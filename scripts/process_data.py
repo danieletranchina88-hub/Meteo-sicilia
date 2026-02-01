@@ -13,8 +13,9 @@ API_LIST_URL = f"https://meteohub.agenziaitaliameteo.it/api/datasets/{DATASET_ID
 API_DOWNLOAD_URL = "https://meteohub.agenziaitaliameteo.it/api/opendata"
 OUTPUT_DIR = "data_weather"
 
-LAT_MIN, LAT_MAX = 36.0, 39.0
-LON_MIN, LON_MAX = 11.5, 16.0
+# Coordinate Sicilia (un po' più larghe per coprire bene)
+LAT_MIN, LAT_MAX = 35.0, 39.5
+LON_MIN, LON_MAX = 11.0, 16.5
 
 def get_latest_run_file():
     print("1. Cerco ultima run...")
@@ -26,7 +27,6 @@ def get_latest_run_file():
         print(f"Errore API: {e}")
         return None, None
 
-    # Trova l'ultimo file in assoluto basato su data e ora
     valid_items = []
     for item in items:
         if isinstance(item, dict) and 'date' in item and 'run' in item:
@@ -36,13 +36,8 @@ def get_latest_run_file():
             except: continue
     
     if not valid_items: return None, None
-    
-    # Ordina e prendi l'ultimo
     valid_items.sort(key=lambda x: x[0])
-    last_run_dt, last_filename = valid_items[-1]
-    
-    print(f"   Run trovata: {last_run_dt} -> File: {last_filename}")
-    return last_run_dt, last_filename
+    return valid_items[-1]
 
 def process_data():
     if os.path.exists(OUTPUT_DIR): shutil.rmtree(OUTPUT_DIR)
@@ -51,7 +46,6 @@ def process_data():
     run_dt, filename = get_latest_run_file()
     if not filename: sys.exit(1)
 
-    # --- DOWNLOAD ---
     print("2. Download file unico...")
     local_path = "meteo_data.grib2"
     try:
@@ -63,87 +57,64 @@ def process_data():
         print(f"Errore download: {e}")
         sys.exit(1)
 
-    # --- ESTRAZIONE CHIRURGICA ---
-    print("3. Estrazione Variabili (Separata)...")
-
-    # A. VENTO (Livello 10m)
-    print("   -> Apro Vento (10m)...")
-    try:
-        ds_wind = xr.open_dataset(local_path, engine='cfgrib', 
-                                backend_kwargs={'filter_by_keys': {'typeOfLevel': 'heightAboveGround', 'level': 10}})
-    except Exception as e:
-        print(f"      ERRORE VENTO: {e}")
-        sys.exit(1) # Senza vento è inutile
-
-    # B. TEMPERATURA (Livello 2m)
-    print("   -> Apro Temperatura (2m)...")
-    try:
-        ds_temp = xr.open_dataset(local_path, engine='cfgrib', 
-                                backend_kwargs={'filter_by_keys': {'typeOfLevel': 'heightAboveGround', 'level': 2}})
-    except:
-        print("      Warn: Temp non trovata, userò zeri.")
-        ds_temp = None
-
-    # C. PIOGGIA (Superficie)
-    print("   -> Apro Pioggia (Surface)...")
-    try:
-        ds_rain = xr.open_dataset(local_path, engine='cfgrib', 
-                                backend_kwargs={'filter_by_keys': {'typeOfLevel': 'surface'}})
-    except:
-        print("      Warn: Pioggia non trovata, userò zeri.")
-        ds_rain = None
-
-    # --- UNIONE E EXPORT ---
-    print("4. Generazione JSON...")
+    print("3. Apertura Dataset...")
     
+    # Apriamo le 3 variabili separatamente per evitare errori di merging
+    try:
+        ds_wind = xr.open_dataset(local_path, engine='cfgrib', backend_kwargs={'filter_by_keys': {'typeOfLevel': 'heightAboveGround', 'level': 10}})
+        ds_temp = xr.open_dataset(local_path, engine='cfgrib', backend_kwargs={'filter_by_keys': {'typeOfLevel': 'heightAboveGround', 'level': 2}})
+        ds_rain = xr.open_dataset(local_path, engine='cfgrib', backend_kwargs={'filter_by_keys': {'typeOfLevel': 'surface'}})
+    except Exception as e:
+        print(f"Errore apertura GRIB: {e}")
+        sys.exit(1)
+
+    print("4. Generazione JSON...")
     steps = range(min(ds_wind.sizes.get('step', 1), 24))
     catalog = []
 
     for i in steps:
         try:
-            # 1. Vento (Master)
+            # Selezione step
             d_w = ds_wind.isel(step=i) if 'step' in ds_wind.dims else ds_wind
+            d_t = ds_temp.isel(step=i) if 'step' in ds_temp.dims else ds_temp
+            d_r = ds_rain.isel(step=i) if 'step' in ds_rain.dims else ds_rain
+
+            # --- FIX FONDAMENTALE: ORDINAMENTO COORDINATE ---
+            # Ordiniamo Latitudine Decrescente (Nord -> Sud) e Longitudine Crescente (Ovest -> Est)
+            # Questo risolve il problema della mappa invertita/specchiata
+            d_w = d_w.sortby('latitude', ascending=False).sortby('longitude', ascending=True)
+            d_t = d_t.sortby('latitude', ascending=False).sortby('longitude', ascending=True)
+            d_r = d_r.sortby('latitude', ascending=False).sortby('longitude', ascending=True)
+
+            # Ritaglio Geografico
             mask = ((d_w.latitude >= LAT_MIN) & (d_w.latitude <= LAT_MAX) & 
                     (d_w.longitude >= LON_MIN) & (d_w.longitude <= LON_MAX))
+            
             cut_w = d_w.where(mask, drop=True)
-            
-            # Cerca variabili u/v
-            keys_w = list(cut_w.data_vars)
-            u_key = next((k for k in ['u10','u','10u'] if k in keys_w), None)
-            v_key = next((k for k in ['v10','v','10v'] if k in keys_w), None)
-            
-            if not u_key: continue
+            cut_t = d_t.where(mask, drop=True)
+            cut_r = d_r.where(mask, drop=True)
 
+            # Estrazione Valori
+            u_key = next((k for k in ['u10','u','10u'] if k in cut_w), None)
+            v_key = next((k for k in ['v10','v','10v'] if k in cut_w), None)
             u = np.nan_to_num(cut_w[u_key].values)
             v = np.nan_to_num(cut_w[v_key].values)
 
-            # 2. Temp
-            if ds_temp:
-                d_t = ds_temp.isel(step=i) if 'step' in ds_temp.dims else ds_temp
-                cut_t = d_t.where(mask, drop=True) # Assumiamo stessa griglia
-                keys_t = list(cut_t.data_vars)
-                t_key = next((k for k in ['t2m','2t','t'] if k in keys_t), None)
-                temp = (cut_t[t_key].values - 273.15) if t_key else np.zeros_like(u)
-            else:
-                temp = np.zeros_like(u)
+            t_key = next((k for k in ['t2m','2t','t'] if k in cut_t), None)
+            temp = (cut_t[t_key].values - 273.15) if t_key else np.zeros_like(u)
 
-            # 3. Pioggia
-            if ds_rain:
-                d_r = ds_rain.isel(step=i) if 'step' in ds_rain.dims else ds_rain
-                cut_r = d_r.where(mask, drop=True)
-                keys_r = list(cut_r.data_vars)
-                r_key = next((k for k in ['tp','tot_prec'] if k in keys_r), None)
-                rain = np.nan_to_num(cut_r[r_key].values) if r_key else np.zeros_like(u)
-            else:
-                rain = np.zeros_like(u)
+            r_key = next((k for k in ['tp','tot_prec'] if k in cut_r), None)
+            rain = np.nan_to_num(cut_r[r_key].values) if r_key else np.zeros_like(u)
 
-            # Metadata
+            # Metadata Griglia
             lat = cut_w.latitude.values
             lon = cut_w.longitude.values
             ny, nx = u.shape
-            dx = float((lon.max()-lon.min())/(nx-1)) if nx > 1 else 0.02
-            dy = float((lat.max()-lat.min())/(ny-1)) if ny > 1 else 0.02
             
+            # Calcolo risoluzione (importante per il rendering)
+            dx = float(np.abs(lon[1] - lon[0])) if nx > 1 else 0.02
+            dy = float(np.abs(lat[1] - lat[0])) if ny > 1 else 0.02 # Qui usiamo lat[1]-lat[0] che sarà negativo se decrescente, usiamo abs
+
             step_hours = int(ds_wind.step.values[i] / 3.6e12) if 'step' in ds_wind.dims else 0
             valid_dt = run_dt + timedelta(hours=step_hours)
 
@@ -151,19 +122,19 @@ def process_data():
                 "meta": {
                     "run": run_dt.strftime("%Y%m%d%H"),
                     "step": step_hours, "nx": nx, "ny": ny,
-                    "la1": float(lat.max()), "lo1": float(lon.min()), "dx": dx, "dy": dy
+                    "la1": float(lat[0]), "lo1": float(lon[0]), # lat[0] ora è il Nord (Max Lat)
+                    "dx": dx, "dy": dy
                 },
                 "wind_u": np.round(u, 1).flatten().tolist(),
                 "wind_v": np.round(v, 1).flatten().tolist(),
                 "temp": np.round(temp, 1).flatten().tolist(),
-                "rain": np.round(rain, 2).flatten().tolist(),
-                "press": [0]
+                "rain": np.round(rain, 2).flatten().tolist()
             }
             
             out_name = f"step_{i}.json"
             with open(f"{OUTPUT_DIR}/{out_name}", 'w') as jf: json.dump(step_data, jf)
             catalog.append({"file": out_name, "label": valid_dt.strftime("%d/%m %H:00"), "hour": step_hours})
-            print(f"   OK Step +{step_hours}h")
+            print(f"   Step +{step_hours}h OK")
 
         except Exception as e:
             print(f"Errore step {i}: {e}")
