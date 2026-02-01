@@ -9,51 +9,54 @@
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet-velocity/1.8.0/leaflet-velocity.css" />
     
     <style>
-        body { margin: 0; padding: 0; background: #111; font-family: sans-serif; color: white; overflow: hidden; }
-        #map { position: absolute; top: 0; bottom: 0; width: 100%; background: #111; }
+        body { margin: 0; padding: 0; background: #222; font-family: 'Segoe UI', sans-serif; color: white; overflow: hidden; }
+        #map { position: absolute; top: 0; bottom: 0; width: 100%; background: #222; }
         
         /* Menu Layer */
         #layer-menu {
             position: absolute; top: 10px; right: 10px; z-index: 1000;
-            background: rgba(0,0,0,0.8); padding: 5px; border-radius: 8px;
-            display: flex; flex-direction: column; gap: 5px; border: 1px solid #444;
+            background: rgba(30,30,30,0.95); padding: 8px; border-radius: 12px;
+            display: flex; flex-direction: column; gap: 6px; 
+            border: 1px solid #444; box-shadow: 0 4px 15px rgba(0,0,0,0.5);
         }
         .layer-btn {
-            background: transparent; border: none; color: #aaa; padding: 10px 15px;
-            font-size: 14px; cursor: pointer; text-align: right; font-weight: bold;
+            background: transparent; border: none; color: #ccc; padding: 10px 20px;
+            font-size: 14px; cursor: pointer; text-align: right; font-weight: 600;
+            border-radius: 8px; transition: all 0.2s;
         }
-        .layer-btn:hover { color: white; }
-        .layer-btn.active { background: #007bff; color: white; border-radius: 5px; }
+        .layer-btn:hover { background: rgba(255,255,255,0.1); color: white; }
+        .layer-btn.active { background: #3b82f6; color: white; }
 
         /* Valore Grande */
         #picker-box {
             position: absolute; top: 20px; left: 20px; z-index: 1000;
-            pointer-events: none; text-shadow: 2px 2px 0px #000;
+            pointer-events: none; text-shadow: 0 2px 4px rgba(0,0,0,0.8);
         }
-        .picker-val { font-size: 4em; font-weight: 800; line-height: 1; }
-        .picker-unit { font-size: 1.5em; color: #ccc; }
-        .picker-lbl { font-size: 1em; color: #888; text-transform: uppercase; font-weight: bold; }
+        .picker-val { font-size: 4em; font-weight: 800; line-height: 1; letter-spacing: -1px; }
+        .picker-unit { font-size: 1.5em; color: #ccc; font-weight: 300; }
+        .picker-lbl { font-size: 0.9em; color: #aaa; text-transform: uppercase; margin-top: 5px; letter-spacing: 1px; }
 
         /* Slider */
         #bottom-bar {
-            position: absolute; bottom: 0; left: 0; right: 0; height: 80px;
-            background: linear-gradient(to top, #000, transparent);
+            position: absolute; bottom: 0; left: 0; right: 0; height: 90px;
+            background: linear-gradient(to top, rgba(0,0,0,0.9), transparent);
             display: flex; align-items: center; padding: 0 20px 20px 20px; z-index: 2000;
         }
-        #play-btn { font-size: 2.5em; cursor: pointer; margin-right: 20px; }
-        input[type=range] { flex-grow: 1; cursor: pointer; height: 6px; accent-color: #00ccff; }
-        #time-label { min-width: 140px; text-align: center; font-weight: bold; font-size: 1.2em; }
+        #play-btn { font-size: 2.5em; cursor: pointer; margin-right: 20px; color: white; transition: 0.2s; }
+        #play-btn:hover { color: #3b82f6; transform: scale(1.1); }
+        input[type=range] { flex-grow: 1; cursor: pointer; height: 6px; accent-color: #3b82f6; }
+        #time-label { min-width: 160px; text-align: center; font-weight: bold; font-size: 1.2em; color: #e5e7eb; }
         
         #loader {
             position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%);
-            background: #222; padding: 15px 30px; border-radius: 30px; 
-            border: 1px solid #555; z-index: 5000; display: none;
+            background: rgba(0,0,0,0.8); padding: 15px 30px; border-radius: 30px; 
+            border: 1px solid #555; z-index: 5000; display: none; font-weight: bold;
         }
     </style>
 </head>
 <body>
 
-<div id="loader">Caricamento...</div>
+<div id="loader">Caricamento Dati...</div>
 
 <div id="layer-menu">
     <button class="layer-btn active" onclick="setLayer('wind')">VENTO 💨</button>
@@ -79,7 +82,9 @@
 <script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet-velocity/1.8.0/leaflet-velocity.min.js"></script>
 
 <script>
-    var map = L.map('map', { zoomControl: false }).setView([37.5, 14.2], 8);
+    var map = L.map('map', { zoomControl: false, attributionControl: false }).setView([37.5, 14.2], 8);
+    
+    // Mappa Scura
     L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png', {
         maxZoom: 19, opacity: 1
     }).addTo(map);
@@ -91,26 +96,60 @@
     var activeLayer = 'wind';
     var isPlaying = false;
 
-    // --- SCALE COLORI CORRETTE ---
-    function getColor(val, type) {
-        if (type === 'temp') {
-            if (val < 0) return [255, 255, 255, 0.5]; // Neve
-            if (val < 10) return [0, 255, 100, 0.4];  // Freddo
-            if (val < 20) return [255, 255, 0, 0.4];  // Mite
-            if (val < 30) return [255, 140, 0, 0.5];  // Caldo
-            return [255, 0, 0, 0.6];                  // Molto Caldo
+    // --- MOTORE COLORI AVANZATO (Interpolazione) ---
+    
+    // Palette copiate da ItaliaMeteo
+    const PALETTES = {
+        temp: [
+            {val: -10, col: [150, 150, 255]}, // Ghiaccio
+            {val: 0,   col: [200, 200, 255]}, 
+            {val: 5,   col: [0, 150, 0]},     // Verde scuro
+            {val: 12,  col: [100, 255, 100]}, // Verde chiaro
+            {val: 18,  col: [255, 255, 0]},   // Giallo
+            {val: 25,  col: [255, 150, 0]},   // Arancio
+            {val: 32,  col: [255, 0, 0]},     // Rosso
+            {val: 40,  col: [150, 0, 150]}    // Viola estremo
+        ],
+        rain: [
+            {val: 0,   col: [0,0,0,0]},       // Trasparente
+            {val: 0.2, col: [0, 180, 255]},   // Azzurro
+            {val: 2,   col: [0, 80, 255]},    // Blu
+            {val: 10,  col: [0, 0, 200]},     // Blu scuro
+            {val: 50,  col: [150, 0, 150]}    // Viola
+        ],
+        wind: [
+            {val: 0,   col: [0,0,0,0]},
+            {val: 5,   col: [0, 255, 200]},   // Verdino acqua
+            {val: 15,  col: [0, 200, 0]},     // Verde
+            {val: 30,  col: [255, 255, 0]},   // Giallo
+            {val: 50,  col: [255, 100, 0]},   // Arancio
+            {val: 80,  col: [255, 0, 0]}      // Rosso
+        ]
+    };
+
+    function getInterpolatedColor(val, type) {
+        let stops = PALETTES[type];
+        if (type === 'rain' && val <= 0.1) return [0,0,0,0]; // Taglio netto pioggia zero
+        
+        // Trova i due stop tra cui si trova il valore
+        for (let i = 0; i < stops.length - 1; i++) {
+            let s1 = stops[i];
+            let s2 = stops[i+1];
+            if (val >= s1.val && val <= s2.val) {
+                let t = (val - s1.val) / (s2.val - s1.val); // Percentuale tra s1 e s2
+                let r = Math.round(s1.col[0] + (s2.col[0] - s1.col[0]) * t);
+                let g = Math.round(s1.col[1] + (s2.col[1] - s1.col[1]) * t);
+                let b = Math.round(s1.col[2] + (s2.col[2] - s1.col[2]) * t);
+                let alpha = (type === 'rain' || type === 'wind') ? 0.6 : 0.5;
+                return [r, g, b, alpha];
+            }
         }
-        if (type === 'rain') {
-            if (val <= 0.1) return [0,0,0,0];         // TRASPARENTE SE 0
-            if (val < 2) return [0, 100, 255, 0.4];
-            if (val < 10) return [0, 0, 255, 0.6];
-            return [140, 0, 255, 0.7];
-        }
-        // Vento: Sfondo trasparente, usiamo solo le particelle
-        return [0,0,0,0];
+        // Se fuori scala (troppo alto), usa l'ultimo colore
+        let last = stops[stops.length-1];
+        return [...last.col, 0.6];
     }
 
-    // --- CANVAS LAYER (Colore Sfondo) ---
+    // --- CANVAS LAYER ---
     L.CanvasLayer = L.Layer.extend({
         onAdd: function(map) {
             this._canvas = L.DomUtil.create('canvas', 'leaflet-layer');
@@ -131,24 +170,19 @@
             this._redraw();
         },
         _redraw: function() {
-            if (!currentData || activeLayer === 'wind') {
-                // Se è vento, puliamo il canvas (niente sfondo colorato)
-                var ctx = this._canvas.getContext('2d');
-                ctx.clearRect(0, 0, this._canvas.width, this._canvas.height);
-                return;
-            }
-            
+            if (!currentData) return;
             var ctx = this._canvas.getContext('2d');
             ctx.clearRect(0, 0, this._canvas.width, this._canvas.height);
             
             var meta = currentData.meta;
             var bounds = this._map.getBounds();
             
-            // Ottimizzazione pixel
+            // Ottimizzazione pixel size
             var p1 = this._map.latLngToContainerPoint([meta.la1, meta.lo1]);
             var p2 = this._map.latLngToContainerPoint([meta.la1 - meta.dy, meta.lo1 + meta.dx]);
-            var w = Math.ceil(p2.x - p1.x) + 1;
-            var h = Math.ceil(p2.y - p1.y) + 1;
+            var w = Math.ceil(p2.x - p1.x); // Rimosso +1 per evitare righe, testiamo così
+            var h = Math.ceil(p2.y - p1.y);
+            if (w < 1) w = 1; if (h < 1) h = 1;
 
             for (var y = 0; y < meta.ny; y++) {
                 var lat = meta.la1 - (y * meta.dy);
@@ -159,15 +193,22 @@
 
                     var idx = y * meta.nx + x;
                     var val = 0;
+
                     if (activeLayer === 'temp') val = currentData.temp[idx];
                     else if (activeLayer === 'rain') val = currentData.rain[idx];
+                    else if (activeLayer === 'wind') {
+                        let u = currentData.wind_u[idx];
+                        let v = currentData.wind_v[idx];
+                        val = Math.sqrt(u*u + v*v) * 3.6;
+                    }
 
-                    var c = getColor(val, activeLayer);
+                    var c = getInterpolatedColor(val, activeLayer);
                     if (c[3] === 0) continue;
 
                     var p = this._map.latLngToContainerPoint([lat, lon]);
                     ctx.fillStyle = `rgba(${c[0]},${c[1]},${c[2]},${c[3]})`;
-                    ctx.fillRect(p.x, p.y, w, h);
+                    // Overlap leggero per evitare righe bianche
+                    ctx.fillRect(p.x, p.y, w+1, h+1);
                 }
             }
         },
@@ -199,29 +240,24 @@
     function updateMap() {
         if (!currentData) return;
         
-        // 1. Sfondo Colore
         if (!heatCanvas) { heatCanvas = new L.CanvasLayer(); map.addLayer(heatCanvas); }
         heatCanvas.update();
 
-        // 2. Particelle Vento
         if (velocityLayer) map.removeLayer(velocityLayer);
         
-        // Se siamo su Temp o Pioggia, le particelle sono quasi invisibili (opacità 0.3)
-        // Se siamo su Vento, sono ben visibili (1.0)
-        let op = (activeLayer === 'wind') ? 1.0 : 0.3;
-
+        // Particelle Vento: Sempre visibili
         velocityLayer = L.velocityLayer({
             displayValues: false,
             data: [
                 { header: { nx: currentData.meta.nx, ny: currentData.meta.ny, lo1: currentData.meta.lo1, la1: currentData.meta.la1, dx: currentData.meta.dx, dy: currentData.meta.dy, parameterNumberName: "Eastward current" }, data: currentData.wind_u },
                 { header: { nx: currentData.meta.nx, ny: currentData.meta.ny, lo1: currentData.meta.lo1, la1: currentData.meta.la1, dx: currentData.meta.dx, dy: currentData.meta.dy, parameterNumberName: "Northward current" }, data: currentData.wind_v }
             ],
-            maxVelocity: 25,
-            velocityScale: 0.008,
-            colorScale: ["#ffffff"], // BIANCO PURO
-            lineWidth: 2, 
-            particleMultiplier: 1/600,
-            opacity: op
+            maxVelocity: 30,
+            velocityScale: 0.008, // Lunghezza scia
+            colorScale: ["#ffffff"], // Bianco puro
+            lineWidth: 2, // Spesse
+            particleMultiplier: 1/500, // Densità media
+            opacity: 0.9 // Molto visibili
         });
         velocityLayer.addTo(map);
     }
