@@ -1,7 +1,7 @@
 <!DOCTYPE html>
 <html>
 <head>
-    <title>Sicilia MeteoHub - ESTREMO</title>
+    <title>Sicilia MeteoHub - FIXED</title>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
@@ -46,7 +46,7 @@
     var map = L.map('map', { zoomControl: false }).setView([37.5, 14.2], 8);
     L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png', { maxZoom: 19 }).addTo(map);
 
-    // CREO IL LIVELLO Z-INDEX PIÙ ALTO POSSIBILE PER LE PARTICELLE
+    // LIVELLO PARTICELLE SOPRA TUTTO
     map.createPane('particles');
     map.getPane('particles').style.zIndex = 999; 
     map.getPane('particles').style.pointerEvents = 'none';
@@ -90,29 +90,40 @@
     });
 
     async function loadCatalog() { try { let r = await fetch('data_weather/catalog.json?t='+Date.now()); catalog = await r.json(); document.getElementById('time-slider').max = catalog.length - 1; document.getElementById('time-slider').addEventListener('input', (e)=>loadStep(parseInt(e.target.value))); loadStep(0); } catch(e){} }
-    async function loadStep(i) { if(!catalog[i]) return; document.getElementById('time-label').innerText = catalog[index].label; document.getElementById('loader').style.display='block'; try { let r = await fetch('data_weather/'+catalog[index].file); currentData = await r.json(); updateMap(); } catch(e){} document.getElementById('loader').style.display='none'; }
+    
+    // --- FUNZIONE CORRETTA QUI SOTTO ---
+    async function loadStep(i) { 
+        if(!catalog[i]) return; 
+        document.getElementById('time-label').innerText = catalog[i].label; // CORRETTO: era catalog[index]
+        document.getElementById('loader').style.display='block'; 
+        try { 
+            let r = await fetch('data_weather/'+catalog[i].file); // CORRETTO: era catalog[index]
+            currentData = await r.json(); 
+            updateMap(); 
+        } catch(e){} 
+        document.getElementById('loader').style.display='none'; 
+    }
 
     function updateMap() {
         if(!currentData) return;
         if(!heatCanvas) { heatCanvas = new L.CanvasLayer(); map.addLayer(heatCanvas); } heatCanvas.update();
         if(velocityLayer) map.removeLayer(velocityLayer);
 
-        // --- CONFIGURAZIONE PARTICELLE ESTREMA ---
         velocityLayer = L.velocityLayer({
-            pane: 'particles', // FORZA SOPRA TUTTO
+            pane: 'particles',
             displayValues: false,
             data: [
                 { header: { nx: currentData.meta.nx, ny: currentData.meta.ny, lo1: currentData.meta.lo1, la1: currentData.meta.la1, dx: currentData.meta.dx, dy: currentData.meta.dy, parameterNumberName: "Eastward current" }, data: currentData.wind_u },
                 { header: { nx: currentData.meta.nx, ny: currentData.meta.ny, lo1: currentData.meta.lo1, la1: currentData.meta.la1, dx: currentData.meta.dx, dy: currentData.meta.dy, parameterNumberName: "Northward current" }, data: currentData.wind_v }
             ],
-            // PARAMETRI BOOSTATI AL MASSIMO
-            maxVelocity: 15,          // Satura subito
-            velocityScale: 0.05,      // SCIE LUNGHISSIME
-            colorScale: ["#ffffff"],  // BIANCO PURO BRILLANTE
-            lineWidth: 5,             // SPESSORE ENORME
-            particleMultiplier: 1/100,// DENSITÀ ESTREMA
-            frameRate: 20,            // PIÙ FLUIDO
-            opacity: 1.0              // VISIBILITÀ TOTALE
+            // PARAMETRI ESTREMI CONFERMATI
+            maxVelocity: 15,
+            velocityScale: 0.05,
+            colorScale: ["#ffffff"],
+            lineWidth: 4,
+            particleMultiplier: 1/100,
+            frameRate: 20,
+            opacity: 1.0
         });
         velocityLayer.addTo(map);
     }
