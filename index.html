@@ -1,7 +1,7 @@
 <!DOCTYPE html>
 <html>
 <head>
-    <title>Sicilia MeteoHub</title>
+    <title>Sicilia MeteoHub - VECTORS</title>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
@@ -45,13 +45,14 @@
     var map = L.map('map', { zoomControl: false }).setView([37.5, 14.2], 8);
     L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png', { maxZoom: 19 }).addTo(map);
 
-    // LIVELLO PARTICELLE SOPRA TUTTO
+    // LIVELLO PARTICELLE SOPRA TUTTO (z-index 650)
     map.createPane('particles');
     map.getPane('particles').style.zIndex = 650;
     map.getPane('particles').style.pointerEvents = 'none';
 
     var velocityLayer = null, heatCanvas = null, currentData = null, catalog = [], activeLayer = 'wind', isPlaying = false;
 
+    // Palette Colori
     const PALETTES = {
         temp: [{val:-10,c:[255,255,255]},{val:0,c:[200,200,255]},{val:10,c:[0,200,100]},{val:20,c:[255,255,0]},{val:30,c:[255,100,0]},{val:40,c:[200,0,0]}],
         rain: [{val:0,c:[0,0,0,0]},{val:0.2,c:[0,150,255]},{val:5,c:[0,0,255]},{val:20,c:[150,0,150]}],
@@ -68,7 +69,7 @@
         } return [...stops[stops.length-1].c, 0.5];
     }
 
-    // CANVAS SOTTO (TilePane)
+    // CANVAS (SFONDO COLORATO)
     L.CanvasLayer = L.Layer.extend({
         onAdd: function(m) { this._c = L.DomUtil.create('canvas', 'leaflet-layer'); m.getPanes().tilePane.appendChild(this._c); m.on('moveend resize', this._reset, this); this._reset(); },
         onRemove: function(m) { m.getPanes().tilePane.removeChild(this._c); m.off('moveend resize', this._reset, this); },
@@ -76,9 +77,8 @@
         _draw: function() {
             if (!currentData) return; var ctx = this._c.getContext('2d'); ctx.clearRect(0,0,this._c.width,this._c.height);
             var m = currentData.meta, b = this._map.getBounds();
-            // CALCOLO COORDINATE STANDARD (Top-Left -> Bottom-Right)
             var p1 = this._map.latLngToContainerPoint([m.la1, m.lo1]);
-            // Con dy positivo e la1 al Nord, il punto in basso a destra si calcola sottraendo dy
+            // Geometria standard: Top-Left -> Scendiamo verso il basso (positive dy in pixel)
             var p2 = this._map.latLngToContainerPoint([m.la1 - (m.dy * (m.ny-1)), m.lo1 + (m.dx * (m.nx-1))]);
             
             var w = Math.ceil((p2.x - p1.x)/(m.nx-1)) + 1;
@@ -119,14 +119,40 @@
         if(!heatCanvas) { heatCanvas = new L.CanvasLayer(); map.addLayer(heatCanvas); } heatCanvas.update();
         if(velocityLayer) map.removeLayer(velocityLayer);
 
+        // --- DEFINIZIONE VETTORIALE GRIB2 ---
+        // Usiamo i codici standard GRIB2 per dire al motore:
+        // Cat 2, Num 2 = Componente U (Zonale)
+        // Cat 2, Num 3 = Componente V (Meridionale)
         velocityLayer = L.velocityLayer({
             pane: 'particles',
             displayValues: false,
             data: [
-                { header: { nx: currentData.meta.nx, ny: currentData.meta.ny, lo1: currentData.meta.lo1, la1: currentData.meta.la1, dx: currentData.meta.dx, dy: currentData.meta.dy, parameterNumberName: "Eastward current" }, data: currentData.wind_u },
-                { header: { nx: currentData.meta.nx, ny: currentData.meta.ny, lo1: currentData.meta.lo1, la1: currentData.meta.la1, dx: currentData.meta.dx, dy: currentData.meta.dy, parameterNumberName: "Northward current" }, data: currentData.wind_v }
+                { 
+                    header: { 
+                        nx: currentData.meta.nx, ny: currentData.meta.ny, 
+                        lo1: currentData.meta.lo1, la1: currentData.meta.la1, 
+                        dx: currentData.meta.dx, dy: currentData.meta.dy,
+                        parameterCategory: 2, parameterNumber: 2 
+                    }, 
+                    data: currentData.wind_u 
+                },
+                { 
+                    header: { 
+                        nx: currentData.meta.nx, ny: currentData.meta.ny, 
+                        lo1: currentData.meta.lo1, la1: currentData.meta.la1, 
+                        dx: currentData.meta.dx, dy: currentData.meta.dy,
+                        parameterCategory: 2, parameterNumber: 3 
+                    }, 
+                    data: currentData.wind_v 
+                }
             ],
-            maxVelocity: 25, velocityScale: 0.02, colorScale: ["#ffffff"], lineWidth: 3, particleMultiplier: 1/200, opacity: 1.0
+            // Parametri Visuali (Style Windy)
+            maxVelocity: 15, // km/h (Scala sensibile)
+            velocityScale: 0.02, 
+            colorScale: ["#ffffff"], 
+            lineWidth: 2, 
+            particleMultiplier: 1/150, 
+            opacity: 0.95
         });
         velocityLayer.addTo(map);
     }
