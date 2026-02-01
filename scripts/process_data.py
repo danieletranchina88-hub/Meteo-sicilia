@@ -68,6 +68,7 @@ def process_data():
 
     print("4. Generazione JSON (fino a 72 ore)...")
     
+    # Prende fino a 75 step se disponibili (copre le 72 ore)
     max_steps = min(ds_wind.sizes.get('step', 1), 75)
     steps = range(max_steps)
     
@@ -106,10 +107,9 @@ def process_data():
             lon = cut_w.longitude.values
             ny, nx = u.shape
             
-            # --- QUESTE SONO LE RIGHE CHE DAVANO ERRORE PRIMA ---
+            # Calcolo DX/DY (questa era la parte tagliata prima)
             dx = float(np.abs(lon[1] - lon[0])) if nx > 1 else 0.02
             dy = float(np.abs(lat[1] - lat[0])) if ny > 1 else 0.02
-            # ----------------------------------------------------
 
             step_hours = int(ds_wind.step.values[i] / 3.6e12) if 'step' in ds_wind.dims else 0
             valid_dt = run_dt + timedelta(hours=step_hours)
@@ -128,5 +128,25 @@ def process_data():
             }
             
             out_name = f"step_{i}.json"
+            # Scrittura file JSON step
             with open(f"{OUTPUT_DIR}/{out_name}", 'w') as jf:
-                
+                json.dump(step_data, jf)
+            
+            day_str = valid_dt.strftime("%d/%m")
+            hour_str = valid_dt.strftime("%H:00")
+            catalog.append({"file": out_name, "label": f"{day_str} {hour_str}", "hour": step_hours})
+            
+            print(f"   Step +{step_hours}h OK")
+
+        except Exception as e:
+            print(f"Errore step {i}: {e}")
+            continue
+
+    # Scrittura Catalogo finale
+    with open(f"{OUTPUT_DIR}/catalog.json", 'w') as f:
+        json.dump(catalog, f)
+    print("Finito.")
+
+if __name__ == "__main__":
+    process_data()
+    
