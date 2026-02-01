@@ -18,16 +18,17 @@ LAT_MIN, LAT_MAX = 35.0, 39.5
 LON_MIN, LON_MAX = 11.0, 16.5
 
 def get_latest_run_files():
-    print("1. Cerco ultima run (e tutti i suoi file)...")
+    print("1. Cerco ultima run...")
     try:
-        r = requests.get(API_LIST_URL, timeout=30)
+        # Timeout aumentato a 60s per la lista
+        r = requests.get(API_LIST_URL, timeout=60)
         r.raise_for_status()
         items = r.json()
     except Exception as e:
         print(f"Errore API: {e}")
         return None, []
 
-    # Raggruppa i file per "Data + Run"
+    # Raggruppa i file
     runs = {}
     for item in items:
         if isinstance(item, dict) and 'date' in item and 'run' in item:
@@ -37,14 +38,11 @@ def get_latest_run_files():
     
     if not runs: return None, []
     
-    # Prende la chiave (data) più recente
     latest_key = sorted(runs.keys())[-1]
     run_dt = datetime.strptime(latest_key, "%Y-%m-%d %H:%M")
     
-    file_list = runs[latest_key]
-    print(f"   Run trovata: {latest_key} -> Trovati {len(file_list)} file associati.")
-    
-    return run_dt, file_list
+    # Restituisce TUTTI i file della run (per coprire 72 ore)
+    return run_dt, runs[latest_key]
 
 def process_data():
     if os.path.exists(OUTPUT_DIR): shutil.rmtree(OUTPUT_DIR)
@@ -53,17 +51,17 @@ def process_data():
     run_dt, file_list = get_latest_run_files()
     if not file_list: sys.exit(1)
 
+    print(f"2. Trovati {len(file_list)} file. Inizio download...")
+    
     catalog = []
-    processed_hours = set() # Per evitare duplicati se i file si sovrappongono
+    processed_hours = set()
 
-    print(f"2. Inizio elaborazione di {len(file_list)} file...")
-
-    # Cicla su TUTTI i file della run (0-24, 24-48, ecc.)
     for idx, filename in enumerate(file_list):
-        print(f"   [{idx+1}/{len(file_list)}] Scarico: {filename}...")
-        
+        print(f"   [{idx+1}/{len(file_list)}] Scarico: {filename}")
         local_path = "temp.grib2"
+        
         try:
+            # TIMEOUT AUMENTATO A 300 SECONDI (5 MINUTI)
             with requests.get(f"{API_DOWNLOAD_URL}/{filename}", stream=True, timeout=300) as r:
                 r.raise_for_status()
                 with open(local_path, 'wb') as f:
@@ -72,44 +70,38 @@ def process_data():
             print(f"      Errore download: {e}. Salto.")
             continue
 
-        # Apre il file
         try:
-            # Apriamo separatamente per sicurezza
+            # Apertura Dataset
             ds_wind = xr.open_dataset(local_path, engine='cfgrib', backend_kwargs={'filter_by_keys': {'typeOfLevel': 'heightAboveGround', 'level': 10}})
-            # Temp e Rain potrebbero mancare in alcuni file spezzati, gestiamo l'eccezione
             try:
                 ds_temp = xr.open_dataset(local_path, engine='cfgrib', backend_kwargs={'filter_by_keys': {'typeOfLevel': 'heightAboveGround', 'level': 2}})
             except: ds_temp = None
             try:
                 ds_rain = xr.open_dataset(local_path, engine='cfgrib', backend_kwargs={'filter_by_keys': {'typeOfLevel': 'surface'}})
             except: ds_rain = None
-        except Exception as e:
-            print(f"      File illeggibile o vuoto: {e}. Salto.")
+        except:
+            print("      File illeggibile. Salto.")
             continue
 
-        # Elabora gli step dentro questo file
         steps = range(ds_wind.sizes.get('step', 1))
-        
+
         for i in steps:
             try:
-                # Calcola l'ora reale dello step
-                # step può essere in nanosecondi o ore
+                # Calcolo ora step
                 raw_step = ds_wind.step.values[i]
-                # Conversione sicura in ore
                 if isinstance(raw_step, np.timedelta64):
                     step_hours = int(raw_step / np.timedelta64(1, 'h'))
                 else:
-                    step_hours = int(raw_step) # Fallback
+                    step_hours = int(raw_step)
 
-                # Evita duplicati (se due file hanno la stessa ora)
                 if step_hours in processed_hours: continue
-                
-                # --- ESTRAZIONE DATI ---
+
+                # Estrazione Vento
                 d_w = ds_wind.isel(step=i) if 'step' in ds_wind.dims else ds_wind
                 
-                # Fix Orientamento
+                # FIX ORIENTAMENTO
                 d_w = d_w.sortby('latitude', ascending=False).sortby('longitude', ascending=True)
-                
+
                 mask = ((d_w.latitude >= LAT_MIN) & (d_w.latitude <= LAT_MAX) & 
                         (d_w.longitude >= LON_MIN) & (d_w.longitude <= LON_MAX))
                 cut_w = d_w.where(mask, drop=True)
@@ -139,10 +131,11 @@ def process_data():
                     r_key = next((k for k in ['tp','tot_prec'] if k in cut_r), None)
                     if r_key: rain = np.nan_to_num(cut_r[r_key].values)
 
-                # Export JSON
                 lat = cut_w.latitude.values
                 lon = cut_w.longitude.values
                 ny, nx = u.shape
+                
+                # QUESTA RIGA ORA È SICURA
                 dx = float(np.abs(lon[1] - lon[0])) if nx > 1 else 0.02
                 dy = float(np.abs(lat[1] - lat[0])) if ny > 1 else 0.02
 
@@ -164,23 +157,19 @@ def process_data():
                 out_name = f"step_{step_hours}.json"
                 with open(f"{OUTPUT_DIR}/{out_name}", 'w') as jf:
                     json.dump(step_data, jf)
-
+                
                 day_str = valid_dt.strftime("%d/%m")
                 hour_str = valid_dt.strftime("%H:00")
                 catalog.append({"file": out_name, "label": f"{day_str} {hour_str}", "hour": step_hours})
                 processed_hours.add(step_hours)
 
             except Exception as e:
-                print(f"      Errore step {i}: {e}")
+                print(f"      Skip step {i}: {e}")
                 continue
 
-    # Ordina il catalogo per ora (0, 1, 2...) altrimenti lo slider salta
     catalog.sort(key=lambda x: x['hour'])
-
-    with open(f"{OUTPUT_DIR}/catalog.json", 'w') as f:
-        json.dump(catalog, f)
-    
-    print(f"Finito. Generati {len(catalog)} step totali.")
+    with open(f"{OUTPUT_DIR}/catalog.json", 'w') as f: json.dump(catalog, f)
+    print("Finito.")
 
 if __name__ == "__main__":
     process_data()
