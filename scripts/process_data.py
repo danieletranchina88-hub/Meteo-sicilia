@@ -13,7 +13,6 @@ API_LIST_URL = f"https://meteohub.agenziaitaliameteo.it/api/datasets/{DATASET_ID
 API_DOWNLOAD_URL = "https://meteohub.agenziaitaliameteo.it/api/opendata"
 OUTPUT_DIR = "data_weather"
 
-# Coordinate Sicilia
 LAT_MIN, LAT_MAX = 35.0, 39.5
 LON_MIN, LON_MAX = 11.0, 16.5
 
@@ -23,9 +22,7 @@ def get_latest_run_files():
         r = requests.get(API_LIST_URL, timeout=60)
         r.raise_for_status()
         items = r.json()
-    except Exception as e:
-        print(f"Errore API: {e}")
-        return None, []
+    except: return None, []
 
     runs = {}
     for item in items:
@@ -48,7 +45,6 @@ def process_data():
 
     catalog = []
     processed_hours = set()
-
     print(f"2. Elaborazione di {len(file_list)} file...")
 
     for idx, filename in enumerate(file_list):
@@ -79,11 +75,13 @@ def process_data():
 
                 if step_hours in processed_hours: continue
 
-                # --- FIX GEOMETRIA ---
+                # --- STANDARDIZZAZIONE GEOMETRIA ---
                 d_w = ds_wind.isel(step=i) if 'step' in ds_wind.dims else ds_wind
                 
-                # Ordiniamo Nord -> Sud (Lat Decrescente)
-                d_w = d_w.sortby('latitude', ascending=False).sortby('longitude', ascending=True)
+                # 1. Ordina Latitudine: NORD (alto) -> SUD (basso)
+                d_w = d_w.sortby('latitude', ascending=False)
+                # 2. Ordina Longitudine: OVEST (sinistra) -> EST (destra)
+                d_w = d_w.sortby('longitude', ascending=True)
 
                 mask = ((d_w.latitude >= LAT_MIN) & (d_w.latitude <= LAT_MAX) & 
                         (d_w.longitude >= LON_MIN) & (d_w.longitude <= LON_MAX))
@@ -96,7 +94,6 @@ def process_data():
                 u = np.nan_to_num(cut_w[u_key].values)
                 v = np.nan_to_num(cut_w[v_key].values)
 
-                # Temp
                 temp = np.zeros_like(u)
                 if ds_temp:
                     d_t = ds_temp.isel(step=i) if 'step' in ds_temp.dims else ds_temp
@@ -105,7 +102,6 @@ def process_data():
                     t_key = next((k for k in ['t2m','2t','t'] if k in cut_t), None)
                     if t_key: temp = cut_t[t_key].values - 273.15
 
-                # Rain
                 rain = np.zeros_like(u)
                 if ds_rain:
                     d_r = ds_rain.isel(step=i) if 'step' in ds_rain.dims else ds_rain
@@ -118,12 +114,12 @@ def process_data():
                 lon = cut_w.longitude.values
                 ny, nx = u.shape
                 
-                # --- LA CORREZIONE MAGICA E' QUI ---
-                # dx è positivo (ovest -> est)
-                dx = float(lon[1] - lon[0])
-                # dy DEVE ESSERE NEGATIVO se andiamo da Nord a Sud (lat[1] < lat[0])
-                # Rimosso np.abs() per permettere il segno meno
-                dy = float(lat[1] - lat[0]) 
+                # METADATA STANDARD: dy DEVE ESSERE POSITIVO PER IL PLUGIN
+                # Il plugin calcola: lat = la1 - (y * dy). Poiché partiamo dal Nord (la1 max), sottraendo un dy positivo scendiamo.
+                dx = float(abs(lon[1] - lon[0])) if nx > 1 else 0.02
+                dy = float(abs(lat[0] - lat[1])) if ny > 1 else 0.02
+                la1 = float(lat.max()) # Nord
+                lo1 = float(lon.min()) # Ovest
 
                 valid_dt = run_dt + timedelta(hours=step_hours)
 
@@ -131,8 +127,7 @@ def process_data():
                     "meta": {
                         "run": run_dt.strftime("%Y%m%d%H"),
                         "step": step_hours, "nx": nx, "ny": ny,
-                        "la1": float(lat[0]), "lo1": float(lon[0]),
-                        "dx": dx, "dy": dy
+                        "la1": la1, "lo1": lo1, "dx": dx, "dy": dy
                     },
                     "wind_u": np.round(u, 1).flatten().tolist(),
                     "wind_v": np.round(v, 1).flatten().tolist(),
@@ -146,10 +141,8 @@ def process_data():
                 day_str = valid_dt.strftime("%d/%m")
                 hour_str = valid_dt.strftime("%H:00")
                 catalog.append({"file": out_name, "label": f"{day_str} {hour_str}", "hour": step_hours})
-                processed_hours.add(step_hours)
                 print(f"   OK +{step_hours}h")
-
-            except Exception as e: continue
+            except: continue
 
     catalog.sort(key=lambda x: x['hour'])
     with open(f"{OUTPUT_DIR}/catalog.json", 'w') as f: json.dump(catalog, f)
