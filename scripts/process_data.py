@@ -13,158 +13,171 @@ API_LIST_URL = f"https://meteohub.agenziaitaliameteo.it/api/datasets/{DATASET_ID
 API_DOWNLOAD_URL = "https://meteohub.agenziaitaliameteo.it/api/opendata"
 OUTPUT_DIR = "data_weather"
 
-# Coordinate Sicilia
 LAT_MIN, LAT_MAX = 36.0, 39.0
 LON_MIN, LON_MAX = 11.5, 16.0
 
-def get_latest_run_files():
-    """Trova TUTTI i file appartenenti all'ultima run disponibile."""
-    print(f"1. Recupero lista file da MeteoHub...")
+def get_run_files():
+    """Trova i file della run più recente raggruppati per tipologia."""
+    print("1. Cerco ultima run disponibile...")
     try:
         r = requests.get(API_LIST_URL, timeout=15)
         r.raise_for_status()
         items = r.json()
     except Exception as e:
         print(f"Errore API: {e}")
-        return None, []
+        return None, None
 
-    # Raggruppa per data/ora run
     runs = {}
     for item in items:
         if isinstance(item, dict) and 'date' in item and 'run' in item:
-            run_key = f"{item['date']} {item['run']}"
-            if run_key not in runs: runs[run_key] = []
-            runs[run_key].append(item['filename'])
+            key = f"{item['date']} {item['run']}"
+            if key not in runs: runs[key] = []
+            runs[key].append(item['filename'])
 
-    if not runs:
-        print("Nessuna run valida trovata.")
-        return None, []
-
-    # Prende la run più recente
-    latest_key = sorted(runs.keys())[-1]
-    print(f"2. Run più recente trovata: {latest_key}")
-    print(f"   -> Ci sono {len(runs[latest_key])} file in questa run.")
+    if not runs: return None, None
     
-    return datetime.strptime(latest_key, "%Y-%m-%d %H:%M"), runs[latest_key]
+    latest_key = sorted(runs.keys())[-1]
+    run_dt = datetime.strptime(latest_key, "%Y-%m-%d %H:%M")
+    print(f"   -> Run trovata: {latest_key}")
+    
+    return run_dt, runs[latest_key]
+
+def download_file(filename):
+    if os.path.exists(filename): return True
+    print(f"   -> Download: {filename} ...")
+    try:
+        with requests.get(f"{API_DOWNLOAD_URL}/{filename}", stream=True, timeout=60) as r:
+            r.raise_for_status()
+            with open(filename, 'wb') as f:
+                for chunk in r.iter_content(chunk_size=1024*1024): f.write(chunk)
+        return True
+    except:
+        return False
 
 def process_data():
-    if os.path.exists(OUTPUT_DIR):
-        shutil.rmtree(OUTPUT_DIR)
+    if os.path.exists(OUTPUT_DIR): shutil.rmtree(OUTPUT_DIR)
     os.makedirs(OUTPUT_DIR)
 
-    run_dt, file_list = get_latest_run_files()
-    if not file_list:
-        sys.exit(1)
+    run_dt, file_list = get_run_files()
+    if not file_list: sys.exit(1)
 
-    # --- FASE DI RICERCA DEL FILE GIUSTO ---
-    # Dobbiamo trovare quale dei file contiene il VENTO (u, v)
+    # --- FASE 1: Identificazione e Download dei File necessari ---
+    # Dobbiamo trovare quale file ha cosa. Scarichiamo e controlliamo.
     
-    target_ds = None
-    target_u_var = None
-    target_v_var = None
+    ds_wind = None
+    ds_temp = None
+    ds_rain = None
     
-    print("3. Inizio scansione file per cercare il vento...")
+    vars_found = {'u': False, 't': False, 'rain': False}
+
+    print("2. Analisi e unione file...")
     
-    for filename in file_list:
-        print(f"   Analisi file: {filename} ...")
+    # Mappatura variabili temporanea
+    datasets = []
+
+    for fname in file_list:
+        if not download_file(fname): continue
         
-        # Scarica file temporaneo
-        url = f"{API_DOWNLOAD_URL}/{filename}"
         try:
-            with requests.get(url, stream=True, timeout=60) as r:
-                r.raise_for_status()
-                with open("temp_scan.grib2", 'wb') as f:
-                    for chunk in r.iter_content(chunk_size=1024*1024):
-                        f.write(chunk)
-        except:
-            print("   -> Errore download, salto.")
+            # Apriamo il file (senza filtri stretti per vedere cosa c'è)
+            ds = xr.open_dataset(fname, engine='cfgrib', 
+                                 backend_kwargs={'filter_by_keys': {'typeOfLevel': 'heightAboveGround'}})
+            keys = list(ds.data_vars)
+            
+            # Identifica VENTO
+            if not vars_found['u']:
+                if any(k in keys for k in ['u10', 'u', '10u']):
+                    print(f"   [OK] File Vento: {fname}")
+                    ds_wind = ds
+                    vars_found['u'] = True
+            
+            # Identifica TEMP (spesso nello stesso del vento, ma controlliamo)
+            if not vars_found['t']:
+                if any(k in keys for k in ['t2m', 't', '2t']):
+                    print(f"   [OK] File Temp: {fname}")
+                    ds_temp = ds
+                    vars_found['t'] = True
+
+            # Per la pioggia serve filtro diverso (surface)
+            if not vars_found['rain']:
+                try:
+                    ds_r = xr.open_dataset(fname, engine='cfgrib', 
+                                           backend_kwargs={'filter_by_keys': {'typeOfLevel': 'surface'}})
+                    keys_r = list(ds_r.data_vars)
+                    if any(k in keys_r for k in ['tp', 'tot_prec']):
+                        print(f"   [OK] File Pioggia: {fname}")
+                        ds_rain = ds_r
+                        vars_found['rain'] = True
+                except:
+                    pass
+
+        except Exception as e:
             continue
 
-        # Prova ad aprire cercando variabili Vento (livello 10m)
-        try:
-            # Filtro stretto per wind 10m
-            ds = xr.open_dataset("temp_scan.grib2", engine='cfgrib', 
-                                backend_kwargs={'filter_by_keys': {'typeOfLevel': 'heightAboveGround', 'level': 10}})
-            
-            # Controlla se ci sono u e v
-            keys = list(ds.data_vars)
-            u = next((k for k in ['u10', 'u', '10u'] if k in keys), None)
-            v = next((k for k in ['v10', 'v', '10v'] if k in keys), None)
-            
-            if u and v:
-                print(f"   >>> TROVATO! Questo file contiene il vento: {u}, {v}")
-                target_ds = ds
-                target_u_var = u
-                target_v_var = v
-                break # Trovato! Usciamo dal ciclo
-            else:
-                print(f"   -> Niente vento qui. (Variabili trovate: {keys})")
-                ds.close()
-                
-        except Exception as e:
-            # Se fallisce con level=10, proviamo senza filtro livello
-            try:
-                ds = xr.open_dataset("temp_scan.grib2", engine='cfgrib',
-                                   backend_kwargs={'filter_by_keys': {'typeOfLevel': 'heightAboveGround'}})
-                keys = list(ds.data_vars)
-                u = next((k for k in ['u10', 'u', '10u'] if k in keys), None)
-                v = next((k for k in ['v10', 'v', '10v'] if k in keys), None)
-                if u and v:
-                    print(f"   >>> TROVATO (Senza filtro livello)! {u}, {v}")
-                    target_ds = ds
-                    target_u_var = u
-                    target_v_var = v
-                    break
-                ds.close()
-            except:
-                pass
-            print(f"   -> File non compatibile o senza vento.")
-
-    if target_ds is None:
-        print("ERRORE FATALE: Ho controllato tutti i file ma nessuno contiene u/v (Vento).")
+    if not ds_wind:
+        print("ERRORE: Vento non trovato in nessun file.")
         sys.exit(1)
 
-    # --- ELABORAZIONE ---
-    print(f"4. Elaborazione dati meteo per Sicilia...")
+    # Se mancano temp o rain, usiamo il vento come placeholder (con zeri)
+    if not ds_temp: ds_temp = ds_wind
+    if not ds_rain: ds_rain = ds_wind
+
+    # --- FASE 2: Unione e Export ---
     catalog = []
-    
-    # Se il file ha la dimensione 'step' (più orari), usiamo quella. Altrimenti assumiamo 1 step.
-    steps = range(min(target_ds.sizes.get('step', 1), 24))
+    # Usiamo gli step del vento come riferimento
+    steps = range(min(ds_wind.sizes.get('step', 1), 24))
+
+    print(f"3. Generazione {len(steps)} step orari...")
 
     for i in steps:
         try:
-            ds_step = target_ds.isel(step=i) if 'step' in target_ds.dims else target_ds
+            # Sincronizzazione step (assumiamo che tutti i file abbiano gli stessi step orari)
+            # Nota: Potrebbe servire logica più complessa se gli step differiscono
+            step_idx = i
             
-            # Calcolo Data Validità
-            step_hours = int(target_ds.step.values[i] / 3.6e12) if 'step' in target_ds.dims else 0
-            valid_dt = run_dt + timedelta(hours=step_hours)
-
-            # --- RITAGLIO ---
-            mask = ((ds_step.latitude >= LAT_MIN) & (ds_step.latitude <= LAT_MAX) & 
-                    (ds_step.longitude >= LON_MIN) & (ds_step.longitude <= LON_MAX))
-            ds_cut = ds_step.where(mask, drop=True)
-
-            # Estrazione Vento
-            u = np.nan_to_num(ds_cut[target_u_var].values)
-            v = np.nan_to_num(ds_cut[target_v_var].values)
+            # --- VENTO ---
+            d_w = ds_wind.isel(step=step_idx) if 'step' in ds_wind.dims else ds_wind
+            mask = ((d_w.latitude >= LAT_MIN) & (d_w.latitude <= LAT_MAX) & 
+                    (d_w.longitude >= LON_MIN) & (d_w.longitude <= LON_MAX))
+            cut_w = d_w.where(mask, drop=True)
             
-            # Temperatura (se c'è nel file vento bene, altrimenti mettiamo placeholder)
-            # Spesso u,v,t sono nello stesso file
-            t_var = next((k for k in ['t2m', 't', '2t'] if k in ds_cut), None)
+            u_var = next((k for k in ['u10', 'u', '10u'] if k in cut_w), None)
+            v_var = next((k for k in ['v10', 'v', '10v'] if k in cut_w), None)
+            u = np.nan_to_num(cut_w[u_var].values)
+            v = np.nan_to_num(cut_w[v_var].values)
+
+            # --- TEMP ---
+            # Se ds_temp è diverso, dobbiamo ritagliare anche lui
+            d_t = ds_temp.isel(step=step_idx) if 'step' in ds_temp.dims else ds_temp
+            # Importante: Interpola o assumi stessa griglia. Qui assumiamo stessa griglia ritagliata.
+            cut_t = d_t.where(mask, drop=True)
+            t_var = next((k for k in ['t2m', 't', '2t'] if k in cut_t), None)
             if t_var:
-                temp = ds_cut[t_var].values - 273.15
+                temp = cut_t[t_var].values - 273.15
             else:
-                temp = np.zeros_like(u) # Se manca la temp, mappa grigia ma vento ok
+                temp = np.zeros_like(u)
 
-            # Griglia
-            lat = ds_cut.latitude.values
-            lon = ds_cut.longitude.values
+            # --- RAIN ---
+            d_r = ds_rain.isel(step=step_idx) if 'step' in ds_rain.dims else ds_rain
+            cut_r = d_r.where(mask, drop=True)
+            r_var = next((k for k in ['tp', 'tot_prec'] if k in cut_r), None)
+            if r_var:
+                rain = np.nan_to_num(cut_r[r_var].values)
+            else:
+                rain = np.zeros_like(u)
+
+            # --- Export ---
+            lat = cut_w.latitude.values
+            lon = cut_w.longitude.values
             ny, nx = u.shape
             
+            # Fix per griglie non quadrate
             dx = float((lon.max()-lon.min())/(nx-1)) if nx > 1 else 0.02
             dy = float((lat.max()-lat.min())/(ny-1)) if ny > 1 else 0.02
+            
+            step_hours = int(ds_wind.step.values[i] / 3.6e12) if 'step' in ds_wind.dims else 0
+            valid_dt = run_dt + timedelta(hours=step_hours)
 
-            # JSON Output
             step_data = {
                 "meta": {
                     "run": run_dt.strftime("%Y%m%d%H"),
@@ -176,10 +189,10 @@ def process_data():
                 "wind_u": np.round(u, 1).flatten().tolist(),
                 "wind_v": np.round(v, 1).flatten().tolist(),
                 "temp": np.round(temp, 1).flatten().tolist(),
-                "rain": [0], 
-                "press": [0]
+                "rain": np.round(rain, 2).flatten().tolist(), # Pioggia con 2 decimali
+                "press": [0] # Pressione facoltativa
             }
-            
+
             out_name = f"step_{i}.json"
             with open(f"{OUTPUT_DIR}/{out_name}", 'w') as jf:
                 json.dump(step_data, jf)
@@ -189,19 +202,14 @@ def process_data():
                 "label": valid_dt.strftime("%d/%m %H:00"),
                 "hour": step_hours
             })
-            print(f"   -> Generato step +{step_hours}h")
 
         except Exception as e:
-            print(f"Errore generazione step {i}: {e}")
+            print(f"Errore step {i}: {e}")
             continue
 
-    if catalog:
-        with open(f"{OUTPUT_DIR}/catalog.json", 'w') as f:
-            json.dump(catalog, f)
-        print("5. SUCCESSO! Dati pronti.")
-    else:
-        print("Nessun dato generato.")
-        sys.exit(1)
+    with open(f"{OUTPUT_DIR}/catalog.json", 'w') as f:
+        json.dump(catalog, f)
+    print("Finito.")
 
 if __name__ == "__main__":
     process_data()
