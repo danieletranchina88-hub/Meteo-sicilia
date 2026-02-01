@@ -1,7 +1,7 @@
 <!DOCTYPE html>
 <html>
 <head>
-    <title>Sicilia MeteoHub - FINAL</title>
+    <title>Sicilia MeteoHub - INDUSTRIAL</title>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     
@@ -13,13 +13,11 @@
         body { margin: 0; background: #1a1a1a; font-family: 'Segoe UI', sans-serif; color: white; overflow: hidden; }
         #map { position: absolute; top: 0; bottom: 0; width: 100%; background: #1a1a1a; }
         
-        /* StatusBar discreta per debug */
         #status-bar {
             position: absolute; bottom: 95px; right: 10px; 
             background: rgba(0,0,0,0.8); color: #00ff00; 
             padding: 5px 10px; border-radius: 4px; font-size: 11px; font-family: monospace;
             z-index: 6000; pointer-events: none; border-left: 3px solid #00ff00;
-            transition: opacity 0.5s;
         }
 
         #layer-menu {
@@ -60,8 +58,8 @@
 </head>
 <body>
 
-<div id="loader">Avvio...</div>
-<div id="status-bar">System Init...</div>
+<div id="loader">Caricamento...</div>
+<div id="status-bar">System Boot...</div>
 
 <div id="layer-menu">
     <button class="layer-btn active" onclick="setLayer('wind')">VENTO 💨</button>
@@ -84,40 +82,33 @@
 </div>
 
 <script>
-    // --- 1. GESTIONE ERRORI & LOG ---
-    window.onerror = function(msg, url, line) {
-        updateStatus("ERR: " + msg, true);
-        return false;
-    };
-
-    function updateStatus(msg, err=false) {
-        let el = document.getElementById('status-bar');
-        el.innerText = msg;
-        el.style.color = err ? "#ff5555" : "#00ff00";
-        el.style.borderLeftColor = err ? "#ff5555" : "#00ff00";
-        console.log(msg);
-    }
-
-    // --- 2. VARIABILI GLOBALI ---
+    // --- 0. CONFIGURAZIONE GLOBALE ---
     var map, velocityLayer, heatCanvas;
     var currentData = null;
     var catalog = [];
     var activeLayer = 'wind';
     var isPlaying = false;
 
-    // --- 3. DEFINIZIONE CLASSE HEATMAP (SUBITO) ---
-    // Definiamo la classe PRIMA di fare qualsiasi altra cosa per evitare "is not a function"
-    var HeatmapLayer = L.Layer.extend({
+    // Gestore Errori
+    window.onerror = function(msg) { updateStatus("ERR: "+msg, true); return false; };
+    function updateStatus(msg, err=false) {
+        let el = document.getElementById('status-bar');
+        el.innerText = msg;
+        el.style.color = err ? "#ff5555" : "#00ff00";
+        el.style.borderLeftColor = err ? "#ff5555" : "#00ff00";
+    }
+
+    // --- 1. DEFINIZIONE CLASSE HEATMAP (ARCHITETTURA SOLIDA) ---
+    // La definiamo come variabile globale Leaflet personalizzata
+    L.CustomHeatmap = L.Layer.extend({
         onAdd: function(m) {
             this._c = L.DomUtil.create('canvas', 'leaflet-layer');
-            m.getPanes().overlayPane.appendChild(this._c); 
+            // AGGIUNTO AL PANE DI SFONDO (Creato dopo)
+            m.getPanes().bgLayer.appendChild(this._c); 
             m.on('moveend resize', this._reset, this);
             this._reset();
         },
-        onRemove: function(m) { 
-            m.getPanes().overlayPane.removeChild(this._c); 
-            m.off('moveend resize', this._reset, this); 
-        },
+        onRemove: function(m) { m.getPanes().bgLayer.removeChild(this._c); m.off('moveend resize', this._reset, this); },
         _reset: function() {
             var s = this._map.getSize(); 
             this._c.width = s.x; this._c.height = s.y;
@@ -157,11 +148,11 @@
                 }
             }
         },
-        // Questa funzione è quella che mancava o si perdeva
-        update: function() { this._draw(); }
+        // Metodo pubblico per aggiornare
+        redraw: function() { this._draw(); }
     });
 
-    // --- 4. PALETTE COLORI ---
+    // --- 2. PALETTE COLORI ---
     const PALETTES = {
         temp: [{val:-10,c:[255,255,255]},{val:0,c:[200,200,255]},{val:10,c:[0,200,100]},{val:20,c:[255,255,0]},{val:30,c:[255,140,0]},{val:40,c:[200,0,0]}],
         rain: [{val:0,c:[0,0,0,0]},{val:0.2,c:[0,150,255]},{val:5,c:[0,0,255]},{val:20,c:[150,0,150]}],
@@ -178,21 +169,7 @@
         } return [...stops[stops.length-1].c, 0.6];
     }
 
-    // --- 5. FUNZIONI NETWORK CON RETRY (ANTI Err JSON) ---
-    async function fetchWithRetry(url, retries=3) {
-        for(let i=0; i<retries; i++) {
-            try {
-                let r = await fetch(url);
-                if (!r.ok) throw new Error("HTTP " + r.status);
-                return await r.json();
-            } catch(e) {
-                if(i === retries-1) throw e;
-                console.log(`Retry ${i+1}/${retries} for ${url}`);
-                await new Promise(r => setTimeout(r, 1000)); // Aspetta 1 secondo
-            }
-        }
-    }
-
+    // --- 3. CARICATORE SCRIPT (Plugin Vento) ---
     function loadScript(url) {
         return new Promise((resolve, reject) => {
             let script = document.createElement('script');
@@ -203,41 +180,54 @@
         });
     }
 
-    // --- 6. SEQUENZA DI AVVIO ---
+    // --- 4. AVVIO SISTEMA ---
     async function initSystem() {
-        // A. Crea Mappa
+        // A. Init Mappa
         try {
             map = L.map('map', { zoomControl: false }).setView([37.5, 14.2], 8);
             L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png', { maxZoom: 19 }).addTo(map);
-        } catch(e) { updateStatus("Err Init Mappa", true); return; }
 
-        // B. Inizializza Heatmap (istanza)
+            // CREAZIONE PANES (LIVELLI FISICI)
+            // bgLayer: Sfondo colori (z-index 200)
+            map.createPane('bgLayer');
+            map.getPane('bgLayer').style.zIndex = 200;
+            
+            // topLayer: Particelle (z-index 600)
+            map.createPane('topLayer');
+            map.getPane('topLayer').style.zIndex = 600;
+            map.getPane('topLayer').style.pointerEvents = 'none';
+
+        } catch(e) { updateStatus("Err Mappa", true); return; }
+
+        // B. Init Heatmap (Senza dati per ora)
         try {
-            heatCanvas = new HeatmapLayer();
+            heatCanvas = new L.CustomHeatmap();
             map.addLayer(heatCanvas);
-        } catch(e) { updateStatus("Err Heatmap", true); return; }
+        } catch(e) { updateStatus("Err Heatmap Class", true); return; }
 
-        updateStatus("Scarico Plugin Vento...");
-
-        // C. Scarica Plugin Vento (con fallback)
+        // C. Carica Plugin Vento
+        updateStatus("Scarico Plugin...");
         try { await loadScript("https://unpkg.com/leaflet-velocity@1.8.0/dist/leaflet-velocity.js"); }
         catch(e) {
             try { await loadScript("https://cdn.jsdelivr.net/npm/leaflet-velocity@1.8.0/dist/leaflet-velocity.min.js"); }
-            catch(e2) { updateStatus("PLUGIN KO - Solo Colori", true); } // Continua comunque!
+            catch(e2) { updateStatus("PLUGIN KO", true); } // Proseguiamo per mostrare almeno i colori
         }
-        
-        // D. Scarica Catalogo Dati
+
         updateStatus("Scarico Dati...");
         loadCatalog();
     }
 
     async function loadCatalog() {
         try {
-            catalog = await fetchWithRetry('data_weather/catalog.json?t=' + Date.now());
+            // NOCACHE: Aggiungiamo timestamp per evitare file corrotti in cache
+            let r = await fetch('data_weather/catalog.json?nocache=' + Date.now());
+            if (!r.ok) throw new Error("HTTP "+r.status);
+            
+            catalog = await r.json();
             document.getElementById('time-slider').max = catalog.length - 1;
             document.getElementById('time-slider').addEventListener('input', (e) => loadStep(parseInt(e.target.value)));
             loadStep(0);
-        } catch(e) { updateStatus("Err Catalogo: " + e.message, true); }
+        } catch(e) { updateStatus("Err Catalogo (Rete)", true); }
     }
 
     async function loadStep(index) {
@@ -245,27 +235,29 @@
         document.getElementById('time-label').innerText = catalog[index].label;
         document.getElementById('loader').style.display = 'block';
         try {
-            currentData = await fetchWithRetry('data_weather/' + catalog[index].file);
+            let r = await fetch('data_weather/' + catalog[index].file + '?nocache=' + Date.now());
+            if (!r.ok) throw new Error("HTTP "+r.status);
+            
+            currentData = await r.json();
             updateMap();
             updateStatus("Dati OK: " + catalog[index].label);
-        } catch(e) { updateStatus("Err Dati: " + e.message, true); }
+        } catch(e) { updateStatus("Err Dati (Rete)", true); }
         document.getElementById('loader').style.display = 'none';
     }
 
     function updateMap() {
         if (!currentData) return;
         
-        // 1. Aggiorna Colori
-        if (heatCanvas && typeof heatCanvas.update === 'function') {
-            heatCanvas.update();
-        }
+        // 1. Disegna Colori
+        if (heatCanvas) heatCanvas.redraw();
 
-        // 2. Aggiorna Particelle
+        // 2. Disegna Particelle
         if (velocityLayer) map.removeLayer(velocityLayer);
 
         if (activeLayer === 'wind' && typeof L.velocityLayer !== 'undefined') {
             try {
                 velocityLayer = L.velocityLayer({
+                    pane: 'topLayer', // <--- LO METTIAMO NEL PANE ALTO
                     displayValues: false,
                     data: [ currentData.wind_u, currentData.wind_v ], 
                     maxVelocity: 15,
@@ -277,7 +269,7 @@
                     frameRate: 20
                 });
                 velocityLayer.addTo(map);
-            } catch(e) { console.error("Err Particelle", e); }
+            } catch(e) { console.error("Err Vento", e); }
         }
     }
 
