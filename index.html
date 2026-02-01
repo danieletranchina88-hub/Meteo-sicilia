@@ -1,19 +1,27 @@
 <!DOCTYPE html>
 <html>
 <head>
-    <title>Sicilia MeteoHub - ISOLATION TEST</title>
+    <title>Sicilia MeteoHub - ROBUST</title>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     
     <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
     <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
-    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet-velocity/1.8.0/leaflet-velocity.css" />
-    <script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet-velocity/1.8.0/leaflet-velocity.min.js"></script>
+    
+    <link rel="stylesheet" href="https://unpkg.com/leaflet-velocity@1.8.0/dist/leaflet-velocity.css" />
     
     <style>
         body { margin: 0; background: #1a1a1a; font-family: 'Segoe UI', sans-serif; color: white; overflow: hidden; }
         #map { position: absolute; top: 0; bottom: 0; width: 100%; background: #1a1a1a; }
         
+        /* StatusBar discreta per capire se funziona */
+        #status-bar {
+            position: absolute; bottom: 90px; right: 10px; 
+            background: rgba(0,0,0,0.7); color: #00ff00; 
+            padding: 5px 10px; border-radius: 4px; font-size: 12px; 
+            z-index: 6000; pointer-events: none;
+        }
+
         #layer-menu {
             position: absolute; top: 15px; right: 15px; z-index: 1000;
             background: rgba(30,30,30,0.9); padding: 8px; border-radius: 12px;
@@ -31,6 +39,7 @@
             pointer-events: none; text-shadow: 0 2px 4px rgba(0,0,0,0.8);
         }
         .picker-val { font-size: 4em; font-weight: 800; line-height: 1; }
+        .picker-unit { font-size: 1.5em; color: #ccc; }
         .picker-lbl { font-size: 0.9em; color: #aaa; text-transform: uppercase; margin-top: 5px; font-weight: bold;}
 
         #bottom-bar {
@@ -51,7 +60,8 @@
 </head>
 <body>
 
-<div id="loader">Caricamento...</div>
+<div id="loader">Inizializzazione...</div>
+<div id="status-bar">System Check...</div>
 
 <div id="layer-menu">
     <button class="layer-btn active" onclick="setLayer('wind')">VENTO 💨</button>
@@ -59,6 +69,7 @@
 
 <div id="picker-box">
     <div id="pk-val" class="picker-val">--</div>
+    <div id="pk-unit" class="picker-unit">km/h</div>
     <div id="pk-lbl" class="picker-lbl">VENTO</div>
 </div>
 
@@ -71,13 +82,62 @@
 </div>
 
 <script>
-    var map = L.map('map', { zoomControl: false }).setView([37.5, 14.2], 8);
-    L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png', { maxZoom: 19 }).addTo(map);
+    // --- SISTEMA DI CARICAMENTO BLINDATO ---
+    function updateStatus(msg, color="#00ff00") {
+        let el = document.getElementById('status-bar');
+        el.innerText = msg;
+        el.style.color = color;
+    }
 
-    var velocityLayer = null;
-    var currentData = null;
-    var catalog = [];
-    var isPlaying = false;
+    function loadScript(url) {
+        return new Promise((resolve, reject) => {
+            let script = document.createElement('script');
+            script.src = url;
+            script.onload = () => resolve(true);
+            script.onerror = () => reject(false);
+            document.head.appendChild(script);
+        });
+    }
+
+    async function initSystem() {
+        updateStatus("Carico Plugin Vento...", "#ffff00");
+        
+        // Tentativo 1: UNPKG
+        try {
+            await loadScript("https://unpkg.com/leaflet-velocity@1.8.0/dist/leaflet-velocity.js");
+        } catch(e) {
+            // Tentativo 2: JSDELIVR (Backup)
+            console.log("Fallback su CDN 2");
+            try {
+                await loadScript("https://cdn.jsdelivr.net/npm/leaflet-velocity@1.8.0/dist/leaflet-velocity.min.js");
+            } catch(e2) {
+                // Tentativo 3: CDNJS
+                try {
+                    await loadScript("https://cdnjs.cloudflare.com/ajax/libs/leaflet-velocity/1.8.0/leaflet-velocity.min.js");
+                } catch(e3) {
+                    updateStatus("ERRORE: Plugin non scaricabile!", "#ff0000");
+                    return;
+                }
+            }
+        }
+
+        if (typeof L.velocityLayer === 'undefined') {
+            updateStatus("ERRORE: Plugin rotto", "#ff0000");
+            return;
+        }
+
+        updateStatus("Plugin OK. Avvio Mappa...");
+        initMap();
+    }
+
+    // --- LOGICA MAPPA ---
+    var map, velocityLayer, currentData, catalog = [], isPlaying = false;
+
+    function initMap() {
+        map = L.map('map', { zoomControl: false }).setView([37.5, 14.2], 8);
+        L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png', { maxZoom: 19 }).addTo(map);
+        loadCatalog();
+    }
 
     async function loadCatalog() {
         try {
@@ -86,7 +146,7 @@
             document.getElementById('time-slider').max = catalog.length - 1;
             document.getElementById('time-slider').addEventListener('input', (e) => loadStep(parseInt(e.target.value)));
             loadStep(0);
-        } catch(e) { console.error(e); }
+        } catch(e) { updateStatus("Err Catalogo", "#ff0000"); }
     }
 
     async function loadStep(index) {
@@ -97,69 +157,46 @@
             let r = await fetch('data_weather/' + catalog[index].file);
             currentData = await r.json();
             updateMap();
-        } catch(e) {}
+            updateStatus("Dati Caricati: " + catalog[index].label);
+        } catch(e) { updateStatus("Err Step", "#ff0000"); }
         document.getElementById('loader').style.display = 'none';
     }
 
     function updateMap() {
         if (!currentData) return;
-        
-        // Rimuoviamo e ricreiamo il layer per forzare il refresh
         if (velocityLayer) map.removeLayer(velocityLayer);
 
-        // CONFIGURAZIONE IDENTICA A QUELLA CHE FUNZIONAVA NELLA DIAGNOSTICA
-        velocityLayer = L.velocityLayer({
-            displayValues: true,
-            displayOptions: {
-                velocityType: "Vento",
-                position: "bottomleft",
-                emptyString: "No Data",
-                angleConvention: "bearingCW"
-            },
-            data: [ currentData.wind_u, currentData.wind_v ],
-            maxVelocity: 15,
-            velocityScale: 0.02,     // Scie lunghe
-            colorScale: ["#ffffff"], // BIANCO
-            lineWidth: 3,            // Spessore
-            particleMultiplier: 1/150, // Densità
-            opacity: 1.0,
-            frameRate: 20
-        });
-        
-        velocityLayer.addTo(map);
-    }
-
-    function setLayer(name) {
-        // Placeholder per quando riattiveremo i colori
-        updateMap();
-    }
-
-    map.on('mousemove', function(e) {
-        if (!currentData) return;
-        let m = currentData.meta;
-        let y = Math.round((m.la1 - e.latlng.lat) / m.dy);
-        let x = Math.round((e.latlng.lng - m.lo1) / m.dx);
-        if (x >= 0 && x < m.nx && y >= 0 && y < m.ny) {
-            let idx = y * m.nx + x;
-            let u = currentData.wind_u.data[idx];
-            let v = currentData.wind_v.data[idx];
-            let val = (Math.sqrt(u*u+v*v)*3.6).toFixed(1);
-            document.getElementById('pk-val').innerText = val + " km/h";
+        try {
+            velocityLayer = L.velocityLayer({
+                displayValues: true,
+                displayOptions: { position: 'bottomleft', emptyString: 'No Data' },
+                data: [ currentData.wind_u, currentData.wind_v ],
+                maxVelocity: 15,
+                velocityScale: 0.02,
+                colorScale: ["#ffffff"], 
+                lineWidth: 2,
+                particleMultiplier: 1/150,
+                opacity: 1.0,
+                frameRate: 20
+            });
+            velocityLayer.addTo(map);
+        } catch(e) {
+            updateStatus("Crash Rendering: " + e.message, "#ff0000");
         }
-    });
+    }
 
     function togglePlay() {
         if (isPlaying) return; isPlaying = true;
         let s = document.getElementById('time-slider');
-        let i = parseInt(s.value);
-        let max = parseInt(s.max);
+        let i = parseInt(s.value), max = parseInt(s.max);
         let interval = setInterval(() => {
             if (i >= max || !isPlaying) { clearInterval(interval); isPlaying = false; }
             else { i++; s.value = i; loadStep(i); }
         }, 800);
     }
-    
-    loadCatalog();
+
+    // AVVIO
+    initSystem();
 
 </script>
 </body>
