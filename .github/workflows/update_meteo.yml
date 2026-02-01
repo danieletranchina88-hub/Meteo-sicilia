@@ -1,0 +1,43 @@
+name: Update ICON-2I Sicily
+
+on:
+  schedule:
+    # Esegue alle 05:00 e 17:00 ora italiana (approx) per prendere i dati
+    - cron: '0 4,16 * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  update-data:
+    runs-on: ubuntu-latest
+    
+    steps:
+    - name: Checkout Repo
+      uses: actions/checkout@v3
+
+    - name: Setup Python
+      uses: actions/setup-python@v4
+      with:
+        python-version: '3.10'
+
+    - name: Install System Libs (ecCodes)
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y libeccodes-dev
+
+    - name: Install Python Libs
+      run: pip install -r requirements.txt
+
+    - name: Run Processing Script
+      run: python scripts/process_data.py
+
+    - name: Commit & Push Data
+      run: |
+        git config --global user.name 'MeteoBot'
+        git config --global user.email 'bot@users.noreply.github.com'
+        git add sicilia_wind.json
+        git commit -m "Aggiornamento dati meteo ICON-2I" || echo "Nessun cambiamento"
+        git push
+        
