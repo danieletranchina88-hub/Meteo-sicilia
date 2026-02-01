@@ -1,26 +1,25 @@
 <!DOCTYPE html>
 <html>
 <head>
-    <title>Sicilia MeteoHub - STABLE</title>
+    <title>Sicilia MeteoHub - FINAL</title>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     
     <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
     <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
-    
     <link rel="stylesheet" href="https://unpkg.com/leaflet-velocity@1.8.0/dist/leaflet-velocity.css" />
     
     <style>
         body { margin: 0; background: #1a1a1a; font-family: 'Segoe UI', sans-serif; color: white; overflow: hidden; }
         #map { position: absolute; top: 0; bottom: 0; width: 100%; background: #1a1a1a; }
         
-        /* BARRA DI STATO (Debug ma elegante) */
+        /* StatusBar discreta per debug */
         #status-bar {
             position: absolute; bottom: 95px; right: 10px; 
             background: rgba(0,0,0,0.8); color: #00ff00; 
-            padding: 6px 10px; border-radius: 4px; font-size: 11px; font-family: monospace;
+            padding: 5px 10px; border-radius: 4px; font-size: 11px; font-family: monospace;
             z-index: 6000; pointer-events: none; border-left: 3px solid #00ff00;
-            transition: all 0.3s; opacity: 0.8;
+            transition: opacity 0.5s;
         }
 
         #layer-menu {
@@ -85,9 +84,9 @@
 </div>
 
 <script>
-    // --- GESTORE ERRORI ---
+    // --- 1. GESTIONE ERRORI & LOG ---
     window.onerror = function(msg, url, line) {
-        updateStatus("JS ERR: " + msg, true);
+        updateStatus("ERR: " + msg, true);
         return false;
     };
 
@@ -96,26 +95,29 @@
         el.innerText = msg;
         el.style.color = err ? "#ff5555" : "#00ff00";
         el.style.borderLeftColor = err ? "#ff5555" : "#00ff00";
+        console.log(msg);
     }
 
-    // --- VARIABILI GLOBALI ---
+    // --- 2. VARIABILI GLOBALI ---
     var map, velocityLayer, heatCanvas;
     var currentData = null;
     var catalog = [];
     var activeLayer = 'wind';
     var isPlaying = false;
 
-    // --- DEFINIZIONE CLASSE HEATMAP (SUBITO!) ---
-    // La definiamo qui fuori così esiste sicuramente quando serve.
+    // --- 3. DEFINIZIONE CLASSE HEATMAP (SUBITO) ---
+    // Definiamo la classe PRIMA di fare qualsiasi altra cosa per evitare "is not a function"
     var HeatmapLayer = L.Layer.extend({
         onAdd: function(m) {
             this._c = L.DomUtil.create('canvas', 'leaflet-layer');
-            // Usiamo overlayPane standard per massima compatibilità
             m.getPanes().overlayPane.appendChild(this._c); 
             m.on('moveend resize', this._reset, this);
             this._reset();
         },
-        onRemove: function(m) { m.getPanes().overlayPane.removeChild(this._c); m.off('moveend resize', this._reset, this); },
+        onRemove: function(m) { 
+            m.getPanes().overlayPane.removeChild(this._c); 
+            m.off('moveend resize', this._reset, this); 
+        },
         _reset: function() {
             var s = this._map.getSize(); 
             this._c.width = s.x; this._c.height = s.y;
@@ -139,7 +141,6 @@
                 var lat = m.la1 - (y*m.dy); 
                 for(var x=0; x<m.nx; x++) {
                     var lon = m.lo1 + (x*m.dx); 
-                    // Ottimizzazione: Disegna solo se nel viewport
                     var p = this._map.latLngToContainerPoint([lat, lon]);
                     if (p.x < -w || p.x > this._c.width || p.y < -h || p.y > this._c.height) continue;
                     
@@ -156,11 +157,11 @@
                 }
             }
         },
-        // Metodo sicuro per aggiornare
-        safeUpdate: function() { this._draw(); }
+        // Questa funzione è quella che mancava o si perdeva
+        update: function() { this._draw(); }
     });
 
-    // --- PALETTE COLORI ---
+    // --- 4. PALETTE COLORI ---
     const PALETTES = {
         temp: [{val:-10,c:[255,255,255]},{val:0,c:[200,200,255]},{val:10,c:[0,200,100]},{val:20,c:[255,255,0]},{val:30,c:[255,140,0]},{val:40,c:[200,0,0]}],
         rain: [{val:0,c:[0,0,0,0]},{val:0.2,c:[0,150,255]},{val:5,c:[0,0,255]},{val:20,c:[150,0,150]}],
@@ -177,21 +178,21 @@
         } return [...stops[stops.length-1].c, 0.6];
     }
 
-    // --- CARICAMENTO DATI CON RETRY ---
+    // --- 5. FUNZIONI NETWORK CON RETRY (ANTI Err JSON) ---
     async function fetchWithRetry(url, retries=3) {
         for(let i=0; i<retries; i++) {
             try {
                 let r = await fetch(url);
-                if (!r.ok) throw new Error(r.status);
+                if (!r.ok) throw new Error("HTTP " + r.status);
                 return await r.json();
             } catch(e) {
                 if(i === retries-1) throw e;
-                await new Promise(r => setTimeout(r, 500)); // Aspetta 500ms prima di riprovare
+                console.log(`Retry ${i+1}/${retries} for ${url}`);
+                await new Promise(r => setTimeout(r, 1000)); // Aspetta 1 secondo
             }
         }
     }
 
-    // --- INIZIALIZZAZIONE ---
     function loadScript(url) {
         return new Promise((resolve, reject) => {
             let script = document.createElement('script');
@@ -202,25 +203,31 @@
         });
     }
 
+    // --- 6. SEQUENZA DI AVVIO ---
     async function initSystem() {
-        // 1. Crea Mappa
-        map = L.map('map', { zoomControl: false }).setView([37.5, 14.2], 8);
-        L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png', { maxZoom: 19 }).addTo(map);
+        // A. Crea Mappa
+        try {
+            map = L.map('map', { zoomControl: false }).setView([37.5, 14.2], 8);
+            L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png', { maxZoom: 19 }).addTo(map);
+        } catch(e) { updateStatus("Err Init Mappa", true); return; }
 
-        // 2. Crea Heatmap (vuota per ora)
-        heatCanvas = new HeatmapLayer();
-        map.addLayer(heatCanvas);
+        // B. Inizializza Heatmap (istanza)
+        try {
+            heatCanvas = new HeatmapLayer();
+            map.addLayer(heatCanvas);
+        } catch(e) { updateStatus("Err Heatmap", true); return; }
 
-        updateStatus("Scarico Plugin...");
+        updateStatus("Scarico Plugin Vento...");
 
-        // 3. Carica Plugin Vento
+        // C. Scarica Plugin Vento (con fallback)
         try { await loadScript("https://unpkg.com/leaflet-velocity@1.8.0/dist/leaflet-velocity.js"); }
         catch(e) {
             try { await loadScript("https://cdn.jsdelivr.net/npm/leaflet-velocity@1.8.0/dist/leaflet-velocity.min.js"); }
-            catch(e2) { updateStatus("PLUGIN KO", true); return; }
+            catch(e2) { updateStatus("PLUGIN KO - Solo Colori", true); } // Continua comunque!
         }
         
-        updateStatus("Sistema OK. Scarico Dati...");
+        // D. Scarica Catalogo Dati
+        updateStatus("Scarico Dati...");
         loadCatalog();
     }
 
@@ -230,7 +237,7 @@
             document.getElementById('time-slider').max = catalog.length - 1;
             document.getElementById('time-slider').addEventListener('input', (e) => loadStep(parseInt(e.target.value)));
             loadStep(0);
-        } catch(e) { updateStatus("Err Catalogo", true); }
+        } catch(e) { updateStatus("Err Catalogo: " + e.message, true); }
     }
 
     async function loadStep(index) {
@@ -241,16 +248,16 @@
             currentData = await fetchWithRetry('data_weather/' + catalog[index].file);
             updateMap();
             updateStatus("Dati OK: " + catalog[index].label);
-        } catch(e) { updateStatus("Err JSON Dati", true); }
+        } catch(e) { updateStatus("Err Dati: " + e.message, true); }
         document.getElementById('loader').style.display = 'none';
     }
 
     function updateMap() {
         if (!currentData) return;
         
-        // 1. Aggiorna Colori (Metodo sicuro)
-        if (heatCanvas && typeof heatCanvas.safeUpdate === 'function') {
-            heatCanvas.safeUpdate();
+        // 1. Aggiorna Colori
+        if (heatCanvas && typeof heatCanvas.update === 'function') {
+            heatCanvas.update();
         }
 
         // 2. Aggiorna Particelle
@@ -270,7 +277,7 @@
                     frameRate: 20
                 });
                 velocityLayer.addTo(map);
-            } catch(e) { console.error(e); }
+            } catch(e) { console.error("Err Particelle", e); }
         }
     }
 
@@ -311,7 +318,7 @@
             else { i++; s.value = i; loadStep(i); }
         }, 800);
     }
-
+    
     // AVVIO
     initSystem();
 
