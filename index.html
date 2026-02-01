@@ -9,45 +9,45 @@
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet-velocity/1.8.0/leaflet-velocity.css" />
     
     <style>
-        body { margin: 0; padding: 0; background: #000; font-family: sans-serif; color: white; overflow: hidden; }
-        #map { position: absolute; top: 0; bottom: 0; width: 100%; background: #000; }
+        body { margin: 0; padding: 0; background: #111; font-family: sans-serif; color: white; overflow: hidden; }
+        #map { position: absolute; top: 0; bottom: 0; width: 100%; background: #111; }
         
-        /* Menu Layer in Alto Destra */
+        /* Menu Layer */
         #layer-menu {
             position: absolute; top: 10px; right: 10px; z-index: 1000;
-            background: rgba(20,20,20,0.9); padding: 5px; border-radius: 10px;
+            background: rgba(0,0,0,0.8); padding: 5px; border-radius: 8px;
             display: flex; flex-direction: column; gap: 5px; border: 1px solid #444;
         }
         .layer-btn {
-            background: transparent; border: none; color: #888; padding: 10px 15px;
-            font-size: 14px; cursor: pointer; text-align: right; border-radius: 8px;
-            font-weight: bold; transition: 0.2s;
+            background: transparent; border: none; color: #aaa; padding: 10px 15px;
+            font-size: 14px; cursor: pointer; text-align: right; font-weight: bold;
         }
-        .layer-btn:hover { color: #fff; background: rgba(255,255,255,0.1); }
-        .layer-btn.active { background: #007bff; color: #fff; }
+        .layer-btn:hover { color: white; }
+        .layer-btn.active { background: #007bff; color: white; border-radius: 5px; }
 
-        /* Valore Gigante in Alto Sinistra */
+        /* Valore Grande */
         #picker-box {
             position: absolute; top: 20px; left: 20px; z-index: 1000;
-            pointer-events: none; text-shadow: 2px 2px 4px #000;
+            pointer-events: none; text-shadow: 2px 2px 0px #000;
         }
-        .picker-val { font-size: 3.5em; font-weight: 800; line-height: 1; letter-spacing: -2px; }
-        .picker-unit { font-size: 1.2em; color: #ccc; font-weight: 300; }
-        .picker-label { font-size: 1em; color: #aaa; text-transform: uppercase; margin-top: 5px; font-weight: bold; }
+        .picker-val { font-size: 4em; font-weight: 800; line-height: 1; }
+        .picker-unit { font-size: 1.5em; color: #ccc; }
+        .picker-lbl { font-size: 1em; color: #888; text-transform: uppercase; font-weight: bold; }
 
-        /* Barra in basso */
+        /* Slider */
         #bottom-bar {
-            position: absolute; bottom: 0; left: 0; right: 0; height: 70px;
+            position: absolute; bottom: 0; left: 0; right: 0; height: 80px;
             background: linear-gradient(to top, #000, transparent);
             display: flex; align-items: center; padding: 0 20px 20px 20px; z-index: 2000;
         }
-        #play-btn { font-size: 2em; cursor: pointer; margin-right: 20px; }
-        input[type=range] { flex-grow: 1; cursor: pointer; }
-        #time-label { min-width: 150px; text-align: center; font-weight: bold; font-size: 1.2em; }
+        #play-btn { font-size: 2.5em; cursor: pointer; margin-right: 20px; }
+        input[type=range] { flex-grow: 1; cursor: pointer; height: 6px; accent-color: #00ccff; }
+        #time-label { min-width: 140px; text-align: center; font-weight: bold; font-size: 1.2em; }
         
         #loader {
             position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%);
-            background: #000; padding: 20px; border-radius: 10px; z-index: 5000; display: none; border: 1px solid #444;
+            background: #222; padding: 15px 30px; border-radius: 30px; 
+            border: 1px solid #555; z-index: 5000; display: none;
         }
     </style>
 </head>
@@ -56,15 +56,15 @@
 <div id="loader">Caricamento...</div>
 
 <div id="layer-menu">
-    <button class="layer-btn active" onclick="setLayer('wind')">VENTO</button>
-    <button class="layer-btn" onclick="setLayer('temp')">TEMPERATURA</button>
-    <button class="layer-btn" onclick="setLayer('rain')">PIOGGIA</button>
+    <button class="layer-btn active" onclick="setLayer('wind')">VENTO 💨</button>
+    <button class="layer-btn" onclick="setLayer('temp')">TEMPERATURA 🌡️</button>
+    <button class="layer-btn" onclick="setLayer('rain')">PIOGGIA ☔</button>
 </div>
 
 <div id="picker-box">
     <div id="pk-val" class="picker-val">--</div>
     <div id="pk-unit" class="picker-unit">km/h</div>
-    <div id="pk-lbl" class="picker-label">VENTO</div>
+    <div id="pk-lbl" class="picker-lbl">VENTO</div>
 </div>
 
 <div id="map"></div>
@@ -72,18 +72,16 @@
 <div id="bottom-bar">
     <div id="play-btn" onclick="togglePlay()">&#9658;</div>
     <input type="range" id="time-slider" min="0" max="0" value="0" step="1">
-    <div id="time-label">--:--</div>
+    <div id="time-label">--/-- --:--</div>
 </div>
 
 <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet-velocity/1.8.0/leaflet-velocity.min.js"></script>
 
 <script>
-    var map = L.map('map', { zoomControl: false, attributionControl: false }).setView([37.5, 14.2], 8);
-    
-    // Mappa Scura (CartoDB Dark Matter)
+    var map = L.map('map', { zoomControl: false }).setView([37.5, 14.2], 8);
     L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png', {
-        opacity: 1, maxZoom: 19
+        maxZoom: 19, opacity: 1
     }).addTo(map);
 
     var velocityLayer = null;
@@ -93,35 +91,26 @@
     var activeLayer = 'wind';
     var isPlaying = false;
 
-    // --- COLORI CORRETTI ---
+    // --- SCALE COLORI CORRETTE ---
     function getColor(val, type) {
         if (type === 'temp') {
-            // Scala Temperatura (°C)
-            if (val < 0) return [200, 200, 255, 0.5]; // Ghiaccio
-            if (val < 10) return [0, 255, 100, 0.4];  // Fresco Verde
-            if (val < 20) return [255, 255, 0, 0.4];  // Mite Giallo
-            if (val < 30) return [255, 150, 0, 0.5];  // Caldo Arancio
-            return [255, 0, 0, 0.6];                  // Molto Caldo Rosso
+            if (val < 0) return [255, 255, 255, 0.5]; // Neve
+            if (val < 10) return [0, 255, 100, 0.4];  // Freddo
+            if (val < 20) return [255, 255, 0, 0.4];  // Mite
+            if (val < 30) return [255, 140, 0, 0.5];  // Caldo
+            return [255, 0, 0, 0.6];                  // Molto Caldo
         }
         if (type === 'rain') {
-            // Scala Pioggia (mm) - IMPORTANTE: 0 deve essere trasparente
-            if (val <= 0.1) return [0,0,0,0];         // Niente pioggia
-            if (val < 2) return [0, 100, 255, 0.4];   // Pioggia debole
-            if (val < 10) return [0, 0, 255, 0.6];    // Moderata
-            return [150, 0, 255, 0.7];                // Forte (Viola)
+            if (val <= 0.1) return [0,0,0,0];         // TRASPARENTE SE 0
+            if (val < 2) return [0, 100, 255, 0.4];
+            if (val < 10) return [0, 0, 255, 0.6];
+            return [140, 0, 255, 0.7];
         }
-        if (type === 'wind') {
-            // Sfondo per il vento (opzionale, meglio nero per contrasto particelle)
-            // Se vuoi colorare la velocità di sfondo:
-            if (val < 5) return [0,0,0,0];
-            if (val < 20) return [0, 100, 200, 0.2];
-            if (val < 50) return [200, 0, 200, 0.3];
-            return [255, 0, 0, 0.4];
-        }
+        // Vento: Sfondo trasparente, usiamo solo le particelle
         return [0,0,0,0];
     }
 
-    // --- CANVAS LAYER (Disegna i colori) ---
+    // --- CANVAS LAYER (Colore Sfondo) ---
     L.CanvasLayer = L.Layer.extend({
         onAdd: function(map) {
             this._canvas = L.DomUtil.create('canvas', 'leaflet-layer');
@@ -142,48 +131,42 @@
             this._redraw();
         },
         _redraw: function() {
-            if (!currentData) return;
+            if (!currentData || activeLayer === 'wind') {
+                // Se è vento, puliamo il canvas (niente sfondo colorato)
+                var ctx = this._canvas.getContext('2d');
+                ctx.clearRect(0, 0, this._canvas.width, this._canvas.height);
+                return;
+            }
+            
             var ctx = this._canvas.getContext('2d');
             ctx.clearRect(0, 0, this._canvas.width, this._canvas.height);
             
-            // Non disegniamo colori di sfondo se siamo in modalità VENTO (solo particelle)
-            // if (activeLayer === 'wind') return; 
-
             var meta = currentData.meta;
             var bounds = this._map.getBounds();
-
-            // Dimensione pixel dinamica per performance
+            
+            // Ottimizzazione pixel
             var p1 = this._map.latLngToContainerPoint([meta.la1, meta.lo1]);
             var p2 = this._map.latLngToContainerPoint([meta.la1 - meta.dy, meta.lo1 + meta.dx]);
             var w = Math.ceil(p2.x - p1.x) + 1;
             var h = Math.ceil(p2.y - p1.y) + 1;
 
-            if (w < 1) w = 1; if (h < 1) h = 1;
-
             for (var y = 0; y < meta.ny; y++) {
                 var lat = meta.la1 - (y * meta.dy);
                 if (lat > bounds.getNorth() || lat < bounds.getSouth()) continue;
-
                 for (var x = 0; x < meta.nx; x++) {
                     var lon = meta.lo1 + (x * meta.dx);
                     if (lon > bounds.getEast() || lon < bounds.getWest()) continue;
 
                     var idx = y * meta.nx + x;
                     var val = 0;
-
                     if (activeLayer === 'temp') val = currentData.temp[idx];
                     else if (activeLayer === 'rain') val = currentData.rain[idx];
-                    else if (activeLayer === 'wind') {
-                         let u = currentData.wind_u[idx];
-                         let v = currentData.wind_v[idx];
-                         val = Math.sqrt(u*u + v*v) * 3.6;
-                    }
 
-                    var col = getColor(val, activeLayer);
-                    if (col[3] === 0) continue; 
+                    var c = getColor(val, activeLayer);
+                    if (c[3] === 0) continue;
 
                     var p = this._map.latLngToContainerPoint([lat, lon]);
-                    ctx.fillStyle = `rgba(${col[0]},${col[1]},${col[2]},${col[3]})`;
+                    ctx.fillStyle = `rgba(${c[0]},${c[1]},${c[2]},${c[3]})`;
                     ctx.fillRect(p.x, p.y, w, h);
                 }
             }
@@ -191,16 +174,14 @@
         update: function() { this._redraw(); }
     });
 
-    // --- CARICAMENTO ---
     async function loadCatalog() {
         try {
             let r = await fetch('data_weather/catalog.json?t=' + Date.now());
             catalog = await r.json();
-            let slider = document.getElementById('time-slider');
-            slider.max = catalog.length - 1;
-            slider.addEventListener('input', (e) => loadStep(parseInt(e.target.value)));
+            document.getElementById('time-slider').max = catalog.length - 1;
+            document.getElementById('time-slider').addEventListener('input', (e) => loadStep(parseInt(e.target.value)));
             loadStep(0);
-        } catch (e) { console.error(e); }
+        } catch(e) { console.log(e); }
     }
 
     async function loadStep(index) {
@@ -211,23 +192,24 @@
             let r = await fetch('data_weather/' + catalog[index].file);
             currentData = await r.json();
             updateMap();
-        } catch (e) { console.error(e); }
+        } catch(e) {}
         document.getElementById('loader').style.display = 'none';
     }
 
     function updateMap() {
         if (!currentData) return;
         
-        // 1. Aggiorna Colori
+        // 1. Sfondo Colore
         if (!heatCanvas) { heatCanvas = new L.CanvasLayer(); map.addLayer(heatCanvas); }
         heatCanvas.update();
 
-        // 2. Aggiorna Particelle (Vento)
+        // 2. Particelle Vento
         if (velocityLayer) map.removeLayer(velocityLayer);
         
-        // Le particelle le mostriamo sempre, ma cambiano opacità
-        var opacity = (activeLayer === 'wind') ? 1.0 : 0.4;
-        
+        // Se siamo su Temp o Pioggia, le particelle sono quasi invisibili (opacità 0.3)
+        // Se siamo su Vento, sono ben visibili (1.0)
+        let op = (activeLayer === 'wind') ? 1.0 : 0.3;
+
         velocityLayer = L.velocityLayer({
             displayValues: false,
             data: [
@@ -235,11 +217,11 @@
                 { header: { nx: currentData.meta.nx, ny: currentData.meta.ny, lo1: currentData.meta.lo1, la1: currentData.meta.la1, dx: currentData.meta.dx, dy: currentData.meta.dy, parameterNumberName: "Northward current" }, data: currentData.wind_v }
             ],
             maxVelocity: 25,
-            velocityScale: 0.005, // Lunghezza scia
-            colorScale: ["#ffffff"], // BIANCO PURO PER CONTRASTO
-            lineWidth: 2, // Più spesse
-            particleMultiplier: 1/500, // Più dense
-            opacity: opacity
+            velocityScale: 0.008,
+            colorScale: ["#ffffff"], // BIANCO PURO
+            lineWidth: 2, 
+            particleMultiplier: 1/600,
+            opacity: op
         });
         velocityLayer.addTo(map);
     }
@@ -249,17 +231,16 @@
         document.querySelectorAll('.layer-btn').forEach(b => b.classList.remove('active'));
         event.target.classList.add('active');
         
-        // Aggiorna Label e Unità
         let lbl = document.getElementById('pk-lbl');
         let unit = document.getElementById('pk-unit');
-        if(name == 'wind') { lbl.innerText = "VENTO"; unit.innerText = "km/h"; }
-        if(name == 'temp') { lbl.innerText = "TEMPERATURA"; unit.innerText = "°C"; }
-        if(name == 'rain') { lbl.innerText = "PIOGGIA"; unit.innerText = "mm"; }
+        
+        if (name === 'wind') { lbl.innerText = "VENTO"; unit.innerText = "km/h"; }
+        if (name === 'temp') { lbl.innerText = "TEMPERATURA"; unit.innerText = "°C"; }
+        if (name === 'rain') { lbl.innerText = "PIOGGIA"; unit.innerText = "mm"; }
         
         updateMap();
     }
 
-    // --- MOUSE HOVER ---
     map.on('mousemove', function(e) {
         if (!currentData) return;
         let meta = currentData.meta;
@@ -269,7 +250,6 @@
         if (x >= 0 && x < meta.nx && y >= 0 && y < meta.ny) {
             let idx = y * meta.nx + x;
             let val = "--";
-            
             if (activeLayer === 'wind') {
                 let u = currentData.wind_u[idx];
                 let v = currentData.wind_v[idx];
@@ -283,7 +263,6 @@
         }
     });
 
-    // Play/Pause
     function togglePlay() {
         if (isPlaying) return;
         isPlaying = true;
