@@ -1,7 +1,7 @@
 <!DOCTYPE html>
 <html>
 <head>
-    <title>Meteo Sicilia - ICON-2I</title>
+    <title>Sicilia MeteoHub - ICON 2I</title>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     
@@ -9,64 +9,191 @@
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet-velocity/1.8.0/leaflet-velocity.css" />
     
     <style>
-        body { margin: 0; padding: 0; background: #222; font-family: sans-serif; }
-        #map { position: absolute; top: 0; bottom: 0; width: 100%; }
-        .info-box {
-            position: absolute; top: 10px; left: 50px; z-index: 1000;
-            background: rgba(0,0,0,0.8); color: white; padding: 15px;
-            border-radius: 8px; pointer-events: none;
+        body { margin: 0; padding: 0; background: #222; font-family: 'Segoe UI', sans-serif; color: white; }
+        #map { position: absolute; top: 0; bottom: 50px; width: 100%; }
+        
+        /* Controlli UI */
+        #controls {
+            position: absolute; bottom: 0; left: 0; right: 0; height: 50px;
+            background: rgba(30, 30, 30, 0.9); display: flex; align-items: center;
+            padding: 0 20px; z-index: 2000; border-top: 1px solid #444;
+        }
+        input[type=range] { flex-grow: 1; margin: 0 15px; cursor: pointer; }
+        #time-label { min-width: 120px; text-align: center; font-weight: bold; color: #4db8ff; }
+
+        /* Picker Box (Dati al puntatore) */
+        #picker-box {
+            position: absolute; top: 10px; right: 10px; z-index: 1000;
+            background: rgba(0, 0, 0, 0.8); padding: 15px; border-radius: 8px;
+            width: 180px; box-shadow: 0 0 15px rgba(0,0,0,0.5);
+            pointer-events: none; /* Lascia passare i click alla mappa */
+        }
+        .data-row { display: flex; justify-content: space-between; margin-bottom: 5px; font-size: 0.9em; }
+        .val { font-weight: bold; }
+        .lbl { color: #aaa; }
+        h3 { margin: 0 0 10px 0; font-size: 1.1em; border-bottom: 1px solid #555; padding-bottom: 5px; }
+
+        /* Loader */
+        #loader {
+            position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%);
+            background: black; padding: 20px; z-index: 3000; border-radius: 5px; display: none;
         }
     </style>
 </head>
 <body>
 
-<div class="info-box">
-    <h2 style="margin:0;">Sicilia Vento Live</h2>
-    <div style="font-size: 0.9em; color: #ccc;">Modello: ICON-2I (ItaliaMeteo)</div>
-    <div id="status" style="margin-top:5px; color: #00ff00;">Caricamento...</div>
+<div id="loader">Caricamento dati...</div>
+
+<div id="picker-box">
+    <h3>Dati Locali</h3>
+    <div class="data-row"><span class="lbl">Temp:</span> <span id="val-temp" class="val">--</span> °C</div>
+    <div class="data-row"><span class="lbl">Vento:</span> <span id="val-wind" class="val">--</span> km/h</div>
+    <div class="data-row"><span class="lbl">Pioggia:</span> <span id="val-rain" class="val">--</span> mm</div>
+    <div class="data-row"><span class="lbl">Press:</span> <span id="val-press" class="val">--</span> hPa</div>
+    <div style="font-size:0.7em; color:#666; margin-top:5px;">Modello ICON-2I ItaliaMeteo</div>
 </div>
 
 <div id="map"></div>
+
+<div id="controls">
+    <button id="btn-play" style="background:none; border:1px solid #666; color:white; padding:5px 10px; cursor:pointer;">&#9658;</button>
+    <input type="range" id="time-slider" min="0" max="0" value="0" step="1">
+    <div id="time-label">--/-- --:--</div>
+</div>
 
 <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet-velocity/1.8.0/leaflet-velocity.min.js"></script>
 
 <script>
+    // --- 1. Inizializzazione Mappa ---
     var map = L.map('map').setView([37.5, 14.0], 8);
-
     L.tileLayer('https://tiles.stadiamaps.com/tiles/alidade_smooth_dark/{z}/{x}/{y}{r}.png', {
-        maxZoom: 20,
-        attribution: '&copy; Stadia Maps, &copy; ItaliaMeteo'
+        maxZoom: 19, attribution: 'Stadia Maps, ItaliaMeteo'
     }).addTo(map);
 
-    // Carica il file JSON generato dallo script Python
-    fetch('sicilia_wind.json')
-        .then(response => {
-            if (!response.ok) throw new Error("File dati non trovato (ancora in generazione?)");
-            return response.json();
-        })
-        .then(data => {
-            var velocityLayer = L.velocityLayer({
-                displayValues: true,
-                displayOptions: {
-                    velocityType: 'Vento',
-                    position: 'bottomleft',
-                    emptyString: 'No data',
-                    angleConvention: 'meteoCW',
-                    speedUnit: 'km/h'
+    var velocityLayer = null;
+    var currentData = null; // Contiene i dati JSON attuali
+    var catalog = [];
+
+    // --- 2. Gestione Dati ---
+    async function loadCatalog() {
+        try {
+            let r = await fetch('data_weather/catalog.json');
+            catalog = await r.json();
+            
+            // Configura slider
+            let slider = document.getElementById('time-slider');
+            slider.max = catalog.length - 1;
+            slider.value = 0;
+            
+            // Carica primo step
+            loadStep(0);
+            
+            // Listener slider
+            slider.addEventListener('input', (e) => loadStep(parseInt(e.target.value)));
+
+        } catch (e) {
+            console.error("Errore catalogo:", e);
+            document.getElementById('time-label').innerText = "Dati non trovati";
+        }
+    }
+
+    async function loadStep(index) {
+        if (!catalog[index]) return;
+        
+        document.getElementById('loader').style.display = 'block';
+        document.getElementById('time-label').innerText = catalog[index].label;
+        
+        let file = 'data_weather/' + catalog[index].file;
+        
+        try {
+            let r = await fetch(file);
+            currentData = await r.json();
+            updateMap(currentData);
+        } catch (e) {
+            console.error(e);
+        }
+        document.getElementById('loader').style.display = 'none';
+    }
+
+    function updateMap(data) {
+        // Rimuovi vecchio layer vento
+        if (velocityLayer) map.removeLayer(velocityLayer);
+
+        // Formatta dati per leaflet-velocity
+        // Deve ricostruire la struttura "header + data" che si aspetta la libreria
+        let velocityData = [
+            {
+                header: {
+                    parameterNumberName: "Eastward current",
+                    dx: data.meta.dx, dy: data.meta.dy,
+                    la1: data.meta.la1, lo1: data.meta.lo1,
+                    nx: data.meta.nx, ny: data.meta.ny
                 },
-                data: data,
-                maxVelocity: 25, 
-                velocityScale: 0.01 // Regola per vedere scie più lunghe/corte
-            });
-            velocityLayer.addTo(map);
-            document.getElementById('status').innerText = "Dati aggiornati";
-        })
-        .catch(err => {
-            console.error(err);
-            document.getElementById('status').innerText = "In attesa primo aggiornamento...";
-            document.getElementById('status').style.color = "orange";
+                data: data.wind_u
+            },
+            {
+                header: {
+                    parameterNumberName: "Northward current",
+                    dx: data.meta.dx, dy: data.meta.dy,
+                    la1: data.meta.la1, lo1: data.meta.lo1,
+                    nx: data.meta.nx, ny: data.meta.ny
+                },
+                data: data.wind_v
+            }
+        ];
+
+        velocityLayer = L.velocityLayer({
+            displayValues: false, // Usiamo il nostro picker custom
+            data: velocityData,
+            maxVelocity: 25,
+            velocityScale: 0.01,
+            colorScale: ["#fff"] // Particelle bianche
         });
+        velocityLayer.addTo(map);
+    }
+
+    // --- 3. Il Picker (Interattività) ---
+    map.on('mousemove', function(e) {
+        if (!currentData) return;
+
+        // Converti lat/lon mouse in indice griglia
+        let meta = currentData.meta;
+        let lat = e.latlng.lat;
+        let lng = e.latlng.lng;
+
+        // Calcolo indici approssimativi nella matrice
+        // Nota: Assumiamo griglia regolare. ICON-2I ritagliato è quasi regolare.
+        let y = Math.round((meta.la1 - lat) / meta.dy); 
+        let x = Math.round((lng - meta.lo1) / meta.dx);
+
+        if (x >= 0 && x < meta.nx && y >= 0 && y < meta.ny) {
+            let idx = y * meta.nx + x; // Indice array piatto
+
+            // Leggi valori
+            let t = currentData.temp[idx];
+            let r = currentData.rain[idx];
+            let p = currentData.press[idx];
+            
+            // Calcola velocità vento (Pitagora u,v)
+            let u = currentData.wind_u[idx];
+            let v = currentData.wind_v[idx];
+            let w = Math.sqrt(u*u + v*v) * 3.6; // m/s -> km/h
+
+            // Aggiorna DOM
+            document.getElementById('val-temp').innerText = t.toFixed(1);
+            document.getElementById('val-wind').innerText = w.toFixed(1);
+            document.getElementById('val-rain').innerText = r.toFixed(1);
+            document.getElementById('val-press').innerText = p.toFixed(0);
+        } else {
+            // Fuori griglia
+            document.getElementById('val-temp').innerText = "--";
+        }
+    });
+
+    // Avvio
+    loadCatalog();
+
 </script>
 </body>
 </html>
