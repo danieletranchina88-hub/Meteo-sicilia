@@ -16,8 +16,8 @@ OUTPUT_DIR = "data_weather"
 LAT_MIN, LAT_MAX = 36.0, 39.0
 LON_MIN, LON_MAX = 11.5, 16.0
 
-def get_latest_run_files():
-    print("1. Cerco file ultima run...")
+def get_latest_run_file():
+    print("1. Cerco ultima run...")
     try:
         r = requests.get(API_LIST_URL, timeout=15)
         r.raise_for_status()
@@ -26,148 +26,118 @@ def get_latest_run_files():
         print(f"Errore API: {e}")
         return None, None
 
-    # Raggruppa i file per Data/Ora Run
-    runs = {}
+    # Trova l'ultimo file in assoluto basato su data e ora
+    valid_items = []
     for item in items:
         if isinstance(item, dict) and 'date' in item and 'run' in item:
-            key = f"{item['date']} {item['run']}"
-            if key not in runs: runs[key] = []
-            runs[key].append(item['filename'])
-
-    if not runs: return None, None
+            try:
+                dt = datetime.strptime(f"{item['date']} {item['run']}", "%Y-%m-%d %H:%M")
+                valid_items.append((dt, item['filename']))
+            except: continue
     
-    # Prendi la run più recente
-    latest_key = sorted(runs.keys())[-1]
-    run_dt = datetime.strptime(latest_key, "%Y-%m-%d %H:%M")
-    print(f"   Run trovata: {latest_key} ({len(runs[latest_key])} file)")
+    if not valid_items: return None, None
     
-    return run_dt, runs[latest_key]
-
-def check_file_content(filename):
-    """Scarica un file e controlla quali variabili contiene."""
-    local_path = "temp_check.grib2"
-    url = f"{API_DOWNLOAD_URL}/{filename}"
+    # Ordina e prendi l'ultimo
+    valid_items.sort(key=lambda x: x[0])
+    last_run_dt, last_filename = valid_items[-1]
     
-    try:
-        # Download rapido
-        with requests.get(url, stream=True, timeout=60) as r:
-            r.raise_for_status()
-            with open(local_path, 'wb') as f:
-                for chunk in r.iter_content(chunk_size=1024*1024): f.write(chunk)
-        
-        # Tentativo 1: Vento/Temp (heightAboveGround)
-        try:
-            ds = xr.open_dataset(local_path, engine='cfgrib', 
-                               backend_kwargs={'filter_by_keys': {'typeOfLevel': 'heightAboveGround'}})
-            vars = list(ds.data_vars)
-            ds.close()
-            return vars, "heightAboveGround"
-        except:
-            pass
-
-        # Tentativo 2: Pioggia/Pressione (surface)
-        try:
-            ds = xr.open_dataset(local_path, engine='cfgrib', 
-                               backend_kwargs={'filter_by_keys': {'typeOfLevel': 'surface'}})
-            vars = list(ds.data_vars)
-            ds.close()
-            return vars, "surface"
-        except:
-            pass
-            
-        return [], None
-    except Exception as e:
-        print(f"Errore check {filename}: {e}")
-        return [], None
+    print(f"   Run trovata: {last_run_dt} -> File: {last_filename}")
+    return last_run_dt, last_filename
 
 def process_data():
     if os.path.exists(OUTPUT_DIR): shutil.rmtree(OUTPUT_DIR)
     os.makedirs(OUTPUT_DIR)
 
-    run_dt, file_list = get_latest_run_files()
-    if not file_list: sys.exit(1)
+    run_dt, filename = get_latest_run_file()
+    if not filename: sys.exit(1)
 
-    # --- FASE 1: Identifica quale file ha cosa ---
-    file_map = {'wind': None, 'temp': None, 'rain': None}
-    
-    print("2. Scansione contenuto file...")
-    for fname in file_list:
-        if all(file_map.values()): break # Abbiamo trovato tutto
-        
-        vars, level_type = check_file_content(fname)
-        print(f"   -> {fname[:20]}... contiene: {vars}")
-        
-        # Cerca Vento
-        if not file_map['wind'] and any(k in vars for k in ['u10','u','10u','v10','v','10v']):
-            file_map['wind'] = (fname, level_type)
-            print("      [TROVATO] Vento")
-        
-        # Cerca Temp (spesso è t2m o 2t)
-        if not file_map['temp'] and any(k in vars for k in ['t2m','2t','t']):
-            file_map['temp'] = (fname, level_type)
-            print("      [TROVATO] Temperatura")
-            
-        # Cerca Pioggia (tp o tot_prec)
-        if not file_map['rain'] and any(k in vars for k in ['tp','tot_prec','unknown']): 
-            file_map['rain'] = (fname, level_type)
-            print("      [TROVATO] Pioggia")
-
-    if not file_map['wind']:
-        print("ERRORE FATALE: Non ho trovato nessun file con il vento (u/v).")
-        # Fallback: se troviamo almeno la temp, usiamo quella come vento fake (solo per non crashare)
-        # Ma l'utente vuole il vento, quindi è meglio uscire.
+    # --- DOWNLOAD ---
+    print("2. Download file unico...")
+    local_path = "meteo_data.grib2"
+    try:
+        with requests.get(f"{API_DOWNLOAD_URL}/{filename}", stream=True, timeout=120) as r:
+            r.raise_for_status()
+            with open(local_path, 'wb') as f:
+                for chunk in r.iter_content(chunk_size=1024*1024): f.write(chunk)
+    except Exception as e:
+        print(f"Errore download: {e}")
         sys.exit(1)
 
-    # --- FASE 2: Estrazione e Unione ---
-    print("3. Elaborazione e Unione dati...")
-    
-    # Carichiamo i dataset necessari
-    ds_wind = xr.open_dataset(f"{API_DOWNLOAD_URL}/{file_map['wind'][0]}", engine='cfgrib', cache=False,
-                              backend_kwargs={'filter_by_keys': {'typeOfLevel': file_map['wind'][1]}}) if file_map['wind'] else None
-    
-    ds_temp = xr.open_dataset(f"{API_DOWNLOAD_URL}/{file_map['temp'][0]}", engine='cfgrib', cache=False,
-                              backend_kwargs={'filter_by_keys': {'typeOfLevel': file_map['temp'][1]}}) if file_map['temp'] else None
-    
-    ds_rain = xr.open_dataset(f"{API_DOWNLOAD_URL}/{file_map['rain'][0]}", engine='cfgrib', cache=False,
-                              backend_kwargs={'filter_by_keys': {'typeOfLevel': file_map['rain'][1]}}) if file_map['rain'] else None
+    # --- ESTRAZIONE CHIRURGICA ---
+    print("3. Estrazione Variabili (Separata)...")
 
-    # Usiamo il vento come riferimento temporale
+    # A. VENTO (Livello 10m)
+    print("   -> Apro Vento (10m)...")
+    try:
+        ds_wind = xr.open_dataset(local_path, engine='cfgrib', 
+                                backend_kwargs={'filter_by_keys': {'typeOfLevel': 'heightAboveGround', 'level': 10}})
+    except Exception as e:
+        print(f"      ERRORE VENTO: {e}")
+        sys.exit(1) # Senza vento è inutile
+
+    # B. TEMPERATURA (Livello 2m)
+    print("   -> Apro Temperatura (2m)...")
+    try:
+        ds_temp = xr.open_dataset(local_path, engine='cfgrib', 
+                                backend_kwargs={'filter_by_keys': {'typeOfLevel': 'heightAboveGround', 'level': 2}})
+    except:
+        print("      Warn: Temp non trovata, userò zeri.")
+        ds_temp = None
+
+    # C. PIOGGIA (Superficie)
+    print("   -> Apro Pioggia (Surface)...")
+    try:
+        ds_rain = xr.open_dataset(local_path, engine='cfgrib', 
+                                backend_kwargs={'filter_by_keys': {'typeOfLevel': 'surface'}})
+    except:
+        print("      Warn: Pioggia non trovata, userò zeri.")
+        ds_rain = None
+
+    # --- UNIONE E EXPORT ---
+    print("4. Generazione JSON...")
+    
     steps = range(min(ds_wind.sizes.get('step', 1), 24))
     catalog = []
 
     for i in steps:
         try:
-            # --- VENTO ---
+            # 1. Vento (Master)
             d_w = ds_wind.isel(step=i) if 'step' in ds_wind.dims else ds_wind
             mask = ((d_w.latitude >= LAT_MIN) & (d_w.latitude <= LAT_MAX) & 
                     (d_w.longitude >= LON_MIN) & (d_w.longitude <= LON_MAX))
             cut_w = d_w.where(mask, drop=True)
             
-            u_name = next(k for k in ['u10','u','10u'] if k in cut_w)
-            v_name = next(k for k in ['v10','v','10v'] if k in cut_w)
-            u = np.nan_to_num(cut_w[u_name].values)
-            v = np.nan_to_num(cut_w[v_name].values)
+            # Cerca variabili u/v
+            keys_w = list(cut_w.data_vars)
+            u_key = next((k for k in ['u10','u','10u'] if k in keys_w), None)
+            v_key = next((k for k in ['v10','v','10v'] if k in keys_w), None)
+            
+            if not u_key: continue
 
-            # --- TEMP ---
+            u = np.nan_to_num(cut_w[u_key].values)
+            v = np.nan_to_num(cut_w[v_key].values)
+
+            # 2. Temp
             if ds_temp:
                 d_t = ds_temp.isel(step=i) if 'step' in ds_temp.dims else ds_temp
-                # Assumiamo stessa griglia per semplicità (ritaglio identico)
-                cut_t = d_t.where(mask, drop=True)
-                t_name = next((k for k in ['t2m','2t','t'] if k in cut_t), None)
-                temp = (cut_t[t_name].values - 273.15) if t_name else np.zeros_like(u)
+                cut_t = d_t.where(mask, drop=True) # Assumiamo stessa griglia
+                keys_t = list(cut_t.data_vars)
+                t_key = next((k for k in ['t2m','2t','t'] if k in keys_t), None)
+                temp = (cut_t[t_key].values - 273.15) if t_key else np.zeros_like(u)
             else:
                 temp = np.zeros_like(u)
 
-            # --- PIOGGIA ---
+            # 3. Pioggia
             if ds_rain:
                 d_r = ds_rain.isel(step=i) if 'step' in ds_rain.dims else ds_rain
                 cut_r = d_r.where(mask, drop=True)
-                r_name = next((k for k in ['tp','tot_prec'] if k in cut_r), None)
-                rain = np.nan_to_num(cut_r[r_name].values) if r_name else np.zeros_like(u)
+                keys_r = list(cut_r.data_vars)
+                r_key = next((k for k in ['tp','tot_prec'] if k in keys_r), None)
+                rain = np.nan_to_num(cut_r[r_key].values) if r_key else np.zeros_like(u)
             else:
                 rain = np.zeros_like(u)
 
-            # --- JSON ---
+            # Metadata
             lat = cut_w.latitude.values
             lon = cut_w.longitude.values
             ny, nx = u.shape
@@ -192,12 +162,11 @@ def process_data():
             
             out_name = f"step_{i}.json"
             with open(f"{OUTPUT_DIR}/{out_name}", 'w') as jf: json.dump(step_data, jf)
-            
             catalog.append({"file": out_name, "label": valid_dt.strftime("%d/%m %H:00"), "hour": step_hours})
-            print(f"   Generato step +{step_hours}h")
+            print(f"   OK Step +{step_hours}h")
 
         except Exception as e:
-            print(f"Errore generazione step {i}: {e}")
+            print(f"Errore step {i}: {e}")
             continue
 
     with open(f"{OUTPUT_DIR}/catalog.json", 'w') as f: json.dump(catalog, f)
