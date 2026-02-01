@@ -1,0 +1,72 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Meteo Sicilia - ICON-2I</title>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    
+    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet-velocity/1.8.0/leaflet-velocity.css" />
+    
+    <style>
+        body { margin: 0; padding: 0; background: #222; font-family: sans-serif; }
+        #map { position: absolute; top: 0; bottom: 0; width: 100%; }
+        .info-box {
+            position: absolute; top: 10px; left: 50px; z-index: 1000;
+            background: rgba(0,0,0,0.8); color: white; padding: 15px;
+            border-radius: 8px; pointer-events: none;
+        }
+    </style>
+</head>
+<body>
+
+<div class="info-box">
+    <h2 style="margin:0;">Sicilia Vento Live</h2>
+    <div style="font-size: 0.9em; color: #ccc;">Modello: ICON-2I (ItaliaMeteo)</div>
+    <div id="status" style="margin-top:5px; color: #00ff00;">Caricamento...</div>
+</div>
+
+<div id="map"></div>
+
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet-velocity/1.8.0/leaflet-velocity.min.js"></script>
+
+<script>
+    var map = L.map('map').setView([37.5, 14.0], 8);
+
+    L.tileLayer('https://tiles.stadiamaps.com/tiles/alidade_smooth_dark/{z}/{x}/{y}{r}.png', {
+        maxZoom: 20,
+        attribution: '&copy; Stadia Maps, &copy; ItaliaMeteo'
+    }).addTo(map);
+
+    // Carica il file JSON generato dallo script Python
+    fetch('sicilia_wind.json')
+        .then(response => {
+            if (!response.ok) throw new Error("File dati non trovato (ancora in generazione?)");
+            return response.json();
+        })
+        .then(data => {
+            var velocityLayer = L.velocityLayer({
+                displayValues: true,
+                displayOptions: {
+                    velocityType: 'Vento',
+                    position: 'bottomleft',
+                    emptyString: 'No data',
+                    angleConvention: 'meteoCW',
+                    speedUnit: 'km/h'
+                },
+                data: data,
+                maxVelocity: 25, 
+                velocityScale: 0.01 // Regola per vedere scie più lunghe/corte
+            });
+            velocityLayer.addTo(map);
+            document.getElementById('status').innerText = "Dati aggiornati";
+        })
+        .catch(err => {
+            console.error(err);
+            document.getElementById('status').innerText = "In attesa primo aggiornamento...";
+            document.getElementById('status').style.color = "orange";
+        });
+</script>
+</body>
+</html>
