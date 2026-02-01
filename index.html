@@ -1,14 +1,14 @@
 <!DOCTYPE html>
 <html>
 <head>
-    <title>Sicilia MeteoHub</title>
+    <title>Sicilia MeteoHub - FINAL FIX</title>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     
     <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
     <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
-    <link rel="stylesheet" href="https://unpkg.com/leaflet-velocity@1.8.0/dist/leaflet-velocity.css" />
-    <script src="https://unpkg.com/leaflet-velocity@1.8.0/dist/leaflet-velocity.js"></script>
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet-velocity/1.8.0/leaflet-velocity.css" />
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet-velocity/1.8.0/leaflet-velocity.min.js"></script>
     
     <style>
         body { margin: 0; background: #1a1a1a; font-family: 'Segoe UI', sans-serif; color: white; overflow: hidden; }
@@ -25,6 +25,13 @@
             border-radius: 8px;
         }
         .layer-btn.active { background: #007bff; color: white; }
+        
+        /* BOTTONE EMERGENZA */
+        #fix-btn {
+            margin-top: 10px; background: #dc3545; color: white; border: none;
+            padding: 5px; font-size: 10px; border-radius: 4px; cursor: pointer;
+            text-align: center; text-transform: uppercase; letter-spacing: 1px;
+        }
 
         #picker-box {
             position: absolute; top: 20px; left: 20px; z-index: 1000;
@@ -56,8 +63,9 @@
 
 <div id="layer-menu">
     <button class="layer-btn active" onclick="setLayer('wind')">VENTO 💨</button>
-    <button class="layer-btn" onclick="setLayer('temp')">TEMPERATURA 🌡️</button>
+    <button class="layer-btn" onclick="setLayer('temp')">TEMP 🌡️</button>
     <button class="layer-btn" onclick="setLayer('rain')">PIOGGIA ☔</button>
+    <button id="fix-btn" onclick="forceRedraw()">FIX PARTICELLE</button>
 </div>
 
 <div id="picker-box">
@@ -77,6 +85,11 @@
 <script>
     var map = L.map('map', { zoomControl: false }).setView([37.5, 14.2], 8);
     L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png', { maxZoom: 19 }).addTo(map);
+
+    // TRUCCO: Creiamo un pane (livello) specifico SOLO per il canvas di sfondo
+    // e gli diamo uno z-index bassissimo (200), sotto tutto il resto.
+    map.createPane('bgCanvas');
+    map.getPane('bgCanvas').style.zIndex = 200;
 
     var velocityLayer = null;
     var heatCanvas = null;
@@ -105,16 +118,15 @@
         return [...stops[stops.length-1].c, 0.5];
     }
 
-    // Canvas Sfondo - METODO STANDARD (overlayPane)
-    // Non usiamo più tilePane o z-index forzati che creano problemi
+    // Canvas Sfondo - FORZATO NEL PANE 'bgCanvas' (SOTTO)
     L.CanvasLayer = L.Layer.extend({
         onAdd: function(m) {
             this._c = L.DomUtil.create('canvas', 'leaflet-layer');
-            m.getPanes().overlayPane.appendChild(this._c); // Standard
+            m.getPanes().bgCanvas.appendChild(this._c); // <--- QUI LA DIFFERENZA
             m.on('moveend resize', this._reset, this);
             this._reset();
         },
-        onRemove: function(m) { m.getPanes().overlayPane.removeChild(this._c); m.off('moveend resize', this._reset, this); },
+        onRemove: function(m) { m.getPanes().bgCanvas.removeChild(this._c); m.off('moveend resize', this._reset, this); },
         _reset: function() {
             var s = this._map.getSize(); this._c.width = s.x; this._c.height = s.y;
             L.DomUtil.setPosition(this._c, this._map.containerPointToLayerPoint([0,0])); this._draw();
@@ -176,14 +188,11 @@
     function updateMap() {
         if (!currentData) return;
         
-        // 1. Aggiungi Sfondo (Heatmap)
-        if (!heatCanvas) { 
-            heatCanvas = new L.CanvasLayer(); 
-            map.addLayer(heatCanvas); 
-        }
+        // 1. Sfondo Heatmap (Va nel pane 'bgCanvas' in basso)
+        if (!heatCanvas) { heatCanvas = new L.CanvasLayer(); map.addLayer(heatCanvas); }
         heatCanvas.update();
 
-        // 2. Aggiungi Particelle (Layer Vento)
+        // 2. Particelle Vento (Overlay standard, sta sopra il bgCanvas)
         if (velocityLayer) map.removeLayer(velocityLayer);
 
         if (activeLayer === 'wind') {
@@ -195,18 +204,17 @@
                 colorScale: ["#ffffff"],
                 lineWidth: 2,
                 particleMultiplier: 1/200,
-                opacity: 0.95,
-                frameRate: 20
+                opacity: 1.0 // Massima visibilità
             });
             velocityLayer.addTo(map);
-            
-            // TRUCCO FINALE: Forziamo le particelle in primo piano
-            // Questo funziona meglio di z-index su molti telefoni
-            setTimeout(() => {
-                if(heatCanvas) heatCanvas.bringToBack();
-                // Il velocity layer non ha bringToFront standard, ma essendo aggiunto dopo
-                // e avendo il canvas sotto, dovrebbe vedersi.
-            }, 100);
+        }
+    }
+
+    function forceRedraw() {
+        // Funzione di emergenza: rimuove e rimette il layer
+        if(velocityLayer) {
+            map.removeLayer(velocityLayer);
+            setTimeout(() => velocityLayer.addTo(map), 100);
         }
     }
 
