@@ -68,9 +68,7 @@ def process_data():
 
     print("4. Generazione JSON (fino a 72 ore)...")
     
-    # --- MODIFICA 72 ORE ---
-    # Proviamo a prendere fino a 72 step se disponibili
-    max_steps = min(ds_wind.sizes.get('step', 1), 75) 
+    max_steps = min(ds_wind.sizes.get('step', 1), 75)
     steps = range(max_steps)
     
     catalog = []
@@ -81,7 +79,7 @@ def process_data():
             d_t = ds_temp.isel(step=i) if 'step' in ds_temp.dims else ds_temp
             d_r = ds_rain.isel(step=i) if 'step' in ds_rain.dims else ds_rain
 
-            # Fix Orientamento
+            # Fix Orientamento (Nord -> Sud)
             d_w = d_w.sortby('latitude', ascending=False).sortby('longitude', ascending=True)
             d_t = d_t.sortby('latitude', ascending=False).sortby('longitude', ascending=True)
             d_r = d_r.sortby('latitude', ascending=False).sortby('longitude', ascending=True)
@@ -108,5 +106,27 @@ def process_data():
             lon = cut_w.longitude.values
             ny, nx = u.shape
             
-            dx = float(np.abs(lon[1] - lon
+            # --- QUESTE SONO LE RIGHE CHE DAVANO ERRORE PRIMA ---
+            dx = float(np.abs(lon[1] - lon[0])) if nx > 1 else 0.02
+            dy = float(np.abs(lat[1] - lat[0])) if ny > 1 else 0.02
+            # ----------------------------------------------------
+
+            step_hours = int(ds_wind.step.values[i] / 3.6e12) if 'step' in ds_wind.dims else 0
+            valid_dt = run_dt + timedelta(hours=step_hours)
+
+            step_data = {
+                "meta": {
+                    "run": run_dt.strftime("%Y%m%d%H"),
+                    "step": step_hours, "nx": nx, "ny": ny,
+                    "la1": float(lat[0]), "lo1": float(lon[0]),
+                    "dx": dx, "dy": dy
+                },
+                "wind_u": np.round(u, 1).flatten().tolist(),
+                "wind_v": np.round(v, 1).flatten().tolist(),
+                "temp": np.round(temp, 1).flatten().tolist(),
+                "rain": np.round(rain, 2).flatten().tolist()
+            }
             
+            out_name = f"step_{i}.json"
+            with open(f"{OUTPUT_DIR}/{out_name}", 'w') as jf:
+                
