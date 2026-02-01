@@ -13,7 +13,7 @@ API_LIST_URL = f"https://meteohub.agenziaitaliameteo.it/api/datasets/{DATASET_ID
 API_DOWNLOAD_URL = "https://meteohub.agenziaitaliameteo.it/api/opendata"
 OUTPUT_DIR = "data_weather"
 
-# Coordinate Sicilia (un po' più larghe per coprire bene)
+# Coordinate Sicilia
 LAT_MIN, LAT_MAX = 35.0, 39.5
 LON_MIN, LON_MAX = 11.0, 16.5
 
@@ -58,8 +58,6 @@ def process_data():
         sys.exit(1)
 
     print("3. Apertura Dataset...")
-    
-    # Apriamo le 3 variabili separatamente per evitare errori di merging
     try:
         ds_wind = xr.open_dataset(local_path, engine='cfgrib', backend_kwargs={'filter_by_keys': {'typeOfLevel': 'heightAboveGround', 'level': 10}})
         ds_temp = xr.open_dataset(local_path, engine='cfgrib', backend_kwargs={'filter_by_keys': {'typeOfLevel': 'heightAboveGround', 'level': 2}})
@@ -68,25 +66,26 @@ def process_data():
         print(f"Errore apertura GRIB: {e}")
         sys.exit(1)
 
-    print("4. Generazione JSON...")
-    steps = range(min(ds_wind.sizes.get('step', 1), 24))
+    print("4. Generazione JSON (fino a 72 ore)...")
+    
+    # --- MODIFICA 72 ORE ---
+    # Proviamo a prendere fino a 72 step se disponibili
+    max_steps = min(ds_wind.sizes.get('step', 1), 75) 
+    steps = range(max_steps)
+    
     catalog = []
 
     for i in steps:
         try:
-            # Selezione step
             d_w = ds_wind.isel(step=i) if 'step' in ds_wind.dims else ds_wind
             d_t = ds_temp.isel(step=i) if 'step' in ds_temp.dims else ds_temp
             d_r = ds_rain.isel(step=i) if 'step' in ds_rain.dims else ds_rain
 
-            # --- FIX FONDAMENTALE: ORDINAMENTO COORDINATE ---
-            # Ordiniamo Latitudine Decrescente (Nord -> Sud) e Longitudine Crescente (Ovest -> Est)
-            # Questo risolve il problema della mappa invertita/specchiata
+            # Fix Orientamento
             d_w = d_w.sortby('latitude', ascending=False).sortby('longitude', ascending=True)
             d_t = d_t.sortby('latitude', ascending=False).sortby('longitude', ascending=True)
             d_r = d_r.sortby('latitude', ascending=False).sortby('longitude', ascending=True)
 
-            # Ritaglio Geografico
             mask = ((d_w.latitude >= LAT_MIN) & (d_w.latitude <= LAT_MAX) & 
                     (d_w.longitude >= LON_MIN) & (d_w.longitude <= LON_MAX))
             
@@ -94,7 +93,6 @@ def process_data():
             cut_t = d_t.where(mask, drop=True)
             cut_r = d_r.where(mask, drop=True)
 
-            # Estrazione Valori
             u_key = next((k for k in ['u10','u','10u'] if k in cut_w), None)
             v_key = next((k for k in ['v10','v','10v'] if k in cut_w), None)
             u = np.nan_to_num(cut_w[u_key].values)
@@ -106,43 +104,9 @@ def process_data():
             r_key = next((k for k in ['tp','tot_prec'] if k in cut_r), None)
             rain = np.nan_to_num(cut_r[r_key].values) if r_key else np.zeros_like(u)
 
-            # Metadata Griglia
             lat = cut_w.latitude.values
             lon = cut_w.longitude.values
             ny, nx = u.shape
             
-            # Calcolo risoluzione (importante per il rendering)
-            dx = float(np.abs(lon[1] - lon[0])) if nx > 1 else 0.02
-            dy = float(np.abs(lat[1] - lat[0])) if ny > 1 else 0.02 # Qui usiamo lat[1]-lat[0] che sarà negativo se decrescente, usiamo abs
-
-            step_hours = int(ds_wind.step.values[i] / 3.6e12) if 'step' in ds_wind.dims else 0
-            valid_dt = run_dt + timedelta(hours=step_hours)
-
-            step_data = {
-                "meta": {
-                    "run": run_dt.strftime("%Y%m%d%H"),
-                    "step": step_hours, "nx": nx, "ny": ny,
-                    "la1": float(lat[0]), "lo1": float(lon[0]), # lat[0] ora è il Nord (Max Lat)
-                    "dx": dx, "dy": dy
-                },
-                "wind_u": np.round(u, 1).flatten().tolist(),
-                "wind_v": np.round(v, 1).flatten().tolist(),
-                "temp": np.round(temp, 1).flatten().tolist(),
-                "rain": np.round(rain, 2).flatten().tolist()
-            }
+            dx = float(np.abs(lon[1] - lon
             
-            out_name = f"step_{i}.json"
-            with open(f"{OUTPUT_DIR}/{out_name}", 'w') as jf: json.dump(step_data, jf)
-            catalog.append({"file": out_name, "label": valid_dt.strftime("%d/%m %H:00"), "hour": step_hours})
-            print(f"   Step +{step_hours}h OK")
-
-        except Exception as e:
-            print(f"Errore step {i}: {e}")
-            continue
-
-    with open(f"{OUTPUT_DIR}/catalog.json", 'w') as f: json.dump(catalog, f)
-    print("Finito.")
-
-if __name__ == "__main__":
-    process_data()
-    
