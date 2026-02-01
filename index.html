@@ -1,38 +1,35 @@
 <!DOCTYPE html>
 <html>
 <head>
-    <title>Sicilia MeteoHub - DIAGNOSTIC</title>
+    <title>Sicilia MeteoHub - FIX</title>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    
     <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
-    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet-velocity/1.8.0/leaflet-velocity.css" />
-    <style>
-        body { margin: 0; background: #000; font-family: monospace; color: white; overflow: hidden; }
-        #map { position: absolute; top: 0; bottom: 0; width: 100%; background: #000; z-index: 1; }
-        
-        /* CONSOLE DI DEBUG SU SCHERMO */
-        #debug-console {
-            position: absolute; top: 0; left: 0; width: 100%; height: 200px;
-            background: rgba(0,0,0,0.8); color: #0f0; font-size: 12px;
-            overflow-y: auto; z-index: 9999; padding: 10px; pointer-events: none;
-            border-bottom: 2px solid #0f0;
-        }
+    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
 
+    <link rel="stylesheet" href="https://unpkg.com/leaflet-velocity@1.8.0/dist/leaflet-velocity.css" />
+    <script src="https://unpkg.com/leaflet-velocity@1.8.0/dist/leaflet-velocity.js"></script>
+    
+    <style>
+        body { margin: 0; background: #222; font-family: sans-serif; color: white; overflow: hidden; }
+        #map { position: absolute; top: 0; bottom: 0; width: 100%; background: #222; }
+        #debug-console {
+            position: absolute; top: 0; left: 0; width: 100%; height: 150px;
+            background: rgba(0,0,0,0.85); color: #0f0; font-family: monospace; font-size: 11px;
+            overflow-y: auto; z-index: 9999; padding: 10px; pointer-events: none; border-bottom: 2px solid #0f0;
+        }
         #bottom-bar { position: absolute; bottom: 0; left: 0; right: 0; height: 80px; background: rgba(0,0,0,0.8); display: flex; align-items: center; padding: 0 20px; z-index: 5000; }
-        input[type=range] { flex-grow: 1; height: 8px; accent-color: #0f0; }
+        input[type=range] { flex-grow: 1; height: 10px; accent-color: #007bff; }
     </style>
 </head>
 <body>
 
-<div id="debug-console">Inizializzazione Sistema...<br></div>
-
+<div id="debug-console">Avvio sistema...<br></div>
 <div id="map"></div>
 <div id="bottom-bar">
     <input type="range" id="time-slider" min="0" max="0" value="0" step="1">
 </div>
-
-<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
-<script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet-velocity/1.8.0/leaflet-velocity.min.js"></script>
 
 <script>
     function log(msg) {
@@ -41,101 +38,79 @@
         c.scrollTop = c.scrollHeight;
     }
 
-    log("Creazione Mappa...");
+    // CONTROLLO LIBRERIE
+    if (typeof L === 'undefined') { log("ERRORE CRITICO: Leaflet non caricato!"); }
+    else { log("Leaflet OK."); }
+
+    // Inizializza Mappa
     var map = L.map('map', { zoomControl: false }).setView([37.5, 14.2], 7);
     L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png', { maxZoom: 19 }).addTo(map);
 
     var velocityLayer = null;
-    var currentData = null;
     var catalog = [];
 
-    async function loadCatalog() {
+    // Funzione principale
+    async function start() {
+        // Controllo se il plugin è stato caricato
+        if (typeof L.velocityLayer !== 'function') {
+            log("ERRORE: Plugin Velocity ANCORA NON CARICATO.");
+            log("Provo a caricarlo manualmente...");
+            // Tentativo disperato di caricamento backup
+            let script = document.createElement('script');
+            script.src = "https://cdn.jsdelivr.net/npm/leaflet-velocity@1.8.0/dist/leaflet-velocity.min.js";
+            script.onload = () => { log("Backup caricato! Riprova a ricaricare la pagina."); };
+            document.head.appendChild(script);
+            return;
+        } else {
+            log("Plugin Velocity RILEVATO! (Finalmente)");
+        }
+
         try {
-            log("Scarico catalog.json...");
             let r = await fetch('data_weather/catalog.json?t=' + Date.now());
-            if (!r.ok) throw new Error("HTTP " + r.status);
+            if(!r.ok) throw new Error("No catalogo");
             catalog = await r.json();
-            log("Catalogo OK. File trovati: " + catalog.length);
+            log("Catalogo scaricato: " + catalog.length + " step.");
             
             document.getElementById('time-slider').max = catalog.length - 1;
             document.getElementById('time-slider').addEventListener('input', (e) => loadStep(parseInt(e.target.value)));
+            
             loadStep(0);
-        } catch(e) {
-            log("ERRORE CATALOGO: " + e.message);
-        }
+        } catch(e) { log("Errore rete: " + e.message); }
     }
 
     async function loadStep(index) {
         if (!catalog[index]) return;
         try {
-            let filename = catalog[index].file;
-            log("Scarico step: " + filename);
+            let r = await fetch('data_weather/' + catalog[index].file);
+            let data = await r.json();
             
-            let r = await fetch('data_weather/' + filename);
-            if (!r.ok) throw new Error("HTTP " + r.status);
-            
-            currentData = await r.json();
-            
-            // ANALISI DATI
-            if (!currentData.wind_u || !currentData.wind_v) {
-                log("ERRORE: Dati vento mancanti nel JSON!");
-                return;
-            }
-            
-            let meta = currentData.meta;
-            log(`Meta: NX=${meta.nx} NY=${meta.ny} LA1=${meta.la1} LO1=${meta.lo1}`);
-            
-            // Controlliamo se ci sono dati validi (non zero)
-            let uData = currentData.wind_u.data;
-            let maxU = 0;
-            for(let i=0; i<uData.length; i+=50) if(Math.abs(uData[i]) > maxU) maxU = Math.abs(uData[i]);
-            log("Max Vento Campionato: " + maxU.toFixed(2) + " m/s");
+            // Log Dati
+            let u = data.wind_u.data;
+            let max = 0;
+            for(let i=0; i<u.length; i+=100) if(Math.abs(u[i])>max) max=Math.abs(u[i]);
+            log(`Step ${index}: Vento Max ${max.toFixed(1)} m/s`);
 
-            if (maxU === 0) log("ATTENZIONE: Il vento sembra essere ZERO.");
+            if (velocityLayer) map.removeLayer(velocityLayer);
 
-            updateMap();
-
-        } catch(e) {
-            log("ERRORE STEP: " + e.message);
-        }
-    }
-
-    function updateMap() {
-        if (velocityLayer) {
-            log("Rimuovo layer precedente...");
-            map.removeLayer(velocityLayer);
-        }
-
-        log("Creo L.velocityLayer...");
-        try {
             velocityLayer = L.velocityLayer({
                 displayValues: true,
-                displayOptions: {
-                    velocityType: "Vento",
-                    position: "bottomleft",
-                    emptyString: "Nessun Dato Vento",
-                    angleConvention: "bearingCW"
-                },
-                data: [ currentData.wind_u, currentData.wind_v ], // Struttura corretta
-                maxVelocity: 20,
-                velocityScale: 0.05, // Molto visibile
-                colorScale: ["#ff0000"], // ROSSO PURO
-                lineWidth: 4, // Spesso
-                particleMultiplier: 1/100, // Denso
-                opacity: 1.0,
-                frameRate: 15
+                displayOptions: { position: 'bottomleft', emptyString: 'No Data' },
+                data: [ data.wind_u, data.wind_v ],
+                maxVelocity: 15,
+                velocityScale: 0.02,     // Lunghezza scia
+                colorScale: ["#ffffff"], // BIANCO
+                lineWidth: 3,            // Spessore
+                particleMultiplier: 1/150 // Densità
             });
-
-            log("Aggiungo layer alla mappa...");
             velocityLayer.addTo(map);
-            log("Layer aggiunto. Se non vedi rosso, il problema è grafico.");
+            log("Layer aggiunto alla mappa.");
 
-        } catch (err) {
-            log("CRASH PLUGIN: " + err.message);
-        }
+        } catch(e) { log("Errore visualizzazione: " + e.message); }
     }
 
-    loadCatalog();
+    // Ritardiamo l'avvio di 1 secondo per dare tempo al plugin di caricarsi
+    setTimeout(start, 1000);
+
 </script>
 </body>
 </html>
