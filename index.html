@@ -56,7 +56,7 @@
 
 <div id="layer-menu">
     <button class="layer-btn active" onclick="setLayer('wind')">VENTO 💨</button>
-    <button class="layer-btn" onclick="setLayer('temp')">TEMP 🌡️</button>
+    <button class="layer-btn" onclick="setLayer('temp')">TEMPERATURA 🌡️</button>
     <button class="layer-btn" onclick="setLayer('rain')">PIOGGIA ☔</button>
 </div>
 
@@ -77,12 +77,6 @@
 <script>
     var map = L.map('map', { zoomControl: false }).setView([37.5, 14.2], 8);
     L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png', { maxZoom: 19 }).addTo(map);
-
-    // --- IL SEGRETO: LIVELLO PARTICELLE FORZATO SOPRA TUTTO ---
-    // Questo era il pezzo mancante nel codice precedente
-    map.createPane('particles');
-    map.getPane('particles').style.zIndex = 650; 
-    map.getPane('particles').style.pointerEvents = 'none';
 
     var velocityLayer = null;
     var heatCanvas = null;
@@ -111,16 +105,16 @@
         return [...stops[stops.length-1].c, 0.5];
     }
 
-    // Canvas per i colori di sfondo
+    // Canvas Sfondo - METODO STANDARD (overlayPane)
+    // Non usiamo più tilePane o z-index forzati che creano problemi
     L.CanvasLayer = L.Layer.extend({
         onAdd: function(m) {
             this._c = L.DomUtil.create('canvas', 'leaflet-layer');
-            // Lo mettiamo nel tilePane così sta SOTTO le particelle
-            m.getPanes().tilePane.appendChild(this._c); 
+            m.getPanes().overlayPane.appendChild(this._c); // Standard
             m.on('moveend resize', this._reset, this);
             this._reset();
         },
-        onRemove: function(m) { m.getPanes().tilePane.removeChild(this._c); m.off('moveend resize', this._reset, this); },
+        onRemove: function(m) { m.getPanes().overlayPane.removeChild(this._c); m.off('moveend resize', this._reset, this); },
         _reset: function() {
             var s = this._map.getSize(); this._c.width = s.x; this._c.height = s.y;
             L.DomUtil.setPosition(this._c, this._map.containerPointToLayerPoint([0,0])); this._draw();
@@ -130,7 +124,6 @@
             var ctx = this._c.getContext('2d'); ctx.clearRect(0,0,this._c.width,this._c.height);
             var m = currentData.meta;
             var p1 = this._map.latLngToContainerPoint([m.la1, m.lo1]);
-            // Calcolo standard Top-Left -> Bottom-Right
             var p2 = this._map.latLngToContainerPoint([m.la1 - (m.dy * (m.ny-1)), m.lo1 + (m.dx * (m.nx-1))]);
             var w = Math.ceil((p2.x - p1.x)/(m.nx-1)) + 1;
             var h = Math.ceil((p2.y - p1.y)/(m.ny-1)) + 1;
@@ -183,16 +176,18 @@
     function updateMap() {
         if (!currentData) return;
         
-        // Sfondo Colori
-        if (!heatCanvas) { heatCanvas = new L.CanvasLayer(); map.addLayer(heatCanvas); }
+        // 1. Aggiungi Sfondo (Heatmap)
+        if (!heatCanvas) { 
+            heatCanvas = new L.CanvasLayer(); 
+            map.addLayer(heatCanvas); 
+        }
         heatCanvas.update();
 
-        // Particelle (SOLO SE VENTO)
+        // 2. Aggiungi Particelle (Layer Vento)
         if (velocityLayer) map.removeLayer(velocityLayer);
 
         if (activeLayer === 'wind') {
             velocityLayer = L.velocityLayer({
-                pane: 'particles', // <--- IL TRUCCO CHE LE FA VEDERE
                 displayValues: false,
                 data: [ currentData.wind_u, currentData.wind_v ], 
                 maxVelocity: 15,
@@ -200,9 +195,18 @@
                 colorScale: ["#ffffff"],
                 lineWidth: 2,
                 particleMultiplier: 1/200,
-                opacity: 0.95
+                opacity: 0.95,
+                frameRate: 20
             });
             velocityLayer.addTo(map);
+            
+            // TRUCCO FINALE: Forziamo le particelle in primo piano
+            // Questo funziona meglio di z-index su molti telefoni
+            setTimeout(() => {
+                if(heatCanvas) heatCanvas.bringToBack();
+                // Il velocity layer non ha bringToFront standard, ma essendo aggiunto dopo
+                // e avendo il canvas sotto, dovrebbe vedersi.
+            }, 100);
         }
     }
 
@@ -238,14 +242,14 @@
     function togglePlay() {
         if (isPlaying) return; isPlaying = true;
         let s = document.getElementById('time-slider');
-        let i = parseInt(s.value), max = parseInt(s.max);
+        let i = parseInt(s.value);
+        let max = parseInt(s.max);
         let interval = setInterval(() => {
             if (i >= max || !isPlaying) { clearInterval(interval); isPlaying = false; }
             else { i++; s.value = i; loadStep(i); }
         }, 800);
     }
     
-    // Avvio ritardato per dare tempo alle librerie di caricare
     setTimeout(loadCatalog, 500);
 
 </script>
