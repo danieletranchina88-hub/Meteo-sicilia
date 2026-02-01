@@ -20,7 +20,6 @@ LON_MIN, LON_MAX = 11.0, 16.5
 def get_latest_run_files():
     print("1. Cerco ultima run...")
     try:
-        # Timeout aumentato a 60s per la lista
         r = requests.get(API_LIST_URL, timeout=60)
         r.raise_for_status()
         items = r.json()
@@ -28,7 +27,6 @@ def get_latest_run_files():
         print(f"Errore API: {e}")
         return None, []
 
-    # Raggruppa i file
     runs = {}
     for item in items:
         if isinstance(item, dict) and 'date' in item and 'run' in item:
@@ -37,11 +35,8 @@ def get_latest_run_files():
             runs[key].append(item['filename'])
     
     if not runs: return None, []
-    
     latest_key = sorted(runs.keys())[-1]
     run_dt = datetime.strptime(latest_key, "%Y-%m-%d %H:%M")
-    
-    # Restituisce TUTTI i file della run (per coprire 72 ore)
     return run_dt, runs[latest_key]
 
 def process_data():
@@ -51,55 +46,43 @@ def process_data():
     run_dt, file_list = get_latest_run_files()
     if not file_list: sys.exit(1)
 
-    print(f"2. Trovati {len(file_list)} file. Inizio download...")
-    
     catalog = []
     processed_hours = set()
 
+    print(f"2. Elaborazione di {len(file_list)} file...")
+
     for idx, filename in enumerate(file_list):
-        print(f"   [{idx+1}/{len(file_list)}] Scarico: {filename}")
+        print(f"   Download: {filename}")
         local_path = "temp.grib2"
-        
         try:
-            # TIMEOUT AUMENTATO A 300 SECONDI (5 MINUTI)
             with requests.get(f"{API_DOWNLOAD_URL}/{filename}", stream=True, timeout=300) as r:
                 r.raise_for_status()
                 with open(local_path, 'wb') as f:
                     for chunk in r.iter_content(chunk_size=1024*1024): f.write(chunk)
-        except Exception as e:
-            print(f"      Errore download: {e}. Salto.")
-            continue
+        except: continue
 
         try:
-            # Apertura Dataset
             ds_wind = xr.open_dataset(local_path, engine='cfgrib', backend_kwargs={'filter_by_keys': {'typeOfLevel': 'heightAboveGround', 'level': 10}})
-            try:
-                ds_temp = xr.open_dataset(local_path, engine='cfgrib', backend_kwargs={'filter_by_keys': {'typeOfLevel': 'heightAboveGround', 'level': 2}})
+            try: ds_temp = xr.open_dataset(local_path, engine='cfgrib', backend_kwargs={'filter_by_keys': {'typeOfLevel': 'heightAboveGround', 'level': 2}})
             except: ds_temp = None
-            try:
-                ds_rain = xr.open_dataset(local_path, engine='cfgrib', backend_kwargs={'filter_by_keys': {'typeOfLevel': 'surface'}})
+            try: ds_rain = xr.open_dataset(local_path, engine='cfgrib', backend_kwargs={'filter_by_keys': {'typeOfLevel': 'surface'}})
             except: ds_rain = None
-        except:
-            print("      File illeggibile. Salto.")
-            continue
+        except: continue
 
         steps = range(ds_wind.sizes.get('step', 1))
 
         for i in steps:
             try:
-                # Calcolo ora step
                 raw_step = ds_wind.step.values[i]
-                if isinstance(raw_step, np.timedelta64):
-                    step_hours = int(raw_step / np.timedelta64(1, 'h'))
-                else:
-                    step_hours = int(raw_step)
+                if isinstance(raw_step, np.timedelta64): step_hours = int(raw_step / np.timedelta64(1, 'h'))
+                else: step_hours = int(raw_step)
 
                 if step_hours in processed_hours: continue
 
-                # Estrazione Vento
+                # --- FIX GEOMETRIA ---
                 d_w = ds_wind.isel(step=i) if 'step' in ds_wind.dims else ds_wind
                 
-                # FIX ORIENTAMENTO
+                # Ordiniamo Nord -> Sud (Lat Decrescente)
                 d_w = d_w.sortby('latitude', ascending=False).sortby('longitude', ascending=True)
 
                 mask = ((d_w.latitude >= LAT_MIN) & (d_w.latitude <= LAT_MAX) & 
@@ -135,9 +118,12 @@ def process_data():
                 lon = cut_w.longitude.values
                 ny, nx = u.shape
                 
-                # QUESTA RIGA ORA È SICURA
-                dx = float(np.abs(lon[1] - lon[0])) if nx > 1 else 0.02
-                dy = float(np.abs(lat[1] - lat[0])) if ny > 1 else 0.02
+                # --- LA CORREZIONE MAGICA E' QUI ---
+                # dx è positivo (ovest -> est)
+                dx = float(lon[1] - lon[0])
+                # dy DEVE ESSERE NEGATIVO se andiamo da Nord a Sud (lat[1] < lat[0])
+                # Rimosso np.abs() per permettere il segno meno
+                dy = float(lat[1] - lat[0]) 
 
                 valid_dt = run_dt + timedelta(hours=step_hours)
 
@@ -155,17 +141,15 @@ def process_data():
                 }
 
                 out_name = f"step_{step_hours}.json"
-                with open(f"{OUTPUT_DIR}/{out_name}", 'w') as jf:
-                    json.dump(step_data, jf)
+                with open(f"{OUTPUT_DIR}/{out_name}", 'w') as jf: json.dump(step_data, jf)
                 
                 day_str = valid_dt.strftime("%d/%m")
                 hour_str = valid_dt.strftime("%H:00")
                 catalog.append({"file": out_name, "label": f"{day_str} {hour_str}", "hour": step_hours})
                 processed_hours.add(step_hours)
+                print(f"   OK +{step_hours}h")
 
-            except Exception as e:
-                print(f"      Skip step {i}: {e}")
-                continue
+            except Exception as e: continue
 
     catalog.sort(key=lambda x: x['hour'])
     with open(f"{OUTPUT_DIR}/catalog.json", 'w') as f: json.dump(catalog, f)
