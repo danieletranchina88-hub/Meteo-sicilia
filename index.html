@@ -1,27 +1,25 @@
 <!DOCTYPE html>
 <html>
 <head>
-    <title>Sicilia MeteoHub - FINAL FULL</title>
+    <title>Sicilia MeteoHub - FINAL</title>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-
+    
     <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" crossorigin=""/>
     <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js" crossorigin=""></script>
-
     <link rel="stylesheet" href="https://unpkg.com/leaflet-velocity@1.8.0/dist/leaflet-velocity.css" crossorigin=""/>
     <script src="https://unpkg.com/leaflet-velocity@1.8.0/dist/leaflet-velocity.js" crossorigin=""></script>
-
+    
     <style>
         body { margin: 0; background: #000; font-family: monospace; color: white; overflow: hidden; }
         #map { position: absolute; top: 0; bottom: 0; width: 100%; background: #000; }
-
-        /* DEBUG BOX */
+        
         #debug-console {
-            position: absolute; bottom: 100px; right: 10px; width: 240px; height: 150px;
-            background: rgba(0,0,0,0.85); color: #00ff00;
-            padding: 6px; border: 1px solid #00ff00;
+            position: absolute; bottom: 100px; right: 10px; width: 200px; height: 100px;
+            background: rgba(0,0,0,0.8); color: #00ff00; 
+            padding: 5px; border: 1px solid #00ff00;
             z-index: 9999; overflow-y: auto; font-size: 10px;
-            pointer-events: none; opacity: 0.85;
+            pointer-events: none; opacity: 0.8;
         }
 
         #layer-menu {
@@ -31,14 +29,13 @@
         }
         .layer-btn {
             background: transparent; border: none; color: #ccc; padding: 12px 20px;
-            font-size: 14px; font-weight: 600; cursor: pointer; text-align: right;
-            border-radius: 8px; font-family: sans-serif;
+            font-size: 14px; font-weight: 600; cursor: pointer; text-align: right; border-radius: 8px;
         }
         .layer-btn.active { background: #007bff; color: white; }
 
         #picker-box {
             position: absolute; top: 20px; left: 20px; z-index: 1000;
-            pointer-events: none; text-shadow: 0 2px 4px rgba(0,0,0,1); font-family: sans-serif;
+            pointer-events: none; text-shadow: 0 2px 4px rgba(0,0,0,1);
         }
         .picker-val { font-size: 3.5em; font-weight: 800; line-height: 1; }
         .picker-unit { font-size: 1.2em; color: #ccc; }
@@ -49,14 +46,14 @@
             background: linear-gradient(to top, #000, transparent);
             display: flex; align-items: center; padding: 0 25px 20px 25px; z-index: 2000;
         }
-        #play-btn { font-size: 2.5em; cursor: pointer; margin-right: 25px; font-family: sans-serif; user-select:none; }
+        #play-btn { font-size: 2.5em; cursor: pointer; margin-right: 25px; }
         input[type=range] { flex-grow: 1; height: 6px; cursor: pointer; accent-color: #007bff; }
-        #time-label { min-width: 150px; text-align: center; font-weight: bold; font-size: 1.2em; font-family: sans-serif; }
-
+        #time-label { min-width: 150px; text-align: center; font-weight: bold; font-size: 1.2em; }
+        
         #loader {
             position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%);
-            background: rgba(0,0,0,0.85); padding: 20px 40px; border-radius: 30px;
-            z-index: 5000; display: none; font-weight: bold; font-family: sans-serif;
+            background: rgba(0,0,0,0.85); padding: 20px 40px; border-radius: 30px; 
+            z-index: 5000; display: none; font-weight: bold;
         }
     </style>
 </head>
@@ -66,9 +63,9 @@
 <div id="debug-console">Console Ready.<br></div>
 
 <div id="layer-menu">
-    <button id="btn-wind" class="layer-btn active">VENTO 💨</button>
-    <button id="btn-temp" class="layer-btn">TEMP 🌡️</button>
-    <button id="btn-rain" class="layer-btn">PIOGGIA ☔</button>
+    <button class="layer-btn active" onclick="setLayer('wind')">VENTO 💨</button>
+    <button class="layer-btn" onclick="setLayer('temp')">TEMP 🌡️</button>
+    <button class="layer-btn" onclick="setLayer('rain')">PIOGGIA ☔</button>
 </div>
 
 <div id="picker-box">
@@ -80,23 +77,18 @@
 <div id="map"></div>
 
 <div id="bottom-bar">
-    <div id="play-btn">&#9658;</div>
+    <div id="play-btn" onclick="togglePlay()">&#9658;</div>
     <input type="range" id="time-slider" min="0" max="0" value="0" step="1">
     <div id="time-label">--:--</div>
 </div>
 
 <script>
-    // --- DEBUG ---
     function log(msg) {
         var d = document.getElementById('debug-console');
         d.innerHTML += "> " + msg + "<br>";
         d.scrollTop = d.scrollHeight;
-        console.log(msg);
     }
-    window.onerror = function(msg, url, line) {
-        log("ERR: " + msg + " @L" + line);
-        return false;
-    };
+    window.onerror = function(msg) { log("ERR: " + msg); return false; };
 
     var map, velocityLayer, heatCanvas;
     var currentData = null;
@@ -104,208 +96,79 @@
     var activeLayer = 'wind';
     var isPlaying = false;
 
-    // --- PALETTE COLORI HD ---
+    // --- PALETTE COLORI (Full) ---
     const PALETTES = {
         temp: [{val:-10,c:[255,255,255]},{val:0,c:[200,200,255]},{val:10,c:[0,200,100]},{val:20,c:[255,255,0]},{val:30,c:[255,140,0]},{val:40,c:[200,0,0]}],
         rain: [{val:0,c:[0,0,0,0]},{val:0.2,c:[0,150,255]},{val:5,c:[0,0,255]},{val:20,c:[150,0,150]}],
         wind: [{val:0,c:[0,0,0,0]},{val:5,c:[0,100,200]},{val:20,c:[0,200,0]},{val:40,c:[200,200,0]},{val:60,c:[255,0,0]}]
     };
     function getColor(val, type) {
-        let stops = PALETTES[type];
-        if(type==='rain' && val<=0.1) return [0,0,0,0];
+        let stops = PALETTES[type]; if(type==='rain' && val<=0.1) return [0,0,0,0];
         for(let i=0; i<stops.length-1; i++) {
             if(val>=stops[i].val && val<=stops[i+1].val) {
                 let t = (val - stops[i].val) / (stops[i+1].val - stops[i].val);
                 let c1=stops[i].c, c2=stops[i+1].c;
-                return [
-                    Math.round(c1[0]+(c2[0]-c1[0])*t),
-                    Math.round(c1[1]+(c2[1]-c1[1])*t),
-                    Math.round(c1[2]+(c2[2]-c1[2])*t),
-                    0.6
-                ];
+                return [Math.round(c1[0]+(c2[0]-c1[0])*t), Math.round(c1[1]+(c2[1]-c1[1])*t), Math.round(c1[2]+(c2[2]-c1[2])*t), 0.6];
             }
-        }
-        return [...stops[stops.length-1].c, 0.6];
-    }
-
-    // --- HELPERS DATI ---
-    function toNumberOrNull(x) {
-        if (x === null || x === undefined) return null;
-        if (typeof x === 'number') return Number.isFinite(x) ? x : null;
-        if (typeof x === 'string') {
-            if (x.trim().toLowerCase() === 'nan') return null;
-            const n = Number(x);
-            return Number.isFinite(n) ? n : null;
-        }
-        return null;
-    }
-
-    function extractWindArrays(d) {
-        // Supporta più formati:
-        // A) d.wind: {u:[], v:[], nx,ny,bbox}
-        // B) d: {u:[], v:[], nx,ny,bbox}
-        // C) d.wind_u.data + d.wind_v.data (come nel tuo codice)
-        let nx = d?.nx ?? d?.wind?.nx ?? d?.meta?.nx ?? null;
-        let ny = d?.ny ?? d?.wind?.ny ?? d?.meta?.ny ?? null;
-        let bbox = d?.bbox ?? d?.wind?.bbox ?? null;
-
-        let u = null, v = null;
-
-        if (d?.wind && Array.isArray(d.wind.u) && Array.isArray(d.wind.v)) {
-            u = d.wind.u; v = d.wind.v;
-            nx = nx ?? d.wind.nx; ny = ny ?? d.wind.ny; bbox = bbox ?? d.wind.bbox;
-        } else if (Array.isArray(d?.u) && Array.isArray(d?.v)) {
-            u = d.u; v = d.v;
-        } else if (Array.isArray(d?.wind_u?.data) && Array.isArray(d?.wind_v?.data)) {
-            u = d.wind_u.data; v = d.wind_v.data;
-        }
-
-        return {nx, ny, bbox, u, v};
-    }
-
-    function buildVelocityGribLike(d) {
-        const ex = extractWindArrays(d);
-        if (!ex.u || !ex.v || !ex.nx || !ex.ny || !ex.bbox) {
-            return null;
-        }
-
-        const [lonMin, latMin, lonMax, latMax] = ex.bbox;
-        const nx = ex.nx, ny = ex.ny;
-
-        // Leaflet-velocity vuole la1 = top (lat max), lo1 = left (lon min)
-        const lo1 = lonMin;
-        const la1 = latMax;
-
-        const dx = (lonMax - lonMin) / (nx - 1);
-        const dy = (latMax - latMin) / (ny - 1);
-
-        // Pulisci array
-        const uData = new Array(nx * ny);
-        const vData = new Array(nx * ny);
-
-        let good = 0;
-        for (let i = 0; i < nx * ny; i++) {
-            const uu = toNumberOrNull(ex.u[i]);
-            const vv = toNumberOrNull(ex.v[i]);
-            if (uu === null || vv === null) {
-                uData[i] = null;
-                vData[i] = null;
-            } else {
-                uData[i] = uu;
-                vData[i] = vv;
-                good++;
-            }
-        }
-
-        const baseHeader = {
-            nx, ny, lo1, la1, dx, dy,
-            // questi campi non sempre sono indispensabili ma aiutano la lib
-            refTime: new Date().toISOString(),
-            forecastTime: 0,
-            parameterCategory: 2
-        };
-
-        const uComp = {
-            header: {...baseHeader, parameterNumber: 2, parameterUnit: "m/s"},
-            data: uData
-        };
-        const vComp = {
-            header: {...baseHeader, parameterNumber: 3, parameterUnit: "m/s"},
-            data: vData
-        };
-
-        return {uComp, vComp, good, total: nx*ny};
+        } return [...stops[stops.length-1].c, 0.6];
     }
 
     // --- INIT ---
     window.addEventListener('load', function() {
-        log("Init...");
-
         map = L.map('map', { zoomControl: false }).setView([37.5, 14.2], 8);
         L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png', { maxZoom: 19 }).addTo(map);
 
-        // PANE
-        map.createPane('gridPane');
-        map.getPane('gridPane').style.zIndex = 200;
+        // --- PANE LAYOUT ---
+        map.createPane('bgPane');
+        map.getPane('bgPane').style.zIndex = 200;
+        
+        map.createPane('topPane');
+        map.getPane('topPane').style.zIndex = 600;
+        map.getPane('topPane').style.pointerEvents = 'none';
 
-        map.createPane('velocityPane');
-        map.getPane('velocityPane').style.zIndex = 600;
-        map.getPane('velocityPane').style.pointerEvents = 'none';
-
-        // --- HEATMAP (GRIGLIA) ---
+        // --- HEATMAP (Full Canvas) ---
         L.HeatmapLayer = L.Layer.extend({
             onAdd: function(m) {
-                this._map = m;
                 this._c = L.DomUtil.create('canvas', 'leaflet-layer');
                 this._c.style.pointerEvents = 'none';
-                m.getPane('gridPane').appendChild(this._c);
+                m.getPane('bgPane').appendChild(this._c);
                 m.on('moveend resize', this._reset, this);
                 this._reset();
             },
-            onRemove: function(m) {
-                m.getPane('gridPane').removeChild(this._c);
-                m.off('moveend resize', this._reset, this);
-            },
+            onRemove: function(m) { m.getPane('bgPane').removeChild(this._c); m.off('moveend resize', this._reset, this); },
             _reset: function() {
-                var s = this._map.getSize();
+                var s = this._map.getSize(); 
                 this._c.width = s.x; this._c.height = s.y;
-                L.DomUtil.setPosition(this._c, this._map.containerPointToLayerPoint([0,0]));
+                L.DomUtil.setPosition(this._c, this._map.containerPointToLayerPoint([0,0])); 
                 this._draw();
             },
             _draw: function() {
                 if (!currentData || !this._c) return;
-                // Meta: supporta sia currentData.meta che nx/ny/bbox
-                const nx = currentData?.meta?.nx ?? currentData?.nx ?? currentData?.wind?.nx;
-                const ny = currentData?.meta?.ny ?? currentData?.ny ?? currentData?.wind?.ny;
-                const bbox = currentData?.meta?.bbox ?? currentData?.bbox ?? currentData?.wind?.bbox;
-                if (!nx || !ny || !bbox) return;
+                var ctx = this._c.getContext('2d'); ctx.clearRect(0,0,this._c.width,this._c.height);
+                var m = currentData.meta;
+                var p1 = this._map.latLngToContainerPoint([m.la1, m.lo1]);
+                var p2 = this._map.latLngToContainerPoint([m.la1 - (m.dy * (m.ny-1)), m.lo1 + (m.dx * (m.nx-1))]);
+                var w = (p2.x - p1.x) / (m.nx - 1);
+                var h = (p2.y - p1.y) / (m.ny - 1);
+                var dw = Math.ceil(w) + 1;
+                var dh = Math.ceil(h) + 1;
 
-                const [lonMin, latMin, lonMax, latMax] = bbox;
-                const dx = (lonMax - lonMin) / (nx - 1);
-                const dy = (latMax - latMin) / (ny - 1);
-
-                var ctx = this._c.getContext('2d');
-                ctx.clearRect(0,0,this._c.width,this._c.height);
-
-                // Calcolo dimensione cella in pixel al volo (più robusto)
-                const pA = this._map.latLngToContainerPoint([latMax, lonMin]);
-                const pB = this._map.latLngToContainerPoint([latMax - dy, lonMin + dx]);
-                let w = Math.max(1, Math.ceil(Math.abs(pB.x - pA.x)));
-                let h = Math.max(1, Math.ceil(Math.abs(pB.y - pA.y)));
-
-                for (let y=0; y<ny; y++) {
-                    const lat = latMax - (y*dy);
-                    for (let x=0; x<nx; x++) {
-                        const lon = lonMin + (x*dx);
-                        const p = this._map.latLngToContainerPoint([lat, lon]);
-                        if (p.x < -w || p.x > this._c.width || p.y < -h || p.y > this._c.height) continue;
-
-                        const idx = y*nx + x;
-                        let val = 0;
-
-                        if(activeLayer==='temp' && Array.isArray(currentData.temp)) {
-                            const t = toNumberOrNull(currentData.temp[idx]);
-                            if (t === null) continue;
-                            val = t;
+                for(var y=0; y<m.ny; y++) {
+                    var lat = m.la1 - (y*m.dy); 
+                    for(var x=0; x<m.nx; x++) {
+                        var lon = m.lo1 + (x*m.dx); 
+                        var p = this._map.latLngToContainerPoint([lat, lon]);
+                        if (p.x < -dw || p.x > this._c.width || p.y < -dh || p.y > this._c.height) continue;
+                        var idx = y*m.nx + x, val = 0;
+                        if(activeLayer==='temp') val = currentData.temp[idx]; 
+                        else if(activeLayer==='rain') val = currentData.rain[idx]; 
+                        else if(activeLayer==='wind') { 
+                            let u=currentData.wind_u.data[idx], v=currentData.wind_v.data[idx]; 
+                            val = Math.sqrt(u*u+v*v)*3.6; 
                         }
-                        else if(activeLayer==='rain' && Array.isArray(currentData.rain)) {
-                            const r = toNumberOrNull(currentData.rain[idx]);
-                            if (r === null) continue;
-                            val = r;
-                        }
-                        else if(activeLayer==='wind') {
-                            const ex = extractWindArrays(currentData);
-                            if (!ex.u || !ex.v) continue;
-                            const uu = toNumberOrNull(ex.u[idx]);
-                            const vv = toNumberOrNull(ex.v[idx]);
-                            if (uu === null || vv === null) continue;
-                            val = Math.sqrt(uu*uu + vv*vv) * 3.6;
-                        }
-
-                        const c = getColor(val, activeLayer);
-                        if(c[3]===0) continue;
-                        ctx.fillStyle = `rgba(${c[0]},${c[1]},${c[2]},${c[3]})`;
-                        ctx.fillRect(p.x, p.y, w, h);
+                        var c = getColor(val, activeLayer); if(c[3]===0) continue;
+                        ctx.fillStyle = `rgba(${c[0]},${c[1]},${c[2]},${c[3]})`; 
+                        ctx.fillRect(Math.floor(p.x), Math.floor(p.y), dw, dh);
                     }
                 }
             },
@@ -314,184 +177,105 @@
 
         heatCanvas = new L.HeatmapLayer();
         map.addLayer(heatCanvas);
-
-        // UI events sicuri (no event globale)
-        document.getElementById('btn-wind').addEventListener('click', () => setLayer('wind'));
-        document.getElementById('btn-temp').addEventListener('click', () => setLayer('temp'));
-        document.getElementById('btn-rain').addEventListener('click', () => setLayer('rain'));
-        document.getElementById('play-btn').addEventListener('click', togglePlay);
-
         loadCatalog();
     });
 
     async function loadCatalog() {
         try {
-            log("DL Catalog...");
             let r = await fetch('data_weather/catalog.json?t=' + Date.now());
-            if (!r.ok) throw new Error("HTTP " + r.status);
             catalog = await r.json();
-            log("Cat OK: " + catalog.length);
-
-            const slider = document.getElementById('time-slider');
-            slider.max = Math.max(0, catalog.length - 1);
-            slider.addEventListener('input', (e) => loadStep(parseInt(e.target.value)));
-
+            document.getElementById('time-slider').max = catalog.length - 1;
+            document.getElementById('time-slider').addEventListener('input', (e) => loadStep(parseInt(e.target.value)));
             loadStep(0);
-        } catch(e) {
-            log("Err Cat: " + e.message);
-        }
+        } catch(e) { log("Err Cat"); }
     }
 
     async function loadStep(index) {
         if (!catalog[index]) return;
-        document.getElementById('time-label').innerText = catalog[index].label ?? ("step " + index);
+        document.getElementById('time-label').innerText = catalog[index].label;
         document.getElementById('loader').style.display = 'block';
-
         try {
             let r = await fetch('data_weather/' + catalog[index].file + '?nocache=' + Date.now());
-            if (!r.ok) throw new Error("HTTP " + r.status);
             currentData = await r.json();
-            log("Data OK: " + (catalog[index].file));
-
+            log("Data Loaded.");
             updateMap();
-        } catch(e) {
-            log("Err Data: " + e.message);
-        }
-
+        } catch(e) { log("Err Data"); }
         document.getElementById('loader').style.display = 'none';
     }
 
     function updateMap() {
         if (!currentData) return;
-
-        // 1) griglia
         if (heatCanvas) heatCanvas.update();
+        if (velocityLayer) map.removeLayer(velocityLayer);
 
-        // 2) particelle
-        if (velocityLayer) {
-            try { map.removeLayer(velocityLayer); } catch(e){}
-            velocityLayer = null;
-        }
-
-        if (activeLayer === 'wind' && typeof L.velocityLayer !== 'undefined') {
-            const built = buildVelocityGribLike(currentData);
-            if (!built) {
-                log("Particelle: dati vento non compatibili (manca nx/ny/bbox/u/v)");
-                return;
-            }
-            log("Vento validi: " + built.good + "/" + built.total);
-
-            if (built.good < 1000) {
-                log("WARN: troppi valori null → particelle quasi invisibili");
-            }
-
+        if (activeLayer === 'wind') {
             try {
                 velocityLayer = L.velocityLayer({
-                    pane: 'velocityPane',
+                    pane: 'topPane',
                     displayValues: false,
-                    data: [ built.uComp, built.vComp ],
-
-                    // Windy-like: più denso e visibile su mobile
-                    maxVelocity: 40,          // m/s circa (144 km/h)
-                    velocityScale: 0.01,      // più alto = scorre più veloce
-                    particleAge: 80,
-                    lineWidth: 1.8,
-                    particleMultiplier: 1/180, // più alto = più particelle
-                    frameRate: 20,
-                    opacity: 0.95,
-
-                    // colore particelle (le particelle qui sono bianche stile windy light)
-                    colorScale: ["#ffffff"]
+                    data: [ currentData.wind_u, currentData.wind_v ], 
+                    maxVelocity: 30,
+                    velocityScale: 0.01,     
+                    colorScale: ["#ffffff"], 
+                    lineWidth: 2,             
+                    particleMultiplier: 1/600,
+                    opacity: 1.0,
+                    frameRate: 20
                 });
-
                 velocityLayer.addTo(map);
-                log("Particelle OK");
-            } catch(e) {
-                log("Err Vel: " + e.message);
-            }
+                log("Wind Added.");
+            } catch(e) { log("Err Wind: " + e.message); }
         }
     }
 
-    function setLayer(n) {
+    window.setLayer = function(n) {
         activeLayer = n;
-
         document.querySelectorAll('.layer-btn').forEach(b => b.classList.remove('active'));
-        if (n === 'wind') document.getElementById('btn-wind').classList.add('active');
-        if (n === 'temp') document.getElementById('btn-temp').classList.add('active');
-        if (n === 'rain') document.getElementById('btn-rain').classList.add('active');
-
+        event.target.classList.add('active');
         let lbl=document.getElementById('pk-lbl'), unit=document.getElementById('pk-unit');
         if(n==='wind'){lbl.innerText="VENTO";unit.innerText="km/h";}
         if(n==='temp'){lbl.innerText="TEMP";unit.innerText="°C";}
         if(n==='rain'){lbl.innerText="PIOGGIA";unit.innerText="mm";}
-
         updateMap();
     }
 
-    function togglePlay() {
-        if (isPlaying) { isPlaying = false; return; }
-        isPlaying = true;
-
+    window.togglePlay = function() {
+        if (isPlaying) return; isPlaying = true;
         let s = document.getElementById('time-slider');
         let i = parseInt(s.value), max = parseInt(s.max);
-
-        const tick = async () => {
-            if (!isPlaying) return;
-            if (i >= max) { isPlaying = false; return; }
-            i++;
-            s.value = i;
-            await loadStep(i);
-            setTimeout(tick, 800);
-        };
-        tick();
+        let interval = setInterval(() => {
+            if (i >= max || !isPlaying) { clearInterval(interval); isPlaying = false; }
+            else { i++; s.value = i; loadStep(i); }
+        }, 800);
     }
-
-    // --- PICKER ---
+    
+    // --- MOUSE SAFE ---
     window.addEventListener('load', function(){
+        if(!map) return;
         map.on('mousemove', function(e) {
             try {
                 if (!currentData) return;
-
-                const nx = currentData?.meta?.nx ?? currentData?.nx ?? currentData?.wind?.nx;
-                const ny = currentData?.meta?.ny ?? currentData?.ny ?? currentData?.wind?.ny;
-                const bbox = currentData?.meta?.bbox ?? currentData?.bbox ?? currentData?.wind?.bbox;
-                if (!nx || !ny || !bbox) return;
-
-                const [lonMin, latMin, lonMax, latMax] = bbox;
-                const dx = (lonMax - lonMin) / (nx - 1);
-                const dy = (latMax - latMin) / (ny - 1);
-
-                let y = Math.round((latMax - e.latlng.lat) / dy);
-                let x = Math.round((e.latlng.lng - lonMin) / dx);
-
-                if (x < 0 || x >= nx || y < 0 || y >= ny) return;
-                let idx = y * nx + x;
-
-                let val = "--";
-
-                if (activeLayer === 'wind') {
-                    const ex = extractWindArrays(currentData);
-                    if (ex.u && ex.v) {
-                        const uu = toNumberOrNull(ex.u[idx]);
-                        const vv = toNumberOrNull(ex.v[idx]);
-                        if (uu !== null && vv !== null) {
-                            val = (Math.sqrt(uu*uu + vv*vv) * 3.6).toFixed(1);
+                let m = currentData.meta;
+                let y = Math.round((m.la1 - e.latlng.lat) / m.dy);
+                let x = Math.round((e.latlng.lng - m.lo1) / m.dx);
+                if (x >= 0 && x < m.nx && y >= 0 && y < m.ny) {
+                    let idx = y * m.nx + x;
+                    let val = "--";
+                    if (activeLayer === 'wind') {
+                        // Safe check for U and V
+                        if(currentData.wind_u && currentData.wind_u.data && currentData.wind_u.data[idx] != null) {
+                            let u = currentData.wind_u.data[idx];
+                            let v = currentData.wind_v.data[idx];
+                            val = (Math.sqrt(u*u+v*v)*3.6).toFixed(1);
                         }
-                    }
+                    } else if (activeLayer === 'temp' && currentData.temp) val = currentData.temp[idx].toFixed(1);
+                    else if (activeLayer === 'rain' && currentData.rain) val = currentData.rain[idx].toFixed(1);
+                    document.getElementById('pk-val').innerText = val;
                 }
-                else if (activeLayer === 'temp' && Array.isArray(currentData.temp)) {
-                    const t = toNumberOrNull(currentData.temp[idx]);
-                    if (t !== null) val = t.toFixed(1);
-                }
-                else if (activeLayer === 'rain' && Array.isArray(currentData.rain)) {
-                    const r = toNumberOrNull(currentData.rain[idx]);
-                    if (r !== null) val = r.toFixed(1);
-                }
-
-                document.getElementById('pk-val').innerText = val;
-            } catch(e) {}
+            } catch(e) { }
         });
     });
+
 </script>
 </body>
 </html>
