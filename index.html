@@ -1,7 +1,7 @@
 <!DOCTYPE html>
 <html>
 <head>
-    <title>Sicilia MeteoHub - FINAL</title>
+    <title>Sicilia MeteoHub - STYLE</title>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     
@@ -11,56 +11,48 @@
     <script src="https://unpkg.com/leaflet-velocity@1.8.0/dist/leaflet-velocity.js" crossorigin=""></script>
     
     <style>
-        body { margin: 0; background: #000; font-family: monospace; color: white; overflow: hidden; }
-        #map { position: absolute; top: 0; bottom: 0; width: 100%; background: #000; }
+        body { margin: 0; background: #1a1a1a; font-family: 'Segoe UI', sans-serif; color: white; overflow: hidden; }
+        #map { position: absolute; top: 0; bottom: 0; width: 100%; background: #1a1a1a; }
         
-        #debug-console {
-            position: absolute; bottom: 100px; right: 10px; width: 200px; height: 100px;
-            background: rgba(0,0,0,0.8); color: #00ff00; 
-            padding: 5px; border: 1px solid #00ff00;
-            z-index: 9999; overflow-y: auto; font-size: 10px;
-            pointer-events: none; opacity: 0.8;
-        }
-
+        /* MENU */
         #layer-menu {
             position: absolute; top: 15px; right: 15px; z-index: 1000;
             background: rgba(30,30,30,0.9); padding: 8px; border-radius: 12px;
             display: flex; flex-direction: column; gap: 8px; border: 1px solid #444;
+            box-shadow: 0 4px 15px rgba(0,0,0,0.5);
         }
         .layer-btn {
             background: transparent; border: none; color: #ccc; padding: 12px 20px;
-            font-size: 14px; font-weight: 600; cursor: pointer; text-align: right; border-radius: 8px;
+            font-size: 14px; font-weight: 600; cursor: pointer; text-align: right;
+            border-radius: 8px; transition: all 0.2s;
         }
-        .layer-btn.active { background: #007bff; color: white; }
+        .layer-btn.active { background: #007bff; color: white; box-shadow: 0 0 10px rgba(0,123,255,0.3); }
 
-        #picker-box {
-            position: absolute; top: 20px; left: 20px; z-index: 1000;
-            pointer-events: none; text-shadow: 0 2px 4px rgba(0,0,0,1);
-        }
-        .picker-val { font-size: 3.5em; font-weight: 800; line-height: 1; }
-        .picker-unit { font-size: 1.2em; color: #ccc; }
-        .picker-lbl { font-size: 0.8em; color: #aaa; text-transform: uppercase; margin-top: 5px; font-weight: bold;}
-
+        /* TIME BAR */
         #bottom-bar {
             position: absolute; bottom: 0; left: 0; right: 0; height: 90px;
-            background: linear-gradient(to top, #000, transparent);
+            background: linear-gradient(to top, rgba(0,0,0,0.95), transparent);
             display: flex; align-items: center; padding: 0 25px 20px 25px; z-index: 2000;
         }
-        #play-btn { font-size: 2.5em; cursor: pointer; margin-right: 25px; }
-        input[type=range] { flex-grow: 1; height: 6px; cursor: pointer; accent-color: #007bff; }
-        #time-label { min-width: 150px; text-align: center; font-weight: bold; font-size: 1.2em; }
+        #play-btn { font-size: 2.8em; cursor: pointer; margin-right: 25px; color: #fff; transition: transform 0.1s; }
+        #play-btn:active { transform: scale(0.9); }
+        input[type=range] { flex-grow: 1; height: 6px; cursor: pointer; accent-color: #007bff; border-radius: 3px; }
+        #time-label { min-width: 160px; text-align: center; font-weight: bold; font-size: 1.3em; color: #e0e0e0; }
         
         #loader {
             position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%);
             background: rgba(0,0,0,0.85); padding: 20px 40px; border-radius: 30px; 
-            z-index: 5000; display: none; font-weight: bold;
+            z-index: 5000; display: none; font-weight: bold; font-size: 1.1em;
+            border: 1px solid #555;
         }
+        
+        #pk-val { font-size: 3em; font-weight: 800; text-shadow: 0 0 5px black; }
+        #picker-box { position: absolute; top: 20px; left: 20px; z-index: 1000; pointer-events: none; }
     </style>
 </head>
 <body>
 
 <div id="loader">Caricamento...</div>
-<div id="debug-console">Console Ready.<br></div>
 
 <div id="layer-menu">
     <button class="layer-btn active" onclick="setLayer('wind')">VENTO 💨</button>
@@ -69,9 +61,7 @@
 </div>
 
 <div id="picker-box">
-    <div id="pk-val" class="picker-val">--</div>
-    <div id="pk-unit" class="picker-unit">km/h</div>
-    <div id="pk-lbl" class="picker-lbl">VENTO</div>
+    <div id="pk-val">--</div>
 </div>
 
 <div id="map"></div>
@@ -79,63 +69,108 @@
 <div id="bottom-bar">
     <div id="play-btn" onclick="togglePlay()">&#9658;</div>
     <input type="range" id="time-slider" min="0" max="0" value="0" step="1">
-    <div id="time-label">--:--</div>
+    <div id="time-label">--/-- --:--</div>
 </div>
 
 <script>
-    function log(msg) {
-        var d = document.getElementById('debug-console');
-        d.innerHTML += "> " + msg + "<br>";
-        d.scrollTop = d.scrollHeight;
-    }
-    window.onerror = function(msg) { log("ERR: " + msg); return false; };
-
     var map, velocityLayer, heatCanvas;
     var currentData = null;
     var catalog = [];
     var activeLayer = 'wind';
     var isPlaying = false;
 
-    // --- PALETTE COLORI (Full) ---
+    // --- NUOVE PALETTE ---
     const PALETTES = {
-        temp: [{val:-10,c:[255,255,255]},{val:0,c:[200,200,255]},{val:10,c:[0,200,100]},{val:20,c:[255,255,0]},{val:30,c:[255,140,0]},{val:40,c:[200,0,0]}],
-        rain: [{val:0,c:[0,0,0,0]},{val:0.2,c:[0,150,255]},{val:5,c:[0,0,255]},{val:20,c:[150,0,150]}],
-        wind: [{val:0,c:[0,0,0,0]},{val:5,c:[0,100,200]},{val:20,c:[0,200,0]},{val:40,c:[200,200,0]},{val:60,c:[255,0,0]}]
+        temp: [
+            {val:-10, c:[255,255,255, 0.6]},
+            {val:0,   c:[200,200,255, 0.6]},
+            {val:10,  c:[0,200,100, 0.6]},
+            {val:20,  c:[255,255,0, 0.6]},
+            {val:30,  c:[255,140,0, 0.6]},
+            {val:40,  c:[200,0,0, 0.6]}
+        ],
+        
+        // --- NUOVA PALETTE PIOGGIA (Azzurro -> Viola) ---
+        rain: [
+            {val:0,   c:[0,0,0,0]},           // Trasparente assoluto
+            {val:0.1, c:[0,150,255, 0.5]},    // Azzurrino (Pioggerella)
+            {val:2,   c:[0,0,255, 0.6]},      // Blu (Pioggia)
+            {val:10,  c:[130,0,200, 0.7]},    // Viola (Forte)
+            {val:50,  c:[100,0,100, 0.8]}     // Viola scuro (Nubifragio)
+        ],
+        
+        wind: [
+            {val:0, c:[0,0,0,0]},             // Calma = Trasparente
+            {val:5, c:[0,100,200, 0.5]},
+            {val:20, c:[0,200,0, 0.5]},
+            {val:40, c:[200,200,0, 0.6]},
+            {val:60, c:[255,0,0, 0.6]}
+        ]
     };
+
     function getColor(val, type) {
-        let stops = PALETTES[type]; if(type==='rain' && val<=0.1) return [0,0,0,0];
+        let stops = PALETTES[type];
+        
+        // Per la pioggia, se è 0 o quasi 0, ritorna TRASPARENTE subito
+        if(type==='rain' && val < 0.1) return [0,0,0,0];
+        if(type==='wind' && val < 1) return [0,0,0,0];
+
         for(let i=0; i<stops.length-1; i++) {
             if(val>=stops[i].val && val<=stops[i+1].val) {
                 let t = (val - stops[i].val) / (stops[i+1].val - stops[i].val);
                 let c1=stops[i].c, c2=stops[i+1].c;
-                return [Math.round(c1[0]+(c2[0]-c1[0])*t), Math.round(c1[1]+(c2[1]-c1[1])*t), Math.round(c1[2]+(c2[2]-c1[2])*t), 0.6];
+                // Interpolazione anche dell'Alpha (Trasparenza)
+                let a1 = c1[3] !== undefined ? c1[3] : 0.6;
+                let a2 = c2[3] !== undefined ? c2[3] : 0.6;
+                return [
+                    Math.round(c1[0]+(c2[0]-c1[0])*t), 
+                    Math.round(c1[1]+(c2[1]-c1[1])*t), 
+                    Math.round(c1[2]+(c2[2]-c1[2])*t), 
+                    a1 + (a2 - a1) * t
+                ];
             }
-        } return [...stops[stops.length-1].c, 0.6];
+        } 
+        let last = stops[stops.length-1];
+        return [last.c[0], last.c[1], last.c[2], last.c[3] || 0.6];
     }
 
-    // --- INIT ---
     window.addEventListener('load', function() {
+        // --- 1. SETUP MAPPA E LIVELLI (Il "Sandwich") ---
         map = L.map('map', { zoomControl: false }).setView([37.5, 14.2], 8);
-        L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png', { maxZoom: 19 }).addTo(map);
 
-        // --- PANE LAYOUT ---
-        map.createPane('bgPane');
-        map.getPane('bgPane').style.zIndex = 200;
-        
-        map.createPane('topPane');
-        map.getPane('topPane').style.zIndex = 600;
-        map.getPane('topPane').style.pointerEvents = 'none';
+        // STRATO 1: Sfondo Scuro SENZA NOMI (TilePane z-index ~1)
+        L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_nolabels/{z}/{x}/{y}{r}.png', { 
+            maxZoom: 19 
+        }).addTo(map);
 
-        // --- HEATMAP (Full Canvas) ---
-        L.HeatmapLayer = L.Layer.extend({
+        // STRATO 2: Griglia Colorata (Creiamo un pane dedicato sopra lo sfondo)
+        map.createPane('gridPane');
+        map.getPane('gridPane').style.zIndex = 300; 
+
+        // STRATO 3: Nomi Città e Confini (Labels Only) - SOPRA I COLORI
+        map.createPane('labelsPane');
+        map.getPane('labelsPane').style.zIndex = 500; 
+        map.getPane('labelsPane').style.pointerEvents = 'none'; // Click passano attraverso
+        L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_only_labels/{z}/{x}/{y}{r}.png', { 
+            pane: 'labelsPane',
+            opacity: 1
+        }).addTo(map);
+
+        // STRATO 4: Particelle (Sopra a tutto)
+        map.createPane('velocityPane');
+        map.getPane('velocityPane').style.zIndex = 600; 
+        map.getPane('velocityPane').style.pointerEvents = 'none';
+
+        // --- DEFINIZIONE GRIGLIA NEL SUO PANE ---
+        L.FullHeatmap = L.Layer.extend({
             onAdd: function(m) {
                 this._c = L.DomUtil.create('canvas', 'leaflet-layer');
                 this._c.style.pointerEvents = 'none';
-                m.getPane('bgPane').appendChild(this._c);
+                m.getPane('gridPane').appendChild(this._c); // Va nello strato intermedio
                 m.on('moveend resize', this._reset, this);
                 this._reset();
             },
-            onRemove: function(m) { m.getPane('bgPane').removeChild(this._c); m.off('moveend resize', this._reset, this); },
+            onRemove: function(m) { m.getPane('gridPane').removeChild(this._c); m.off('moveend resize', this._reset, this); },
             _reset: function() {
                 var s = this._map.getSize(); 
                 this._c.width = s.x; this._c.height = s.y;
@@ -159,6 +194,7 @@
                         var lon = m.lo1 + (x*m.dx); 
                         var p = this._map.latLngToContainerPoint([lat, lon]);
                         if (p.x < -dw || p.x > this._c.width || p.y < -dh || p.y > this._c.height) continue;
+                        
                         var idx = y*m.nx + x, val = 0;
                         if(activeLayer==='temp') val = currentData.temp[idx]; 
                         else if(activeLayer==='rain') val = currentData.rain[idx]; 
@@ -166,7 +202,10 @@
                             let u=currentData.wind_u.data[idx], v=currentData.wind_v.data[idx]; 
                             val = Math.sqrt(u*u+v*v)*3.6; 
                         }
-                        var c = getColor(val, activeLayer); if(c[3]===0) continue;
+                        
+                        var c = getColor(val, activeLayer); 
+                        if(c[3]===0) continue; // Se alpha è 0, non disegnare (Trasparenza Pioggia)
+                        
                         ctx.fillStyle = `rgba(${c[0]},${c[1]},${c[2]},${c[3]})`; 
                         ctx.fillRect(Math.floor(p.x), Math.floor(p.y), dw, dh);
                     }
@@ -175,19 +214,25 @@
             update: function() { this._draw(); }
         });
 
-        heatCanvas = new L.HeatmapLayer();
+        heatCanvas = new L.FullHeatmap();
         map.addLayer(heatCanvas);
         loadCatalog();
     });
 
+    // --- CARICAMENTO DATI ---
+    async function fetchWithRetry(url) {
+        let r = await fetch(url);
+        if (!r.ok) throw new Error(r.status);
+        return await r.json();
+    }
+
     async function loadCatalog() {
         try {
-            let r = await fetch('data_weather/catalog.json?t=' + Date.now());
-            catalog = await r.json();
+            catalog = await fetchWithRetry('data_weather/catalog.json?t=' + Date.now());
             document.getElementById('time-slider').max = catalog.length - 1;
             document.getElementById('time-slider').addEventListener('input', (e) => loadStep(parseInt(e.target.value)));
             loadStep(0);
-        } catch(e) { log("Err Cat"); }
+        } catch(e) { console.error("Cat Err"); }
     }
 
     async function loadStep(index) {
@@ -195,36 +240,35 @@
         document.getElementById('time-label').innerText = catalog[index].label;
         document.getElementById('loader').style.display = 'block';
         try {
-            let r = await fetch('data_weather/' + catalog[index].file + '?nocache=' + Date.now());
-            currentData = await r.json();
-            log("Data Loaded.");
+            currentData = await fetchWithRetry('data_weather/' + catalog[index].file + '?nocache=' + Date.now());
             updateMap();
-        } catch(e) { log("Err Data"); }
+        } catch(e) { console.error("Data Err"); }
         document.getElementById('loader').style.display = 'none';
     }
 
     function updateMap() {
         if (!currentData) return;
+        
         if (heatCanvas) heatCanvas.update();
         if (velocityLayer) map.removeLayer(velocityLayer);
 
+        // Disegna particelle SOLO se layer VENTO è attivo
         if (activeLayer === 'wind') {
             try {
                 velocityLayer = L.velocityLayer({
-                    pane: 'topPane',
+                    pane: 'velocityPane', // Forzato in cima
                     displayValues: false,
                     data: [ currentData.wind_u, currentData.wind_v ], 
-                    maxVelocity: 30,
-                    velocityScale: 0.01,     
+                    maxVelocity: 40,
+                    velocityScale: 0.015,     
                     colorScale: ["#ffffff"], 
                     lineWidth: 2,             
-                    particleMultiplier: 1/600,
+                    particleMultiplier: 1/500,
                     opacity: 1.0,
                     frameRate: 20
                 });
                 velocityLayer.addTo(map);
-                log("Wind Added.");
-            } catch(e) { log("Err Wind: " + e.message); }
+            } catch(e) { console.error(e); }
         }
     }
 
@@ -232,10 +276,6 @@
         activeLayer = n;
         document.querySelectorAll('.layer-btn').forEach(b => b.classList.remove('active'));
         event.target.classList.add('active');
-        let lbl=document.getElementById('pk-lbl'), unit=document.getElementById('pk-unit');
-        if(n==='wind'){lbl.innerText="VENTO";unit.innerText="km/h";}
-        if(n==='temp'){lbl.innerText="TEMP";unit.innerText="°C";}
-        if(n==='rain'){lbl.innerText="PIOGGIA";unit.innerText="mm";}
         updateMap();
     }
 
@@ -249,7 +289,7 @@
         }, 800);
     }
     
-    // --- MOUSE SAFE ---
+    // --- SAFE TOUCH (Nessun errore rosso) ---
     window.addEventListener('load', function(){
         if(!map) return;
         map.on('mousemove', function(e) {
@@ -262,10 +302,8 @@
                     let idx = y * m.nx + x;
                     let val = "--";
                     if (activeLayer === 'wind') {
-                        // Safe check for U and V
                         if(currentData.wind_u && currentData.wind_u.data && currentData.wind_u.data[idx] != null) {
-                            let u = currentData.wind_u.data[idx];
-                            let v = currentData.wind_v.data[idx];
+                            let u = currentData.wind_u.data[idx], v = currentData.wind_v.data[idx];
                             val = (Math.sqrt(u*u+v*v)*3.6).toFixed(1);
                         }
                     } else if (activeLayer === 'temp' && currentData.temp) val = currentData.temp[idx].toFixed(1);
