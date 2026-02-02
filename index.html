@@ -1,7 +1,7 @@
 <!DOCTYPE html>
 <html>
 <head>
-    <title>Sicilia MeteoHub - OPTIMIZED</title>
+    <title>Sicilia MeteoHub - RESET</title>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     
@@ -48,16 +48,11 @@
             background: rgba(0,0,0,0.85); padding: 20px 40px; border-radius: 30px; 
             z-index: 5000; display: none; font-weight: bold;
         }
-        
-        #status-bar {
-            position: absolute; bottom: 95px; right: 10px; color: red; font-size: 10px; display: none;
-        }
     </style>
 </head>
 <body>
 
 <div id="loader">Caricamento...</div>
-<div id="status-bar"></div>
 
 <div id="layer-menu">
     <button class="layer-btn active" onclick="setLayer('wind')">VENTO 💨</button>
@@ -86,13 +81,7 @@
     var activeLayer = 'wind';
     var isPlaying = false;
 
-    // Gestione Errori
-    window.onerror = function(msg) { 
-        document.getElementById('status-bar').style.display='block';
-        document.getElementById('status-bar').innerText = msg;
-    };
-
-    // --- PALETTE ---
+    // --- PALETTE COLORI (Reset originali) ---
     const PALETTES = {
         temp: [{val:-10,c:[255,255,255]},{val:0,c:[200,200,255]},{val:10,c:[0,200,100]},{val:20,c:[255,255,0]},{val:30,c:[255,140,0]},{val:40,c:[200,0,0]}],
         rain: [{val:0,c:[0,0,0,0]},{val:0.2,c:[0,150,255]},{val:5,c:[0,0,255]},{val:20,c:[150,0,150]}],
@@ -104,24 +93,25 @@
             if(val>=stops[i].val && val<=stops[i+1].val) {
                 let t = (val - stops[i].val) / (stops[i+1].val - stops[i].val);
                 let c1=stops[i].c, c2=stops[i+1].c;
-                return [Math.round(c1[0]+(c2[0]-c1[0])*t), Math.round(c1[1]+(c2[1]-c1[1])*t), Math.round(c1[2]+(c2[2]-c1[2])*t), 0.5]; // 0.5 Opacità
+                return [Math.round(c1[0]+(c2[0]-c1[0])*t), Math.round(c1[1]+(c2[1]-c1[1])*t), Math.round(c1[2]+(c2[2]-c1[2])*t), 0.5]; // 0.5 Opacità fissa
             }
         } return [...stops[stops.length-1].c, 0.5];
     }
 
     // --- INIT ---
     window.addEventListener('load', function() {
-        // Mappa base
+        
         map = L.map('map', { zoomControl: false }).setView([37.5, 14.2], 8);
         L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png', { maxZoom: 19 }).addTo(map);
 
-        // --- HEATMAP LEGGERA (OTTIMIZZATA) ---
-        L.OptimizedHeatmap = L.Layer.extend({
+        // --- HEATMAP NEL TILEPANE (IL SEGRETO) ---
+        // Usiamo tilePane (z-index basso) invece di crearne uno nuovo.
+        // Questo garantisce che stia SOTTO a velocityLayer che va in overlayPane.
+        L.HeatmapLayer = L.Layer.extend({
             onAdd: function(m) {
                 this._c = L.DomUtil.create('canvas', 'leaflet-layer');
                 this._c.style.pointerEvents = 'none';
-                // La mettiamo nel tilePane (SOTTO A TUTTO) per non disturbare le particelle
-                m.getPanes().tilePane.appendChild(this._c);
+                m.getPanes().tilePane.appendChild(this._c); // <--- Qui sta il trucco
                 m.on('moveend resize', this._reset, this);
                 this._reset();
             },
@@ -135,29 +125,22 @@
             _draw: function() {
                 if (!currentData || !this._c) return;
                 var ctx = this._c.getContext('2d'); ctx.clearRect(0,0,this._c.width,this._c.height);
-                
                 var m = currentData.meta;
                 var p1 = this._map.latLngToContainerPoint([m.la1, m.lo1]);
                 var p2 = this._map.latLngToContainerPoint([m.la1 - (m.dy * (m.ny-1)), m.lo1 + (m.dx * (m.nx-1))]);
                 var w = Math.ceil((p2.x - p1.x)/(m.nx-1)) + 1;
                 var h = Math.ceil((p2.y - p1.y)/(m.ny-1)) + 1;
-                
-                // STEP DI CAMPIONAMENTO: Disegna solo 1 pixel ogni 2 o 3
-                // Questo riduce il carico del 75%!
-                var step = (this._map.getZoom() < 9) ? 2 : 1; 
+                // Minimo 1px (Risoluzione massima come volevi)
+                if(w<1) w=1; if(h<1) h=1; 
 
-                // Adatta larghezza rettangolo al salto
-                var drawW = w * step;
-                var drawH = h * step;
-
-                for(var y=0; y<m.ny; y+=step) {
+                for(var y=0; y<m.ny; y++) {
                     var lat = m.la1 - (y*m.dy); 
-                    for(var x=0; x<m.nx; x+=step) {
+                    for(var x=0; x<m.nx; x++) {
                         var lon = m.lo1 + (x*m.dx); 
                         var p = this._map.latLngToContainerPoint([lat, lon]);
                         
-                        // Clipping: Non disegnare fuori schermo
-                        if (p.x < -drawW || p.x > this._c.width || p.y < -drawH || p.y > this._c.height) continue;
+                        // Clipping di base per non disegnare fuori schermo
+                        if (p.x < -w || p.x > this._c.width || p.y < -h || p.y > this._c.height) continue;
                         
                         var idx = y*m.nx + x, val = 0;
                         if(activeLayer==='temp') val = currentData.temp[idx]; 
@@ -166,17 +149,16 @@
                             let u=currentData.wind_u.data[idx], v=currentData.wind_v.data[idx]; 
                             val = Math.sqrt(u*u+v*v)*3.6; 
                         }
-                        
                         var c = getColor(val, activeLayer); if(c[3]===0) continue;
                         ctx.fillStyle = `rgba(${c[0]},${c[1]},${c[2]},${c[3]})`; 
-                        ctx.fillRect(p.x, p.y, drawW+1, drawH+1); // +1 per evitare righe vuote
+                        ctx.fillRect(p.x, p.y, w, h);
                     }
                 }
             },
             update: function() { this._draw(); }
         });
 
-        heatCanvas = new L.OptimizedHeatmap();
+        heatCanvas = new L.HeatmapLayer();
         map.addLayer(heatCanvas);
 
         loadCatalog();
@@ -189,7 +171,7 @@
             document.getElementById('time-slider').max = catalog.length - 1;
             document.getElementById('time-slider').addEventListener('input', (e) => loadStep(parseInt(e.target.value)));
             loadStep(0);
-        } catch(e) { console.log("Err Cat"); }
+        } catch(e) { console.log(e); }
     }
 
     async function loadStep(index) {
@@ -200,35 +182,39 @@
             let r = await fetch('data_weather/' + catalog[index].file + '?nocache=' + Date.now());
             currentData = await r.json();
             updateMap();
-        } catch(e) { console.log("Err Step"); }
+        } catch(e) { console.log(e); }
         document.getElementById('loader').style.display = 'none';
     }
 
     function updateMap() {
         if (!currentData) return;
         
-        // 1. Aggiorna Heatmap (Sfondo)
+        // 1. Griglia
         if (heatCanvas) heatCanvas.update();
 
-        // 2. Aggiorna Particelle (Sopra)
+        // 2. Particelle
         if (velocityLayer) map.removeLayer(velocityLayer);
 
         if (activeLayer === 'wind' && typeof L.velocityLayer !== 'undefined') {
             try {
-                // PARAMETRI STANDARD E SICURI
                 velocityLayer = L.velocityLayer({
                     displayValues: false,
                     data: [ currentData.wind_u, currentData.wind_v ], 
+                    
+                    // --- PARAMETRI ANTI-CRASH MA BELLI ---
                     maxVelocity: 50,
                     velocityScale: 0.008,     
                     colorScale: ["#ffffff"], 
-                    lineWidth: 1.5,           // Leggermente più visibile
-                    particleMultiplier: 1/600,// Rade per performance
+                    lineWidth: 1,             
+                    
+                    // Il compromesso d'oro:
+                    // 1/800 è abbastanza rado da non crashare sopra la griglia HD
+                    particleMultiplier: 1/800, 
                     opacity: 0.9,
-                    frameRate: 20
+                    frameRate: 15  // FPS sicuri
                 });
                 velocityLayer.addTo(map);
-            } catch(e) { console.error("Vel Err", e); }
+            } catch(e) { console.error(e); }
         }
     }
 
