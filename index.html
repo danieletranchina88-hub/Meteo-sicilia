@@ -1,72 +1,72 @@
 <!DOCTYPE html>
 <html>
 <head>
-    <title>Sicilia MeteoHub</title>
+    <title>Sicilia MeteoHub - FULL</title>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     
-    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
-    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" crossorigin=""/>
+    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js" crossorigin=""></script>
     
-    <link rel="stylesheet" href="https://unpkg.com/leaflet-velocity@1.8.0/dist/leaflet-velocity.css" />
-    <script src="https://unpkg.com/leaflet-velocity@1.8.0/dist/leaflet-velocity.js"></script>
+    <link rel="stylesheet" href="https://unpkg.com/leaflet-velocity@1.8.0/dist/leaflet-velocity.css" crossorigin=""/>
+    <script src="https://unpkg.com/leaflet-velocity@1.8.0/dist/leaflet-velocity.js" crossorigin=""></script>
     
     <style>
-        body { margin: 0; background: #1a1a1a; font-family: 'Segoe UI', sans-serif; color: white; overflow: hidden; }
-        #map { position: absolute; top: 0; bottom: 0; width: 100%; background: #1a1a1a; }
+        body { margin: 0; background: #000; font-family: 'Segoe UI', sans-serif; color: white; overflow: hidden; }
+        #map { position: absolute; top: 0; bottom: 0; width: 100%; background: #000; }
         
+        /* STATUS BAR (Solo errori gravi) */
         #status-bar {
             position: absolute; bottom: 95px; right: 10px; 
-            background: rgba(0,0,0,0.8); color: #0f0; 
+            background: rgba(0,0,0,0.8); color: #ff5555; 
             padding: 4px 8px; border-radius: 4px; font-size: 11px; font-family: monospace;
-            z-index: 6000; pointer-events: none; border: 1px solid #0f0;
-            opacity: 0; transition: opacity 2s; /* Nascosto dopo caricamento */
+            z-index: 6000; pointer-events: none; border: 1px solid #ff5555;
+            display: none; /* Nascosta di default */
         }
 
         #layer-menu {
             position: absolute; top: 15px; right: 15px; z-index: 1000;
-            background: rgba(30,30,30,0.9); padding: 8px; border-radius: 12px;
-            display: flex; flex-direction: column; gap: 8px; border: 1px solid #444;
+            background: rgba(20,20,20,0.9); padding: 8px; border-radius: 12px;
+            display: flex; flex-direction: column; gap: 8px; border: 1px solid #333;
             box-shadow: 0 4px 15px rgba(0,0,0,0.5);
         }
         .layer-btn {
-            background: transparent; border: none; color: #ccc; padding: 12px 20px;
-            font-size: 14px; font-weight: 600; cursor: pointer; text-align: right;
+            background: transparent; border: none; color: #888; padding: 10px 15px;
+            font-size: 13px; font-weight: 600; cursor: pointer; text-align: right;
             border-radius: 8px; transition: all 0.2s;
         }
         .layer-btn:hover { background: rgba(255,255,255,0.1); color: white; }
-        .layer-btn.active { background: #007bff; color: white; box-shadow: 0 2px 8px rgba(0,123,255,0.4); }
+        .layer-btn.active { background: #222; color: #fff; border-left: 3px solid #007bff; }
 
         #picker-box {
             position: absolute; top: 20px; left: 20px; z-index: 1000;
-            pointer-events: none; text-shadow: 0 2px 4px rgba(0,0,0,0.8);
+            pointer-events: none; text-shadow: 0 2px 4px rgba(0,0,0,1);
         }
-        .picker-val { font-size: 4em; font-weight: 800; line-height: 1; letter-spacing: -1px; }
-        .picker-unit { font-size: 1.5em; color: #ccc; font-weight: 300; }
-        .picker-lbl { font-size: 0.9em; color: #aaa; text-transform: uppercase; margin-top: 5px; letter-spacing: 1px; font-weight: bold;}
+        .picker-val { font-size: 3.5em; font-weight: 800; line-height: 1; letter-spacing: -1px; }
+        .picker-unit { font-size: 1.2em; color: #999; font-weight: 400; }
+        .picker-lbl { font-size: 0.8em; color: #666; text-transform: uppercase; margin-top: 5px; letter-spacing: 2px; font-weight: bold;}
 
         #bottom-bar {
             position: absolute; bottom: 0; left: 0; right: 0; height: 90px;
-            background: linear-gradient(to top, rgba(0,0,0,0.95), transparent);
+            background: linear-gradient(to top, #000, transparent);
             display: flex; align-items: center; padding: 0 25px 20px 25px; z-index: 2000;
         }
-        #play-btn { font-size: 2.8em; cursor: pointer; margin-right: 25px; color: #fff; transition: transform 0.1s; }
-        #play-btn:active { transform: scale(0.9); }
-        input[type=range] { flex-grow: 1; height: 6px; cursor: pointer; accent-color: #007bff; border-radius: 3px; }
-        #time-label { min-width: 160px; text-align: center; font-weight: bold; font-size: 1.3em; color: #e0e0e0; }
+        #play-btn { font-size: 2.5em; cursor: pointer; margin-right: 20px; color: #fff; }
+        input[type=range] { flex-grow: 1; height: 4px; cursor: pointer; accent-color: #007bff; }
+        #time-label { min-width: 140px; text-align: center; font-weight: bold; font-size: 1.1em; color: #ccc; }
         
         #loader {
             position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%);
-            background: rgba(0,0,0,0.85); padding: 20px 40px; border-radius: 30px; 
-            z-index: 5000; display: none; font-weight: bold; font-size: 1.1em;
-            border: 1px solid #555; box-shadow: 0 10px 30px rgba(0,0,0,0.5);
+            background: #000; padding: 15px 30px; border-radius: 50px; 
+            z-index: 5000; display: none; font-weight: bold; font-size: 1em;
+            border: 1px solid #333;
         }
     </style>
 </head>
 <body>
 
-<div id="loader">MeteoHub Ready</div>
-<div id="status-bar">System Ready</div>
+<div id="loader">Caricamento...</div>
+<div id="status-bar">Error</div>
 
 <div id="layer-menu">
     <button class="layer-btn active" onclick="setLayer('wind')">VENTO 💨</button>
@@ -89,20 +89,14 @@
 </div>
 
 <script>
-    // --- GESTORE ERRORI (Nascosto se tutto va bene) ---
-    function updateStatus(msg, err=false) {
+    // --- GESTORE ERRORI ---
+    function updateStatus(msg) {
         let el = document.getElementById('status-bar');
-        el.innerText = msg;
-        el.style.opacity = "1";
-        if(err) {
-            el.style.color = "#ff5555";
-            el.style.borderColor = "#ff5555";
-        } else {
-            // Nascondi dopo 3 secondi se è tutto ok
-            setTimeout(() => { el.style.opacity = "0"; }, 3000);
-        }
+        el.innerText = "ERR: " + msg;
+        el.style.display = "block";
+        setTimeout(() => { el.style.display = "none"; }, 5000);
     }
-    window.onerror = function(msg) { updateStatus("ERR: "+msg, true); return false; };
+    window.onerror = function(msg) { updateStatus(msg); return false; };
 
     // --- VARIABILI GLOBALI ---
     var map, velocityLayer, heatCanvas;
@@ -111,101 +105,119 @@
     var activeLayer = 'wind';
     var isPlaying = false;
 
-    // --- PALETTE COLORI (Migliorate) ---
+    // --- PALETTE COLORI (GRIGLIA) ---
     const PALETTES = {
         temp: [{val:-10,c:[255,255,255]},{val:0,c:[200,200,255]},{val:10,c:[0,200,100]},{val:20,c:[255,255,0]},{val:30,c:[255,140,0]},{val:40,c:[200,0,0]}],
         rain: [{val:0,c:[0,0,0,0]},{val:0.2,c:[0,150,255]},{val:5,c:[0,0,255]},{val:20,c:[150,0,150]}],
         wind: [{val:0,c:[0,0,0,0]},{val:5,c:[0,100,200]},{val:20,c:[0,200,0]},{val:40,c:[200,200,0]},{val:60,c:[255,0,0]}]
     };
+
     function getColor(val, type) {
-        let stops = PALETTES[type]; if(type==='rain' && val<=0.1) return [0,0,0,0];
+        let stops = PALETTES[type]; 
+        // Pioggia debole = trasparente
+        if(type==='rain' && val<=0.1) return [0,0,0,0];
+        
         for(let i=0; i<stops.length-1; i++) {
             if(val>=stops[i].val && val<=stops[i+1].val) {
                 let t = (val - stops[i].val) / (stops[i+1].val - stops[i].val);
                 let c1=stops[i].c, c2=stops[i+1].c;
-                return [Math.round(c1[0]+(c2[0]-c1[0])*t), Math.round(c1[1]+(c2[1]-c1[1])*t), Math.round(c1[2]+(c2[2]-c1[2])*t), 0.6];
+                // Opacità fissa a 0.5 per vedere bene le particelle sopra
+                return [Math.round(c1[0]+(c2[0]-c1[0])*t), Math.round(c1[1]+(c2[1]-c1[1])*t), Math.round(c1[2]+(c2[2]-c1[2])*t), 0.5];
             }
-        } return [...stops[stops.length-1].c, 0.6];
+        } 
+        return [...stops[stops.length-1].c, 0.5];
     }
 
-    // --- INIZIALIZZAZIONE ---
+    // --- INIT ---
     window.addEventListener('load', function() {
-        
-        // 1. Mappa
         try {
+            // 1. Mappa Base
             map = L.map('map', { zoomControl: false }).setView([37.5, 14.2], 8);
             L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png', { 
                 maxZoom: 19, opacity: 1 
             }).addTo(map);
-        } catch(e) { updateStatus("Err Map", true); return; }
 
-        // 2. Heatmap Layer
-        L.HeatmapLayer = L.Layer.extend({
-            onAdd: function(m) {
-                this._c = L.DomUtil.create('canvas', 'leaflet-layer');
-                this._c.style.pointerEvents = 'none';
-                m.getPanes().overlayPane.appendChild(this._c);
-                m.on('moveend resize', this._reset, this);
-                this._reset();
-            },
-            onRemove: function(m) { m.getPanes().overlayPane.removeChild(this._c); m.off('moveend resize', this._reset, this); },
-            _reset: function() {
-                var s = this._map.getSize(); 
-                this._c.width = s.x; this._c.height = s.y;
-                L.DomUtil.setPosition(this._c, this._map.containerPointToLayerPoint([0,0])); 
-                this._draw();
-            },
-            _draw: function() {
-                if (!currentData || !this._c) return;
-                var ctx = this._c.getContext('2d'); ctx.clearRect(0,0,this._c.width,this._c.height);
-                var m = currentData.meta;
-                var p1 = this._map.latLngToContainerPoint([m.la1, m.lo1]);
-                var p2 = this._map.latLngToContainerPoint([m.la1 - (m.dy * (m.ny-1)), m.lo1 + (m.dx * (m.nx-1))]);
-                var w = Math.ceil((p2.x - p1.x)/(m.nx-1)) + 1;
-                var h = Math.ceil((p2.y - p1.y)/(m.ny-1)) + 1;
-                if(w<1)w=1; if(h<1)h=1;
+            // 2. Definizione Classe Heatmap (La Griglia)
+            L.HeatmapLayer = L.Layer.extend({
+                onAdd: function(m) {
+                    this._c = L.DomUtil.create('canvas', 'leaflet-layer');
+                    this._c.style.pointerEvents = 'none'; // Click passano attraverso
+                    // OverlayPane = sotto le label, sopra la mappa base
+                    m.getPanes().overlayPane.appendChild(this._c);
+                    m.on('moveend resize', this._reset, this);
+                    this._reset();
+                },
+                onRemove: function(m) { 
+                    m.getPanes().overlayPane.removeChild(this._c); 
+                    m.off('moveend resize', this._reset, this); 
+                },
+                _reset: function() {
+                    var s = this._map.getSize(); 
+                    this._c.width = s.x; this._c.height = s.y;
+                    L.DomUtil.setPosition(this._c, this._map.containerPointToLayerPoint([0,0])); 
+                    this._draw();
+                },
+                _draw: function() {
+                    if (!currentData || !this._c) return;
+                    var ctx = this._c.getContext('2d'); 
+                    ctx.clearRect(0,0,this._c.width,this._c.height);
+                    
+                    var m = currentData.meta;
+                    // Calcolo pixel
+                    var p1 = this._map.latLngToContainerPoint([m.la1, m.lo1]);
+                    var p2 = this._map.latLngToContainerPoint([m.la1 - (m.dy * (m.ny-1)), m.lo1 + (m.dx * (m.nx-1))]);
+                    
+                    var w = Math.ceil((p2.x - p1.x)/(m.nx-1)) + 1;
+                    var h = Math.ceil((p2.y - p1.y)/(m.ny-1)) + 1;
+                    // Evita rettangoli troppo piccoli che uccidono la CPU
+                    if(w<2) w=2; if(h<2) h=2;
 
-                for(var y=0; y<m.ny; y++) {
-                    var lat = m.la1 - (y*m.dy); 
-                    for(var x=0; x<m.nx; x++) {
-                        var lon = m.lo1 + (x*m.dx); 
-                        var p = this._map.latLngToContainerPoint([lat, lon]);
-                        if (p.x < -w || p.x > this._c.width || p.y < -h || p.y > this._c.height) continue;
-                        
-                        var idx = y*m.nx + x, val = 0;
-                        if(activeLayer==='temp') val = currentData.temp[idx]; 
-                        else if(activeLayer==='rain') val = currentData.rain[idx]; 
-                        else if(activeLayer==='wind') { 
-                            let u=currentData.wind_u.data[idx], v=currentData.wind_v.data[idx]; 
-                            val = Math.sqrt(u*u+v*v)*3.6; 
+                    // Loop di disegno
+                    for(var y=0; y<m.ny; y++) {
+                        var lat = m.la1 - (y*m.dy); 
+                        for(var x=0; x<m.nx; x++) {
+                            var lon = m.lo1 + (x*m.dx); 
+                            var p = this._map.latLngToContainerPoint([lat, lon]);
+                            
+                            // Disegna solo se visibile nello schermo (Ottimizzazione Importante)
+                            if (p.x < -w || p.x > this._c.width || p.y < -h || p.y > this._c.height) continue;
+                            
+                            var idx = y*m.nx + x, val = 0;
+                            if(activeLayer==='temp') val = currentData.temp[idx]; 
+                            else if(activeLayer==='rain') val = currentData.rain[idx]; 
+                            else if(activeLayer==='wind') { 
+                                let u=currentData.wind_u.data[idx], v=currentData.wind_v.data[idx]; 
+                                val = Math.sqrt(u*u+v*v)*3.6; 
+                            }
+                            
+                            var c = getColor(val, activeLayer); 
+                            if(c[3]===0) continue; // Trasparente, salta
+                            
+                            ctx.fillStyle = `rgba(${c[0]},${c[1]},${c[2]},${c[3]})`; 
+                            ctx.fillRect(p.x, p.y, w, h);
                         }
-                        var c = getColor(val, activeLayer); if(c[3]===0) continue;
-                        ctx.fillStyle = `rgba(${c[0]},${c[1]},${c[2]},${c[3]})`; 
-                        ctx.fillRect(p.x, p.y, w, h);
                     }
-                }
-            },
-            update: function() { this._draw(); }
-        });
+                },
+                update: function() { this._draw(); }
+            });
 
-        heatCanvas = new L.HeatmapLayer();
-        map.addLayer(heatCanvas);
+            // Aggiunge subito la heatmap
+            heatCanvas = new L.HeatmapLayer();
+            map.addLayer(heatCanvas);
 
-        loadCatalog();
+            // Carica i dati
+            loadCatalog();
+
+        } catch(e) { updateStatus("Init Error: " + e.message); }
     });
 
-    // --- CARICAMENTO DATI ---
-    async function fetchWithRetry(url, retries=3) {
-        for(let i=0; i<retries; i++) {
-            try {
-                let r = await fetch(url);
-                if (!r.ok) throw new Error(r.status);
-                return await r.json();
-            } catch(e) {
-                if(i === retries-1) throw e;
-                await new Promise(r => setTimeout(r, 500));
-            }
-        }
+    // --- NETWORKING ---
+    async function fetchWithRetry(url) {
+        try {
+            let r = await fetch(url);
+            if (!r.ok) throw new Error(r.status);
+            return await r.json();
+        } catch(e) { throw e; }
     }
 
     async function loadCatalog() {
@@ -214,7 +226,7 @@
             document.getElementById('time-slider').max = catalog.length - 1;
             document.getElementById('time-slider').addEventListener('input', (e) => loadStep(parseInt(e.target.value)));
             loadStep(0);
-        } catch(e) { updateStatus("Err Network", true); }
+        } catch(e) { updateStatus("Catalogo offline"); }
     }
 
     async function loadStep(index) {
@@ -223,49 +235,52 @@
         document.getElementById('loader').style.display = 'block';
         try {
             currentData = await fetchWithRetry('data_weather/' + catalog[index].file + '?nocache=' + Date.now());
-            updateMap();
-            updateStatus("Dati Aggiornati");
-        } catch(e) { updateStatus("Err Dati", true); }
+            updateMap(); // Aggiorna sia griglia che particelle
+        } catch(e) { updateStatus("Errore Dati"); }
         document.getElementById('loader').style.display = 'none';
     }
 
     function updateMap() {
         if (!currentData) return;
         
-        // 1. Colori
+        // 1. Aggiorna Griglia Colori
         if (heatCanvas) heatCanvas.update();
 
-        // 2. Particelle Vento (TUNING ELEGANTE)
+        // 2. Aggiorna Particelle (Ottimizzate per non crashare con la griglia)
         if (velocityLayer) map.removeLayer(velocityLayer);
 
+        // Mostra particelle SOLO se siamo sul layer VENTO
         if (activeLayer === 'wind' && typeof L.velocityLayer !== 'undefined') {
             try {
                 velocityLayer = L.velocityLayer({
                     displayValues: false,
                     data: [ currentData.wind_u, currentData.wind_v ], 
                     
-                    // --- PARAMETRI ESTETICI ---
-                    maxVelocity: 50,          // Scala fino a 50 km/h (0-10 lento, 40+ veloce)
-                    velocityScale: 0.01,      // Scie sottili e proporzionate
+                    // --- CONFIGURAZIONE "ELEGANTE" ---
+                    maxVelocity: 50,          // Scala 0-50 km/h
+                    velocityScale: 0.008,     // Scie fluide
                     colorScale: ["#ffffff"],  // Bianco
-                    lineWidth: 1,             // Molto sottile ed elegante
-                    particleMultiplier: 1/400,// Molto rade (poche particelle)
-                    opacity: 0.8,             // Leggermente trasparenti
-                    frameRate: 25             // Fluidissimo
+                    lineWidth: 1,             // Sottilissime
+                    particleMultiplier: 1/600,// MOLTO RADE (Per non appesantire sopra la griglia)
+                    opacity: 0.9,             // Visibili
+                    frameRate: 25             // Fluide
                 });
                 velocityLayer.addTo(map);
             } catch(e) { console.error(e); }
         }
     }
 
+    // --- UI E CONTROLLI ---
     window.setLayer = function(n) {
         activeLayer = n;
         document.querySelectorAll('.layer-btn').forEach(b => b.classList.remove('active'));
         event.target.classList.add('active');
+        
         let lbl=document.getElementById('pk-lbl'), unit=document.getElementById('pk-unit');
         if(n==='wind'){lbl.innerText="VENTO";unit.innerText="km/h";}
         if(n==='temp'){lbl.innerText="TEMP";unit.innerText="°C";}
         if(n==='rain'){lbl.innerText="PIOGGIA";unit.innerText="mm";}
+        
         updateMap();
     }
 
@@ -279,7 +294,6 @@
         }, 800);
     }
 
-    // Interazione Mouse
     window.addEventListener('load', function(){
         if(!map) return;
         map.on('mousemove', function(e) {
