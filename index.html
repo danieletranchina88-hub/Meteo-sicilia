@@ -1,13 +1,15 @@
 <!DOCTYPE html>
 <html>
 <head>
-    <title>Sicilia MeteoHub - INDUSTRIAL</title>
+    <title>Sicilia MeteoHub - ATOMIC</title>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     
     <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
     <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+    
     <link rel="stylesheet" href="https://unpkg.com/leaflet-velocity@1.8.0/dist/leaflet-velocity.css" />
+    <script src="https://unpkg.com/leaflet-velocity@1.8.0/dist/leaflet-velocity.js"></script>
     
     <style>
         body { margin: 0; background: #1a1a1a; font-family: 'Segoe UI', sans-serif; color: white; overflow: hidden; }
@@ -15,9 +17,9 @@
         
         #status-bar {
             position: absolute; bottom: 95px; right: 10px; 
-            background: rgba(0,0,0,0.8); color: #00ff00; 
-            padding: 5px 10px; border-radius: 4px; font-size: 11px; font-family: monospace;
-            z-index: 6000; pointer-events: none; border-left: 3px solid #00ff00;
+            background: rgba(0,0,0,0.8); color: #0f0; 
+            padding: 4px 8px; border-radius: 4px; font-size: 11px; font-family: monospace;
+            z-index: 6000; pointer-events: none; border: 1px solid #0f0;
         }
 
         #layer-menu {
@@ -58,8 +60,8 @@
 </head>
 <body>
 
-<div id="loader">Caricamento...</div>
-<div id="status-bar">System Boot...</div>
+<div id="loader">Avvio...</div>
+<div id="status-bar">Loading...</div>
 
 <div id="layer-menu">
     <button class="layer-btn active" onclick="setLayer('wind')">VENTO 💨</button>
@@ -82,77 +84,24 @@
 </div>
 
 <script>
-    // --- 0. CONFIGURAZIONE GLOBALE ---
+    // --- GESTORE ERRORI ---
+    function updateStatus(msg, err=false) {
+        let el = document.getElementById('status-bar');
+        el.innerText = msg;
+        el.style.color = err ? "#ff5555" : "#00ff00";
+        el.style.borderColor = err ? "#ff5555" : "#00ff00";
+    }
+
+    window.onerror = function(msg) { updateStatus("SYS ERR: "+msg, true); return false; };
+
+    // --- VARIABILI ---
     var map, velocityLayer, heatCanvas;
     var currentData = null;
     var catalog = [];
     var activeLayer = 'wind';
     var isPlaying = false;
 
-    // Gestore Errori
-    window.onerror = function(msg) { updateStatus("ERR: "+msg, true); return false; };
-    function updateStatus(msg, err=false) {
-        let el = document.getElementById('status-bar');
-        el.innerText = msg;
-        el.style.color = err ? "#ff5555" : "#00ff00";
-        el.style.borderLeftColor = err ? "#ff5555" : "#00ff00";
-    }
-
-    // --- 1. DEFINIZIONE CLASSE HEATMAP (ARCHITETTURA SOLIDA) ---
-    // La definiamo come variabile globale Leaflet personalizzata
-    L.CustomHeatmap = L.Layer.extend({
-        onAdd: function(m) {
-            this._c = L.DomUtil.create('canvas', 'leaflet-layer');
-            // AGGIUNTO AL PANE DI SFONDO (Creato dopo)
-            m.getPanes().bgLayer.appendChild(this._c); 
-            m.on('moveend resize', this._reset, this);
-            this._reset();
-        },
-        onRemove: function(m) { m.getPanes().bgLayer.removeChild(this._c); m.off('moveend resize', this._reset, this); },
-        _reset: function() {
-            var s = this._map.getSize(); 
-            this._c.width = s.x; this._c.height = s.y;
-            L.DomUtil.setPosition(this._c, this._map.containerPointToLayerPoint([0,0])); 
-            this._draw();
-        },
-        _draw: function() {
-            if (!currentData || !this._c) return;
-            var ctx = this._c.getContext('2d'); 
-            ctx.clearRect(0,0,this._c.width,this._c.height);
-            
-            var m = currentData.meta;
-            var p1 = this._map.latLngToContainerPoint([m.la1, m.lo1]);
-            var p2 = this._map.latLngToContainerPoint([m.la1 - (m.dy * (m.ny-1)), m.lo1 + (m.dx * (m.nx-1))]);
-            
-            var w = Math.ceil((p2.x - p1.x)/(m.nx-1)) + 1;
-            var h = Math.ceil((p2.y - p1.y)/(m.ny-1)) + 1;
-            if(w<1)w=1; if(h<1)h=1;
-
-            for(var y=0; y<m.ny; y++) {
-                var lat = m.la1 - (y*m.dy); 
-                for(var x=0; x<m.nx; x++) {
-                    var lon = m.lo1 + (x*m.dx); 
-                    var p = this._map.latLngToContainerPoint([lat, lon]);
-                    if (p.x < -w || p.x > this._c.width || p.y < -h || p.y > this._c.height) continue;
-                    
-                    var idx = y*m.nx + x, val = 0;
-                    if(activeLayer==='temp') val = currentData.temp[idx]; 
-                    else if(activeLayer==='rain') val = currentData.rain[idx]; 
-                    else if(activeLayer==='wind') { 
-                        let u=currentData.wind_u.data[idx], v=currentData.wind_v.data[idx]; 
-                        val = Math.sqrt(u*u+v*v)*3.6; 
-                    }
-                    var c = getColor(val, activeLayer); if(c[3]===0) continue;
-                    ctx.fillStyle = `rgba(${c[0]},${c[1]},${c[2]},${c[3]})`; 
-                    ctx.fillRect(p.x, p.y, w, h);
-                }
-            }
-        },
-        // Metodo pubblico per aggiornare
-        redraw: function() { this._draw(); }
-    });
-
-    // --- 2. PALETTE COLORI ---
+    // --- PALETTE COLORI ---
     const PALETTES = {
         temp: [{val:-10,c:[255,255,255]},{val:0,c:[200,200,255]},{val:10,c:[0,200,100]},{val:20,c:[255,255,0]},{val:30,c:[255,140,0]},{val:40,c:[200,0,0]}],
         rain: [{val:0,c:[0,0,0,0]},{val:0.2,c:[0,150,255]},{val:5,c:[0,0,255]},{val:20,c:[150,0,150]}],
@@ -169,65 +118,104 @@
         } return [...stops[stops.length-1].c, 0.6];
     }
 
-    // --- 3. CARICATORE SCRIPT (Plugin Vento) ---
-    function loadScript(url) {
-        return new Promise((resolve, reject) => {
-            let script = document.createElement('script');
-            script.src = url;
-            script.onload = () => resolve(true);
-            script.onerror = () => reject(false);
-            document.head.appendChild(script);
-        });
-    }
-
-    // --- 4. AVVIO SISTEMA ---
-    async function initSystem() {
-        // A. Init Mappa
+    // --- MAIN INIT ---
+    // Aspettiamo che TUTTO sia caricato prima di eseguire una singola riga di codice
+    window.addEventListener('load', function() {
+        
+        // 1. Inizializza Mappa
         try {
             map = L.map('map', { zoomControl: false }).setView([37.5, 14.2], 8);
             L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png', { maxZoom: 19 }).addTo(map);
+            updateStatus("Mappa OK");
+        } catch(e) { updateStatus("Err Map Init", true); return; }
 
-            // CREAZIONE PANES (LIVELLI FISICI)
-            // bgLayer: Sfondo colori (z-index 200)
-            map.createPane('bgLayer');
-            map.getPane('bgLayer').style.zIndex = 200;
-            
-            // topLayer: Particelle (z-index 600)
-            map.createPane('topLayer');
-            map.getPane('topLayer').style.zIndex = 600;
-            map.getPane('topLayer').style.pointerEvents = 'none';
+        // 2. Definisci Heatmap Layer (Solo ora che L è sicuro)
+        L.HeatmapLayer = L.Layer.extend({
+            onAdd: function(m) {
+                this._c = L.DomUtil.create('canvas', 'leaflet-layer');
+                this._c.style.pointerEvents = 'none'; // Importante per far passare i click
+                // Lo aggiungiamo all'overlayPane standard
+                m.getPanes().overlayPane.appendChild(this._c);
+                m.on('moveend resize', this._reset, this);
+                this._reset();
+            },
+            onRemove: function(m) { 
+                m.getPanes().overlayPane.removeChild(this._c); 
+                m.off('moveend resize', this._reset, this); 
+            },
+            _reset: function() {
+                var s = this._map.getSize(); 
+                this._c.width = s.x; this._c.height = s.y;
+                L.DomUtil.setPosition(this._c, this._map.containerPointToLayerPoint([0,0])); 
+                this._draw();
+            },
+            _draw: function() {
+                if (!currentData || !this._c) return;
+                var ctx = this._c.getContext('2d'); 
+                ctx.clearRect(0,0,this._c.width,this._c.height);
+                
+                var m = currentData.meta;
+                var p1 = this._map.latLngToContainerPoint([m.la1, m.lo1]);
+                var p2 = this._map.latLngToContainerPoint([m.la1 - (m.dy * (m.ny-1)), m.lo1 + (m.dx * (m.nx-1))]);
+                
+                var w = Math.ceil((p2.x - p1.x)/(m.nx-1)) + 1;
+                var h = Math.ceil((p2.y - p1.y)/(m.ny-1)) + 1;
+                if(w<1)w=1; if(h<1)h=1;
 
-        } catch(e) { updateStatus("Err Mappa", true); return; }
+                for(var y=0; y<m.ny; y++) {
+                    var lat = m.la1 - (y*m.dy); 
+                    for(var x=0; x<m.nx; x++) {
+                        var lon = m.lo1 + (x*m.dx); 
+                        var p = this._map.latLngToContainerPoint([lat, lon]);
+                        // Clipping semplice
+                        if (p.x < -w || p.x > this._c.width || p.y < -h || p.y > this._c.height) continue;
+                        
+                        var idx = y*m.nx + x, val = 0;
+                        if(activeLayer==='temp') val = currentData.temp[idx]; 
+                        else if(activeLayer==='rain') val = currentData.rain[idx]; 
+                        else if(activeLayer==='wind') { 
+                            let u=currentData.wind_u.data[idx], v=currentData.wind_v.data[idx]; 
+                            val = Math.sqrt(u*u+v*v)*3.6; 
+                        }
+                        var c = getColor(val, activeLayer); if(c[3]===0) continue;
+                        ctx.fillStyle = `rgba(${c[0]},${c[1]},${c[2]},${c[3]})`; 
+                        ctx.fillRect(p.x, p.y, w, h);
+                    }
+                }
+            },
+            update: function() { this._draw(); }
+        });
 
-        // B. Init Heatmap (Senza dati per ora)
-        try {
-            heatCanvas = new L.CustomHeatmap();
-            map.addLayer(heatCanvas);
-        } catch(e) { updateStatus("Err Heatmap Class", true); return; }
+        // 3. Aggiungi Heatmap alla mappa (vuota)
+        heatCanvas = new L.HeatmapLayer();
+        map.addLayer(heatCanvas);
 
-        // C. Carica Plugin Vento
-        updateStatus("Scarico Plugin...");
-        try { await loadScript("https://unpkg.com/leaflet-velocity@1.8.0/dist/leaflet-velocity.js"); }
-        catch(e) {
-            try { await loadScript("https://cdn.jsdelivr.net/npm/leaflet-velocity@1.8.0/dist/leaflet-velocity.min.js"); }
-            catch(e2) { updateStatus("PLUGIN KO", true); } // Proseguiamo per mostrare almeno i colori
-        }
-
-        updateStatus("Scarico Dati...");
+        // 4. Avvia Download
         loadCatalog();
+    });
+
+    // --- FUNZIONI LOGICHE ---
+    async function fetchWithRetry(url, retries=3) {
+        for(let i=0; i<retries; i++) {
+            try {
+                let r = await fetch(url);
+                if (!r.ok) throw new Error(r.status);
+                return await r.json();
+            } catch(e) {
+                if(i === retries-1) throw e;
+                await new Promise(r => setTimeout(r, 1000));
+            }
+        }
     }
 
     async function loadCatalog() {
         try {
-            // NOCACHE: Aggiungiamo timestamp per evitare file corrotti in cache
-            let r = await fetch('data_weather/catalog.json?nocache=' + Date.now());
-            if (!r.ok) throw new Error("HTTP "+r.status);
-            
-            catalog = await r.json();
+            updateStatus("Scarico Dati...");
+            catalog = await fetchWithRetry('data_weather/catalog.json?t=' + Date.now());
             document.getElementById('time-slider').max = catalog.length - 1;
             document.getElementById('time-slider').addEventListener('input', (e) => loadStep(parseInt(e.target.value)));
             loadStep(0);
-        } catch(e) { updateStatus("Err Catalogo (Rete)", true); }
+        } catch(e) { updateStatus("Err Catalogo", true); }
     }
 
     async function loadStep(index) {
@@ -235,29 +223,25 @@
         document.getElementById('time-label').innerText = catalog[index].label;
         document.getElementById('loader').style.display = 'block';
         try {
-            let r = await fetch('data_weather/' + catalog[index].file + '?nocache=' + Date.now());
-            if (!r.ok) throw new Error("HTTP "+r.status);
-            
-            currentData = await r.json();
+            currentData = await fetchWithRetry('data_weather/' + catalog[index].file + '?nocache=' + Date.now());
             updateMap();
-            updateStatus("Dati OK: " + catalog[index].label);
-        } catch(e) { updateStatus("Err Dati (Rete)", true); }
+            updateStatus("Dati OK");
+        } catch(e) { updateStatus("Err Step JSON", true); }
         document.getElementById('loader').style.display = 'none';
     }
 
     function updateMap() {
         if (!currentData) return;
         
-        // 1. Disegna Colori
-        if (heatCanvas) heatCanvas.redraw();
+        // 1. Colori Sfondo (Sono già aggiunti, basta ridisegnare)
+        if (heatCanvas) heatCanvas.update();
 
-        // 2. Disegna Particelle
+        // 2. Particelle
         if (velocityLayer) map.removeLayer(velocityLayer);
 
         if (activeLayer === 'wind' && typeof L.velocityLayer !== 'undefined') {
             try {
                 velocityLayer = L.velocityLayer({
-                    pane: 'topLayer', // <--- LO METTIAMO NEL PANE ALTO
                     displayValues: false,
                     data: [ currentData.wind_u, currentData.wind_v ], 
                     maxVelocity: 15,
@@ -269,11 +253,12 @@
                     frameRate: 20
                 });
                 velocityLayer.addTo(map);
-            } catch(e) { console.error("Err Vento", e); }
+            } catch(e) { console.error(e); }
         }
     }
 
-    function setLayer(n) {
+    // --- UI HELPERS ---
+    window.setLayer = function(n) {
         activeLayer = n;
         document.querySelectorAll('.layer-btn').forEach(b => b.classList.remove('active'));
         event.target.classList.add('active');
@@ -284,24 +269,7 @@
         updateMap();
     }
 
-    map.on('mousemove', function(e) {
-        if (!currentData) return;
-        let m = currentData.meta;
-        let y = Math.round((m.la1 - e.latlng.lat) / m.dy);
-        let x = Math.round((e.latlng.lng - m.lo1) / m.dx);
-        if (x >= 0 && x < m.nx && y >= 0 && y < m.ny) {
-            let idx = y * m.nx + x;
-            let val = "--";
-            if (activeLayer === 'wind') {
-                let u = currentData.wind_u.data[idx], v = currentData.wind_v.data[idx];
-                val = (Math.sqrt(u*u+v*v)*3.6).toFixed(1);
-            } else if (activeLayer === 'temp') val = currentData.temp[idx].toFixed(1);
-            else if (activeLayer === 'rain') val = currentData.rain[idx].toFixed(1);
-            document.getElementById('pk-val').innerText = val;
-        }
-    });
-
-    function togglePlay() {
+    window.togglePlay = function() {
         if (isPlaying) return; isPlaying = true;
         let s = document.getElementById('time-slider');
         let i = parseInt(s.value), max = parseInt(s.max);
@@ -310,9 +278,27 @@
             else { i++; s.value = i; loadStep(i); }
         }, 800);
     }
-    
-    // AVVIO
-    initSystem();
+
+    // Interazione Mouse
+    window.addEventListener('load', function(){
+        if(!map) return;
+        map.on('mousemove', function(e) {
+            if (!currentData) return;
+            let m = currentData.meta;
+            let y = Math.round((m.la1 - e.latlng.lat) / m.dy);
+            let x = Math.round((e.latlng.lng - m.lo1) / m.dx);
+            if (x >= 0 && x < m.nx && y >= 0 && y < m.ny) {
+                let idx = y * m.nx + x;
+                let val = "--";
+                if (activeLayer === 'wind') {
+                    let u = currentData.wind_u.data[idx], v = currentData.wind_v.data[idx];
+                    val = (Math.sqrt(u*u+v*v)*3.6).toFixed(1);
+                } else if (activeLayer === 'temp') val = currentData.temp[idx].toFixed(1);
+                else if (activeLayer === 'rain') val = currentData.rain[idx].toFixed(1);
+                document.getElementById('pk-val').innerText = val;
+            }
+        });
+    });
 
 </script>
 </body>
