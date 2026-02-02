@@ -1,7 +1,7 @@
 <!DOCTYPE html>
 <html>
 <head>
-    <title>Sicilia MeteoHub - LAYERS</title>
+    <title>Sicilia MeteoHub - OPTIMIZED</title>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     
@@ -14,14 +14,6 @@
         body { margin: 0; background: #000; font-family: 'Segoe UI', sans-serif; color: white; overflow: hidden; }
         #map { position: absolute; top: 0; bottom: 0; width: 100%; background: #000; }
         
-        #status-bar {
-            position: absolute; bottom: 95px; right: 10px; 
-            background: rgba(0,0,0,0.8); color: #0f0; 
-            padding: 4px 8px; border-radius: 4px; font-size: 11px; font-family: monospace;
-            z-index: 6000; pointer-events: none; border: 1px solid #0f0;
-            display: none;
-        }
-
         #layer-menu {
             position: absolute; top: 15px; right: 15px; z-index: 1000;
             background: rgba(30,30,30,0.9); padding: 8px; border-radius: 12px;
@@ -36,7 +28,7 @@
 
         #picker-box {
             position: absolute; top: 20px; left: 20px; z-index: 1000;
-            pointer-events: none; text-shadow: 0 2px 4px rgba(0,0,0,0.8);
+            pointer-events: none; text-shadow: 0 2px 4px rgba(0,0,0,1);
         }
         .picker-val { font-size: 3.5em; font-weight: 800; line-height: 1; }
         .picker-unit { font-size: 1.2em; color: #ccc; }
@@ -44,7 +36,7 @@
 
         #bottom-bar {
             position: absolute; bottom: 0; left: 0; right: 0; height: 90px;
-            background: linear-gradient(to top, rgba(0,0,0,0.95), transparent);
+            background: linear-gradient(to top, #000, transparent);
             display: flex; align-items: center; padding: 0 25px 20px 25px; z-index: 2000;
         }
         #play-btn { font-size: 2.5em; cursor: pointer; margin-right: 25px; }
@@ -56,11 +48,15 @@
             background: rgba(0,0,0,0.85); padding: 20px 40px; border-radius: 30px; 
             z-index: 5000; display: none; font-weight: bold;
         }
+        
+        #status-bar {
+            position: absolute; bottom: 95px; right: 10px; color: red; font-size: 10px; display: none;
+        }
     </style>
 </head>
 <body>
 
-<div id="loader">Avvio...</div>
+<div id="loader">Caricamento...</div>
 <div id="status-bar"></div>
 
 <div id="layer-menu">
@@ -84,20 +80,17 @@
 </div>
 
 <script>
-    // --- UTILS ---
-    function updateStatus(msg) {
-        let el = document.getElementById('status-bar');
-        el.innerText = msg;
-        el.style.display = "block";
-        console.log(msg);
-    }
-    window.onerror = function(msg) { updateStatus("ERR: "+msg); return false; };
-
     var map, velocityLayer, heatCanvas;
     var currentData = null;
     var catalog = [];
     var activeLayer = 'wind';
     var isPlaying = false;
+
+    // Gestione Errori
+    window.onerror = function(msg) { 
+        document.getElementById('status-bar').style.display='block';
+        document.getElementById('status-bar').innerText = msg;
+    };
 
     // --- PALETTE ---
     const PALETTES = {
@@ -111,40 +104,28 @@
             if(val>=stops[i].val && val<=stops[i+1].val) {
                 let t = (val - stops[i].val) / (stops[i+1].val - stops[i].val);
                 let c1=stops[i].c, c2=stops[i+1].c;
-                return [Math.round(c1[0]+(c2[0]-c1[0])*t), Math.round(c1[1]+(c2[1]-c1[1])*t), Math.round(c1[2]+(c2[2]-c1[2])*t), 0.6];
+                return [Math.round(c1[0]+(c2[0]-c1[0])*t), Math.round(c1[1]+(c2[1]-c1[1])*t), Math.round(c1[2]+(c2[2]-c1[2])*t), 0.5]; // 0.5 Opacità
             }
-        } return [...stops[stops.length-1].c, 0.6];
+        } return [...stops[stops.length-1].c, 0.5];
     }
 
     // --- INIT ---
     window.addEventListener('load', function() {
-        
+        // Mappa base
         map = L.map('map', { zoomControl: false }).setView([37.5, 14.2], 8);
         L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png', { maxZoom: 19 }).addTo(map);
 
-        // --- CREAZIONE LIVELLI FISICI (PANES) ---
-        // 1. Pane per la Griglia (Sotto)
-        map.createPane('gridPane');
-        map.getPane('gridPane').style.zIndex = 400; // Standard Overlay
-        
-        // 2. Pane per il Vento (Sopra)
-        map.createPane('velocityPane');
-        map.getPane('velocityPane').style.zIndex = 600; // Molto sopra
-        map.getPane('velocityPane').style.pointerEvents = 'none'; // Click passano
-
-        // --- CLASSE GRIGLIA ---
-        L.HeatmapLayer = L.Layer.extend({
+        // --- HEATMAP LEGGERA (OTTIMIZZATA) ---
+        L.OptimizedHeatmap = L.Layer.extend({
             onAdd: function(m) {
                 this._c = L.DomUtil.create('canvas', 'leaflet-layer');
-                // FORZIAMO LA GRIGLIA NEL SUO PANE
-                m.getPane('gridPane').appendChild(this._c);
+                this._c.style.pointerEvents = 'none';
+                // La mettiamo nel tilePane (SOTTO A TUTTO) per non disturbare le particelle
+                m.getPanes().tilePane.appendChild(this._c);
                 m.on('moveend resize', this._reset, this);
                 this._reset();
             },
-            onRemove: function(m) { 
-                m.getPane('gridPane').removeChild(this._c); 
-                m.off('moveend resize', this._reset, this); 
-            },
+            onRemove: function(m) { m.getPanes().tilePane.removeChild(this._c); m.off('moveend resize', this._reset, this); },
             _reset: function() {
                 var s = this._map.getSize(); 
                 this._c.width = s.x; this._c.height = s.y;
@@ -154,20 +135,29 @@
             _draw: function() {
                 if (!currentData || !this._c) return;
                 var ctx = this._c.getContext('2d'); ctx.clearRect(0,0,this._c.width,this._c.height);
+                
                 var m = currentData.meta;
                 var p1 = this._map.latLngToContainerPoint([m.la1, m.lo1]);
                 var p2 = this._map.latLngToContainerPoint([m.la1 - (m.dy * (m.ny-1)), m.lo1 + (m.dx * (m.nx-1))]);
                 var w = Math.ceil((p2.x - p1.x)/(m.nx-1)) + 1;
                 var h = Math.ceil((p2.y - p1.y)/(m.ny-1)) + 1;
-                if(w<2) w=2; if(h<2) h=2; // Minimo 2px per performance
+                
+                // STEP DI CAMPIONAMENTO: Disegna solo 1 pixel ogni 2 o 3
+                // Questo riduce il carico del 75%!
+                var step = (this._map.getZoom() < 9) ? 2 : 1; 
 
-                // Disegno sincrono semplice (per vedere se appare)
-                for(var y=0; y<m.ny; y++) {
+                // Adatta larghezza rettangolo al salto
+                var drawW = w * step;
+                var drawH = h * step;
+
+                for(var y=0; y<m.ny; y+=step) {
                     var lat = m.la1 - (y*m.dy); 
-                    for(var x=0; x<m.nx; x++) {
+                    for(var x=0; x<m.nx; x+=step) {
                         var lon = m.lo1 + (x*m.dx); 
                         var p = this._map.latLngToContainerPoint([lat, lon]);
-                        if (p.x < -w || p.x > this._c.width || p.y < -h || p.y > this._c.height) continue;
+                        
+                        // Clipping: Non disegnare fuori schermo
+                        if (p.x < -drawW || p.x > this._c.width || p.y < -drawH || p.y > this._c.height) continue;
                         
                         var idx = y*m.nx + x, val = 0;
                         if(activeLayer==='temp') val = currentData.temp[idx]; 
@@ -176,37 +166,30 @@
                             let u=currentData.wind_u.data[idx], v=currentData.wind_v.data[idx]; 
                             val = Math.sqrt(u*u+v*v)*3.6; 
                         }
+                        
                         var c = getColor(val, activeLayer); if(c[3]===0) continue;
                         ctx.fillStyle = `rgba(${c[0]},${c[1]},${c[2]},${c[3]})`; 
-                        ctx.fillRect(p.x, p.y, w, h);
+                        ctx.fillRect(p.x, p.y, drawW+1, drawH+1); // +1 per evitare righe vuote
                     }
                 }
             },
             update: function() { this._draw(); }
         });
 
-        heatCanvas = new L.HeatmapLayer();
+        heatCanvas = new L.OptimizedHeatmap();
         map.addLayer(heatCanvas);
 
         loadCatalog();
     });
 
-    // --- NETWORKING ---
-    async function fetchWithRetry(url) {
-        try {
-            let r = await fetch(url);
-            if (!r.ok) throw new Error(r.status);
-            return await r.json();
-        } catch(e) { throw e; }
-    }
-
     async function loadCatalog() {
         try {
-            catalog = await fetchWithRetry('data_weather/catalog.json?t=' + Date.now());
+            let r = await fetch('data_weather/catalog.json?t=' + Date.now());
+            catalog = await r.json();
             document.getElementById('time-slider').max = catalog.length - 1;
             document.getElementById('time-slider').addEventListener('input', (e) => loadStep(parseInt(e.target.value)));
             loadStep(0);
-        } catch(e) { updateStatus("Catalogo KO"); }
+        } catch(e) { console.log("Err Cat"); }
     }
 
     async function loadStep(index) {
@@ -214,41 +197,38 @@
         document.getElementById('time-label').innerText = catalog[index].label;
         document.getElementById('loader').style.display = 'block';
         try {
-            currentData = await fetchWithRetry('data_weather/' + catalog[index].file + '?nocache=' + Date.now());
+            let r = await fetch('data_weather/' + catalog[index].file + '?nocache=' + Date.now());
+            currentData = await r.json();
             updateMap();
-        } catch(e) { updateStatus("Dati KO"); }
+        } catch(e) { console.log("Err Step"); }
         document.getElementById('loader').style.display = 'none';
     }
 
     function updateMap() {
         if (!currentData) return;
         
-        // 1. Griglia
+        // 1. Aggiorna Heatmap (Sfondo)
         if (heatCanvas) heatCanvas.update();
 
-        // 2. Particelle (FORZATE NEL PANE SUPERIORE)
+        // 2. Aggiorna Particelle (Sopra)
         if (velocityLayer) map.removeLayer(velocityLayer);
 
         if (activeLayer === 'wind' && typeof L.velocityLayer !== 'undefined') {
             try {
+                // PARAMETRI STANDARD E SICURI
                 velocityLayer = L.velocityLayer({
-                    // FORZATURA PANE
-                    pane: 'velocityPane',
-                    
                     displayValues: false,
                     data: [ currentData.wind_u, currentData.wind_v ], 
-                    
-                    // PARAMETRI STANDARD (Per essere sicuri di vederle)
                     maxVelocity: 50,
-                    velocityScale: 0.01,
+                    velocityScale: 0.008,     
                     colorScale: ["#ffffff"], 
-                    lineWidth: 2,             // Spessore normale per visibilità
-                    particleMultiplier: 1/500,
-                    opacity: 1.0,
+                    lineWidth: 1.5,           // Leggermente più visibile
+                    particleMultiplier: 1/600,// Rade per performance
+                    opacity: 0.9,
                     frameRate: 20
                 });
                 velocityLayer.addTo(map);
-            } catch(e) { updateStatus("Vento Err: " + e.message); }
+            } catch(e) { console.error("Vel Err", e); }
         }
     }
 
