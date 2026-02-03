@@ -2,48 +2,48 @@ name: Update Meteo Data
 
 on:
   schedule:
-    # Esegue ogni 6 ore (alle 00:00, 06:00, 12:00, 18:00 UTC)
     - cron: '0 0,6,12,18 * * *'
-  workflow_dispatch: # Permette di avviarlo manualmente dal tab "Actions"
+  workflow_dispatch:
 
 jobs:
-  update-data:
+  build:
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
     
     steps:
-    # 1. Scarica il codice del repository
-    - name: Checkout repository
+    - name: Checkout repo
       uses: actions/checkout@v3
 
-    # 2. Installa la libreria di sistema necessaria per leggere i file GRIB
-    - name: Install system dependencies (eccodes)
-      run: |
-        sudo apt-get update
-        sudo apt-get install -y libeccodes-dev
-
-    # 3. Imposta Python
-    - name: Set up Python
+    - name: Setup Python
       uses: actions/setup-python@v4
       with:
         python-version: '3.9'
 
-    # 4. Installa le librerie Python necessarie
-    - name: Install Python dependencies
+    - name: Install dependencies
       run: |
-        python -m pip install --upgrade pip
+        sudo apt-get install -y libeccodes-dev
         pip install requests xarray numpy cfgrib
 
-    # 5. Esegue lo script Python (il "cervello" che scarica i dati)
-    - name: Run data processor
-      run: python scripts/process_data.py
+    - name: Run Data Processor
+      run: python scripts/update_data.py
 
-    # 6. Salva i nuovi dati nel repository (Commit & Push)
-    - name: Commit and push changes
+    - name: FORCE CLEANUP
+      # Cancelliamo qualsiasi file GRIB o indice rimasto per sicurezza
       run: |
-        git config --global user.name "GitHub Action"
-        git config --global user.email "action@github.com"
+        rm -f temp.grib2
+        rm -f *.idx
+
+    - name: Commit and Push
+      run: |
+        git config --global user.name "MeteoBot"
+        git config --global user.email "bot@meteo.it"
+        
+        # --- LA MODIFICA MAGICA ---
+        # Non usiamo più "git add .", ma aggiungiamo SOLO la cartella dei dati.
+        # Questo impedisce fisicamente al file gigante di essere caricato.
         git add data_weather/
-        # Il comando commit fallisce se non ci sono modifiche, quindi usiamo "|| echo..." per non bloccare tutto
-        git commit -m "Auto-update weather data" || echo "No changes to commit"
+        
+        git commit -m "Aggiornamento dati meteo" || echo "Nessuna modifica"
         git push
         
