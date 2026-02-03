@@ -1,7 +1,7 @@
 <!DOCTYPE html>
 <html>
 <head>
-    <title>Sicilia MeteoHub - CLASSIC RAINBOW</title>
+    <title>Sicilia MeteoHub - CALIBRATED</title>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     
@@ -11,11 +11,9 @@
     <script src="https://unpkg.com/leaflet-velocity@1.8.0/dist/leaflet-velocity.js"></script>
     
     <style>
-        /* BASE STYLE */
         body { margin: 0; background: #0a0a0a; font-family: 'Segoe UI', Roboto, sans-serif; color: white; overflow: hidden; }
         #map { position: absolute; top: 0; bottom: 0; width: 100%; background: #0a0a0a; }
         
-        /* --- MENU --- */
         #layer-menu {
             position: absolute; top: 20px; right: 20px; z-index: 1000;
             background: rgba(15, 15, 15, 0.85);
@@ -36,7 +34,6 @@
             box-shadow: 0 0 15px rgba(0, 80, 255, 0.4); border: 1px solid rgba(100, 180, 255, 0.5);
         }
 
-        /* --- BARRA DEL TEMPO --- */
         #bottom-bar {
             position: absolute; bottom: 0; left: 0; right: 0; height: 110px;
             background: linear-gradient(to top, #000 0%, rgba(0,0,0,0.9) 60%, transparent 100%);
@@ -62,7 +59,6 @@
             text-shadow: 0 2px 10px black; font-variant-numeric: tabular-nums;
         }
         
-        /* UI ELEMENTS */
         #loader {
             position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%);
             background: rgba(0,0,0,0.9); padding: 20px 40px; border-radius: 30px; 
@@ -122,8 +118,6 @@
         let stops = PALETTES[type];
         if(type==='rain' && val < 0.05) return [0,0,0,0];
         if(type==='wind' && val < 1) return [0,0,0,0];
-        if(type==='press' && val < 800) return [0,0,0,0];
-        if(type==='press') val = Math.floor(val/2)*2;
 
         for(let i=0; i<stops.length-1; i++) {
             if(val>=stops[i].val && val<=stops[i+1].val) {
@@ -134,38 +128,6 @@
         } 
         let last = stops[stops.length-1];
         return [last.c[0], last.c[1], last.c[2], last.c[3]];
-    }
-
-    // ====== SOLO PER IL VENTO: GRADIENTE CONTINUO BLU->ROSSO ======
-    function clamp01(t){ return Math.max(0, Math.min(1, t)); }
-    function lerp(a,b,t){ return a + (b-a)*t; }
-    function windColorFromSpeedMs(speedMs){
-        // 0 -> blu, max -> rosso, gradiente continuo
-        // max realistica: 35 m/s ~ 126 km/h. Puoi aumentare se vuoi più "spalmatura"
-        var MAX_MS = 35.0;
-        var t = clamp01(speedMs / MAX_MS);
-
-        // Gradient keypoints (blu -> ciano -> verde -> giallo -> arancio -> rosso)
-        // così non è "piatto" ma resta continuo e leggibile
-        var stops = [
-            {t:0.00, c:[0, 60, 255]},     // blu
-            {t:0.25, c:[0, 220, 255]},    // ciano
-            {t:0.45, c:[0, 255, 120]},    // verde acqua
-            {t:0.62, c:[255, 255, 0]},    // giallo
-            {t:0.80, c:[255, 140, 0]},    // arancio
-            {t:1.00, c:[255, 0, 0]}       // rosso
-        ];
-
-        for (var i=0; i<stops.length-1; i++){
-            if(t>=stops[i].t && t<=stops[i+1].t){
-                var tt = (t - stops[i].t) / (stops[i+1].t - stops[i].t);
-                var r = Math.round(lerp(stops[i].c[0], stops[i+1].c[0], tt));
-                var g = Math.round(lerp(stops[i].c[1], stops[i+1].c[1], tt));
-                var b = Math.round(lerp(stops[i].c[2], stops[i+1].c[2], tt));
-                return "rgb(" + r + "," + g + "," + b + ")";
-            }
-        }
-        return "rgb(255,0,0)";
     }
 
     // INIT MAP
@@ -262,41 +224,41 @@
 
         if (activeLayer === 'wind') {
             try {
-                // ---- PARAMETRI "PIÙ FISICI" (percepiti) ----
-                // maxVelocity: alto per non tagliare le tempeste
-                // velocityScale: più alto del tuo (0.002) per distinguere bene 5 vs 20 vs 60 km/h
-                // particleMultiplier: densità ragionevole (se lo alzi troppo diventa caos e sembra "veloce" anche con vento debole)
-                // particleAge: scia lunga per percepire direzione e differenze
                 velocityLayer = L.velocityLayer({
                     pane: 'velocityPane',
                     displayValues: false,
-                    data: [ currentData.wind_u, currentData.wind_v ],
-
-                    velocityScale: 0.010,   // <<<<< CHIAVE: differenze molto più evidenti tra velocità
-                    maxVelocity: 70.0,      // m/s max (sovrastima volutamente per non saturare mai)
+                    data: [ currentData.wind_u, currentData.wind_v ], 
                     
-                    particleMultiplier: 1/180,
-                    lineWidth: 2,
-                    particleAge: 120,
+                    // === CALIBRAZIONE ESTREMA ===
+                    
+                    // 1. MaxVelocity a 25 m/s (90 km/h)
+                    // Questo significa che se il vento è 45 km/h, sarà GIALLO/ARANCIO (metà scala).
+                    // Prima era 50, quindi 45 km/h era ancora Azzurro.
+                    maxVelocity: 25.0, 
+                    
+                    // 2. VelocityScale a 0.001
+                    // È lentissimo. I venti a 10 km/h saranno pigri.
+                    // Quelli a 60 km/h saranno 6 volte più veloci, quindi visibili.
+                    velocityScale: 0.001, 
+                    
+                    particleMultiplier: 1/100, // Molte particelle
+                    lineWidth: 1.5,           // Sottili
+                    particleAge: 90,
                     frameRate: 60,
                     opacity: 1.0,
-
-                    // ---- COLORE CONTINUO PER VELOCITÀ ----
-                    // leaflet-velocity accetta un array, ma per renderlo "continuo" gli diamo una scala fitta
-                    // generata in base alla funzione blu->rosso.
-                    colorScale: (function(){
-                        var arr = [];
-                        // 0..35 m/s (0..126 km/h) in 120 step: gradiente molto fluido
-                        var steps = 120;
-                        var maxMs = 35.0;
-                        for (var i=0; i<steps; i++){
-                            var ms = (i/(steps-1)) * maxMs;
-                            arr.push(windColorFromSpeedMs(ms));
-                        }
-                        return arr;
-                    })()
+                    
+                    // === SCALA COLORI TERMICA COMPRESSA ===
+                    // Entra subito nel verde/giallo anche con vento moderato
+                    colorScale: [
+                        "#0000ff", // 0-5 km/h: Blu
+                        "#0088ff", // 10 km/h: Azzurro
+                        "#00ff00", // 15-20 km/h: VERDE (Presto!)
+                        "#ffff00", // 30-40 km/h: GIALLO
+                        "#ff8800", // 50-60 km/h: ARANCIO
+                        "#ff0000", // 70+ km/h: ROSSO
+                        "#ff00ff"  // 90+ km/h: VIOLA
+                    ]
                 });
-
                 velocityLayer.addTo(map);
             } catch(e) { console.log(e); }
         }
