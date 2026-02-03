@@ -1,272 +1,85 @@
 import requests
 import xarray as xr
-import numpy as np
-import json
 import os
 import sys
-import shutil
-from datetime import datetime, timedelta
+import cfgrib
 
 # --- CONFIGURAZIONE ---
 DATASET_ID = "ICON_2I_SURFACE_PRESSURE_LEVELS"
 API_LIST_URL = f"https://meteohub.agenziaitaliameteo.it/api/datasets/{DATASET_ID}/opendata"
 API_DOWNLOAD_URL = "https://meteohub.agenziaitaliameteo.it/api/opendata"
+TEMP_FILE = "test_debug.grib2"
 
-FINAL_DIR = "data_weather"
-TEMP_DIR = "temp_processing"
-TEMP_FILE = "temp.grib2"
-
-# Coordinate Box Sicilia
-LAT_MIN, LAT_MAX = 35.0, 39.5
-LON_MIN, LON_MAX = 11.0, 16.5
-
-def get_latest_run_files():
-    print("1. Cerco dati su MeteoHub...", flush=True)
+def inspect_grib():
+    print("1. Cerco un file di esempio...", flush=True)
     try:
         r = requests.get(API_LIST_URL, timeout=30)
-        r.raise_for_status()
         items = r.json()
+        if not items:
+            print("Nessun file trovato nelle API.")
+            return
+            
+        # Prendo l'ultimo file disponibile
+        last_item = items[-1]
+        filename = last_item['filename']
+        print(f"   Scarico: {filename}")
+        
+        with requests.get(f"{API_DOWNLOAD_URL}/{filename}", stream=True) as r:
+            with open(TEMP_FILE, 'wb') as f:
+                for chunk in r.iter_content(chunk_size=1024*1024): f.write(chunk)
     except Exception as e:
-        print(f"Errore connessione API: {e}")
-        return None, []
-    
-    runs = {}
-    for item in items:
-        if isinstance(item, dict) and 'date' in item and 'run' in item:
-            key = f"{item['date']} {item['run']}"
-            if key not in runs: runs[key] = []
-            runs[key].append(item['filename'])
-            
-    if not runs: return None, []
-    
-    # Prende l'ultimo run disponibile
-    latest_key = sorted(runs.keys())[-1]
-    run_dt = datetime.strptime(latest_key, "%Y-%m-%d %H:%M")
-    
-    return run_dt, runs[latest_key][:48]
+        print(f"Errore download: {e}")
+        return
 
-def calculate_rh(temp_k, dew_k):
-    # Calcolo su array NUMPY puri per evitare errori xarray
-    T = temp_k - 273.15
-    Td = dew_k - 273.15
-    a = 17.625
-    b = 243.04
-    numerator = np.exp((a * Td) / (b + Td))
-    denominator = np.exp((a * T) / (b + T))
-    # Gestione divisione per zero o valori invalidi
-    with np.errstate(divide='ignore', invalid='ignore'):
-        rh = 100 * (numerator / denominator)
-    return np.nan_to_num(np.clip(rh, 0, 100))
+    print("\n2. ANALISI CONTENUTO GRIB")
+    print("="*60)
 
-def extract_raw_values(ds, mask, var_names):
-    """Estrae i valori come numpy array ignorando coordinate temporali per evitare conflitti"""
+    # Proviamo ad aprire il file e vedere cosa contiene
     try:
-        # Trova la variabile disponibile
-        var_key = next((k for k in var_names if k in ds), None)
-        if not var_key: return None
-        
-        # Applica maschera e estrai valori
-        d_masked = ds[var_key].where(mask, drop=True)
-        return d_masked.values # Ritorna Numpy Array
-    except:
-        return None
+        # filter_by_keys={} vuoto prova a leggere tutto, ma grib spesso separa i messaggi.
+        # open_datasets (plurale) ci dà una lista di tutti i "messaggi" grib separati.
+        datasets = cfgrib.open_datasets(TEMP_FILE)
+    except Exception as e:
+        print(f"Errore apertura GRIB generale: {e}")
+        return
 
-def process_data():
-    run_dt, file_list = get_latest_run_files()
-    if not file_list:
-        print("Nessun dato trovato.")
-        sys.exit(0) 
-        
-    print(f"2. Elaboro Run: {run_dt} ({len(file_list)} files)", flush=True)
+    found_press = False
     
-    if os.path.exists(TEMP_DIR): shutil.rmtree(TEMP_DIR)
-    os.makedirs(TEMP_DIR)
-    
-    catalog = []
-
-    for idx, filename in enumerate(file_list):
-        print(f"   [{idx+1:02d}] DL {filename}...", end=" ", flush=True)
+    for i, ds in enumerate(datasets):
+        print(f"\n--- GRUPPO DATI {i+1} ---")
         
-        # --- DOWNLOAD ---
-        try:
-            with requests.get(f"{API_DOWNLOAD_URL}/{filename}", stream=True, timeout=60) as r:
-                r.raise_for_status()
-                with open(TEMP_FILE, 'wb') as f:
-                    for chunk in r.iter_content(chunk_size=1024*1024): f.write(chunk)
-            print("OK", end=" ", flush=True)
-        except Exception as e:
-            print(f"KO DL: {e}", flush=True)
-            continue
+        # Stampiamo le coordinate per capire il livello
+        print("COORDINATE/FILTRI DEL GRUPPO:")
+        coords_info = []
+        for coord in ds.coords:
+            if coord not in ['latitude', 'longitude', 'step', 'time', 'valid_time']:
+                val = ds[coord].values
+                coords_info.append(f"{coord}={val}")
+        print("  " + ", ".join(coords_info))
 
-        if os.path.exists(f"{TEMP_FILE}.idx"): os.remove(f"{TEMP_FILE}.idx")
-
-        # --- APERTURA DATASET ---
-        try:
-            # VENTO (Dataset Principale per coordinate)
-            ds_wind = xr.open_dataset(TEMP_FILE, engine='cfgrib', 
-                backend_kwargs={'filter_by_keys': {'typeOfLevel': 'heightAboveGround', 'level': 10}})
+        print("VARIABILI DISPONIBILI:")
+        for var in ds.data_vars:
+            attrs = ds[var].attrs
+            long_name = attrs.get('long_name', 'N/A')
+            units = attrs.get('units', 'N/A')
+            grib_name = attrs.get('GRIB_shortName', var)
             
-            # Debug: Stampa variabili trovate solo al primo giro
-            if idx == 0:
-                print(f"\n   [DEBUG VARS] {list(ds_wind.data_vars)}")
-        except Exception as e:
-            print(f" Skip (Grib Error: {e})")
-            continue
+            print(f"  >>> NOME VARIABILE: '{var}' (GribName: {grib_name})")
+            print(f"      Descrizione: {long_name}")
+            print(f"      Unità: {units}")
+            
+            if 'pres' in long_name.lower() or 'mean sea' in long_name.lower():
+                found_press = True
+                print("      [!!!] QUESTA SEMBRA PRESSIONE")
 
-        # Apertura dataset secondari (con try/except silenziosi per non bloccare)
-        ds_thermo = None # Temp + DewPoint
-        try: ds_thermo = xr.open_dataset(TEMP_FILE, engine='cfgrib', backend_kwargs={'filter_by_keys': {'typeOfLevel': 'heightAboveGround', 'level': 2}})
-        except: pass
-
-        ds_press = None # Pressione
-        try: ds_press = xr.open_dataset(TEMP_FILE, engine='cfgrib', backend_kwargs={'filter_by_keys': {'typeOfLevel': 'meanSea'}})
-        except: 
-            try: ds_press = xr.open_dataset(TEMP_FILE, engine='cfgrib', backend_kwargs={'filter_by_keys': {'typeOfLevel': 'surface'}})
-            except: pass
-
-        ds_rain = None # Pioggia
-        try: ds_rain = xr.open_dataset(TEMP_FILE, engine='cfgrib', backend_kwargs={'filter_by_keys': {'typeOfLevel': 'surface', 'stepType': 'accum'}})
-        except: pass
-
-        # --- LOOP STEP ---
-        # Determiniamo se ci sono più step o uno solo
-        steps = range(ds_wind.sizes.get('step', 1))
-        
-        for i in steps:
-            try:
-                # Isoliamo il singolo frame del VENTO
-                if ds_wind.sizes.get('step', 1) > 1:
-                    dw_step = ds_wind.isel(step=i)
-                    raw_step = ds_wind.step.values[i]
-                else:
-                    dw_step = ds_wind
-                    raw_step = ds_wind.step.values
-
-                # Calcolo ore previsione
-                step_hours = int(raw_step / np.timedelta64(1, 'h')) if isinstance(raw_step, np.timedelta64) else int(raw_step)
-
-                # Maschera Sicilia (Costruita sul vento)
-                dw_step = dw_step.sortby('latitude', ascending=False).sortby('longitude', ascending=True)
-                mask = ((dw_step.latitude >= LAT_MIN) & (dw_step.latitude <= LAT_MAX) & (dw_step.longitude >= LON_MIN) & (dw_step.longitude <= LON_MAX))
-                
-                # Applicazione Maschera al Vento
-                cut_w = dw_step.where(mask, drop=True)
-                
-                # Controllo dati vuoti
-                if cut_w.latitude.size == 0: continue
-
-                # ESTRAZIONE VENTO (Numpy Arrays)
-                u_key = next((k for k in ['u10','u'] if k in cut_w), None)
-                v_key = next((k for k in ['v10','v'] if k in cut_w), None)
-                
-                if not u_key or not v_key: continue
-                
-                u_val = np.nan_to_num(cut_w[u_key].values)
-                v_val = np.nan_to_num(cut_w[v_key].values)
-
-                # GRID INFO
-                lat = cut_w.latitude.values
-                lon = cut_w.longitude.values
-                if lat.ndim > 1: lat = lat[:,0]
-                if lon.ndim > 1: lon = lon[0,:]
-                
-                ny, nx = u_val.shape
-                la1, lo1 = float(lat[0]), float(lon[0])
-                dx, dy = float(abs(lon[1] - lon[0])), float(abs(lat[0] - lat[1]))
-                lo2, la2 = lo1 + (nx - 1) * dx, la1 - (ny - 1) * dy
-
-                # --- ESTRAZIONE ALTRI DATI (Bypassando Xarray align) ---
-                # Usiamo le chiavi raw e convertiamo subito in numpy per evitare errori di coordinate
-                
-                # 1. Temperatura e RH
-                temp_c = np.zeros_like(u_val)
-                rh_val = np.zeros_like(u_val)
-                
-                if ds_thermo:
-                    dt_step = ds_thermo.isel(step=i) if ds_thermo.sizes.get('step', 1) > 1 else ds_thermo
-                    dt_step = dt_step.sortby('latitude', ascending=False).sortby('longitude', ascending=True)
-                    
-                    # Estrai valori crudi usando la maschera (o slicing simile)
-                    # Nota: assumiamo che la griglia sia identica. Se fallisce shape, catchiamo l'errore.
-                    try:
-                        t_raw = extract_raw_values(dt_step, mask, ['t2m', 't'])
-                        d_raw = extract_raw_values(dt_step, mask, ['d2m', '2d', 'd'])
-                        
-                        if t_raw is not None and t_raw.shape == u_val.shape:
-                            temp_c = t_raw - 273.15
-                            if d_raw is not None:
-                                rh_val = calculate_rh(t_raw, d_raw)
-                    except: pass
-
-                # 2. Pioggia
-                rain = np.zeros_like(u_val)
-                if ds_rain:
-                    try:
-                        dr_step = ds_rain.isel(step=i) if ds_rain.sizes.get('step', 1) > 1 else ds_rain
-                        dr_step = dr_step.sortby('latitude', ascending=False).sortby('longitude', ascending=True)
-                        r_raw = extract_raw_values(dr_step, mask, ['tp', 'tot_prec', 'apcp'])
-                        if r_raw is not None and r_raw.shape == u_val.shape:
-                            rain = np.nan_to_num(r_raw)
-                    except: pass
-
-                # 3. Pressione
-                press = np.zeros_like(u_val)
-                if ds_press:
-                    try:
-                        dp_step = ds_press.isel(step=i) if ds_press.sizes.get('step', 1) > 1 else ds_press
-                        dp_step = dp_step.sortby('latitude', ascending=False).sortby('longitude', ascending=True)
-                        p_raw = extract_raw_values(dp_step, mask, ['prmsl', 'msl', 'sp', 'pres'])
-                        
-                        if p_raw is not None and p_raw.shape == u_val.shape:
-                            p_raw = np.nan_to_num(p_raw)
-                            if np.max(p_raw) > 80000: press = p_raw / 100.0
-                            else: press = p_raw
-                    except: pass
-                
-                if np.max(press) < 500: press.fill(1013.0)
-
-                # --- EXPORT JSON ---
-                valid_dt = run_dt + timedelta(hours=step_hours)
-                iso_date = valid_dt.strftime("%Y-%m-%dT%H:%M:%S.000Z")
-                
-                header = {"nx": nx, "ny": ny, "lo1": lo1, "la1": la1, "lo2": lo2, "la2": la2, "dx": dx, "dy": dy, "refTime": iso_date}
-                
-                step_data = {
-                    "meta": header,
-                    "wind_u": {"header":{**header,"parameterCategory":2,"parameterNumber":2}, "data": np.round(u_val,1).flatten().tolist()},
-                    "wind_v": {"header":{**header,"parameterCategory":2,"parameterNumber":3}, "data": np.round(v_val,1).flatten().tolist()},
-                    "temp": np.round(temp_c,1).flatten().tolist(),
-                    "rain": np.round(rain,2).flatten().tolist(),
-                    "press": np.round(press,1).flatten().tolist(),
-                    "rh": np.round(rh_val,0).flatten().tolist()
-                }
-                
-                out_name = f"step_{step_hours}.json"
-                with open(f"{TEMP_DIR}/{out_name}", 'w') as jf: json.dump(step_data, jf)
-                
-                if not any(x['hour'] == step_hours for x in catalog):
-                    catalog.append({"file": out_name, "label": f"{valid_dt.strftime('%d/%m %H:00')}", "hour": step_hours})
-
-            except Exception as e_step:
-                # Stampa errore minimale per non intasare il log
-                print(f"!", end="", flush=True)
-                continue
-        
-        print(" -> Done")
-
+    print("\n" + "="*60)
+    
     if os.path.exists(TEMP_FILE): os.remove(TEMP_FILE)
     if os.path.exists(f"{TEMP_FILE}.idx"): os.remove(f"{TEMP_FILE}.idx")
 
-    if catalog:
-        catalog.sort(key=lambda x: x['hour'])
-        with open(f"{TEMP_DIR}/catalog.json", 'w') as f: json.dump(catalog, f)
-        if os.path.exists(FINAL_DIR): shutil.rmtree(FINAL_DIR)
-        shutil.move(TEMP_DIR, FINAL_DIR)
-        print("\nCOMPLETATO CON DATI.")
-    else:
-        print("\nCATALOGO VUOTO.")
-        sys.exit(1)
-
 if __name__ == "__main__":
-    process_data()
-    
+    try:
+        inspect_grib()
+    except Exception as e:
+        print(f"Crash finale: {e}")
+        
