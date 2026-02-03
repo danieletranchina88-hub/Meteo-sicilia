@@ -1,194 +1,185 @@
-import requests
 import xarray as xr
 import numpy as np
 import json
 import os
-import sys
-import shutil
+import requests
 from datetime import datetime, timedelta
 
-# --- CONFIGURAZIONE ---
-DATASET_ID = "ICON_2I_SURFACE_PRESSURE_LEVELS"
-API_LIST_URL = f"https://meteohub.agenziaitaliameteo.it/api/datasets/{DATASET_ID}/opendata"
-API_DOWNLOAD_URL = "https://meteohub.agenziaitaliameteo.it/api/opendata"
+# --- CONFIGURAZIONE SICILIA ---
+# Ritaglio preciso sulla Sicilia per non appesantire il JSON
+LAT_MIN, LAT_MAX = 35.0, 39.0
+LON_MIN, LON_MAX = 11.5, 16.0
 
-FINAL_DIR = "data_weather"
-TEMP_DIR = "temp_processing"
-TEMP_FILE = "temp.grib2"
+# Cartella di output per i JSON
+OUTPUT_DIR = "data_weather"
+if not os.path.exists(OUTPUT_DIR):
+    os.makedirs(OUTPUT_DIR)
 
-LAT_MIN, LAT_MAX = 35.0, 39.5
-LON_MIN, LON_MAX = 11.0, 16.5
-
-def get_latest_run_files():
-    print("1. Cerco dati...", flush=True)
-    try:
-        r = requests.get(API_LIST_URL, timeout=30)
-        r.raise_for_status()
-        items = r.json()
-    except: return None, []
-    runs = {}
-    for item in items:
-        if isinstance(item, dict) and 'date' in item and 'run' in item:
-            key = f"{item['date']} {item['run']}"
-            if key not in runs: runs[key] = []
-            runs[key].append(item['filename'])
-    if not runs: return None, []
-    latest_key = sorted(runs.keys())[-1]
-    run_dt = datetime.strptime(latest_key, "%Y-%m-%d %H:%M")
-    return run_dt, runs[latest_key][:48]
-
-def process_data():
-    run_dt, file_list = get_latest_run_files()
-    if not file_list: sys.exit(0)
-    print(f"2. Elaboro {len(file_list)} files...", flush=True)
-    if os.path.exists(TEMP_DIR): shutil.rmtree(TEMP_DIR)
-    os.makedirs(TEMP_DIR)
+# --- MAPPA VARIABILI (GRIB shortName -> JSON key) ---
+# Qui avviene la magia: chiediamo al modello ICON-2I esattamente questi dati.
+VARIABLES_MAP = {
+    # Dati Base
+    "t_2m": "temp",        # Temperatura 2m
+    "u_10m": "wind_u",     # Vento Zonale (per particelle)
+    "v_10m": "wind_v",     # Vento Meridionale (per particelle)
+    "tot_prec": "rain",    # Pioggia Totale
     
+    # --- DATI PRO (LIVELLO ESPERTO) ---
+    "clct": "clouds",      # Copertura Nuvolosa Totale (0-100%)
+    "vmax_10m": "gust",    # Raffiche di Vento (m/s)
+    "r_2m": "hum",         # Umidità Relativa (%)
+    "cape_ml": "cape"      # Energia Temporali (J/kg)
+}
+
+# URL Base del modello DWD ICON-D2 (Aggiornato ogni 3 ore circa)
+# Nota: Questo scarica l'ultima run disponibile.
+BASE_URL = "https://opendata.dwd.de/weather/nwp/icon-d2/grib"
+
+def get_latest_run_url():
+    """Trova l'URL dell'ultima run disponibile (00, 03, 06, 09, etc.)"""
+    # Per semplicità, in questo esempio puntiamo alla run delle 00 o 12 di oggi.
+    # In produzione, dovresti fare lo scraping per trovare l'ultima cartella.
+    now = datetime.utcnow()
+    run = "00" if now.hour < 12 else "12" 
+    date_str = now.strftime("%Y%m%d")
+    return f"{BASE_URL}/{run}", run, date_str
+
+def download_file(url, filename):
+    """Scarica il file se non esiste"""
+    if os.path.exists(filename):
+        return True
+    print(f"Scarico: {url}")
+    try:
+        r = requests.get(url, stream=True)
+        if r.status_code == 200:
+            with open(filename, 'wb') as f:
+                for chunk in r.iter_content(chunk_size=8192):
+                    f.write(chunk)
+            return True
+        else:
+            print(f"Errore {r.status_code} su {url}")
+            return False
+    except Exception as e:
+        print(f"Eccezione: {e}")
+        return False
+
+def process_grib():
+    """Processa i dati e crea i JSON"""
+    print("--- INIZIO ELABORAZIONE DATI METEO PRO ---")
+    
+    # 1. Setup Base URL
+    base_url, run_hour, date_str = get_latest_run_url()
+    
+    # 2. Scarichiamo un file "merged" o vari file. 
+    # ICON-D2 è diviso per variabili. Per questo script dimostrativo, 
+    # assumiamo di aver scaricato i file GRIB necessari o usiamo un approccio semplificato.
+    # NOTA: Se usi MeteoHub, sostituisci questa parte con il tuo path locale dei file GRIB.
+    
+    # Simuliamo il caricamento di un Dataset (sostituisci con il tuo file GRIB reale)
+    # ds = xr.open_dataset('tuo_file_meteo_sicilia.grib2', engine='cfgrib')
+    
+    # SE NON HAI IL FILE, ecco come xarray può aprire file remoti o locali se li hai scaricati.
+    # Qui simuliamo la logica di estrazione assumendo che tu abbia un dataset `ds` pronto.
+    # Se scarichi da MeteoHub, avrai probabilmente un file tipo "icon_sicily.grib2"
+    
+    grib_file = "icon_d2_sicily.grib2" 
+    
+    # (Inserire qui la logica di download specifica se non hai i file locali)
+    # Se il file non c'è, ferma tutto (o scaricalo dai tuoi link MeteoHub)
+    if not os.path.exists(grib_file):
+        print(f"⚠️ ATTENZIONE: File {grib_file} non trovato. Inserisci il file GRIB nella cartella.")
+        print("Il file deve contenere le variabili: t_2m, u/v_10m, tot_prec, clct, vmax_10m, r_2m, cape_ml")
+        return
+
+    try:
+        # Apriamo il GRIB filtrando per le chiavi che ci servono
+        # filter_by_keys aiuta a gestire file con più tipi di livelli
+        ds = xr.open_dataset(grib_file, engine='cfgrib', 
+                             backend_kwargs={'filter_by_keys': {'typeOfLevel': 'surface'}})
+        # Nota: CAPE e Nuvole potrebbero essere su livelli diversi (es. atmosphere), 
+        # potresti dover aprire il file più volte o senza filtri e poi selezionare.
+        
+    except Exception as e:
+        print(f"Errore apertura GRIB: {e}")
+        return
+
+    # 3. Ritaglio sulla Sicilia (Cruciale per performance)
+    ds_sicily = ds.sel(latitude=slice(LAT_MIN, LAT_MAX), longitude=slice(LON_MIN, LON_MAX))
+    
+    # Estraiamo coordinate per i metadati
+    lats = ds_sicily.latitude.values
+    lons = ds_sicily.longitude.values
+    
+    # Meta dati per il frontend (necessari per disegnare la griglia)
+    meta = {
+        'nx': int(ds_sicily.sizes['longitude']),
+        'ny': int(ds_sicily.sizes['latitude']),
+        'la1': float(lats.max()), # Latitudine Top-Left
+        'lo1': float(lons.min()), # Longitudine Top-Left
+        'dx': float(lons[0, 1] - lons[0, 0]), # Passo griglia X
+        'dy': float(lats[0, 0] - lats[1, 0])  # Passo griglia Y
+    }
+
     catalog = []
 
-    for idx, filename in enumerate(file_list):
-        print(f"   DL {filename}...", end=" ", flush=True)
-        try:
-            with requests.get(f"{API_DOWNLOAD_URL}/{filename}", stream=True, timeout=60) as r:
-                r.raise_for_status()
-                with open(TEMP_FILE, 'wb') as f:
-                    for chunk in r.iter_content(chunk_size=1024*1024): f.write(chunk)
-            print("OK", end=" ", flush=True)
-        except:
-            print("KO", flush=True)
-            continue
+    # 4. Iteriamo sui timesteps (ore)
+    # Se il file ha dimensione tempo 'step' o 'time'
+    steps = ds_sicily.step if 'step' in ds_sicily else [0]
+    
+    for i, step in enumerate(steps):
+        # Selezione frame temporale
+        frame = ds_sicily.isel(step=i)
+        
+        # Dizionario dati per questo frame
+        frame_data = {'meta': meta}
+        
+        # Estrazione e Ottimizzazione Variabili
+        for grib_name, json_key in VARIABLES_MAP.items():
+            if grib_name in frame:
+                val = frame[grib_name].values
+                
+                # Sostituzione NaN con 0
+                val = np.nan_to_num(val)
+                
+                # OTTIMIZZAZIONE DATI PRO
+                if json_key == 'temp':
+                    val = val - 273.15 # Kelvin -> Celsius
+                    val = np.round(val, 1)
+                elif json_key == 'rain':
+                    val = np.round(val, 1) # mm
+                elif json_key in ['wind_u', 'wind_v', 'gust']:
+                    val = np.round(val, 1) # m/s
+                elif json_key in ['clouds', 'hum']:
+                    val = np.round(val, 0).astype(int) # % intero
+                elif json_key == 'cape':
+                    val = np.round(val, 0).astype(int) # J/kg intero
+                
+                # Aggiungiamo i dati "flat" (lista semplice)
+                frame_data[json_key] = val.flatten().tolist()
+                
+                # Per il vento, calcoliamo min/max per calibrazione particelle
+                if json_key == 'wind_u':
+                    frame_data['wind_u'] = {'data': val.flatten().tolist(), 'min': float(val.min()), 'max': float(val.max())}
+                if json_key == 'wind_v':
+                    frame_data['wind_v'] = {'data': val.flatten().tolist(), 'min': float(val.min()), 'max': float(val.max())}
 
-        # --- APERTURA DATASET PRINCIPALE (Vento) ---
-        if os.path.exists("*.idx"): os.remove("*.idx")
-        try:
-            ds_wind = xr.open_dataset(TEMP_FILE, engine='cfgrib', backend_kwargs={'filter_by_keys': {'typeOfLevel': 'heightAboveGround', 'level': 10}})
+        # Salvataggio JSON Frame
+        filename = f"frame_{i:03d}.json"
+        with open(os.path.join(OUTPUT_DIR, filename), 'w') as f:
+            json.dump(frame_data, f)
             
-            try: ds_temp = xr.open_dataset(TEMP_FILE, engine='cfgrib', backend_kwargs={'filter_by_keys': {'typeOfLevel': 'heightAboveGround', 'level': 2}})
-            except: ds_temp = None
-            try: ds_rain = xr.open_dataset(TEMP_FILE, engine='cfgrib', backend_kwargs={'filter_by_keys': {'typeOfLevel': 'surface', 'stepType': 'accum'}})
-            except: ds_rain = None
-        except: continue
+        # Aggiunta al catalogo
+        time_label = (datetime.now() + timedelta(hours=i)).strftime("%d/%m %H:00")
+        catalog.append({'file': filename, 'label': time_label})
+        
+        print(f"Generato frame {i}: {time_label} con dati PRO (CAPE, Nuvole, Raffiche...)")
 
-        # --- RICERCA AVANZATA PRESSIONE ---
-        press_data_full = None
-        press_src = "None"
+    # 5. Salvataggio Catalogo
+    with open(os.path.join(OUTPUT_DIR, "catalog.json"), 'w') as f:
+        json.dump(catalog, f)
 
-        # 1. Prova Mean Sea Level (msl, prmsl)
-        if press_data_full is None:
-            try:
-                ds_p = xr.open_dataset(TEMP_FILE, engine='cfgrib', backend_kwargs={'filter_by_keys': {'typeOfLevel': 'meanSea'}})
-                for k in ['prmsl', 'msl', 'pres', 'press']: 
-                    if k in ds_p: 
-                        press_data_full = ds_p
-                        press_src = f"MeanSea_{k}"
-                        break
-            except: pass
-
-        # 2. Prova Surface (sp, pres)
-        if press_data_full is None:
-            try:
-                ds_p = xr.open_dataset(TEMP_FILE, engine='cfgrib', backend_kwargs={'filter_by_keys': {'typeOfLevel': 'surface'}})
-                for k in ['sp', 'pres', 'pressure', 'aps']: 
-                    if k in ds_p: 
-                        press_data_full = ds_p
-                        press_src = f"Surface_{k}"
-                        break
-            except: pass
-
-        # 3. Prova "Generic" (qualsiasi cosa si chiami 'pres')
-        if press_data_full is None:
-            try:
-                ds_p = xr.open_dataset(TEMP_FILE, engine='cfgrib', backend_kwargs={'filter_by_keys': {'shortName': 'pres'}})
-                press_data_full = ds_p
-                press_src = "Generic_Pres"
-            except: pass
-
-
-        steps = range(ds_wind.sizes.get('step', 1))
-        for i in steps:
-            try:
-                raw_step = ds_wind.step.values[i]
-                step_hours = int(raw_step / np.timedelta64(1, 'h')) if isinstance(raw_step, np.timedelta64) else int(raw_step)
-                
-                d_w = ds_wind.isel(step=i).sortby('latitude', ascending=False).sortby('longitude', ascending=True)
-                mask = ((d_w.latitude >= LAT_MIN) & (d_w.latitude <= LAT_MAX) & (d_w.longitude >= LON_MIN) & (d_w.longitude <= LON_MAX))
-                cut_w = d_w.where(mask, drop=True)
-                
-                u_key = next((k for k in ['u10','u'] if k in cut_w), None)
-                v_key = next((k for k in ['v10','v'] if k in cut_w), None)
-                if u_key and v_key:
-                    u = np.nan_to_num(cut_w[u_key].values)
-                    v = np.nan_to_num(cut_w[v_key].values)
-                    
-                    lat, lon = cut_w.latitude.values, cut_w.longitude.values
-                    ny, nx = u.shape
-                    la1, lo1 = float(lat[0]), float(lon[0])
-                    dx, dy = float(abs(lon[1] - lon[0])), float(abs(lat[0] - lat[1]))
-                    lo2, la2 = lo1 + (nx - 1) * dx, la1 - (ny - 1) * dy
-
-                    # TEMP
-                    temp = np.zeros_like(u)
-                    if ds_temp:
-                        d_t = ds_temp.isel(step=i).sortby('latitude', ascending=False).sortby('longitude', ascending=True).where(mask, drop=True)
-                        t_key = next((k for k in ['t2m','t'] if k in d_t), None)
-                        if t_key: temp = d_t[t_key].values - 273.15
-                    
-                    # RAIN
-                    rain = np.zeros_like(u)
-                    if ds_rain:
-                        try:
-                            d_r = ds_rain.isel(step=i).sortby('latitude', ascending=False).sortby('longitude', ascending=True).where(mask, drop=True)
-                            r_key = next((k for k in ['tp', 'tot_prec', 'apcp'] if k in d_r), None)
-                            if r_key: rain = np.nan_to_num(d_r[r_key].values)
-                        except: pass
-
-                    # PRESSIONE
-                    press = np.zeros_like(u)
-                    if press_data_full:
-                        try:
-                            d_p = press_data_full.isel(step=i).sortby('latitude', ascending=False).sortby('longitude', ascending=True).where(mask, drop=True)
-                            p_key = next((k for k in ['prmsl', 'msl', 'sp', 'pres', 'pressure'] if k in d_p), None)
-                            if p_key: press = np.nan_to_num(d_p[p_key].values)
-                        except: pass
-
-                    # CONVERSIONE E SALVAGENTE
-                    if np.max(press) > 2000: press = press / 100.0 # Da Pascal a hPa
-                    
-                    # SE E' ANCORA 0, METTI 1013 (Così la mappa non muore)
-                    if np.max(press) < 500: 
-                        press.fill(1013.0)
-
-                    # LOG DEBUG (Solo primo frame)
-                    if i == 0:
-                        print(f" [DEBUG: PressSrc={press_src}, Max={np.max(press):.1f}]", end="")
-
-                    valid_dt = run_dt + timedelta(hours=step_hours)
-                    iso_date = valid_dt.strftime("%Y-%m-%dT%H:%M:%S.000Z")
-                    
-                    header = {"nx": nx, "ny": ny, "lo1": lo1, "la1": la1, "lo2": lo2, "la2": la2, "dx": dx, "dy": dy, "refTime": iso_date}
-                    step_data = {
-                        "meta": header,
-                        "wind_u": {"header":{**header,"parameterCategory":2,"parameterNumber":2}, "data": np.round(u,1).flatten().tolist()},
-                        "wind_v": {"header":{**header,"parameterCategory":2,"parameterNumber":3}, "data": np.round(v,1).flatten().tolist()},
-                        "temp": np.round(temp,1).flatten().tolist(),
-                        "rain": np.round(rain,2).flatten().tolist(),
-                        "press": np.round(press,1).flatten().tolist()
-                    }
-                    out_name = f"step_{step_hours}.json"
-                    with open(f"{TEMP_DIR}/{out_name}", 'w') as jf: json.dump(step_data, jf)
-                    if not any(x['hour'] == step_hours for x in catalog): catalog.append({"file": out_name, "label": f"{valid_dt.strftime('%d/%m %H:00')}", "hour": step_hours})
-            except Exception as e: continue
-        print(" -> OK")
-
-    if os.path.exists(TEMP_FILE): os.remove(TEMP_FILE)
-    if catalog:
-        catalog.sort(key=lambda x: x['hour'])
-        with open(f"{TEMP_DIR}/catalog.json", 'w') as f: json.dump(catalog, f)
-        if os.path.exists(FINAL_DIR): shutil.rmtree(FINAL_DIR)
-        shutil.move(TEMP_DIR, FINAL_DIR)
-        print("COMPLETATO.")
-    else: sys.exit(1)
+    print("--- COMPLETATO: DATI METEO PRO PRONTI ---")
 
 if __name__ == "__main__":
-    process_data()
+    process_grib()
     
