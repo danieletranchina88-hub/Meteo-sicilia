@@ -1,9 +1,10 @@
 <!DOCTYPE html>
 <html>
 <head>
-    <title>Sicilia MeteoHub</title>
+    <title>Sicilia MeteoHub HD</title>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    
     <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
     <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
     <link rel="stylesheet" href="https://unpkg.com/leaflet-velocity@1.8.0/dist/leaflet-velocity.css" />
@@ -13,6 +14,7 @@
         body { margin: 0; background: #1a1a1a; font-family: 'Segoe UI', sans-serif; color: white; overflow: hidden; }
         #map { position: absolute; top: 0; bottom: 0; width: 100%; background: #1a1a1a; }
         
+        /* MENU LIVELLI */
         #layer-menu {
             position: absolute; top: 15px; right: 15px; z-index: 1000;
             background: rgba(30,30,30,0.95); padding: 8px; border-radius: 12px;
@@ -21,26 +23,32 @@
         .layer-btn {
             background: transparent; border: none; color: #ccc; padding: 12px 20px;
             font-size: 14px; font-weight: 600; cursor: pointer; text-align: right; border-radius: 8px;
+            transition: all 0.2s;
         }
+        .layer-btn:hover { background: rgba(255,255,255,0.1); }
         .layer-btn.active { background: #007bff; color: white; box-shadow: 0 0 10px rgba(0,123,255,0.4); }
 
+        /* BARRA DEL TEMPO IN BASSO */
         #bottom-bar {
             position: absolute; bottom: 0; left: 0; right: 0; height: 90px;
             background: linear-gradient(to top, rgba(0,0,0,0.95), transparent);
             display: flex; align-items: center; padding: 0 25px 20px 25px; z-index: 2000;
         }
-        #play-btn { font-size: 2.8em; cursor: pointer; margin-right: 25px; color: #fff; }
+        #play-btn { font-size: 2.8em; cursor: pointer; margin-right: 25px; color: #fff; transition: transform 0.1s; }
+        #play-btn:active { transform: scale(0.9); }
         input[type=range] { flex-grow: 1; height: 6px; cursor: pointer; accent-color: #007bff; }
-        #time-label { min-width: 160px; text-align: center; font-weight: bold; font-size: 1.3em; color: #e0e0e0; }
+        #time-label { min-width: 160px; text-align: center; font-weight: bold; font-size: 1.3em; color: #e0e0e0; margin-left: 15px; }
         
+        /* INDICATORI E LOADER */
         #loader {
             position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%);
             background: rgba(0,0,0,0.85); padding: 20px 40px; border-radius: 30px; 
             z-index: 5000; display: block; font-weight: bold; font-size: 1.1em; border: 1px solid #555;
+            box-shadow: 0 0 20px rgba(0,0,0,0.5);
         }
         #picker-box { position: absolute; top: 20px; left: 20px; z-index: 1000; pointer-events: none; }
-        #pk-val { font-size: 3em; font-weight: 800; text-shadow: 0 0 5px black; }
-        #pk-unit { color: #ccc; font-size: 1.2em; font-weight: bold; margin-left: 5px; }
+        #pk-val { font-size: 3em; font-weight: 800; text-shadow: 0 0 10px rgba(0,0,0,0.8); }
+        #pk-unit { color: #ccc; font-size: 1.2em; font-weight: bold; margin-left: 5px; text-shadow: 0 0 5px black; }
         
         #status-box {
             position: absolute; bottom: 95px; left: 20px; 
@@ -52,7 +60,7 @@
 </head>
 <body>
 
-<div id="loader">Caricamento Mappa...</div>
+<div id="loader">Avvio Mappa...</div>
 <div id="status-box"></div>
 
 <div id="layer-menu">
@@ -86,7 +94,7 @@
     var activeLayer = 'wind';
     var isPlaying = false;
 
-    // PALETTE
+    // --- PALETTE COLORI ---
     const PALETTES = {
         temp: [ {val:-10, c:[255,255,255,0.6]}, {val:0, c:[200,200,255,0.6]}, {val:10, c:[0,200,100,0.6]}, {val:20, c:[255,255,0,0.6]}, {val:30, c:[255,140,0,0.6]}, {val:40, c:[200,0,0,0.6]} ],
         rain: [ {val:0, c:[0,0,0,0]}, {val:0.05, c:[0,200,255,0.6]}, {val:2, c:[0,0,255,0.7]}, {val:10, c:[150,0,200,0.8]} ],
@@ -97,12 +105,13 @@
     function getColor(val, type) {
         let stops = PALETTES[type];
         
-        // --- FILTRO ZERO O INVALIDI ---
+        // --- FILTRI DI VISIBILITÀ ---
         if(type==='rain' && val < 0.05) return [0,0,0,0];
         if(type==='wind' && val < 1) return [0,0,0,0];
-        if(type==='press' && val < 900) return [0,0,0,0]; // <--- QUESTO RISOLVE IL "TUTTO ROSSO"
+        // Protezione Pressione: Se < 800 (es. 0.0), rendi trasparente per evitare schermo rosso
+        if(type==='press' && val < 800) return [0,0,0,0]; 
 
-        if(type==='press') val = Math.floor(val/2)*2; // Bande isobare
+        if(type==='press') val = Math.floor(val/2)*2; // Effetto bande isobare
 
         for(let i=0; i<stops.length-1; i++) {
             if(val>=stops[i].val && val<=stops[i+1].val) {
@@ -111,31 +120,36 @@
                 return [ Math.round(c1[0]+(c2[0]-c1[0])*t), Math.round(c1[1]+(c2[1]-c1[1])*t), Math.round(c1[2]+(c2[2]-c1[2])*t), c1[3]+(c2[3]-c1[3])*t ];
             }
         } 
-        // Se supera il massimo, usa l'ultimo colore
         let last = stops[stops.length-1];
         return [last.c[0], last.c[1], last.c[2], last.c[3]];
     }
 
-    // INIT MAPPA
+    // --- INIZIALIZZAZIONE MAPPA ---
     window.addEventListener('load', function() {
         document.getElementById('loader').innerText = "Disegno Mappa...";
         
         map = L.map('map', { zoomControl: false }).setView([37.5, 14.2], 8);
         
+        // Mappa Base Scura
         L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_nolabels/{z}/{x}/{y}{r}.png', { 
             maxZoom: 19,
             attribution: '©OpenStreetMap, ©CartoDB'
         }).addTo(map);
 
+        // Creazione Livelli (Panes) per gestire la sovrapposizione
         map.createPane('gridPane'); map.getPane('gridPane').style.zIndex = 300; 
         map.createPane('labelsPane'); map.getPane('labelsPane').style.zIndex = 500; map.getPane('labelsPane').style.pointerEvents = 'none';
+        
+        // Etichette città sopra tutto
         L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_only_labels/{z}/{x}/{y}{r}.png', { pane: 'labelsPane' }).addTo(map);
+        
         map.createPane('velocityPane'); map.getPane('velocityPane').style.zIndex = 600; map.getPane('velocityPane').style.pointerEvents = 'none';
 
         initHeatmapLayer();
         loadCatalog();
     });
 
+    // --- GESTIONE HEATMAP (Colori di sfondo) ---
     function initHeatmapLayer() {
         L.FullHeatmap = L.Layer.extend({
             onAdd: function(m) {
@@ -156,6 +170,7 @@
                 if (!currentData || !this._c) return;
                 var ctx = this._c.getContext('2d'); ctx.clearRect(0,0,this._c.width,this._c.height);
                 var m = currentData.meta;
+                // Calcolo preciso della griglia per allinearla al terreno (Montagne/Valli)
                 var p1 = this._map.latLngToContainerPoint([m.la1, m.lo1]);
                 var p2 = this._map.latLngToContainerPoint([m.la1 - (m.dy * (m.ny-1)), m.lo1 + (m.dx * (m.nx-1))]);
                 var w = (p2.x - p1.x) / (m.nx - 1); var h = (p2.y - p1.y) / (m.ny - 1);
@@ -188,6 +203,7 @@
         map.addLayer(heatCanvas);
     }
 
+    // --- CARICAMENTO DATI ---
     async function loadCatalog() {
         document.getElementById('loader').innerText = "Scarico dati...";
         try {
@@ -215,6 +231,7 @@
         document.getElementById('loader').style.display = 'none';
     }
 
+    // --- AGGIORNAMENTO MAPPA E VENTO ---
     function updateMap() {
         if (!currentData) return;
         if (heatCanvas) heatCanvas.update();
@@ -226,13 +243,23 @@
                     pane: 'velocityPane',
                     displayValues: false,
                     data: [ currentData.wind_u, currentData.wind_v ], 
-                    maxVelocity: 40, velocityScale: 0.015, colorScale: ["#ffffff"], lineWidth: 2, particleMultiplier: 1/500, opacity: 1.0, frameRate: 20
+                    
+                    // --- CONFIGURAZIONE REALISMO HD ---
+                    maxVelocity: 15,          // Colora il vento forte più velocemente
+                    velocityScale: 0.01,      // Velocità particelle (lenta e fluida)
+                    particleAge: 90,          // Scia lunga
+                    lineWidth: 1,             // Linee sottili ed eleganti
+                    particleMultiplier: 1/150,// ALTA DENSITÀ (Simula flusso reale)
+                    frameRate: 30,            // Animazione fluida
+                    colorScale: ["#ffffff"],  // Particelle bianche
+                    opacity: 0.8              // Leggera trasparenza
                 });
                 velocityLayer.addTo(map);
             } catch(e) { console.log(e); }
         }
     }
 
+    // --- UI E CONTROLLI ---
     window.setLayer = function(n) {
         activeLayer = n;
         document.querySelectorAll('.layer-btn').forEach(b => b.classList.remove('active'));
@@ -253,6 +280,7 @@
         }, 800);
     }
 
+    // Interazione Mouse (Picker)
     window.addEventListener('load', function(){
         if(!map) return;
         map.on('mousemove', function(e) {
