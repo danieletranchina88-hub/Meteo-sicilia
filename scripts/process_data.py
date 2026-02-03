@@ -16,7 +16,6 @@ FINAL_DIR = "data_weather"
 TEMP_DIR = "temp_processing"
 TEMP_FILE = "temp.grib2"
 
-# Area Sicilia
 LAT_MIN, LAT_MAX = 35.0, 39.5
 LON_MIN, LON_MAX = 11.0, 16.5
 
@@ -63,24 +62,29 @@ def process_data():
             continue
 
         try:
-            # Apriamo i dataset
+            # 1. VENTO
             ds_wind = xr.open_dataset(TEMP_FILE, engine='cfgrib', backend_kwargs={'filter_by_keys': {'typeOfLevel': 'heightAboveGround', 'level': 10}})
             
+            # 2. TEMP
             try: ds_temp = xr.open_dataset(TEMP_FILE, engine='cfgrib', backend_kwargs={'filter_by_keys': {'typeOfLevel': 'heightAboveGround', 'level': 2}})
             except: ds_temp = None
             
-            # Strategia PIOGGIA Totale
-            ds_rain = None
-            rain_var_name = None
-            try: 
-                ds_rain = xr.open_dataset(TEMP_FILE, engine='cfgrib', backend_kwargs={'filter_by_keys': {'typeOfLevel': 'surface', 'stepType': 'accum'}})
+            # 3. PIOGGIA
+            try: ds_rain = xr.open_dataset(TEMP_FILE, engine='cfgrib', backend_kwargs={'filter_by_keys': {'typeOfLevel': 'surface', 'stepType': 'accum'}})
             except:
-                try: 
-                    ds_rain = xr.open_dataset(TEMP_FILE, engine='cfgrib', backend_kwargs={'filter_by_keys': {'typeOfLevel': 'surface'}})
-                except: pass
+                try: ds_rain = xr.open_dataset(TEMP_FILE, engine='cfgrib', backend_kwargs={'filter_by_keys': {'typeOfLevel': 'surface'}})
+                except: ds_rain = None
 
-            try: ds_press = xr.open_dataset(TEMP_FILE, engine='cfgrib', backend_kwargs={'filter_by_keys': {'typeOfLevel': 'meanSea'}})
-            except: pass
+            # 4. PRESSIONE (Strategia Multipla)
+            ds_press = None
+            # Tentativo A: Mean Sea Level (Standard meteo)
+            try: 
+                ds_press = xr.open_dataset(TEMP_FILE, engine='cfgrib', backend_kwargs={'filter_by_keys': {'typeOfLevel': 'meanSea'}})
+            except:
+                # Tentativo B: Surface Pressure (Se manca il livello mare)
+                try: 
+                    ds_press = xr.open_dataset(TEMP_FILE, engine='cfgrib', backend_kwargs={'filter_by_keys': {'typeOfLevel': 'surface', 'shortName': 'sp'}})
+                except: ds_press = None
 
         except: continue
 
@@ -107,15 +111,12 @@ def process_data():
                     lat = cut_w.latitude.values
                     lon = cut_w.longitude.values
                     ny, nx = u.shape
-                    
-                    # GEOMETRIA: Nessun salto, risoluzione nativa
                     la1, lo1 = float(lat[0]), float(lon[0])
                     dx = float(abs(lon[1] - lon[0]))
                     dy = float(abs(lat[0] - lat[1]))
                     lo2 = lo1 + (nx - 1) * dx
                     la2 = la1 - (ny - 1) * dy
 
-                    # TEMP
                     temp = np.zeros_like(u)
                     if ds_temp:
                         d_t = ds_temp.isel(step=i) if 'step' in ds_temp.dims else ds_temp
@@ -124,27 +125,26 @@ def process_data():
                         t_key = next((k for k in ['t2m','t'] if k in cut_t), None)
                         if t_key: temp = cut_t[t_key].values - 273.15
                     
-                    # RAIN
                     rain = np.zeros_like(u)
                     if ds_rain:
                         d_r = ds_rain.isel(step=i) if 'step' in ds_rain.dims else ds_rain
                         d_r = d_r.sortby('latitude', ascending=False).sortby('longitude', ascending=True)
                         cut_r = d_r.where(mask, drop=True)
-                        r_key = next((k for k in ['tp', 'tot_prec', 'apcp', 'precip'] if k in cut_r), None)
+                        r_key = next((k for k in ['tp', 'tot_prec', 'apcp'] if k in cut_r), None)
                         if r_key: rain = np.nan_to_num(cut_r[r_key].values)
-                    
-                    # LOG DI CONTROLLO
-                    if np.max(rain) > 0:
-                        print(f"[R:{np.max(rain):.2f}]", end="", flush=True)
 
-                    # PRESS
                     press = np.zeros_like(u)
                     if ds_press:
                         d_p = ds_press.isel(step=i) if 'step' in ds_press.dims else ds_press
                         d_p = d_p.sortby('latitude', ascending=False).sortby('longitude', ascending=True)
                         cut_p = d_p.where(mask, drop=True)
-                        p_key = next((k for k in ['prmsl', 'msl'] if k in cut_p), None)
-                        if p_key: press = np.nan_to_num(cut_p[p_key].values) / 100.0
+                        # Cerchiamo prmsl (Mean Sea Level) o sp (Surface)
+                        p_key = next((k for k in ['prmsl', 'msl', 'sp'] if k in cut_p), None)
+                        if p_key: 
+                            val = np.nan_to_num(cut_p[p_key].values)
+                            # Se è in Pascal (>80000), converti in hPa
+                            if np.max(val) > 2000: val = val / 100.0
+                            press = val
 
                     valid_dt = run_dt + timedelta(hours=step_hours)
                     iso_date = valid_dt.strftime("%Y-%m-%dT%H:%M:%S.000Z")
@@ -183,4 +183,4 @@ def process_data():
 
 if __name__ == "__main__":
     process_data()
-                    
+    
