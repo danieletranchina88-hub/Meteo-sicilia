@@ -4,7 +4,6 @@
     <title>Sicilia MeteoHub</title>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    
     <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
     <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
     <link rel="stylesheet" href="https://unpkg.com/leaflet-velocity@1.8.0/dist/leaflet-velocity.css" />
@@ -53,7 +52,7 @@
 </head>
 <body>
 
-<div id="loader">Avvio Mappa...</div>
+<div id="loader">Caricamento Mappa...</div>
 <div id="status-box"></div>
 
 <div id="layer-menu">
@@ -97,8 +96,14 @@
 
     function getColor(val, type) {
         let stops = PALETTES[type];
-        if((type==='rain' && val < 0.05) || (type==='wind' && val < 1)) return [0,0,0,0];
-        if(type==='press') val = Math.floor(val/2)*2;
+        
+        // --- FILTRO ZERO O INVALIDI ---
+        if(type==='rain' && val < 0.05) return [0,0,0,0];
+        if(type==='wind' && val < 1) return [0,0,0,0];
+        if(type==='press' && val < 900) return [0,0,0,0]; // <--- QUESTO RISOLVE IL "TUTTO ROSSO"
+
+        if(type==='press') val = Math.floor(val/2)*2; // Bande isobare
+
         for(let i=0; i<stops.length-1; i++) {
             if(val>=stops[i].val && val<=stops[i+1].val) {
                 let t = (val - stops[i].val) / (stops[i+1].val - stops[i].val);
@@ -106,33 +111,28 @@
                 return [ Math.round(c1[0]+(c2[0]-c1[0])*t), Math.round(c1[1]+(c2[1]-c1[1])*t), Math.round(c1[2]+(c2[2]-c1[2])*t), c1[3]+(c2[3]-c1[3])*t ];
             }
         } 
-        return [...stops[stops.length-1].c];
+        // Se supera il massimo, usa l'ultimo colore
+        let last = stops[stops.length-1];
+        return [last.c[0], last.c[1], last.c[2], last.c[3]];
     }
 
-    // INIT MAPPA IMMEDIATA
+    // INIT MAPPA
     window.addEventListener('load', function() {
         document.getElementById('loader').innerText = "Disegno Mappa...";
         
         map = L.map('map', { zoomControl: false }).setView([37.5, 14.2], 8);
         
-        // Mappa Base SCURA
         L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_nolabels/{z}/{x}/{y}{r}.png', { 
             maxZoom: 19,
             attribution: '©OpenStreetMap, ©CartoDB'
         }).addTo(map);
 
-        // Layers Setup
         map.createPane('gridPane'); map.getPane('gridPane').style.zIndex = 300; 
         map.createPane('labelsPane'); map.getPane('labelsPane').style.zIndex = 500; map.getPane('labelsPane').style.pointerEvents = 'none';
-        
         L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_only_labels/{z}/{x}/{y}{r}.png', { pane: 'labelsPane' }).addTo(map);
-        
         map.createPane('velocityPane'); map.getPane('velocityPane').style.zIndex = 600; map.getPane('velocityPane').style.pointerEvents = 'none';
 
-        // Griglia Canvas
         initHeatmapLayer();
-        
-        // Avvia download dati
         loadCatalog();
     });
 
@@ -171,7 +171,7 @@
                         var idx = y*m.nx + x, val = 0;
                         if(activeLayer==='temp') val = currentData.temp[idx]; 
                         else if(activeLayer==='rain') val = currentData.rain[idx];
-                        else if(activeLayer==='press' && currentData.press) val = currentData.press[idx];
+                        else if(activeLayer==='press') val = currentData.press ? currentData.press[idx] : 0;
                         else if(activeLayer==='wind') { 
                             let u=currentData.wind_u.data[idx], v=currentData.wind_v.data[idx]; 
                             val = Math.sqrt(u*u+v*v)*3.6; 
@@ -269,7 +269,7 @@
                         val = (Math.sqrt(u*u+v*v)*3.6).toFixed(1);
                     } else if (activeLayer === 'temp') val = currentData.temp[idx].toFixed(1);
                     else if (activeLayer === 'rain') val = currentData.rain[idx].toFixed(1);
-                    else if (activeLayer === 'press' && currentData.press) val = currentData.press[idx].toFixed(1);
+                    else if (activeLayer === 'press') val = currentData.press ? currentData.press[idx].toFixed(1) : 0;
                     document.getElementById('pk-val').innerText = val;
                 }
             } catch(e) {}
