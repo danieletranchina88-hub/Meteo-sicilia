@@ -1,126 +1,472 @@
 <!DOCTYPE html>
 <html>
 <head>
-  <title>Sicilia MeteoHub - FINAL FULL (Velocity)</title>
-  <meta charset="utf-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Sicilia MeteoHub - PRO LAGRANGIAN</title>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    
+    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+    
+    <script src="https://d3js.org/d3.v7.min.js"></script>
 
-  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" crossorigin=""/>
-  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js" crossorigin=""></script>
+    <!-- FIX: forzo https (stessa libreria, nessuna aggiunta) -->
+    <script src="https://ihcantoria.github.io/leaflet-canvaslayer-field/dist/leaflet.canvaslayer.field.js"></script>
+    
+    <style>
+        /* BASE STYLE */
+        body { margin: 0; background: #0f0f0f; font-family: 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; color: white; overflow: hidden; }
+        #map { position: absolute; top: 0; bottom: 0; width: 100%; background: #0f0f0f; }
+        
+        /* --- MENU GLASSMORPHISM --- */
+        #layer-menu {
+            position: absolute; top: 20px; right: 20px; z-index: 1000;
+            background: rgba(20, 20, 20, 0.65);
+            backdrop-filter: blur(12px); -webkit-backdrop-filter: blur(12px);
+            padding: 12px; border-radius: 16px;
+            display: flex; flex-direction: column; gap: 8px;
+            border: 1px solid rgba(255, 255, 255, 0.08);
+            box-shadow: 0 8px 32px rgba(0, 0, 0, 0.3);
+            transition: all 0.3s ease;
+        }
+        
+        .layer-btn {
+            background: transparent; border: none; color: #ccc; padding: 12px 24px;
+            font-size: 14px; font-weight: 600; cursor: pointer; text-align: right; 
+            border-radius: 10px; transition: all 0.3s cubic-bezier(0.25, 0.8, 0.25, 1);
+            border: 1px solid transparent;
+        }
+        .layer-btn:hover {
+            background: rgba(255, 255, 255, 0.05); color: #fff; transform: translateX(-3px);
+            text-shadow: 0 0 8px rgba(255,255,255,0.3);
+        }
+        .layer-btn.active {
+            background: linear-gradient(135deg, #007bff, #0056b3); color: white;
+            box-shadow: 0 4px 15px rgba(0, 123, 255, 0.4); border: 1px solid rgba(255, 255, 255, 0.2);
+            font-weight: 700;
+        }
 
-  <!-- Wind particles engine (Windy-like) -->
-  <link rel="stylesheet" href="https://unpkg.com/leaflet-velocity@1.8.0/dist/leaflet-velocity.css" crossorigin=""/>
-  <script src="https://unpkg.com/leaflet-velocity@1.8.0/dist/leaflet-velocity.js" crossorigin=""></script>
+        /* --- BARRA DEL TEMPO --- */
+        #bottom-bar {
+            position: absolute; bottom: 0; left: 0; right: 0; height: 100px;
+            background: linear-gradient(to top, rgba(0,0,0,0.95) 0%, rgba(0,0,0,0.8) 40%, transparent 100%);
+            display: flex; align-items: center; padding: 0 30px 20px 30px; z-index: 2000;
+        }
+        #play-btn { 
+            font-size: 2.5em; cursor: pointer; margin-right: 25px; color: #fff; 
+            transition: transform 0.2s, color 0.2s; filter: drop-shadow(0 0 5px rgba(0,0,0,0.5));
+        }
+        #play-btn:hover { color: #007bff; transform: scale(1.1); }
+        #play-btn:active { transform: scale(0.95); }
+        
+        input[type=range] { 
+            flex-grow: 1; height: 6px; cursor: pointer; background: rgba(255,255,255,0.2); border-radius: 3px;
+            -webkit-appearance: none; appearance: none;
+        }
+        input[type=range]::-webkit-slider-thumb {
+            -webkit-appearance: none; width: 18px; height: 18px; border-radius: 50%;
+            background: #007bff; box-shadow: 0 0 10px rgba(0,123,255,0.8); margin-top: -6px; transition: transform 0.1s;
+        }
+        input[type=range]::-webkit-slider-thumb:hover { transform: scale(1.3); }
 
-  <style>
-    body { margin: 0; background: #000; font-family: monospace; color: white; overflow: hidden; }
-    #map { position: absolute; top: 0; bottom: 0; width: 100%; background: #000; }
-
-    /* DEBUG BOX */
-    #debug-console {
-      position: absolute; bottom: 100px; right: 10px; width: 240px; height: 140px;
-      background: rgba(0,0,0,0.85); color: #00ff00;
-      padding: 6px; border: 1px solid #00ff00;
-      z-index: 9999; overflow-y: auto; font-size: 10px;
-      pointer-events: none; opacity: 0.85;
-    }
-
-    #layer-menu {
-      position: absolute; top: 15px; right: 15px; z-index: 1000;
-      background: rgba(30,30,30,0.9); padding: 8px; border-radius: 12px;
-      display: flex; flex-direction: column; gap: 8px; border: 1px solid #444;
-    }
-    .layer-btn {
-      background: transparent; border: none; color: #ccc; padding: 12px 20px;
-      font-size: 14px; font-weight: 600; cursor: pointer; text-align: right;
-      border-radius: 8px; font-family: sans-serif;
-    }
-    .layer-btn.active { background: #007bff; color: white; }
-
-    #picker-box {
-      position: absolute; top: 20px; left: 20px; z-index: 1000;
-      pointer-events: none; text-shadow: 0 2px 4px rgba(0,0,0,1); font-family: sans-serif;
-    }
-    .picker-val { font-size: 3.5em; font-weight: 800; line-height: 1; }
-    .picker-unit { font-size: 1.2em; color: #ccc; }
-    .picker-lbl { font-size: 0.8em; color: #aaa; text-transform: uppercase; margin-top: 5px; font-weight: bold;}
-
-    #bottom-bar {
-      position: absolute; bottom: 0; left: 0; right: 0; height: 90px;
-      background: linear-gradient(to top, #000, transparent);
-      display: flex; align-items: center; padding: 0 25px 20px 25px; z-index: 2000;
-    }
-    #play-btn { font-size: 2.5em; cursor: pointer; margin-right: 25px; font-family: sans-serif; }
-    input[type=range] { flex-grow: 1; height: 6px; cursor: pointer; accent-color: #007bff; }
-    #time-label { min-width: 170px; text-align: center; font-weight: bold; font-size: 1.2em; font-family: sans-serif; }
-
-    #loader {
-      position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%);
-      background: rgba(0,0,0,0.85); padding: 20px 40px; border-radius: 30px;
-      z-index: 5000; display: none; font-weight: bold; font-family: sans-serif;
-    }
-  </style>
+        #time-label { 
+            min-width: 170px; text-align: center; font-weight: 700; font-size: 1.4em; color: #fff; margin-left: 20px; 
+            text-shadow: 0 2px 4px rgba(0,0,0,0.8); font-variant-numeric: tabular-nums;
+        }
+        
+        /* LOADER & PICKER */
+        #loader {
+            position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%);
+            background: rgba(15, 15, 15, 0.9); padding: 25px 50px; border-radius: 40px; 
+            z-index: 5000; display: block; font-weight: 600; font-size: 1.2em; 
+            border: 1px solid rgba(255,255,255,0.1); box-shadow: 0 0 30px rgba(0,0,0,0.6);
+            backdrop-filter: blur(5px); color: #007bff;
+        }
+        #picker-box { position: absolute; top: 25px; left: 25px; z-index: 1000; pointer-events: none; }
+        #pk-val { font-size: 3.5em; font-weight: 800; text-shadow: 0 2px 10px rgba(0,0,0,0.9); letter-spacing: -1px; }
+        #pk-unit { color: #aaa; font-size: 1.3em; font-weight: 600; margin-left: 5px; text-shadow: 0 2px 5px black; text-transform: uppercase; }
+        
+        #status-box {
+            position: absolute; bottom: 110px; left: 30px; color: #ff6b6b; font-size: 12px; font-family: monospace;
+            background: rgba(0,0,0,0.8); padding: 8px 12px; border-radius: 6px; pointer-events: none; z-index: 5000; display: none; border-left: 3px solid #ff6b6b;
+        }
+    </style>
 </head>
 <body>
 
-<div id="loader">Caricamento...</div>
-<div id="debug-console">Console Ready.<br></div>
+<div id="loader">Caricamento Motore Particellare...</div>
+<div id="status-box"></div>
 
 <div id="layer-menu">
-  <button class="layer-btn active" id="btn-wind" onclick="setLayer('wind', this)">VENTO 💨</button>
-  <button class="layer-btn" id="btn-temp" onclick="setLayer('temp', this)">TEMP 🌡️</button>
-  <button class="layer-btn" id="btn-rain" onclick="setLayer('rain', this)">PIOGGIA ☔</button>
+    <button class="layer-btn active" onclick="setLayer('wind', this)">VENTO 💨</button>
+    <button class="layer-btn" onclick="setLayer('temp', this)">TEMP 🌡️</button>
+    <button class="layer-btn" onclick="setLayer('rain', this)">PIOGGIA ☔</button>
 </div>
 
 <div id="picker-box">
-  <div id="pk-val" class="picker-val">--</div>
-  <div id="pk-unit" class="picker-unit">km/h</div>
-  <div id="pk-lbl" class="picker-lbl">VENTO</div>
+    <span id="pk-val">--</span><span id="pk-unit">km/h</span>
 </div>
 
 <div id="map"></div>
 
 <div id="bottom-bar">
-  <div id="play-btn" onclick="togglePlay()">&#9658;</div>
-  <input type="range" id="time-slider" min="0" max="0" value="0" step="1">
-  <div id="time-label">--/-- --:--</div>
+    <div id="play-btn" onclick="togglePlay()">&#9658;</div>
+    <input type="range" id="time-slider" min="0" max="0" value="0" step="1">
+    <div id="time-label">--/-- --:--</div>
 </div>
 
 <script>
-  // --- DEBUG ---
-  function log(msg) {
-    var d = document.getElementById('debug-console');
-    d.innerHTML += "> " + msg + "<br>";
-    d.scrollTop = d.scrollHeight;
-    console.log(msg);
-  }
-  window.onerror = function(msg, url, line) {
-    log("ERR: " + msg);
-    return false;
-  };
+    function status(msg) { let el = document.getElementById('status-box'); el.innerText = msg; el.style.display = 'block'; }
+    
+    var map, windLayer, heatCanvas;
+    var currentData = null;
+    var catalog = [];
+    var activeLayer = 'wind';
+    var isPlaying = false;
 
-  var map, velocityLayer, heatCanvas;
-  var currentData = null;
-  var catalog = [];
-  var activeLayer = 'wind';
-  var isPlaying = false;
-  var playTimer = null;
+    // PALETTE STANDARD (Per Temp/Rain)
+    const PALETTES = {
+        temp: [ {val:-10, c:[255,255,255,0.6]}, {val:0, c:[200,200,255,0.6]}, {val:10, c:[0,200,100,0.6]}, {val:20, c:[255,255,0,0.6]}, {val:30, c:[255,140,0,0.6]}, {val:40, c:[200,0,0,0.6]} ],
+        rain: [ {val:0, c:[0,0,0,0]}, {val:0.05, c:[0,200,255,0.6]}, {val:2, c:[0,0,255,0.7]}, {val:10, c:[150,0,200,0.8]} ]
+    };
 
-  // --- PALETTE COLORI ---
-  const PALETTES = {
-    temp: [
-      {val:-10,c:[255,255,255]},{val:0,c:[200,200,255]},{val:10,c:[0,200,100]},
-      {val:20,c:[255,255,0]},{val:30,c:[255,140,0]},{val:40,c:[200,0,0]}
-    ],
-    rain: [
-      {val:0,c:[0,0,0,0]},{val:0.2,c:[0,150,255]},{val:5,c:[0,0,255]},{val:20,c:[150,0,150]}
-    ],
-    wind: [
-      {val:0,c:[0,0,0,0]},{val:5,c:[0,100,200]},{val:20,c:[0,200,0]},{val:40,c:[200,200,0]},
-      {val:60,c:[255,0,0]},{val:90,c:[120,0,0]}
-    ]
-  };
+    // PALETTA VENTO (Per le particelle colorate)
+    const WIND_COLOR_SCALE = ['#0000ff', '#00c3ff', '#00ff00', '#ffff00', '#ff0000'];
+    const WIND_DOMAIN = [0, 35]; // m/s (0 a 126 km/h)
 
-  function getColor(val, type) {
-    let stops = PALETTES[type];
-    if(type==='rain'
+    function getColor(val, type) {
+        if (!PALETTES[type]) return [0,0,0,0];
+        let stops = PALETTES[type];
+        if(type==='rain' && val < 0.05) return [0,0,0,0];
+        if(type==='press' && val < 800) return [0,0,0,0];
+
+        if(type==='press') val = Math.floor(val/2)*2;
+
+        for(let i=0; i<stops.length-1; i++) {
+            if(val>=stops[i].val && val<=stops[i+1].val) {
+                let t = (val - stops[i].val) / (stops[i+1].val - stops[i].val);
+                let c1=stops[i].c, c2=stops[i+1].c;
+                return [ Math.round(c1[0]+(c2[0]-c1[0])*t), Math.round(c1[1]+(c2[1]-c1[1])*t), Math.round(c1[2]+(c2[2]-c1[2])*t), c1[3]+(c2[3]-c1[3])*t ];
+            }
+        } 
+        let last = stops[stops.length-1];
+        return [last.c[0], last.c[1], last.c[2], last.c[3]];
+    }
+
+    // INIT MAP
+    window.addEventListener('load', function() {
+        document.getElementById('loader').innerText = "Inizializzazione WebGL...";
+        map = L.map('map', { zoomControl: false }).setView([37.5, 14.2], 8);
+        L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_nolabels/{z}/{x}/{y}{r}.png', { maxZoom: 19, attribution: '©OpenStreetMap, ©CartoDB' }).addTo(map);
+
+        map.createPane('gridPane'); map.getPane('gridPane').style.zIndex = 300; 
+        map.createPane('labelsPane'); map.getPane('labelsPane').style.zIndex = 500; map.getPane('labelsPane').style.pointerEvents = 'none';
+        L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_only_labels/{z}/{x}/{y}{r}.png', { pane: 'labelsPane' }).addTo(map);
+        map.createPane('windPane'); map.getPane('windPane').style.zIndex = 400; map.getPane('windPane').style.pointerEvents = 'none';
+
+        initRawGridLayer();
+        loadCatalog();
+    });
+
+    // RAW GRID RENDERER (Mantenuto per Temp/Rain)
+    function initRawGridLayer() {
+        L.FullHeatmap = L.Layer.extend({
+            onAdd: function(m) {
+                this._c = L.DomUtil.create('canvas', 'leaflet-layer');
+                this._c.style.pointerEvents = 'none';
+                m.getPane('gridPane').appendChild(this._c);
+                m.on('moveend resize', this._reset, this);
+                this._reset();
+            },
+            onRemove: function(m) { m.getPane('gridPane').removeChild(this._c); m.off('moveend resize', this._reset, this); },
+            _reset: function() {
+                var s = this._map.getSize(); 
+                this._c.width = s.x; this._c.height = s.y;
+                L.DomUtil.setPosition(this._c, this._map.containerPointToLayerPoint([0,0])); 
+                this._draw();
+            },
+            _draw: function() {
+                if (!currentData || !this._c || activeLayer === 'wind') {
+                     if(this._c) this._c.getContext('2d').clearRect(0,0,this._c.width,this._c.height);
+                     return;
+                }
+                var ctx = this._c.getContext('2d'); ctx.clearRect(0,0,this._c.width,this._c.height);
+                var m = currentData.meta;
+                for(var y=0; y<m.ny; y++) {
+                    var lat = m.la1 - (y * m.dy);
+                    for(var x=0; x<m.nx; x++) {
+                        var lon = m.lo1 + (x * m.dx);
+                        var pStart = this._map.latLngToContainerPoint([lat, lon]);
+                        if (pStart.x < -20 || pStart.x > this._c.width + 20 || pStart.y < -20 || pStart.y > this._c.height + 20) continue;
+                        var pEnd = this._map.latLngToContainerPoint([lat - m.dy, lon + m.dx]);
+                        var w = Math.ceil(pEnd.x - pStart.x); var h = Math.ceil(pEnd.y - pStart.y);
+
+                        var idx = y * m.nx + x, val = 0;
+                        if(activeLayer==='temp') val = currentData.temp[idx]; 
+                        else if(activeLayer==='rain') val = currentData.rain[idx];
+                        
+                        var c = getColor(val, activeLayer); if(c[3]===0) continue; 
+                        ctx.fillStyle = `rgba(${c[0]},${c[1]},${c[2]},${c[3]})`; 
+                        ctx.fillRect(Math.floor(pStart.x), Math.floor(pStart.y), w, h);
+                    }
+                }
+            },
+            update: function() { this._draw(); }
+        });
+        heatCanvas = new L.FullHeatmap();
+        map.addLayer(heatCanvas);
+    }
+
+    async function loadCatalog() {
+        try {
+            let r = await fetch('data_weather/catalog.json?t=' + Date.now());
+            if(!r.ok) throw new Error("404");
+            catalog = await r.json();
+            document.getElementById('time-slider').max = catalog.length - 1;
+            document.getElementById('time-slider').addEventListener('input', (e) => loadStep(parseInt(e.target.value)));
+            loadStep(0);
+        } catch(e) { status("ATTESA DATI..."); document.getElementById('loader').style.display = 'none'; }
+    }
+
+    async function loadStep(index) {
+        if (!catalog[index]) return;
+        document.getElementById('time-label').innerText = catalog[index].label;
+        document.getElementById('loader').style.display = 'block';
+        try {
+            let r = await fetch('data_weather/' + catalog[index].file + '?nocache=' + Date.now());
+            currentData = await r.json();
+            updateMap();
+        } catch(e) { status("Errore frame " + index); }
+        document.getElementById('loader').style.display = 'none';
+    }
+
+    /* =========================
+       MOTORE PARTICELLE VENTO
+       (sostituisce SOLO la parte windLayer)
+       ========================= */
+    function isValidNumber(n){ return typeof n === 'number' && Number.isFinite(n); }
+
+    function WindParticlesLayer(frame, options) {
+        this._frame = frame;
+        this._opt = options || {};
+        this._map = null;
+        this._canvas = null;
+        this._ctx = null;
+        this._raf = null;
+        this._particles = [];
+        this._lastT = 0;
+
+        this._colorFn = this._opt.colorFn;
+        this._paths = this._opt.paths || 8000;
+        this._age = this._opt.age || 100;
+        this._width = this._opt.width || 1.5;
+        this._velocityScale = this._opt.velocityScale || 0.01;
+
+        this._meta = frame.meta;
+        this._u = frame.wind_u && frame.wind_u.data ? frame.wind_u.data : null;
+        this._v = frame.wind_v && frame.wind_v.data ? frame.wind_v.data : null;
+    }
+
+    WindParticlesLayer.prototype = Object.create(L.Layer.prototype);
+
+    WindParticlesLayer.prototype.onAdd = function(map) {
+        this._map = map;
+        this._canvas = L.DomUtil.create('canvas', 'leaflet-layer');
+        this._canvas.style.pointerEvents = 'none';
+        map.getPane('windPane').appendChild(this._canvas);
+        this._ctx = this._canvas.getContext('2d');
+
+        map.on('moveend zoomend resize', this._reset, this);
+        this._reset();
+
+        this._initParticles();
+        this._lastT = performance.now();
+        this._animate();
+    };
+
+    WindParticlesLayer.prototype.onRemove = function(map) {
+        map.off('moveend zoomend resize', this._reset, this);
+        if (this._raf) cancelAnimationFrame(this._raf);
+        this._raf = null;
+        if (this._canvas && map.getPane('windPane').contains(this._canvas)) {
+            map.getPane('windPane').removeChild(this._canvas);
+        }
+        this._canvas = null;
+        this._ctx = null;
+        this._map = null;
+        this._particles = [];
+    };
+
+    WindParticlesLayer.prototype._reset = function() {
+        if (!this._map || !this._canvas) return;
+        const s = this._map.getSize();
+        this._canvas.width = s.x;
+        this._canvas.height = s.y;
+        L.DomUtil.setPosition(this._canvas, this._map.containerPointToLayerPoint([0,0]));
+        this._ctx.clearRect(0,0,s.x,s.y);
+    };
+
+    WindParticlesLayer.prototype._randomLatLng = function() {
+        const b = this._map.getBounds();
+        const lat = b.getSouth() + Math.random() * (b.getNorth() - b.getSouth());
+        const lng = b.getWest() + Math.random() * (b.getEast() - b.getWest());
+        return {lat, lng};
+    };
+
+    WindParticlesLayer.prototype._initParticles = function() {
+        this._particles = [];
+        for (let i = 0; i < this._paths; i++) {
+            const p = this._randomLatLng();
+            this._particles.push({lat: p.lat, lng: p.lng, age: Math.random() * this._age});
+        }
+    };
+
+    WindParticlesLayer.prototype._sampleUV = function(lat, lng) {
+        const m = this._meta;
+        if (!m || !this._u || !this._v) return null;
+
+        const x = (lng - m.lo1) / m.dx;
+        const y = (m.la1 - lat) / m.dy;
+
+        const xi = Math.floor(x);
+        const yi = Math.floor(y);
+
+        if (xi < 0 || yi < 0 || xi >= (m.nx - 1) || yi >= (m.ny - 1)) return null;
+
+        const idx00 = yi * m.nx + xi;
+        const idx10 = yi * m.nx + (xi + 1);
+        const idx01 = (yi + 1) * m.nx + xi;
+        const idx11 = (yi + 1) * m.nx + (xi + 1);
+
+        const u00 = this._u[idx00], u10 = this._u[idx10], u01 = this._u[idx01], u11 = this._u[idx11];
+        const v00 = this._v[idx00], v10 = this._v[idx10], v01 = this._v[idx01], v11 = this._v[idx11];
+
+        if (![u00,u10,u01,u11,v00,v10,v01,v11].every(isValidNumber)) return null;
+
+        const tx = x - xi;
+        const ty = y - yi;
+
+        const u0 = u00 * (1 - tx) + u10 * tx;
+        const u1 = u01 * (1 - tx) + u11 * tx;
+        const v0 = v00 * (1 - tx) + v10 * tx;
+        const v1 = v01 * (1 - tx) + v11 * tx;
+
+        const u = u0 * (1 - ty) + u1 * ty;
+        const v = v0 * (1 - ty) + v1 * ty;
+
+        return {u, v};
+    };
+
+    WindParticlesLayer.prototype._animate = function() {
+        if (!this._map || !this._ctx) return;
+
+        const now = performance.now();
+        const dt = Math.min(0.05, (now - this._lastT) / 1000); // clamp
+        this._lastT = now;
+
+        const ctx = this._ctx;
+        const w = this._canvas.width;
+        const h = this._canvas.height;
+
+        // fading trail (Windy-like)
+        ctx.globalCompositeOperation = 'source-over';
+        ctx.fillStyle = 'rgba(0,0,0,0.08)';
+        ctx.fillRect(0, 0, w, h);
+
+        ctx.lineWidth = this._width;
+        ctx.globalCompositeOperation = 'lighter';
+
+        for (let i = 0; i < this._particles.length; i++) {
+            let p = this._particles[i];
+
+            if (p.age++ > this._age) {
+                const np = this._randomLatLng();
+                p.lat = np.lat; p.lng = np.lng; p.age = 0;
+                continue;
+            }
+
+            const uv = this._sampleUV(p.lat, p.lng);
+            if (!uv) {
+                const np = this._randomLatLng();
+                p.lat = np.lat; p.lng = np.lng; p.age = 0;
+                continue;
+            }
+
+            const speed = Math.sqrt(uv.u*uv.u + uv.v*uv.v); // m/s
+            const kmh = speed * 3.6;
+
+            const p0 = this._map.latLngToContainerPoint([p.lat, p.lng]);
+
+            // move (m/s -> degrees) con approssimazione geografica
+            const metersPerDegLat = 111320;
+            const metersPerDegLon = 111320 * Math.cos(p.lat * Math.PI/180);
+
+            const dLat = (uv.v * dt * (this._velocityScale * 1000)) / metersPerDegLat;
+            const dLon = (uv.u * dt * (this._velocityScale * 1000)) / Math.max(1e-6, metersPerDegLon);
+
+            p.lat += dLat;
+            p.lng += dLon;
+
+            const p1 = this._map.latLngToContainerPoint([p.lat, p.lng]);
+
+            // se esce dallo schermo, respawn
+            if (p1.x < -50 || p1.y < -50 || p1.x > w + 50 || p1.y > h + 50) {
+                const np = this._randomLatLng();
+                p.lat = np.lat; p.lng = np.lng; p.age = 0;
+                continue;
+            }
+
+            // colore per velocità (d3)
+            const col = this._colorFn ? this._colorFn(speed) : '#ffffff';
+            ctx.strokeStyle = col;
+            ctx.beginPath();
+            ctx.moveTo(p0.x, p0.y);
+            ctx.lineTo(p1.x, p1.y);
+            ctx.stroke();
+        }
+
+        this._raf = requestAnimationFrame(this._animate.bind(this));
+    };
+
+    function updateMap() {
+        if (!currentData) return;
+        
+        if (heatCanvas) heatCanvas.update();
+        
+        if (windLayer) map.removeLayer(windLayer);
+
+        if (activeLayer === 'wind') {
+            try {
+                // controllo dati minimi necessari
+                if (!currentData.meta || !currentData.wind_u || !currentData.wind_v || !currentData.wind_u.data || !currentData.wind_v.data) {
+                    status("Dati vento mancanti (wind_u/wind_v)");
+                    return;
+                }
+
+                // scala colori identica alla tua idea
+                const colorFn = d3.scaleSequential()
+                                 .domain(WIND_DOMAIN)
+                                 .interpolator(d3.interpolateRgbBasis(WIND_COLOR_SCALE));
+
+                windLayer = new WindParticlesLayer(currentData, {
+                    paths: 8000,
+                    age: 100,
+                    width: 1.5,
+                    velocityScale: 0.01,
+                    colorFn: colorFn
+                });
+
+                map.addLayer(windLayer);
+            } catch(e) {
+                console.error("Errore Motore Vento:", e);
+                status("Errore vento: " + e.message);
+            }
+        }
+    }
+
+    window.setLayer = function(n, el) {
+        activeLayer = n;
+        document.querySelectorAll('.layer-btn').forEach(b => b.classList.remove('active'));
+        if (el) el.classList.add('active');
+        let u = document.getElementById('pk-unit');
+        u.innerText = (n==='wind')?'km/h':(n==='temp')?'°C':(n==='rain')?'mm':'';
