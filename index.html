@@ -1,7 +1,7 @@
 <!DOCTYPE html>
 <html>
 <head>
-    <title>Sicilia MeteoHub - AIR FLOW HD</title>
+    <title>Sicilia MeteoHub - PRO EDITION</title>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     
@@ -10,17 +10,39 @@
     <link rel="stylesheet" href="https://unpkg.com/leaflet-velocity@1.8.0/dist/leaflet-velocity.css" />
     <script src="https://unpkg.com/leaflet-velocity@1.8.0/dist/leaflet-velocity.js"></script>
     
+    <script src="https://d3js.org/d3.v7.min.js"></script>
+    
     <style>
-        body { margin: 0; background: #020202; font-family: 'Segoe UI', Roboto, sans-serif; color: white; overflow: hidden; }
-        #map { position: absolute; top: 0; bottom: 0; width: 100%; background: #020202; }
+        body { margin: 0; background: #050505; font-family: 'Segoe UI', Roboto, sans-serif; color: white; overflow: hidden; }
+        #map { position: absolute; top: 0; bottom: 0; width: 100%; background: #050505; }
         
+        /* --- SELETTORE MAPPA (SATELLITE / DARK) --- */
+        #basemap-selector {
+            position: absolute; top: 20px; left: 20px; z-index: 1000;
+            background: rgba(10, 10, 10, 0.85); backdrop-filter: blur(8px);
+            border-radius: 12px; padding: 6px; border: 1px solid rgba(255,255,255,0.15);
+            display: flex; gap: 6px;
+        }
+        .base-btn {
+            background: rgba(255,255,255,0.05); color: #aaa; border: none; 
+            padding: 8px 16px; border-radius: 8px; cursor: pointer; 
+            font-size: 13px; font-weight: 700; transition: all 0.2s;
+        }
+        .base-btn:hover { background: rgba(255,255,255,0.2); color: white; }
+        .base-btn.active { 
+            background: #0088ff; color: white; 
+            box-shadow: 0 2px 10px rgba(0,136,255,0.4);
+        }
+
+        /* --- MENU LIVELLI --- */
         #layer-menu {
             position: absolute; top: 20px; right: 20px; z-index: 1000;
-            background: rgba(10, 10, 10, 0.85);
+            background: rgba(15, 15, 15, 0.85);
             backdrop-filter: blur(12px); -webkit-backdrop-filter: blur(12px);
             padding: 12px; border-radius: 16px;
             display: flex; flex-direction: column; gap: 8px;
-            border: 1px solid rgba(255, 255, 255, 0.1);
+            border: 1px solid rgba(255, 255, 255, 0.15);
+            box-shadow: 0 10px 30px rgba(0,0,0,0.5);
         }
         
         .layer-btn {
@@ -33,7 +55,11 @@
             background: linear-gradient(90deg, #0055ff, #0022aa); color: white;
             box-shadow: 0 0 15px rgba(0, 80, 255, 0.4); border: 1px solid rgba(100, 180, 255, 0.5);
         }
+        /* Stile speciale per il tasto Isobare */
+        .layer-btn.toggle-btn { border-top: 1px solid rgba(255,255,255,0.1); margin-top: 5px; color: #aaa; }
+        .layer-btn.toggle-btn.active { background: rgba(255,255,255,0.2); color: #fff; box-shadow: none; border: 1px solid rgba(255,255,255,0.3); }
 
+        /* --- BARRA DEL TEMPO --- */
         #bottom-bar {
             position: absolute; bottom: 0; left: 0; right: 0; height: 110px;
             background: linear-gradient(to top, #000 0%, rgba(0,0,0,0.9) 60%, transparent 100%);
@@ -59,31 +85,44 @@
             text-shadow: 0 2px 10px black; font-variant-numeric: tabular-nums;
         }
         
+        /* UI VARI */
         #loader {
             position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%);
             background: rgba(0,0,0,0.9); padding: 20px 40px; border-radius: 30px; 
             z-index: 5000; display: block; font-weight: bold; font-size: 1.2em; 
             border: 1px solid #444; color: #0088ff;
         }
-        #picker-box { position: absolute; top: 30px; left: 30px; z-index: 1000; pointer-events: none; }
-        #pk-val { font-size: 4.5em; font-weight: 900; text-shadow: 2px 2px 0px #000; line-height: 0.9; }
+        #picker-box { position: absolute; top: 80px; left: 20px; z-index: 1000; pointer-events: none; }
+        #pk-val { font-size: 4em; font-weight: 900; text-shadow: 2px 2px 0px #000; line-height: 0.9; }
         #pk-unit { color: #aaa; font-size: 1.5em; font-weight: 700; margin-left: 8px; text-shadow: 1px 1px 0 #000; }
         
         #status-box {
             position: absolute; bottom: 120px; left: 35px; color: #ff5555; font-size: 13px; font-family: monospace;
             background: rgba(20,0,0,0.9); padding: 10px; border-radius: 5px; pointer-events: none; z-index: 5000; display: none;
         }
+        
+        /* TRUCCO INTERPOLAZIONE: Sfumatura morbida per Canvas */
+        canvas.leaflet-layer {
+            image-rendering: auto; 
+            image-rendering: -webkit-optimize-contrast;
+        }
     </style>
 </head>
 <body>
 
-<div id="loader">Caricamento Flusso HD...</div>
+<div id="loader">Caricamento PRO...</div>
 <div id="status-box"></div>
+
+<div id="basemap-selector">
+    <button class="base-btn active" onclick="setBaseMap('dark')">DARK</button>
+    <button class="base-btn" onclick="setBaseMap('sat')">SATELLITE</button>
+</div>
 
 <div id="layer-menu">
     <button class="layer-btn active" onclick="setLayer('wind')">VENTO 💨</button>
     <button class="layer-btn" onclick="setLayer('temp')">TEMP 🌡️</button>
     <button class="layer-btn" onclick="setLayer('rain')">PIOGGIA ☔</button>
+    <button id="iso-btn" class="layer-btn toggle-btn" onclick="toggleIsobars()">ISOBARE 〰️</button>
 </div>
 
 <div id="picker-box">
@@ -101,13 +140,17 @@
 <script>
     function status(msg) { let el = document.getElementById('status-box'); el.innerText = msg; el.style.display = 'block'; }
     
-    var map, velocityLayer, heatCanvas;
+    var map, velocityLayer, heatCanvas, isobarCanvas;
     var currentData = null;
     var catalog = [];
     var activeLayer = 'wind';
+    var showIsobars = false;
     var isPlaying = false;
+    
+    // Mappe Base
+    var darkLayer, satLayer;
 
-    // PALETTE SFONDO (TEMP / RAIN)
+    // PALETTE
     const PALETTES = {
         temp: [ {val:-10, c:[255,255,255,0.6]}, {val:0, c:[200,200,255,0.6]}, {val:10, c:[0,200,100,0.6]}, {val:20, c:[255,255,0,0.6]}, {val:30, c:[255,140,0,0.6]}, {val:40, c:[200,0,0,0.6]} ],
         rain: [ {val:0, c:[0,0,0,0]}, {val:0.05, c:[0,200,255,0.6]}, {val:2, c:[0,0,255,0.7]}, {val:10, c:[150,0,200,0.8]} ]
@@ -133,22 +176,44 @@
     window.addEventListener('load', function() {
         document.getElementById('loader').innerText = "Inizializzazione...";
         map = L.map('map', { zoomControl: false }).setView([37.5, 14.2], 8);
-        L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_nolabels/{z}/{x}/{y}{r}.png', { maxZoom: 19, attribution: '©OpenStreetMap, ©CartoDB', opacity: 1.0 }).addTo(map);
+        
+        // Setup Mappe Base
+        darkLayer = L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_nolabels/{z}/{x}/{y}{r}.png', { maxZoom: 19, attribution: '©OpenStreetMap', opacity: 1.0 }).addTo(map);
+        satLayer = L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}', { maxZoom: 19, attribution: 'Tiles © Esri' });
 
+        // Creazione Panes (Livelli sovrapposti)
         map.createPane('gridPane'); map.getPane('gridPane').style.zIndex = 300; 
+        map.createPane('isobarPane'); map.getPane('isobarPane').style.zIndex = 400; map.getPane('isobarPane').style.pointerEvents = 'none';
         map.createPane('labelsPane'); map.getPane('labelsPane').style.zIndex = 500; map.getPane('labelsPane').style.pointerEvents = 'none';
+        
+        // Etichette sempre sopra
         L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_only_labels/{z}/{x}/{y}{r}.png', { pane: 'labelsPane' }).addTo(map);
+        
         map.createPane('velocityPane'); map.getPane('velocityPane').style.zIndex = 600; map.getPane('velocityPane').style.pointerEvents = 'none';
 
-        initRawGridLayer();
+        initRawGridLayer(); // Inizializza Sfondo Colorato (Temp/Rain)
+        initIsobarLayer();  // Inizializza Livello Isobare
         loadCatalog();
     });
 
+    // --- GESTIONE CAMBIO SFONDO ---
+    window.setBaseMap = function(type) {
+        document.querySelectorAll('.base-btn').forEach(b => b.classList.remove('active'));
+        event.target.classList.add('active');
+        if(type === 'dark') {
+            map.removeLayer(satLayer); darkLayer.addTo(map);
+        } else {
+            map.removeLayer(darkLayer); satLayer.addTo(map);
+        }
+    }
+
+    // --- 2. GESTIONE SFONDO "SMOOTH" (Interpolazione) ---
     function initRawGridLayer() {
         L.FullHeatmap = L.Layer.extend({
             onAdd: function(m) {
                 this._c = L.DomUtil.create('canvas', 'leaflet-layer');
                 this._c.style.pointerEvents = 'none';
+                this._c.style.imageRendering = 'auto'; // Attiva interpolazione browser (Smooth)
                 m.getPane('gridPane').appendChild(this._c);
                 m.on('moveend resize', this._reset, this);
                 this._reset();
@@ -166,14 +231,16 @@
                 if(activeLayer === 'wind') return;
 
                 var m = currentData.meta;
+                // Disegna rettangoli leggermente sovrapposti per evitare linee vuote
                 for(var y=0; y<m.ny; y++) {
                     var lat = m.la1 - (y * m.dy);
                     for(var x=0; x<m.nx; x++) {
                         var lon = m.lo1 + (x * m.dx);
                         var pStart = this._map.latLngToContainerPoint([lat, lon]);
-                        if (pStart.x < -20 || pStart.x > this._c.width + 20 || pStart.y < -20 || pStart.y > this._c.height + 20) continue;
+                        if (pStart.x < -50 || pStart.x > this._c.width + 50 || pStart.y < -50 || pStart.y > this._c.height + 50) continue;
                         var pEnd = this._map.latLngToContainerPoint([lat - m.dy, lon + m.dx]);
-                        var w = Math.ceil(pEnd.x - pStart.x); var h = Math.ceil(pEnd.y - pStart.y);
+                        var w = Math.ceil(pEnd.x - pStart.x) + 1; // Sovrapposizione per blending
+                        var h = Math.ceil(pEnd.y - pStart.y) + 1;
 
                         var idx = y * m.nx + x, val = 0;
                         if(activeLayer==='temp') val = currentData.temp[idx]; 
@@ -189,6 +256,73 @@
         });
         heatCanvas = new L.FullHeatmap();
         map.addLayer(heatCanvas);
+    }
+
+    // --- 3. SISTEMA ISOBARE (D3 Contours) ---
+    function initIsobarLayer() {
+        L.IsobarLayer = L.Layer.extend({
+            onAdd: function(m) {
+                this._c = L.DomUtil.create('canvas', 'leaflet-layer');
+                this._c.style.pointerEvents = 'none';
+                m.getPane('isobarPane').appendChild(this._c);
+                m.on('moveend resize', this._reset, this);
+                this._reset();
+            },
+            onRemove: function(m) { m.getPane('isobarPane').removeChild(this._c); m.off('moveend resize', this._reset, this); },
+            _reset: function() {
+                var s = this._map.getSize(); this._c.width = s.x; this._c.height = s.y;
+                L.DomUtil.setPosition(this._c, this._map.containerPointToLayerPoint([0,0])); 
+                this._draw();
+            },
+            _draw: function() {
+                if (!currentData || !this._c || !showIsobars) {
+                     if(this._c) this._c.getContext('2d').clearRect(0,0,this._c.width,this._c.height);
+                     return;
+                }
+                var ctx = this._c.getContext('2d'); ctx.clearRect(0,0,this._c.width,this._c.height);
+                
+                // CALCOLO ISOBARE CON D3
+                if(!currentData.press) return;
+                var m = currentData.meta;
+                var values = currentData.press;
+                
+                // Genera Contorni (Step 2 hPa)
+                var contours = d3.contours().size([m.nx, m.ny]).thresholds(d3.range(950, 1050, 2))(values);
+                
+                ctx.strokeStyle = "rgba(255, 255, 255, 0.4)";
+                ctx.lineWidth = 1.0;
+                ctx.beginPath();
+                
+                // Disegna le linee proiettandole sulla mappa
+                contours.forEach(function(contour) {
+                    contour.coordinates.forEach(function(ring) {
+                        ring.forEach(function(points) {
+                            var first = true;
+                            points.forEach(function(coord) {
+                                // coord[0] è x (lon idx), coord[1] è y (lat idx)
+                                // Converti indice griglia -> Lat/Lon -> Pixel Schermo
+                                var lon = m.lo1 + (coord[0] * m.dx);
+                                var lat = m.la1 - (coord[1] * m.dy); // la1 è top, quindi sottraiamo
+                                var p = map.latLngToContainerPoint([lat, lon]);
+                                
+                                if (first) { ctx.moveTo(p.x, p.y); first = false; }
+                                else { ctx.lineTo(p.x, p.y); }
+                            });
+                        });
+                    });
+                });
+                ctx.stroke();
+            },
+            update: function() { this._draw(); }
+        });
+        isobarCanvas = new L.IsobarLayer();
+        map.addLayer(isobarCanvas);
+    }
+    
+    window.toggleIsobars = function() {
+        showIsobars = !showIsobars;
+        document.getElementById('iso-btn').classList.toggle('active');
+        if(isobarCanvas) isobarCanvas.update();
     }
 
     async function loadCatalog() {
@@ -217,6 +351,7 @@
     function updateMap() {
         if (!currentData) return;
         if (heatCanvas) heatCanvas.update();
+        if (isobarCanvas) isobarCanvas.update(); // Aggiorna isobare
         if (velocityLayer) map.removeLayer(velocityLayer);
 
         if (activeLayer === 'wind') {
@@ -226,37 +361,15 @@
                     displayValues: false,
                     data: [ currentData.wind_u, currentData.wind_v ], 
                     
-                    // === FISICA FLUIDA E DENSA ===
-                    
-                    // Colori accesi già a velocità medie
+                    // CONFIGURAZIONE FISICA TOP (Calibrata)
                     maxVelocity: 18.0, 
-                    
-                    // Movimento proporzionale (non troppo lento, non schizzofrenico)
-                    velocityScale: 0.005, 
-                    
-                    // 1/35 = DENSITÀ ESTREMA (Migliaia di particelle)
+                    velocityScale: 0.006, 
                     particleMultiplier: 1/35, 
-                    
-                    // 0.8 = SPESSORE SETOSO (Filamenti sottilissimi)
                     lineWidth: 0.8,
-                    
-                    // 140 = PERSISTENZA (Scie lunghe e continue)
                     particleAge: 140,
-                    
                     frameRate: 60,
-                    opacity: 0.95, // Alta visibilità
-                    
-                    // Scala Colori Vivace
-                    colorScale: [
-                        "#000080", // Blu notte
-                        "#0044ff", // Blu
-                        "#00ddff", // Ciano (Appare presto)
-                        "#00ff55", // Verde
-                        "#ffff00", // Giallo
-                        "#ff6600", // Arancio
-                        "#ff0000", // Rosso
-                        "#ff00ff"  // Viola (Estremo)
-                    ]
+                    opacity: 0.95, 
+                    colorScale: ["#000080", "#0044ff", "#00ddff", "#00ff55", "#ffff00", "#ff6600", "#ff0000", "#ff00ff"]
                 });
                 velocityLayer.addTo(map);
             } catch(e) { console.log(e); }
@@ -265,8 +378,11 @@
 
     window.setLayer = function(n) {
         activeLayer = n;
-        document.querySelectorAll('.layer-btn').forEach(b => b.classList.remove('active'));
-        event.target.classList.add('active');
+        document.querySelectorAll('.layer-btn').forEach(b => {
+             if(!b.classList.contains('toggle-btn')) b.classList.remove('active');
+        });
+        if(n !== 'iso') event.target.classList.add('active');
+        
         let u = document.getElementById('pk-unit');
         u.innerText = (n==='wind')?'km/h':(n==='temp')?'°C':(n==='rain')?'mm':'';
         document.getElementById('pk-val').innerText = "--";
