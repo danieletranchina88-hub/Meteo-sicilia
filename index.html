@@ -1,7 +1,7 @@
 <!DOCTYPE html>
 <html>
 <head>
-    <title>Sicilia MeteoHub - FINAL PRO</title>
+    <title>Sicilia MeteoHub - PRO EDITION</title>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     
@@ -10,17 +10,17 @@
     <link rel="stylesheet" href="https://unpkg.com/leaflet-velocity@1.8.0/dist/leaflet-velocity.css" />
     <script src="https://unpkg.com/leaflet-velocity@1.8.0/dist/leaflet-velocity.js"></script>
     
+    <script src="https://d3js.org/d3.v7.min.js"></script>
+    
     <style>
         body { margin: 0; background: #050505; font-family: 'Segoe UI', Roboto, sans-serif; color: white; overflow: hidden; }
         #map { position: absolute; top: 0; bottom: 0; width: 100%; background: #050505; }
         
-        /* SELETTORE MAPPA */
         #basemap-selector {
             position: absolute; top: 20px; left: 20px; z-index: 1000;
             background: rgba(10, 10, 10, 0.85); backdrop-filter: blur(8px);
             border-radius: 12px; padding: 6px; border: 1px solid rgba(255,255,255,0.15);
             display: flex; gap: 6px;
-            box-shadow: 0 4px 15px rgba(0,0,0,0.5);
         }
         .base-btn {
             background: rgba(255,255,255,0.05); color: #aaa; border: none; 
@@ -28,46 +28,57 @@
             font-size: 13px; font-weight: 700; transition: all 0.2s;
         }
         .base-btn:hover { background: rgba(255,255,255,0.2); color: white; }
-        .base-btn.active { background: #0088ff; color: white; box-shadow: 0 2px 10px rgba(0,136,255,0.4); }
+        .base-btn.active { 
+            background: #0088ff; color: white; 
+            box-shadow: 0 2px 10px rgba(0,136,255,0.4);
+        }
 
-        /* MENU LATERALE SCROLLABILE */
         #layer-menu {
             position: absolute; top: 20px; right: 20px; z-index: 1000;
             background: rgba(15, 15, 15, 0.85);
-            backdrop-filter: blur(12px);
+            backdrop-filter: blur(12px); -webkit-backdrop-filter: blur(12px);
             padding: 12px; border-radius: 16px;
             display: flex; flex-direction: column; gap: 8px;
             border: 1px solid rgba(255, 255, 255, 0.15);
-            max-height: 85vh; overflow-y: auto; /* Importante per schermi piccoli */
+            box-shadow: 0 10px 30px rgba(0,0,0,0.5);
         }
         
         .layer-btn {
-            background: transparent; border: none; color: #ccc; padding: 10px 20px;
-            font-size: 14px; font-weight: 600; cursor: pointer; text-align: right; 
-            border-radius: 8px; transition: all 0.2s;
-            border-right: 3px solid transparent; white-space: nowrap;
+            background: transparent; border: none; color: #ccc; padding: 12px 24px;
+            font-size: 15px; font-weight: 600; cursor: pointer; text-align: right; 
+            border-radius: 10px; transition: all 0.2s;
         }
         .layer-btn:hover { background: rgba(255, 255, 255, 0.1); color: #fff; }
         .layer-btn.active {
-            background: linear-gradient(90deg, rgba(0,136,255,0.1), rgba(0,136,255,0.3)); 
-            color: white; border-right: 3px solid #0088ff;
+            background: linear-gradient(90deg, #0055ff, #0022aa); color: white;
+            box-shadow: 0 0 15px rgba(0, 80, 255, 0.4); border: 1px solid rgba(100, 180, 255, 0.5);
         }
+        .layer-btn.toggle-btn { border-top: 1px solid rgba(255,255,255,0.1); margin-top: 5px; color: #aaa; }
+        .layer-btn.toggle-btn.active { background: rgba(255,255,255,0.2); color: #fff; box-shadow: none; border: 1px solid rgba(255,255,255,0.3); }
 
-        /* BARRA TEMPO */
         #bottom-bar {
             position: absolute; bottom: 0; left: 0; right: 0; height: 110px;
             background: linear-gradient(to top, #000 0%, rgba(0,0,0,0.9) 60%, transparent 100%);
             display: flex; align-items: center; padding: 0 30px 20px 30px; z-index: 2000;
         }
-        #play-btn { font-size: 3em; cursor: pointer; margin-right: 25px; color: #fff; transition: transform 0.1s; }
-        #play-btn:active { transform: scale(0.9); }
-        input[type=range] { flex-grow: 1; height: 6px; cursor: pointer; background: #333; border-radius: 3px; accent-color: #0088ff; }
-        #time-label { min-width: 180px; text-align: center; font-weight: 800; font-size: 1.6em; color: #fff; margin-left: 20px; font-variant-numeric: tabular-nums; }
+        #play-btn { 
+            font-size: 3em; cursor: pointer; margin-right: 25px; color: #fff; 
+            filter: drop-shadow(0 0 5px rgba(255,255,255,0.5)); transition: transform 0.1s;
+        }
         
-        /* PICKER DATI */
-        #picker-box { position: absolute; top: 80px; left: 20px; z-index: 1000; pointer-events: none; }
-        #pk-val { font-size: 4em; font-weight: 900; text-shadow: 2px 2px 0px #000; line-height: 0.9; }
-        #pk-unit { color: #aaa; font-size: 1.5em; font-weight: 700; margin-left: 8px; text-shadow: 1px 1px 0 #000; }
+        input[type=range] { 
+            flex-grow: 1; height: 6px; cursor: pointer; background: #333; border-radius: 3px;
+            -webkit-appearance: none; appearance: none;
+        }
+        input[type=range]::-webkit-slider-thumb {
+            -webkit-appearance: none; width: 20px; height: 20px; border-radius: 50%;
+            background: #0088ff; border: 2px solid white; margin-top: -7px;
+        }
+
+        #time-label { 
+            min-width: 180px; text-align: center; font-weight: 800; font-size: 1.6em; color: #fff; margin-left: 20px; 
+            text-shadow: 0 2px 10px black; font-variant-numeric: tabular-nums;
+        }
         
         #loader {
             position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%);
@@ -75,22 +86,20 @@
             z-index: 5000; display: block; font-weight: bold; font-size: 1.2em; 
             border: 1px solid #444; color: #0088ff;
         }
+        #picker-box { position: absolute; top: 80px; left: 20px; z-index: 1000; pointer-events: none; }
+        #pk-val { font-size: 4em; font-weight: 900; text-shadow: 2px 2px 0px #000; line-height: 0.9; }
+        #pk-unit { color: #aaa; font-size: 1.5em; font-weight: 700; margin-left: 8px; text-shadow: 1px 1px 0 #000; }
         
-        /* LEGENDA DINAMICA */
-        #legend {
-            position: absolute; bottom: 120px; right: 20px; z-index: 1000;
-            width: 180px; background: rgba(0,0,0,0.7); padding: 8px;
-            border-radius: 8px; backdrop-filter: blur(4px); pointer-events: none;
+        #status-box {
+            position: absolute; bottom: 120px; left: 35px; color: #ff5555; font-size: 13px; font-family: monospace;
+            background: rgba(20,0,0,0.9); padding: 10px; border-radius: 5px; pointer-events: none; z-index: 5000; display: none;
         }
-        #leg-grad { height: 10px; width: 100%; border-radius: 5px; margin-bottom: 4px; border: 1px solid rgba(255,255,255,0.3); }
-        #leg-labels { display: flex; justify-content: space-between; font-size: 10px; color: #ddd; font-weight: bold; }
-
-        canvas.leaflet-layer { image-rendering: auto; }
     </style>
 </head>
 <body>
 
-<div id="loader">Caricamento Dati...</div>
+<div id="loader">Caricamento PRO...</div>
+<div id="status-box"></div>
 
 <div id="basemap-selector">
     <button class="base-btn active" onclick="setBaseMap('dark')">DARK</button>
@@ -99,73 +108,53 @@
 
 <div id="layer-menu">
     <button class="layer-btn active" onclick="setLayer('wind')">VENTO 💨</button>
-    <button class="layer-btn" onclick="setLayer('gust')">RAFFICHE 🌬️</button>
     <button class="layer-btn" onclick="setLayer('temp')">TEMP 🌡️</button>
     <button class="layer-btn" onclick="setLayer('rain')">PIOGGIA ☔</button>
-    <button class="layer-btn" onclick="setLayer('rh')">UMIDITÀ 💧</button>
-    <button class="layer-btn" onclick="setLayer('cloud')">NUVOLE ☁️</button>
-    <button class="layer-btn" onclick="setLayer('press')">PRESSIONE ⏲️</button>
+    <button class="layer-btn" onclick="setLayer('clouds')">NUBI ☁️</button>
+    <button class="layer-btn" onclick="setLayer('dew_point')">DEWP 💧</button>
+    <button id="iso-btn" class="layer-btn toggle-btn" onclick="toggleIsobars()">ISOBARE 〰️</button>
 </div>
 
 <div id="picker-box">
-    <span id="pk-val">--</span><span id="pk-unit"></span>
-</div>
-
-<div id="legend">
-    <div id="leg-grad"></div>
-    <div id="leg-labels">
-        <span id="leg-min">0</span>
-        <span id="leg-mid">50</span>
-        <span id="leg-max">100</span>
-    </div>
+    <span id="pk-val">--</span><span id="pk-unit">km/h</span>
 </div>
 
 <div id="map"></div>
 
 <div id="bottom-bar">
-    <div id="play-btn" onclick="togglePlay()">&#9658;</div>
+    <div id="play-btn" onclick="togglePlay()">►</div>
     <input type="range" id="time-slider" min="0" max="0" value="0" step="1">
     <div id="time-label">--/-- --:--</div>
 </div>
 
 <script>
-    var map, velocityLayer, heatCanvas;
+    function status(msg) { let el = document.getElementById('status-box'); el.innerText = msg; el.style.display = 'block'; }
+    
+    var map, velocityLayer, heatCanvas, isobarCanvas;
     var currentData = null;
     var catalog = [];
     var activeLayer = 'wind';
+    var showIsobars = false;
     var isPlaying = false;
-    
-    // VARIABILI MAPPE BASE
     var darkLayer, satLayer;
 
-    // --- DEFINIZIONE PALETTE COLORI ---
+    // PALETTE AGGIORNATE
     const PALETTES = {
-        temp: [ {val:-10, c:[255,255,255,0.6]}, {val:0, c:[100,100,255,0.6]}, {val:15, c:[0,200,100,0.6]}, {val:25, c:[255,255,0,0.6]}, {val:40, c:[200,0,0,0.6]} ],
-        rain: [ {val:0, c:[0,0,0,0]}, {val:0.1, c:[0,200,255,0.5]}, {val:2, c:[0,0,255,0.7]}, {val:10, c:[150,0,200,0.8]}, {val:50, c:[255,200,0,0.9]} ],
-        rh: [ {val:0, c:[255,200,0,0.5]}, {val:30, c:[200,255,0,0.5]}, {val:60, c:[50,200,50,0.5]}, {val:90, c:[0,100,255,0.6]}, {val:100, c:[0,0,150,0.7]} ],
-        cloud: [ {val:0, c:[0,0,0,0]}, {val:20, c:[255,255,255,0.1]}, {val:60, c:[220,220,220,0.4]}, {val:100, c:[100,100,100,0.7]} ],
-        gust: [ {val:0, c:[0,0,0,0]}, {val:20, c:[0,255,255,0.4]}, {val:50, c:[255,255,0,0.5]}, {val:80, c:[255,0,0,0.6]}, {val:110, c:[255,0,255,0.7]} ],
-        press: [ {val:980, c:[0,0,255,0.5]}, {val:1000, c:[0,150,255,0.5]}, {val:1013, c:[0,255,100,0.4]}, {val:1025, c:[255,100,0,0.5]}, {val:1040, c:[200,0,0,0.5]} ]
+        temp: [ {val:-10, c:[255,255,255,0.6]}, {val:0, c:[200,200,255,0.6]}, {val:10, c:[0,200,100,0.6]}, {val:20, c:[255,255,0,0.6]}, {val:30, c:[255,140,0,0.6]}, {val:40, c:[200,0,0,0.6]} ],
+        rain: [ {val:0, c:[0,0,0,0]}, {val:0.05, c:[0,200,255,0.6]}, {val:2, c:[0,0,255,0.7]}, {val:10, c:[150,0,200,0.8]} ],
+        clouds: [ {val:0, c:[0,0,0,0]}, {val:10, c:[255,255,255,0.1]}, {val:50, c:[255,255,255,0.4]}, {val:100, c:[255,255,255,0.8]} ],
+        dew_point: [ {val:-5, c:[139,69,19,0.5]}, {val:5, c:[255,255,224,0.5]}, {val:15, c:[0,255,127,0.6]}, {val:25, c:[0,191,255,0.7]} ]
     };
 
     function getColor(val, type) {
         if (!PALETTES[type]) return [0,0,0,0];
         let stops = PALETTES[type];
-        
-        if(type==='rain' && val < 0.1) return [0,0,0,0];
-        if(type==='gust' && val < 5) return [0,0,0,0];
-        if(type==='cloud' && val < 10) return [0,0,0,0];
-        
+        if(type==='rain' && val < 0.05) return [0,0,0,0];
         for(let i=0; i<stops.length-1; i++) {
             if(val>=stops[i].val && val<=stops[i+1].val) {
                 let t = (val - stops[i].val) / (stops[i+1].val - stops[i].val);
                 let c1=stops[i].c, c2=stops[i+1].c;
-                return [ 
-                    Math.round(c1[0]+(c2[0]-c1[0])*t), 
-                    Math.round(c1[1]+(c2[1]-c1[1])*t), 
-                    Math.round(c1[2]+(c2[2]-c1[2])*t), 
-                    c1[3]+(c2[3]-c1[3])*t 
-                ];
+                return [ Math.round(c1[0]+(c2[0]-c1[0])*t), Math.round(c1[1]+(c2[1]-c1[1])*t), Math.round(c1[2]+(c2[2]-c1[2])*t), c1[3]+(c2[3]-c1[3])*t ];
             }
         } 
         let last = stops[stops.length-1];
@@ -173,20 +162,19 @@
     }
 
     window.addEventListener('load', function() {
-        document.getElementById('loader').innerText = "Inizializzazione...";
         map = L.map('map', { zoomControl: false }).setView([37.5, 14.2], 8);
-        
-        darkLayer = L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_nolabels/{z}/{x}/{y}{r}.png', { maxZoom: 19, attribution: 'OSM' }).addTo(map);
-        satLayer = L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}', { maxZoom: 19, attribution: 'Esri' });
+        darkLayer = L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_nolabels/{z}/{x}/{y}{r}.png', { maxZoom: 19 }).addTo(map);
+        satLayer = L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}', { maxZoom: 19 });
 
         map.createPane('gridPane'); map.getPane('gridPane').style.zIndex = 300; 
-        map.createPane('labelsPane'); map.getPane('labelsPane').style.zIndex = 500; map.getPane('labelsPane').style.pointerEvents = 'none';
+        map.createPane('isobarPane'); map.getPane('isobarPane').style.zIndex = 400;
+        map.createPane('labelsPane'); map.getPane('labelsPane').style.zIndex = 500;
         L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_only_labels/{z}/{x}/{y}{r}.png', { pane: 'labelsPane' }).addTo(map);
-        map.createPane('velocityPane'); map.getPane('velocityPane').style.zIndex = 600; map.getPane('velocityPane').style.pointerEvents = 'none';
+        map.createPane('velocityPane'); map.getPane('velocityPane').style.zIndex = 600;
 
         initRawGridLayer();
+        initIsobarLayer();
         loadCatalog();
-        updateLegend(); // Init legenda
     });
 
     window.setBaseMap = function(type) {
@@ -200,49 +188,39 @@
         L.FullHeatmap = L.Layer.extend({
             onAdd: function(m) {
                 this._c = L.DomUtil.create('canvas', 'leaflet-layer');
-                this._c.style.pointerEvents = 'none';
-                this._c.style.imageRendering = 'auto'; 
                 m.getPane('gridPane').appendChild(this._c);
                 m.on('moveend resize', this._reset, this);
                 this._reset();
             },
-            onRemove: function(m) { m.getPane('gridPane').removeChild(this._c); m.off('moveend resize', this._reset, this); },
+            onRemove: function(m) { m.getPane('gridPane').removeChild(this._c); },
             _reset: function() {
-                var s = this._map.getSize(); 
-                this._c.width = s.x; this._c.height = s.y;
+                var s = this._map.getSize(); this._c.width = s.x; this._c.height = s.y;
                 L.DomUtil.setPosition(this._c, this._map.containerPointToLayerPoint([0,0])); 
                 this._draw();
             },
             _draw: function() {
-                if (!currentData || !this._c) return;
+                if (!currentData || !this._c || activeLayer === 'wind') {
+                    if(this._c) this._c.getContext('2d').clearRect(0,0,this._c.width,this._c.height);
+                    return;
+                }
                 var ctx = this._c.getContext('2d'); ctx.clearRect(0,0,this._c.width,this._c.height);
-                
-                // Se attivo Vento, non disegno sfondo colorato (solo particelle)
-                if(activeLayer === 'wind') return;
-
                 var m = currentData.meta;
                 for(var y=0; y<m.ny; y++) {
                     var lat = m.la1 - (y * m.dy);
                     for(var x=0; x<m.nx; x++) {
                         var lon = m.lo1 + (x * m.dx);
                         var pStart = this._map.latLngToContainerPoint([lat, lon]);
-                        if (pStart.x < -50 || pStart.x > this._c.width + 50 || pStart.y < -50 || pStart.y > this._c.height + 50) continue;
-                        var w = Math.ceil(this._map.latLngToContainerPoint([lat - m.dy, lon + m.dx]).x - pStart.x) + 1;
-                        var h = Math.ceil(this._map.latLngToContainerPoint([lat - m.dy, lon + m.dx]).y - pStart.y) + 1;
-
+                        var pEnd = this._map.latLngToContainerPoint([lat - m.dy, lon + m.dx]);
+                        var w = Math.ceil(pEnd.x - pStart.x) + 1;
+                        var h = Math.ceil(pEnd.y - pStart.y) + 1;
                         var idx = y * m.nx + x, val = 0;
                         
-                        // --- MAPPATURA CORRETTA JSON -> VISUALIZZAZIONE ---
-                        if(activeLayer==='temp' && currentData.temp) val = currentData.temp[idx]; 
-                        else if(activeLayer==='rain' && currentData.rain) val = currentData.rain[idx];
-                        else if(activeLayer==='rh' && currentData.rh) val = currentData.rh[idx];   // NOTA: 'rh' non 'hum'
-                        else if(activeLayer==='cloud' && currentData.cloud) val = currentData.cloud[idx]; // NOTA: 'cloud' non 'clouds'
-                        else if(activeLayer==='gust' && currentData.gust) val = currentData.gust[idx];
-                        else if(activeLayer==='press' && currentData.press) val = currentData.press[idx];
-
-                        var c = getColor(val, activeLayer); 
-                        if(c[3]===0) continue; 
+                        if(activeLayer==='temp') val = currentData.temp[idx]; 
+                        else if(activeLayer==='rain') val = currentData.rain[idx];
+                        else if(activeLayer==='clouds') val = currentData.clouds[idx];
+                        else if(activeLayer==='dew_point') val = currentData.dew_point[idx];
                         
+                        var c = getColor(val, activeLayer); if(c[3]===0) continue; 
                         ctx.fillStyle = `rgba(${c[0]},${c[1]},${c[2]},${c[3]})`; 
                         ctx.fillRect(Math.floor(pStart.x), Math.floor(pStart.y), w, h);
                     }
@@ -254,18 +232,64 @@
         map.addLayer(heatCanvas);
     }
 
+    function initIsobarLayer() {
+        L.IsobarLayer = L.Layer.extend({
+            onAdd: function(m) {
+                this._c = L.DomUtil.create('canvas', 'leaflet-layer');
+                m.getPane('isobarPane').appendChild(this._c);
+                m.on('moveend resize', this._reset, this);
+                this._reset();
+            },
+            onRemove: function(m) { m.getPane('isobarPane').removeChild(this._c); },
+            _reset: function() {
+                var s = this._map.getSize(); this._c.width = s.x; this._c.height = s.y;
+                L.DomUtil.setPosition(this._c, this._map.containerPointToLayerPoint([0,0])); 
+                this._draw();
+            },
+            _draw: function() {
+                if (!currentData || !this._c || !showIsobars || !currentData.press) {
+                     if(this._c) this._c.getContext('2d').clearRect(0,0,this._c.width,this._c.height);
+                     return;
+                }
+                var ctx = this._c.getContext('2d'); ctx.clearRect(0,0,this._c.width,this._c.height);
+                var m = currentData.meta;
+                var contours = d3.contours().size([m.nx, m.ny]).thresholds(d3.range(980, 1040, 2))(currentData.press);
+                ctx.strokeStyle = "rgba(255, 255, 255, 0.4)";
+                ctx.lineWidth = 1.2;
+                contours.forEach(c => {
+                    ctx.beginPath();
+                    c.coordinates.forEach(ring => {
+                        ring.forEach(points => {
+                            let first = true;
+                            points.forEach(coord => {
+                                let p = map.latLngToContainerPoint([m.la1 - (coord[1] * m.dy), m.lo1 + (coord[0] * m.dx)]);
+                                if (first) { ctx.moveTo(p.x, p.y); first = false; }
+                                else { ctx.lineTo(p.x, p.y); }
+                            });
+                        });
+                    });
+                    ctx.stroke();
+                });
+            },
+            update: function() { this._draw(); }
+        });
+        isobarCanvas = new L.IsobarLayer();
+        map.addLayer(isobarCanvas);
+    }
+    
+    window.toggleIsobars = function() {
+        showIsobars = !showIsobars;
+        document.getElementById('iso-btn').classList.toggle('active');
+        isobarCanvas.update();
+    }
+
     async function loadCatalog() {
         try {
             let r = await fetch('data_weather/catalog.json?t=' + Date.now());
-            if(!r.ok) throw new Error("404");
             catalog = await r.json();
             document.getElementById('time-slider').max = catalog.length - 1;
-            document.getElementById('time-slider').addEventListener('input', (e) => loadStep(parseInt(e.target.value)));
             loadStep(0);
-        } catch(e) { 
-            console.log(e);
-            document.getElementById('loader').innerText = "Attesa Dati (Catalog)..."; 
-        }
+        } catch(e) { status("ATTESA DATI..."); }
     }
 
     async function loadStep(index) {
@@ -273,123 +297,73 @@
         document.getElementById('time-label').innerText = catalog[index].label;
         document.getElementById('loader').style.display = 'block';
         try {
-            let r = await fetch('data_weather/' + catalog[index].file + '?nocache=' + Date.now());
+            let r = await fetch('data_weather/' + catalog[index].file);
             currentData = await r.json();
             updateMap();
-            document.getElementById('loader').style.display = 'none';
-        } catch(e) { 
-            console.log("Errore caricamento frame " + index, e); 
-        }
+        } catch(e) {}
+        document.getElementById('loader').style.display = 'none';
     }
 
     function updateMap() {
         if (!currentData) return;
-        if (heatCanvas) heatCanvas.update();
+        heatCanvas.update();
+        isobarCanvas.update();
         if (velocityLayer) map.removeLayer(velocityLayer);
-
-        // Disegna particelle se siamo su Vento o Raffiche
-        if (activeLayer === 'wind' || activeLayer === 'gust') {
-            try {
-                if(currentData.wind_u && currentData.wind_v) {
-                    velocityLayer = L.velocityLayer({
-                        pane: 'velocityPane',
-                        displayValues: false,
-                        data: [ currentData.wind_u, currentData.wind_v ], 
-                        maxVelocity: 18.0, 
-                        velocityScale: 0.006, 
-                        particleMultiplier: 1/35, 
-                        lineWidth: 0.8,
-                        particleAge: 140,
-                        frameRate: 60,
-                        opacity: 0.95, 
-                        colorScale: ["#000080", "#0044ff", "#00ddff", "#00ff55", "#ffff00", "#ff6600", "#ff0000", "#ff00ff"]
-                    });
-                    velocityLayer.addTo(map);
-                }
-            } catch(e) { console.log(e); }
+        if (activeLayer === 'wind') {
+            velocityLayer = L.velocityLayer({
+                pane: 'velocityPane',
+                data: [ currentData.wind_u, currentData.wind_v ], 
+                maxVelocity: 18.0, velocityScale: 0.006, particleMultiplier: 1/35,
+                colorScale: ["#000080", "#0044ff", "#00ddff", "#00ff55", "#ffff00", "#ff6600", "#ff0000"]
+            }).addTo(map);
         }
-        updateLegend();
-    }
-
-    function updateLegend() {
-        let grad = document.getElementById('leg-grad');
-        let lMin = document.getElementById('leg-min');
-        let lMid = document.getElementById('leg-mid');
-        let lMax = document.getElementById('leg-max');
-        let u = document.getElementById('pk-unit');
-
-        if(activeLayer === 'wind' || activeLayer === 'gust') {
-            grad.style.background = 'linear-gradient(to right, #000080, #0044ff, #00ff55, #ffff00, #ff0000, #ff00ff)';
-            lMin.innerText = "0"; lMid.innerText = "40"; lMax.innerText = "80+"; u.innerText = "km/h";
-        } else if(activeLayer === 'temp') {
-            grad.style.background = 'linear-gradient(to right, white, #0044ff, #00ff55, #ffff00, #ff0000)';
-            lMin.innerText = "-10"; lMid.innerText = "15"; lMax.innerText = "40"; u.innerText = "°C";
-        } else if(activeLayer === 'rain') {
-            grad.style.background = 'linear-gradient(to right, transparent, #00ccff, #0000ff, #ffcc00)';
-            lMin.innerText = "0"; lMid.innerText = "5"; lMax.innerText = "50"; u.innerText = "mm";
-        } else if(activeLayer === 'rh') {
-            grad.style.background = 'linear-gradient(to right, yellow, green, blue)';
-            lMin.innerText = "0"; lMid.innerText = "50"; lMax.innerText = "100"; u.innerText = "%";
-        } else if(activeLayer === 'cloud') {
-            grad.style.background = 'linear-gradient(to right, #333, #888, #fff)';
-            lMin.innerText = "0"; lMid.innerText = "50"; lMax.innerText = "100"; u.innerText = "%";
-        } else if(activeLayer === 'press') {
-            grad.style.background = 'linear-gradient(to right, blue, green, red)';
-            lMin.innerText = "980"; lMid.innerText = "1013"; lMax.innerText = "1040"; u.innerText = "hPa";
-        }
-        document.getElementById('pk-val').innerText = "--";
     }
 
     window.setLayer = function(n) {
         activeLayer = n;
-        document.querySelectorAll('.layer-btn').forEach(b => b.classList.remove('active'));
+        document.querySelectorAll('.layer-btn').forEach(b => { if(!b.classList.contains('toggle-btn')) b.classList.remove('active'); });
         event.target.classList.add('active');
+        const units = { wind:'km/h', temp:'°C', rain:'mm', clouds:'%', dew_point:'°C' };
+        document.getElementById('pk-unit').innerText = units[n];
         updateMap();
     }
 
     window.togglePlay = function() {
-        if (isPlaying) return; isPlaying = true;
+        if (isPlaying) { isPlaying = false; return; }
+        isPlaying = true;
         let s = document.getElementById('time-slider');
         let btn = document.getElementById('play-btn');
-        btn.innerHTML = "&#10074;&#10074;";
-        
+        btn.innerHTML = "❚❚";
         let interval = setInterval(() => {
             let i = parseInt(s.value);
-            if (i >= parseInt(s.max) || !isPlaying) { clearInterval(interval); isPlaying = false; btn.innerHTML = "&#9658;"; }
-            else { s.value = i + 1; loadStep(i + 1); }
+            if (i >= parseInt(s.max) || !isPlaying) { clearInterval(interval); isPlaying = false; btn.innerHTML = "►"; }
+            else { i++; s.value = i; loadStep(i); }
         }, 800);
     }
-    
-    // MOUSE PROBE CORRETTO
+
     window.addEventListener('load', function(){
-        if(!map) return;
         map.on('mousemove', function(e) {
-            try {
-                if (!currentData) return;
-                let m = currentData.meta;
-                let y = Math.round((m.la1 - e.latlng.lat) / m.dy);
-                let x = Math.round((e.latlng.lng - m.lo1) / m.dx);
-                if (x >= 0 && x < m.nx && y >= 0 && y < m.ny) {
-                    let idx = y * m.nx + x;
-                    let val = "--";
-                    
-                    if(activeLayer === 'wind') {
-                        if (currentData.wind_u && currentData.wind_v) {
-                             let u = currentData.wind_u.data[idx], v = currentData.wind_v.data[idx];
-                             val = (Math.sqrt(u*u+v*v)*3.6).toFixed(1);
-                        }
-                    }
-                    else if(activeLayer === 'temp' && currentData.temp) val = currentData.temp[idx].toFixed(1);
-                    else if(activeLayer === 'rain' && currentData.rain) val = currentData.rain[idx].toFixed(1);
-                    else if(activeLayer === 'rh' && currentData.rh) val = currentData.rh[idx];
-                    else if(activeLayer === 'cloud' && currentData.cloud) val = currentData.cloud[idx];
-                    else if(activeLayer === 'gust' && currentData.gust) val = currentData.gust[idx];
-                    else if(activeLayer === 'press' && currentData.press) val = currentData.press[idx].toFixed(0);
-                    
-                    document.getElementById('pk-val').innerText = val;
+            if (!currentData) return;
+            let m = currentData.meta;
+            let y = Math.round((m.la1 - e.latlng.lat) / m.dy);
+            let x = Math.round((e.latlng.lng - m.lo1) / m.dx);
+            if (x >= 0 && x < m.nx && y >= 0 && y < m.ny) {
+                let idx = y * m.nx + x;
+                let val = "--";
+                if (activeLayer === 'wind') val = (Math.sqrt(Math.pow(currentData.wind_u.data[idx],2)+Math.pow(currentData.wind_v.data[idx],2))*3.6).toFixed(1);
+                else if (activeLayer === 'temp') val = currentData.temp[idx].toFixed(1);
+                else if (activeLayer === 'rain') val = currentData.rain[idx].toFixed(1);
+                else if (activeLayer === 'clouds') val = currentData.clouds[idx].toFixed(0);
+                else if (activeLayer === 'dew_point') val = currentData.dew_point[idx].toFixed(1);
+                
+                // AGGIUNTA PRESSIONE NEL PICKER SE ISOBARE ATTIVE
+                if(showIsobars && currentData.press) {
+                    val += " | " + currentData.press[idx].toFixed(1) + " hPa";
                 }
-            } catch(e) {}
+                document.getElementById('pk-val').innerText = val;
+            }
         });
+        document.getElementById('time-slider').addEventListener('input', (e) => loadStep(parseInt(e.target.value)));
     });
 </script>
 </body>
