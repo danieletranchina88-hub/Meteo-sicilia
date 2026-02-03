@@ -1,15 +1,14 @@
 <!DOCTYPE html>
 <html>
 <head>
-    <title>Sicilia MeteoHub - PRO LAGRANGIAN</title>
+    <title>Sicilia MeteoHub - COLOR PHYSICS</title>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     
     <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
     <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
-    
-    <script src="https://d3js.org/d3.v7.min.js"></script>
-    <script src="//ihcantoria.github.io/leaflet-canvaslayer-field/dist/leaflet.canvaslayer.field.js"></script>
+    <link rel="stylesheet" href="https://unpkg.com/leaflet-velocity@1.8.0/dist/leaflet-velocity.css" />
+    <script src="https://unpkg.com/leaflet-velocity@1.8.0/dist/leaflet-velocity.js"></script>
     
     <style>
         /* BASE STYLE */
@@ -92,7 +91,7 @@
 </head>
 <body>
 
-<div id="loader">Caricamento Motore Particellare...</div>
+<div id="loader">Avvio Motore Fisico...</div>
 <div id="status-box"></div>
 
 <div id="layer-menu">
@@ -116,29 +115,26 @@
 <script>
     function status(msg) { let el = document.getElementById('status-box'); el.innerText = msg; el.style.display = 'block'; }
     
-    var map, windLayer, heatCanvas;
+    var map, velocityLayer, heatCanvas;
     var currentData = null;
     var catalog = [];
     var activeLayer = 'wind';
     var isPlaying = false;
 
-    // PALETTE STANDARD (Per Temp/Rain)
+    // PALETTE SFONDO (Temp/Rain/Wind Grid)
     const PALETTES = {
         temp: [ {val:-10, c:[255,255,255,0.6]}, {val:0, c:[200,200,255,0.6]}, {val:10, c:[0,200,100,0.6]}, {val:20, c:[255,255,0,0.6]}, {val:30, c:[255,140,0,0.6]}, {val:40, c:[200,0,0,0.6]} ],
-        rain: [ {val:0, c:[0,0,0,0]}, {val:0.05, c:[0,200,255,0.6]}, {val:2, c:[0,0,255,0.7]}, {val:10, c:[150,0,200,0.8]} ]
+        rain: [ {val:0, c:[0,0,0,0]}, {val:0.05, c:[0,200,255,0.6]}, {val:2, c:[0,0,255,0.7]}, {val:10, c:[150,0,200,0.8]} ],
+        // Palette per i QUADRATINI di sfondo del vento (opzionale se vuoi vedere anche la griglia colorata sotto le particelle)
+        wind: [ {val:0, c:[0,0,0,0]}, {val:5, c:[0,0,100,0.3]}, {val:15, c:[0,100,0,0.3]}, {val:30, c:[100,0,0,0.3]} ]
     };
-
-    // PALETTA VENTO (Per le particelle colorate)
-    // Blu scuro -> Azzurro -> Verde -> Giallo -> Rosso Vivo
-    const WIND_COLOR_SCALE = ['#0000ff', '#00c3ff', '#00ff00', '#ffff00', '#ff0000'];
-    const WIND_DOMAIN = [0, 35]; // m/s (0 a 126 km/h)
 
     function getColor(val, type) {
         if (!PALETTES[type]) return [0,0,0,0];
         let stops = PALETTES[type];
         if(type==='rain' && val < 0.05) return [0,0,0,0];
+        if(type==='wind' && val < 1) return [0,0,0,0];
         if(type==='press' && val < 800) return [0,0,0,0];
-
         if(type==='press') val = Math.floor(val/2)*2;
 
         for(let i=0; i<stops.length-1; i++) {
@@ -154,40 +150,20 @@
 
     // INIT MAP
     window.addEventListener('load', function() {
-        document.getElementById('loader').innerText = "Inizializzazione WebGL...";
+        document.getElementById('loader').innerText = "Inizializzazione...";
         map = L.map('map', { zoomControl: false }).setView([37.5, 14.2], 8);
         L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_nolabels/{z}/{x}/{y}{r}.png', { maxZoom: 19, attribution: '©OpenStreetMap, ©CartoDB' }).addTo(map);
 
         map.createPane('gridPane'); map.getPane('gridPane').style.zIndex = 300; 
         map.createPane('labelsPane'); map.getPane('labelsPane').style.zIndex = 500; map.getPane('labelsPane').style.pointerEvents = 'none';
         L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_only_labels/{z}/{x}/{y}{r}.png', { pane: 'labelsPane' }).addTo(map);
-        // Pane per il vento sopra la griglia ma sotto le etichette
-        map.createPane('windPane'); map.getPane('windPane').style.zIndex = 400; map.getPane('windPane').style.pointerEvents = 'none';
+        map.createPane('velocityPane'); map.getPane('velocityPane').style.zIndex = 600; map.getPane('velocityPane').style.pointerEvents = 'none';
 
         initRawGridLayer();
         loadCatalog();
     });
 
-    // --- ADATTATORE DATI PER IL NUOVO MOTORE VENTO ---
-    function adaptDataForWindLayer(jsonData) {
-        const m = jsonData.meta;
-        const uData = jsonData.wind_u.data;
-        const vData = jsonData.wind_v.data;
-        // Il nuovo motore vuole un array unico interlacciato [u0, v0, u1, v1, ...]
-        const grid = new Float32Array(uData.length * 2);
-        for (let i = 0; i < uData.length; i++) {
-            grid[2 * i] = uData[i];
-            grid[2 * i + 1] = vData[i];
-        }
-        return {
-            nx: m.nx, ny: m.ny,
-            lo1: m.lo1, la1: m.la1,
-            dx: m.dx, dy: m.dy,
-            grid: grid
-        };
-    }
-
-    // RAW GRID RENDERER (Mantenuto per Temp/Rain)
+    // RAW GRID RENDERER (Disegna i quadratini)
     function initRawGridLayer() {
         L.FullHeatmap = L.Layer.extend({
             onAdd: function(m) {
@@ -205,11 +181,13 @@
                 this._draw();
             },
             _draw: function() {
-                if (!currentData || !this._c || activeLayer === 'wind') { // Non disegnare se è attivo il vento
-                     if(this._c) this._c.getContext('2d').clearRect(0,0,this._c.width,this._c.height);
-                     return;
-                }
+                if (!currentData || !this._c) return;
                 var ctx = this._c.getContext('2d'); ctx.clearRect(0,0,this._c.width,this._c.height);
+                
+                // Se è attivo il vento, non disegnare i quadratini (per lasciare pulite le particelle)
+                // Oppure rimuovi questo IF se vuoi vedere i quadratini SOTTO le particelle
+                if(activeLayer === 'wind') return;
+
                 var m = currentData.meta;
                 for(var y=0; y<m.ny; y++) {
                     var lat = m.la1 - (y * m.dy);
@@ -261,36 +239,49 @@
 
     function updateMap() {
         if (!currentData) return;
-        
-        // Aggiorna Griglia (se attiva)
         if (heatCanvas) heatCanvas.update();
-        
-        // Rimuovi vecchio layer vento
-        if (windLayer) map.removeLayer(windLayer);
+        if (velocityLayer) map.removeLayer(velocityLayer);
 
         if (activeLayer === 'wind') {
             try {
-                // Adatta i dati per il nuovo motore
-                const vectorFieldData = adaptDataForWindLayer(currentData);
-                
-                // --- CONFIGURAZIONE NUOVO MOTORE VENTO (Colori Dinamici) ---
-                windLayer = L.canvasLayer.vectorFieldAnim(vectorFieldData, {
-                    pane: 'windPane',
-                    paths: 8000,     // Densità molto alta di particelle
-                    age: 100,        // Le particelle vivono a lungo
-                    width: 1.5,      // Larghezza particella
+                velocityLayer = L.velocityLayer({
+                    pane: 'velocityPane',
+                    displayValues: false,
+                    data: [ currentData.wind_u, currentData.wind_v ], 
                     
-                    // LA PARTE CRUCIALE: Colore basato sulla velocità (m/s)
-                    // Usa D3 per interpolare la scala di colori definita sopra
-                    color: d3.scaleSequential()
-                             .domain(WIND_DOMAIN) // Range 0 -> 35 m/s
-                             .interpolator(d3.interpolateRgbBasis(WIND_COLOR_SCALE)),
+                    // --- CONFIGURAZIONE FISICA ESTREMA ---
+                    maxVelocity: 40.0, // Tetto alto per differenziare i venti forti
+                    velocityScale: 0.015, // Velocità base
                     
-                    velocityScale: 0.01, // Fattore di velocità globale movimento
-                    frameRate: 60        // Fluidità massima
+                    particleMultiplier: 1/200, // Densità ottimizzata
+                    particleAge: 100, // Scie lunghe
+                    lineWidth: 2, // Linee ben visibili
+                    frameRate: 60,
+                    opacity: 0.9,
+                    
+                    // --- IL SEGRETO: SCALA COLORI ARCOBALENO ---
+                    // Le particelle useranno questi colori in base alla loro velocità.
+                    // Lento (Blu/Azzurro) -> Medio (Verde/Giallo) -> Forte (Rosso/Viola)
+                    colorScale: [
+                        "rgb(36,104, 180)", // Blu Scuro (Calma)
+                        "rgb(60,157, 194)", 
+                        "rgb(128,205,193)", // Azzurro
+                        "rgb(151,218,168)", 
+                        "rgb(198,231,181)", // Verde Chiaro
+                        "rgb(238,247,217)", 
+                        "rgb(255,238,159)", // Giallo
+                        "rgb(252,217,125)", 
+                        "rgb(255,182,100)", // Arancio
+                        "rgb(252,150,75)", 
+                        "rgb(250,112,52)", 
+                        "rgb(245,64,32)",   // Rosso
+                        "rgb(237,45,28)", 
+                        "rgb(220,24,32)", 
+                        "rgb(180,0,35)"     // Rosso Sangue (Tempesta)
+                    ]
                 });
-                map.addLayer(windLayer);
-            } catch(e) { console.error("Errore Motore Vento:", e); }
+                velocityLayer.addTo(map);
+            } catch(e) { console.log(e); }
         }
     }
 
