@@ -1,7 +1,7 @@
 <!DOCTYPE html>
 <html>
 <head>
-    <title>Sicilia MeteoHub HD</title>
+    <title>Sicilia MeteoHub - RAW RESOLUTION</title>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     
@@ -28,7 +28,7 @@
         .layer-btn:hover { background: rgba(255,255,255,0.1); }
         .layer-btn.active { background: #007bff; color: white; box-shadow: 0 0 10px rgba(0,123,255,0.4); }
 
-        /* BARRA DEL TEMPO IN BASSO */
+        /* BARRA DEL TEMPO */
         #bottom-bar {
             position: absolute; bottom: 0; left: 0; right: 0; height: 90px;
             background: linear-gradient(to top, rgba(0,0,0,0.95), transparent);
@@ -39,7 +39,7 @@
         input[type=range] { flex-grow: 1; height: 6px; cursor: pointer; accent-color: #007bff; }
         #time-label { min-width: 160px; text-align: center; font-weight: bold; font-size: 1.3em; color: #e0e0e0; margin-left: 15px; }
         
-        /* INDICATORI E LOADER */
+        /* LOADER E INDICATORI */
         #loader {
             position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%);
             background: rgba(0,0,0,0.85); padding: 20px 40px; border-radius: 30px; 
@@ -94,7 +94,7 @@
     var activeLayer = 'wind';
     var isPlaying = false;
 
-    // --- PALETTE COLORI ---
+    // PALETTE COLORI
     const PALETTES = {
         temp: [ {val:-10, c:[255,255,255,0.6]}, {val:0, c:[200,200,255,0.6]}, {val:10, c:[0,200,100,0.6]}, {val:20, c:[255,255,0,0.6]}, {val:30, c:[255,140,0,0.6]}, {val:40, c:[200,0,0,0.6]} ],
         rain: [ {val:0, c:[0,0,0,0]}, {val:0.05, c:[0,200,255,0.6]}, {val:2, c:[0,0,255,0.7]}, {val:10, c:[150,0,200,0.8]} ],
@@ -104,14 +104,11 @@
 
     function getColor(val, type) {
         let stops = PALETTES[type];
-        
-        // --- FILTRI DI VISIBILITÀ ---
         if(type==='rain' && val < 0.05) return [0,0,0,0];
         if(type==='wind' && val < 1) return [0,0,0,0];
-        // Protezione Pressione: Se < 800 (es. 0.0), rendi trasparente per evitare schermo rosso
         if(type==='press' && val < 800) return [0,0,0,0]; 
 
-        if(type==='press') val = Math.floor(val/2)*2; // Effetto bande isobare
+        if(type==='press') val = Math.floor(val/2)*2;
 
         for(let i=0; i<stops.length-1; i++) {
             if(val>=stops[i].val && val<=stops[i+1].val) {
@@ -124,32 +121,23 @@
         return [last.c[0], last.c[1], last.c[2], last.c[3]];
     }
 
-    // --- INIZIALIZZAZIONE MAPPA ---
     window.addEventListener('load', function() {
         document.getElementById('loader').innerText = "Disegno Mappa...";
-        
         map = L.map('map', { zoomControl: false }).setView([37.5, 14.2], 8);
         
-        // Mappa Base Scura
         L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_nolabels/{z}/{x}/{y}{r}.png', { 
-            maxZoom: 19,
-            attribution: '©OpenStreetMap, ©CartoDB'
+            maxZoom: 19, attribution: '©OpenStreetMap, ©CartoDB'
         }).addTo(map);
 
-        // Creazione Livelli (Panes) per gestire la sovrapposizione
         map.createPane('gridPane'); map.getPane('gridPane').style.zIndex = 300; 
         map.createPane('labelsPane'); map.getPane('labelsPane').style.zIndex = 500; map.getPane('labelsPane').style.pointerEvents = 'none';
-        
-        // Etichette città sopra tutto
         L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_only_labels/{z}/{x}/{y}{r}.png', { pane: 'labelsPane' }).addTo(map);
-        
         map.createPane('velocityPane'); map.getPane('velocityPane').style.zIndex = 600; map.getPane('velocityPane').style.pointerEvents = 'none';
 
         initHeatmapLayer();
         loadCatalog();
     });
 
-    // --- GESTIONE HEATMAP (Colori di sfondo) ---
     function initHeatmapLayer() {
         L.FullHeatmap = L.Layer.extend({
             onAdd: function(m) {
@@ -168,22 +156,34 @@
             },
             _draw: function() {
                 if (!currentData || !this._c) return;
-                var ctx = this._c.getContext('2d'); ctx.clearRect(0,0,this._c.width,this._c.height);
+                var ctx = this._c.getContext('2d'); 
+                ctx.clearRect(0,0,this._c.width,this._c.height);
+                
                 var m = currentData.meta;
-                // Calcolo preciso della griglia per allinearla al terreno (Montagne/Valli)
-                var p1 = this._map.latLngToContainerPoint([m.la1, m.lo1]);
-                var p2 = this._map.latLngToContainerPoint([m.la1 - (m.dy * (m.ny-1)), m.lo1 + (m.dx * (m.nx-1))]);
-                var w = (p2.x - p1.x) / (m.nx - 1); var h = (p2.y - p1.y) / (m.ny - 1);
-                var dw = Math.ceil(w + 0.5); var dh = Math.ceil(h + 0.5);
-
+                
+                // --- LOGICA RAW RESOLUTION (Quadratini Veri) ---
+                // Invece di una media, calcoliamo i pixel esatti per ogni cella
                 for(var y=0; y<m.ny; y++) {
-                    var lat = m.la1 - (y*m.dy); 
+                    var lat = m.la1 - (y * m.dy);
                     for(var x=0; x<m.nx; x++) {
-                        var lon = m.lo1 + (x*m.dx); 
-                        var p = this._map.latLngToContainerPoint([lat, lon]);
-                        if (p.x < -dw || p.x > this._c.width || p.y < -dh || p.y > this._c.height) continue;
+                        var lon = m.lo1 + (x * m.dx);
                         
-                        var idx = y*m.nx + x, val = 0;
+                        // Proietta l'angolo in alto a sinistra (Top-Left)
+                        var pStart = this._map.latLngToContainerPoint([lat, lon]);
+                        
+                        // Se il punto è fuori schermo (con un margine), saltalo per performance
+                        if (pStart.x < -20 || pStart.x > this._c.width + 20 || pStart.y < -20 || pStart.y > this._c.height + 20) continue;
+
+                        // Proietta l'angolo in basso a destra (Bottom-Right) per avere la dimensione esatta
+                        var pEnd = this._map.latLngToContainerPoint([lat - m.dy, lon + m.dx]);
+                        
+                        // Calcola larghezza e altezza in pixel. Math.ceil per evitare righe bianche tra i quadrati.
+                        var w = Math.ceil(pEnd.x - pStart.x);
+                        var h = Math.ceil(pEnd.y - pStart.y);
+
+                        // Recupera il valore
+                        var idx = y * m.nx + x;
+                        var val = 0;
                         if(activeLayer==='temp') val = currentData.temp[idx]; 
                         else if(activeLayer==='rain') val = currentData.rain[idx];
                         else if(activeLayer==='press') val = currentData.press ? currentData.press[idx] : 0;
@@ -191,9 +191,13 @@
                             let u=currentData.wind_u.data[idx], v=currentData.wind_v.data[idx]; 
                             val = Math.sqrt(u*u+v*v)*3.6; 
                         }
-                        var c = getColor(val, activeLayer); if(c[3]===0) continue; 
+
+                        // Colora
+                        var c = getColor(val, activeLayer); 
+                        if(c[3]===0) continue; 
+                        
                         ctx.fillStyle = `rgba(${c[0]},${c[1]},${c[2]},${c[3]})`; 
-                        ctx.fillRect(Math.floor(p.x), Math.floor(p.y), dw, dh);
+                        ctx.fillRect(Math.floor(pStart.x), Math.floor(pStart.y), w, h);
                     }
                 }
             },
@@ -203,7 +207,6 @@
         map.addLayer(heatCanvas);
     }
 
-    // --- CARICAMENTO DATI ---
     async function loadCatalog() {
         document.getElementById('loader').innerText = "Scarico dati...";
         try {
@@ -231,7 +234,6 @@
         document.getElementById('loader').style.display = 'none';
     }
 
-    // --- AGGIORNAMENTO MAPPA E VENTO ---
     function updateMap() {
         if (!currentData) return;
         if (heatCanvas) heatCanvas.update();
@@ -244,22 +246,21 @@
                     displayValues: false,
                     data: [ currentData.wind_u, currentData.wind_v ], 
                     
-                    // --- CONFIGURAZIONE REALISMO HD ---
-                    maxVelocity: 15,          // Colora il vento forte più velocemente
-                    velocityScale: 0.01,      // Velocità particelle (lenta e fluida)
-                    particleAge: 90,          // Scia lunga
-                    lineWidth: 1,             // Linee sottili ed eleganti
-                    particleMultiplier: 1/150,// ALTA DENSITÀ (Simula flusso reale)
-                    frameRate: 30,            // Animazione fluida
-                    colorScale: ["#ffffff"],  // Particelle bianche
-                    opacity: 0.8              // Leggera trasparenza
+                    // --- VENTO HD ---
+                    maxVelocity: 15,
+                    velocityScale: 0.01,
+                    particleAge: 90,
+                    lineWidth: 1,
+                    particleMultiplier: 1/150, // Densità per realismo
+                    frameRate: 30,
+                    colorScale: ["#ffffff"],
+                    opacity: 0.8
                 });
                 velocityLayer.addTo(map);
             } catch(e) { console.log(e); }
         }
     }
 
-    // --- UI E CONTROLLI ---
     window.setLayer = function(n) {
         activeLayer = n;
         document.querySelectorAll('.layer-btn').forEach(b => b.classList.remove('active'));
@@ -280,7 +281,6 @@
         }, 800);
     }
 
-    // Interazione Mouse (Picker)
     window.addEventListener('load', function(){
         if(!map) return;
         map.on('mousemove', function(e) {
