@@ -61,39 +61,23 @@ def process_data():
             print("KO", flush=True)
             continue
 
-        # --- APERTURA DATASET (Strategia Multipla) ---
+        # --- APERTURA DATASET ---
         try:
-            # 1. VENTO (Livello 10m)
+            # VENTO
             ds_wind = xr.open_dataset(TEMP_FILE, engine='cfgrib', backend_kwargs={'filter_by_keys': {'typeOfLevel': 'heightAboveGround', 'level': 10}})
             
-            # 2. TEMP (Livello 2m)
+            # TEMP
             try: ds_temp = xr.open_dataset(TEMP_FILE, engine='cfgrib', backend_kwargs={'filter_by_keys': {'typeOfLevel': 'heightAboveGround', 'level': 2}})
             except: ds_temp = None
             
-            # 3. PIOGGIA (Superficie - Accumulo)
+            # PIOGGIA
             try: ds_rain = xr.open_dataset(TEMP_FILE, engine='cfgrib', backend_kwargs={'filter_by_keys': {'typeOfLevel': 'surface', 'stepType': 'accum'}})
             except:
                 try: ds_rain = xr.open_dataset(TEMP_FILE, engine='cfgrib', backend_kwargs={'filter_by_keys': {'typeOfLevel': 'surface'}})
                 except: ds_rain = None
 
-            # 4. PRESSIONE (Il pezzo forte)
-            # Cerchiamo in ordine: MeanSeaLevel (prmsl), Surface (sp), o generico
-            ds_press = None
-            press_source = "None"
-            
-            # Tentativo A: Mean Sea Level (Standard Meteo)
-            try: 
-                ds_press = xr.open_dataset(TEMP_FILE, engine='cfgrib', backend_kwargs={'filter_by_keys': {'typeOfLevel': 'meanSea'}})
-                press_source = "MeanSea"
-            except:
-                # Tentativo B: Surface Pressure
-                try: 
-                    ds_press = xr.open_dataset(TEMP_FILE, engine='cfgrib', backend_kwargs={'filter_by_keys': {'typeOfLevel': 'surface'}})
-                    press_source = "Surface"
-                except: pass
-
         except Exception as e: 
-            print(f"ERR GRIB: {e}")
+            print(f"Skip file: {e}")
             continue
 
         steps = range(ds_wind.sizes.get('step', 1))
@@ -145,22 +129,40 @@ def process_data():
                         r_key = next((k for k in ['tp', 'tot_prec', 'apcp'] if k in cut_r), None)
                         if r_key: rain = np.nan_to_num(cut_r[r_key].values)
 
-                    # PRESSIONE (Estrazione Intelligente)
+                    # PRESSIONE - LOGICA INTELLIGENTE
                     press = np.zeros_like(u)
-                    if ds_press:
-                        d_p = ds_press.isel(step=i) if 'step' in ds_press.dims else ds_press
+                    press_source = "None"
+
+                    # 1. Prova Mean Sea Level
+                    try:
+                        ds_p1 = xr.open_dataset(TEMP_FILE, engine='cfgrib', backend_kwargs={'filter_by_keys': {'typeOfLevel': 'meanSea'}})
+                        d_p = ds_p1.isel(step=i) if 'step' in ds_p1.dims else ds_p1
                         d_p = d_p.sortby('latitude', ascending=False).sortby('longitude', ascending=True)
                         cut_p = d_p.where(mask, drop=True)
-                        # Cerca chiavi comuni per la pressione
-                        p_key = next((k for k in ['prmsl', 'msl', 'sp', 'pres'] if k in cut_p), None)
-                        
-                        if p_key: 
-                            raw_p = np.nan_to_num(cut_p[p_key].values)
-                            # Se è in Pascal (> 80000), converti in hPa
-                            if np.max(raw_p) > 2000: raw_p = raw_p / 100.0
-                            press = raw_p
+                        p_key = next((k for k in ['prmsl', 'msl'] if k in cut_p), None)
+                        if p_key:
+                            val = np.nan_to_num(cut_p[p_key].values)
+                            if np.max(val) > 100: # Se il valore è valido (>100)
+                                press = val
+                                press_source = "MeanSea"
+                    except: pass
+
+                    # 2. Se MeanSea ha fallito (è ancora 0), prova Surface Pressure
+                    if np.max(press) < 100:
+                        try:
+                            ds_p2 = xr.open_dataset(TEMP_FILE, engine='cfgrib', backend_kwargs={'filter_by_keys': {'typeOfLevel': 'surface', 'shortName': 'sp'}})
+                            d_p = ds_p2.isel(step=i) if 'step' in ds_p2.dims else ds_p2
+                            d_p = d_p.sortby('latitude', ascending=False).sortby('longitude', ascending=True)
+                            cut_p = d_p.where(mask, drop=True)
+                            val = np.nan_to_num(cut_p['sp'].values)
+                            press = val
+                            press_source = "Surface"
+                        except: pass
                     
-                    # LOG DI CONTROLLO (Solo primo step)
+                    # Conversione Pa -> hPa
+                    if np.max(press) > 2000: press = press / 100.0
+
+                    # LOG DEBUG
                     if i == 0:
                         print(f" [DEBUG: Press Source={press_source}, MaxVal={np.max(press):.1f}]", end="")
 
@@ -186,9 +188,7 @@ def process_data():
                     
                     if not any(x['hour'] == step_hours for x in catalog):
                         catalog.append({"file": out_name, "label": f"{valid_dt.strftime('%d/%m %H:00')}", "hour": step_hours})
-            except Exception as e: 
-                # print(f"Err Step: {e}") 
-                continue
+            except Exception as e: continue
         print(" -> OK")
 
     if os.path.exists(TEMP_FILE): os.remove(TEMP_FILE)
@@ -198,7 +198,7 @@ def process_data():
         with open(f"{TEMP_DIR}/catalog.json", 'w') as f: json.dump(catalog, f)
         if os.path.exists(FINAL_DIR): shutil.rmtree(FINAL_DIR)
         shutil.move(TEMP_DIR, FINAL_DIR)
-        print(f"COMPLETATO! {len(catalog)} frame generati.")
+        print("COMPLETATO.")
     else: sys.exit(1)
 
 if __name__ == "__main__":
