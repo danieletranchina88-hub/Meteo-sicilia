@@ -136,6 +136,38 @@
         return [last.c[0], last.c[1], last.c[2], last.c[3]];
     }
 
+    // ====== SOLO PER IL VENTO: GRADIENTE CONTINUO BLU->ROSSO ======
+    function clamp01(t){ return Math.max(0, Math.min(1, t)); }
+    function lerp(a,b,t){ return a + (b-a)*t; }
+    function windColorFromSpeedMs(speedMs){
+        // 0 -> blu, max -> rosso, gradiente continuo
+        // max realistica: 35 m/s ~ 126 km/h. Puoi aumentare se vuoi più "spalmatura"
+        var MAX_MS = 35.0;
+        var t = clamp01(speedMs / MAX_MS);
+
+        // Gradient keypoints (blu -> ciano -> verde -> giallo -> arancio -> rosso)
+        // così non è "piatto" ma resta continuo e leggibile
+        var stops = [
+            {t:0.00, c:[0, 60, 255]},     // blu
+            {t:0.25, c:[0, 220, 255]},    // ciano
+            {t:0.45, c:[0, 255, 120]},    // verde acqua
+            {t:0.62, c:[255, 255, 0]},    // giallo
+            {t:0.80, c:[255, 140, 0]},    // arancio
+            {t:1.00, c:[255, 0, 0]}       // rosso
+        ];
+
+        for (var i=0; i<stops.length-1; i++){
+            if(t>=stops[i].t && t<=stops[i+1].t){
+                var tt = (t - stops[i].t) / (stops[i+1].t - stops[i].t);
+                var r = Math.round(lerp(stops[i].c[0], stops[i+1].c[0], tt));
+                var g = Math.round(lerp(stops[i].c[1], stops[i+1].c[1], tt));
+                var b = Math.round(lerp(stops[i].c[2], stops[i+1].c[2], tt));
+                return "rgb(" + r + "," + g + "," + b + ")";
+            }
+        }
+        return "rgb(255,0,0)";
+    }
+
     // INIT MAP
     window.addEventListener('load', function() {
         document.getElementById('loader').innerText = "Inizializzazione...";
@@ -172,7 +204,7 @@
                 if (!currentData || !this._c) return;
                 var ctx = this._c.getContext('2d'); ctx.clearRect(0,0,this._c.width,this._c.height);
                 
-                if(activeLayer === 'wind') return; // Niente griglia per il vento
+                if(activeLayer === 'wind') return;
 
                 var m = currentData.meta;
                 for(var y=0; y<m.ny; y++) {
@@ -230,51 +262,41 @@
 
         if (activeLayer === 'wind') {
             try {
+                // ---- PARAMETRI "PIÙ FISICI" (percepiti) ----
+                // maxVelocity: alto per non tagliare le tempeste
+                // velocityScale: più alto del tuo (0.002) per distinguere bene 5 vs 20 vs 60 km/h
+                // particleMultiplier: densità ragionevole (se lo alzi troppo diventa caos e sembra "veloce" anche con vento debole)
+                // particleAge: scia lunga per percepire direzione e differenze
                 velocityLayer = L.velocityLayer({
                     pane: 'velocityPane',
                     displayValues: false,
-                    data: [ currentData.wind_u, currentData.wind_v ], 
+                    data: [ currentData.wind_u, currentData.wind_v ],
+
+                    velocityScale: 0.010,   // <<<<< CHIAVE: differenze molto più evidenti tra velocità
+                    maxVelocity: 70.0,      // m/s max (sovrastima volutamente per non saturare mai)
                     
-                    // --- CALIBRAZIONE FISICA CONTRASTATA ---
-                    // velocityScale MOLTO BASSO (0.002): Rende i venti deboli quasi fermi.
-                    // maxVelocity MOLTO ALTO (50): Permette ai venti forti di non essere "tagliati".
-                    velocityScale: 0.002, 
-                    maxVelocity: 50.0, 
-                    
-                    particleMultiplier: 1/120, // Densità bilanciata
-                    lineWidth: 2,             // Linea marcata per vedere il colore
-                    particleAge: 90,          // Scia media (non troppo lunga per evitare caos)
+                    particleMultiplier: 1/180,
+                    lineWidth: 2,
+                    particleAge: 120,
                     frameRate: 60,
                     opacity: 1.0,
-                    
-                    // --- SCALA COLORI CLASSICA (RAINBOW) ---
-                    // Blu scuro (Lento) -> Azzurro -> Verde -> Giallo -> Rosso (Veloce) -> Viola (Estremo)
-                    colorScale: [
-                        "#000033", // Blu Notte Profondo (Quasi fermo)
-                        "#000066",
-                        "#000099",
-                        "#0000cc",
-                        "#0000ff", // Blu Puro
-                        "#0044ff",
-                        "#0088ff", // Azzurro
-                        "#00ccff",
-                        "#00ffff", // Ciano
-                        "#00ffcc",
-                        "#00ff88",
-                        "#00ff44",
-                        "#00ff00", // Verde Puro (Medio)
-                        "#88ff00",
-                        "#ccff00",
-                        "#ffff00", // Giallo (Forte)
-                        "#ffcc00",
-                        "#ff8800", // Arancio
-                        "#ff4400",
-                        "#ff0000", // Rosso Puro (Tempesta)
-                        "#cc0000",
-                        "#990000",
-                        "#ff00ff"  // Viola (Uragano)
-                    ]
+
+                    // ---- COLORE CONTINUO PER VELOCITÀ ----
+                    // leaflet-velocity accetta un array, ma per renderlo "continuo" gli diamo una scala fitta
+                    // generata in base alla funzione blu->rosso.
+                    colorScale: (function(){
+                        var arr = [];
+                        // 0..35 m/s (0..126 km/h) in 120 step: gradiente molto fluido
+                        var steps = 120;
+                        var maxMs = 35.0;
+                        for (var i=0; i<steps; i++){
+                            var ms = (i/(steps-1)) * maxMs;
+                            arr.push(windColorFromSpeedMs(ms));
+                        }
+                        return arr;
+                    })()
                 });
+
                 velocityLayer.addTo(map);
             } catch(e) { console.log(e); }
         }
