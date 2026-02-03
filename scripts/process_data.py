@@ -61,34 +61,43 @@ def process_data():
             print("KO", flush=True)
             continue
 
+        # --- APERTURA DATASET (Strategia Multipla) ---
         try:
-            # 1. VENTO
+            # 1. VENTO (Livello 10m)
             ds_wind = xr.open_dataset(TEMP_FILE, engine='cfgrib', backend_kwargs={'filter_by_keys': {'typeOfLevel': 'heightAboveGround', 'level': 10}})
             
-            # 2. TEMP
+            # 2. TEMP (Livello 2m)
             try: ds_temp = xr.open_dataset(TEMP_FILE, engine='cfgrib', backend_kwargs={'filter_by_keys': {'typeOfLevel': 'heightAboveGround', 'level': 2}})
             except: ds_temp = None
             
-            # 3. PIOGGIA
+            # 3. PIOGGIA (Superficie - Accumulo)
             try: ds_rain = xr.open_dataset(TEMP_FILE, engine='cfgrib', backend_kwargs={'filter_by_keys': {'typeOfLevel': 'surface', 'stepType': 'accum'}})
             except:
                 try: ds_rain = xr.open_dataset(TEMP_FILE, engine='cfgrib', backend_kwargs={'filter_by_keys': {'typeOfLevel': 'surface'}})
                 except: ds_rain = None
 
-            # 4. PRESSIONE (Strategia Multipla)
+            # 4. PRESSIONE (Il pezzo forte)
+            # Cerchiamo in ordine: MeanSeaLevel (prmsl), Surface (sp), o generico
             ds_press = None
-            # Tentativo A: Mean Sea Level (Standard meteo)
+            press_source = "None"
+            
+            # Tentativo A: Mean Sea Level (Standard Meteo)
             try: 
                 ds_press = xr.open_dataset(TEMP_FILE, engine='cfgrib', backend_kwargs={'filter_by_keys': {'typeOfLevel': 'meanSea'}})
+                press_source = "MeanSea"
             except:
-                # Tentativo B: Surface Pressure (Se manca il livello mare)
+                # Tentativo B: Surface Pressure
                 try: 
-                    ds_press = xr.open_dataset(TEMP_FILE, engine='cfgrib', backend_kwargs={'filter_by_keys': {'typeOfLevel': 'surface', 'shortName': 'sp'}})
-                except: ds_press = None
+                    ds_press = xr.open_dataset(TEMP_FILE, engine='cfgrib', backend_kwargs={'filter_by_keys': {'typeOfLevel': 'surface'}})
+                    press_source = "Surface"
+                except: pass
 
-        except: continue
+        except Exception as e: 
+            print(f"ERR GRIB: {e}")
+            continue
 
         steps = range(ds_wind.sizes.get('step', 1))
+        
         for i in steps:
             try:
                 raw_step = ds_wind.step.values[i]
@@ -108,6 +117,7 @@ def process_data():
                     u = np.nan_to_num(cut_w[u_key].values)
                     v = np.nan_to_num(cut_w[v_key].values)
                     
+                    # Geometria
                     lat = cut_w.latitude.values
                     lon = cut_w.longitude.values
                     ny, nx = u.shape
@@ -117,6 +127,7 @@ def process_data():
                     lo2 = lo1 + (nx - 1) * dx
                     la2 = la1 - (ny - 1) * dy
 
+                    # TEMP
                     temp = np.zeros_like(u)
                     if ds_temp:
                         d_t = ds_temp.isel(step=i) if 'step' in ds_temp.dims else ds_temp
@@ -125,6 +136,7 @@ def process_data():
                         t_key = next((k for k in ['t2m','t'] if k in cut_t), None)
                         if t_key: temp = cut_t[t_key].values - 273.15
                     
+                    # RAIN
                     rain = np.zeros_like(u)
                     if ds_rain:
                         d_r = ds_rain.isel(step=i) if 'step' in ds_rain.dims else ds_rain
@@ -133,18 +145,24 @@ def process_data():
                         r_key = next((k for k in ['tp', 'tot_prec', 'apcp'] if k in cut_r), None)
                         if r_key: rain = np.nan_to_num(cut_r[r_key].values)
 
+                    # PRESSIONE (Estrazione Intelligente)
                     press = np.zeros_like(u)
                     if ds_press:
                         d_p = ds_press.isel(step=i) if 'step' in ds_press.dims else ds_press
                         d_p = d_p.sortby('latitude', ascending=False).sortby('longitude', ascending=True)
                         cut_p = d_p.where(mask, drop=True)
-                        # Cerchiamo prmsl (Mean Sea Level) o sp (Surface)
-                        p_key = next((k for k in ['prmsl', 'msl', 'sp'] if k in cut_p), None)
+                        # Cerca chiavi comuni per la pressione
+                        p_key = next((k for k in ['prmsl', 'msl', 'sp', 'pres'] if k in cut_p), None)
+                        
                         if p_key: 
-                            val = np.nan_to_num(cut_p[p_key].values)
-                            # Se è in Pascal (>80000), converti in hPa
-                            if np.max(val) > 2000: val = val / 100.0
-                            press = val
+                            raw_p = np.nan_to_num(cut_p[p_key].values)
+                            # Se è in Pascal (> 80000), converti in hPa
+                            if np.max(raw_p) > 2000: raw_p = raw_p / 100.0
+                            press = raw_p
+                    
+                    # LOG DI CONTROLLO (Solo primo step)
+                    if i == 0:
+                        print(f" [DEBUG: Press Source={press_source}, MaxVal={np.max(press):.1f}]", end="")
 
                     valid_dt = run_dt + timedelta(hours=step_hours)
                     iso_date = valid_dt.strftime("%Y-%m-%dT%H:%M:%S.000Z")
@@ -168,7 +186,9 @@ def process_data():
                     
                     if not any(x['hour'] == step_hours for x in catalog):
                         catalog.append({"file": out_name, "label": f"{valid_dt.strftime('%d/%m %H:00')}", "hour": step_hours})
-            except: continue
+            except Exception as e: 
+                # print(f"Err Step: {e}") 
+                continue
         print(" -> OK")
 
     if os.path.exists(TEMP_FILE): os.remove(TEMP_FILE)
@@ -178,7 +198,7 @@ def process_data():
         with open(f"{TEMP_DIR}/catalog.json", 'w') as f: json.dump(catalog, f)
         if os.path.exists(FINAL_DIR): shutil.rmtree(FINAL_DIR)
         shutil.move(TEMP_DIR, FINAL_DIR)
-        print("COMPLETATO.")
+        print(f"COMPLETATO! {len(catalog)} frame generati.")
     else: sys.exit(1)
 
 if __name__ == "__main__":
