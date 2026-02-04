@@ -323,35 +323,53 @@
         }
     }
 
-    // 4. VENTO NOAA REALISTICO
+    // 4. VENTO NOAA DINAMICO (colore = velocità locale)
     function updateWind() {
-        if(velocityLayer) map.removeLayer(velocityLayer);
-        if(activeLayer === 'wind' && currentData) {
+        if (velocityLayer) map.removeLayer(velocityLayer);
+
+        if (activeLayer === 'wind' && currentData) {
             try {
+                // u/v sono in m/s: scala colori e maxVelocity vanno in m/s
+                const MAX_MS = 35.0; // ~126 km/h
+
+                // Scala colori NOAA (Viola/Indaco -> Blu -> Verde -> Giallo -> Arancio -> Rosso)
+                const noaaColors = [
+                    "#2b004f", // viola scuro (calma)
+                    "#4b0082", // indaco
+                    "#0000ff", // blu
+                    "#0080ff", // azzurro
+                    "#00ffff", // ciano
+                    "#00ff80", // verde acqua
+                    "#00ff00", // verde
+                    "#80ff00", // giallo-verde
+                    "#ffff00", // giallo
+                    "#ffb000", // arancio
+                    "#ff5500", // arancio/rosso
+                    "#ff0000"  // rosso (estremo)
+                ];
+
+                // Funzione dinamica: velocità (m/s) -> colore
+                const speedToColor = d3.scaleLinear()
+                    .domain(noaaColors.map((_, i) => (i / (noaaColors.length - 1)) * MAX_MS))
+                    .range(noaaColors)
+                    .clamp(true);
+
                 velocityLayer = L.velocityLayer({
                     displayValues: false,
                     data: [ currentData.wind_u, currentData.wind_v ],
-                    
-                    // --- FISICA REALISTICA ---
-                    maxVelocity: 25.0, 
-                    velocityScale: 0.008, // Bassa scala = movimento realistico (non schizza)
-                    particleMultiplier: 1/100, // Meno particelle = più pulizia
-                    lineWidth: 1.5,
+
+                    // --- FISICA: più differenza tra velocità ---
+                    maxVelocity: MAX_MS,
+                    velocityScale: 0.010,       // aumenta la separazione visiva
+                    particleMultiplier: 1/140,  // più pulito ma ancora pieno
+                    lineWidth: 1.6,
                     frameRate: 60,
-                    
-                    // --- COLORI NOAA (Viola -> Blu -> Verde -> Giallo) ---
-                    colorScale: [
-                        "#1a0033", // Viola scuro (calma)
-                        "#4b0082", // Indaco
-                        "#0000ff", // Blu
-                        "#0080ff", // Azzurro
-                        "#00ffff", // Ciano
-                        "#00ff80", // Verde acqua
-                        "#00ff00", // Verde
-                        "#80ff00", // Verde acido
-                        "#ffff00"  // Giallo (forte)
-                    ]
+
+                    // --- COLORI DINAMICI (NOAA) ---
+                    // Leaflet-velocity chiama la funzione con la velocità (m/s)
+                    colorScale: (v) => speedToColor(v)
                 });
+
                 velocityLayer.addTo(map);
             } catch(e){}
         }
@@ -403,3 +421,4 @@
 </script>
 </body>
 </html>
+```0
