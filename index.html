@@ -1,7 +1,7 @@
 <!DOCTYPE html>
 <html>
 <head>
-    <title>Sicilia MeteoHub - REALISTIC</title>
+    <title>Sicilia MeteoHub - NOAA EDITION</title>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
     
@@ -15,8 +15,9 @@
         body { margin: 0; background: #111; font-family: 'Segoe UI', sans-serif; color: white; overflow: hidden; }
         #map { position: absolute; top: 0; bottom: 0; width: 100%; background: #111; }
         
-        /* UI */
+        /* UI CONTROL */
         #ui-container { position: absolute; top: 10px; right: 10px; z-index: 1000; display: flex; flex-direction: column; gap: 10px; align-items: flex-end; }
+        
         .panel { background: rgba(0,0,0,0.85); backdrop-filter: blur(4px); padding: 8px; border-radius: 12px; border: 1px solid #444; }
         
         .layer-btn { 
@@ -43,6 +44,7 @@
         #time-label { font-size: 1.4em; font-weight: bold; margin-left: 15px; min-width: 140px; text-align: center; }
         input[type=range] { flex-grow: 1; height: 5px; cursor: pointer; accent-color: #0088ff; }
 
+        /* Pixel Nitidi */
         canvas { image-rendering: pixelated; }
     </style>
 </head>
@@ -80,13 +82,14 @@
 </div>
 
 <script>
+    // --- VARIABILI GLOBALI ---
     var map, velocityLayer, heatCanvas, isoCanvas, gridCanvas;
     var currentData = null, catalog = [];
     var activeLayer = 'wind', showIso = false, showGrid = false, isPlaying = false;
     var baseLayers = {};
-    var isLightMode = false; // Gestisce colore isobare e testo
+    var isLightMode = false;
 
-    // --- CONFIGURAZIONE FISICA ---
+    // --- PALETTE COLORI (NOAA STYLE) ---
     const PALETTES = {
         temp: [{v:-10,c:[255,255,255]},{v:0,c:[180,180,255]},{v:10,c:[0,200,100]},{v:20,c:[255,255,0]},{v:30,c:[255,140,0]},{v:40,c:[200,0,0]}],
         rain: [{v:0,c:[0,0,0,0]},{v:0.1,c:[0,200,255]},{v:2,c:[0,0,255]},{v:10,c:[150,0,200]}],
@@ -99,11 +102,12 @@
         if(!p) return [0,0,0,0];
         if(type==='rain' && val<0.1) return [0,0,0,0];
         if(type==='wind' && val<1) return [0,0,0,0];
+        
         for(let i=0; i<p.length-1; i++) {
             if(val>=p[i].v && val<=p[i+1].v) {
                 let t = (val-p[i].v)/(p[i+1].v-p[i].v);
                 let c1=p[i].c, c2=p[i+1].c;
-                let a1=c1.length>3?c1[3]:0.6, a2=c2.length>3?c2[3]:0.6;
+                let a1 = c1.length>3?c1[3]:0.6, a2 = c2.length>3?c2[3]:0.6;
                 if(type==='press') { a1=c1.length>3?c1[3]:0.6; a2=c2.length>3?c2[3]:0.6; }
                 return [Math.round(c1[0]+(c2[0]-c1[0])*t), Math.round(c1[1]+(c2[1]-c1[1])*t), Math.round(c1[2]+(c2[2]-c1[2])*t), a1+(a2-a1)*t];
             }
@@ -111,21 +115,21 @@
         let last=p[p.length-1]; return [last.c[0],last.c[1],last.c[2], last.length>3?last[3]:0.6];
     }
 
-    // --- SETUP ---
-    window.onload = function() {
+    // --- SETUP INIZIALE ---
+    window.addEventListener('load', function() {
         try {
             map = L.map('map', { zoomControl: false }).setView([37.5, 14.2], 8);
             
             baseLayers.dark = L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_nolabels/{z}/{x}/{y}{r}.png').addTo(map);
-            baseLayers.map = L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {opacity:1.0}); // Opacità piena per OSM
+            baseLayers.map = L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {opacity:1.0}); // Mappa chiara
             
             L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_only_labels/{z}/{x}/{y}{r}.png', {zIndex:600}).addTo(map);
 
             createCanvasLayers();
             loadData();
             
-        } catch(e) { document.getElementById('unit-display').innerText="Errore Init"; }
-    };
+        } catch(e) { document.getElementById('unit-display').innerText = "Errore Init"; }
+    });
 
     function setBase(type) {
         document.querySelectorAll('.map-toggle').forEach(b => b.classList.remove('active'));
@@ -140,19 +144,24 @@
             baseLayers.map.addTo(map); 
             isLightMode = true;
         }
-        redrawAll(); // Ridisegna isobare col colore giusto
+        redrawAll(); // Ridisegna per cambiare colore isobare
     }
 
+    // --- CARICAMENTO DATI ---
     async function loadData() {
         try {
-            let r = await fetch('data_weather/catalog.json?t=' + Date.now());
+            let r = await fetch('data_weather/catalog.json?t=' + Date.now()); // Anti-cache
             if(!r.ok) throw new Error("404");
             catalog = await r.json();
+            
             if(catalog.length===0) throw new Error("Empty");
+
             document.getElementById('time-slider').max = catalog.length - 1;
             document.getElementById('time-slider').addEventListener('input', (e) => loadStep(parseInt(e.target.value)));
+            
             await loadStep(0);
             document.getElementById('unit-display').innerText = "Pronto";
+
         } catch(e) { document.getElementById('unit-display').innerText = "Errore Dati"; }
     }
 
@@ -187,7 +196,9 @@
         map.on('moveend resize', redrawAll);
     }
 
-    // 1. HEATMAP (Overlap Fix)
+    // --- RENDERING ---
+
+    // 1. HEATMAP (Dati statici)
     function drawHeatmap() {
         let ctx = heatCanvas.getContext('2d');
         let s = map.getSize(); heatCanvas.width=s.x; heatCanvas.height=s.y;
@@ -232,7 +243,7 @@
         }
     }
 
-    // 2. ISOBARE (Auto-Color: Nere su chiaro, Bianche su scuro)
+    // 2. ISOBARE (Smart Colors)
     function drawIsobars() {
         let ctx = isoCanvas.getContext('2d');
         let s = map.getSize(); isoCanvas.width=s.x; isoCanvas.height=s.y;
@@ -247,12 +258,11 @@
         ctx.lineWidth=1.5; ctx.font="bold 12px Arial"; ctx.textAlign="center"; ctx.textBaseline="middle";
 
         contours.forEach(c => {
-            // COLORE DINAMICO ISOBARE
             if(isLightMode) {
-                // Su mappa chiara: Nero (basse) o Grigio Scuro (alte)
+                // Nero per contrasto su mappa chiara
                 ctx.strokeStyle = (c.value < 1013) ? "rgba(0,0,0,0.8)" : "rgba(80,80,80,0.8)";
             } else {
-                // Su mappa scura: Blu (basse) o Rosso (alte)
+                // Blu/Rosso su mappa scura
                 ctx.strokeStyle = (c.value < 1013) ? "rgba(100,100,255,0.9)" : "rgba(255,100,100,0.9)";
                 if(Math.abs(c.value-1013)<1) ctx.strokeStyle="rgba(255,255,255,0.9)";
             }
@@ -272,18 +282,14 @@
             });
             ctx.stroke();
 
-            // Etichette (Bianche con sfondo scuro, o Nere con sfondo chiaro)
             pathArr.forEach(pts => {
                 if(pts.length > 40) {
                     let mid = pts[Math.floor(pts.length/2)];
-                    
-                    if(isLightMode) {
-                        ctx.fillStyle="rgba(255,255,255,0.8)"; ctx.fillRect(mid.x-15, mid.y-8, 30, 16);
-                        ctx.fillStyle="#000"; 
-                    } else {
-                        ctx.fillStyle="rgba(0,0,0,0.8)"; ctx.fillRect(mid.x-15, mid.y-8, 30, 16);
-                        ctx.fillStyle="#fff";
-                    }
+                    // Sfondo etichetta
+                    ctx.fillStyle = isLightMode ? "rgba(255,255,255,0.8)" : "rgba(0,0,0,0.7)";
+                    ctx.fillRect(mid.x-15, mid.y-8, 30, 16);
+                    // Testo
+                    ctx.fillStyle = isLightMode ? "#000" : "#fff";
                     ctx.fillText(Math.round(c.value), mid.x, mid.y);
                 }
             });
@@ -301,10 +307,9 @@
         let b = map.getBounds();
         let step = map.getZoom() > 9 ? 0.1 : 0.5;
         
-        // Griglia Nera su chiaro, Bianca su scuro
         ctx.strokeStyle = isLightMode ? "rgba(0,0,0,0.4)" : "rgba(255,255,255,0.3)";
-        ctx.fillStyle = isLightMode ? "#000" : "#fff";
         ctx.font = "10px Monospace";
+        ctx.fillStyle = isLightMode ? "#000" : "#fff";
 
         for(let lon=Math.floor(b.getWest()); lon<=Math.ceil(b.getEast()); lon+=step) {
             let x = map.latLngToContainerPoint([b.getSouth(), lon]).x;
@@ -318,7 +323,7 @@
         }
     }
 
-    // 4. VENTO REALISTICO (Configurazione Fisica)
+    // 4. VENTO NOAA REALISTICO
     function updateWind() {
         if(velocityLayer) map.removeLayer(velocityLayer);
         if(activeLayer === 'wind' && currentData) {
@@ -326,20 +331,33 @@
                 velocityLayer = L.velocityLayer({
                     displayValues: false,
                     data: [ currentData.wind_u, currentData.wind_v ],
-                    // PARAMETRI FISICI CALIBRATI PER IL REALISMO
+                    
+                    // --- FISICA REALISTICA ---
                     maxVelocity: 25.0, 
-                    velocityScale: 0.008, // Ridotto per evidenziare la differenza lento/veloce
-                    particleMultiplier: 1/100, // Densità ridotta per pulizia visiva
-                    lineWidth: 1.5, // Linee più visibili
-                    frameRate: 60, // Fluidità massima
-                    colorScale: ["#001f4d", "#003380", "#004db3", "#0066e6", "#0088ff", "#00aaff", "#00ccff", "#00ffff", "#33ffcc", "#66ff99", "#99ff66", "#ccff33", "#ffff00", "#ffcc00", "#ff9900", "#ff6600", "#ff3300", "#ff0000"]
+                    velocityScale: 0.008, // Bassa scala = movimento realistico (non schizza)
+                    particleMultiplier: 1/100, // Meno particelle = più pulizia
+                    lineWidth: 1.5,
+                    frameRate: 60,
+                    
+                    // --- COLORI NOAA (Viola -> Blu -> Verde -> Giallo) ---
+                    colorScale: [
+                        "#1a0033", // Viola scuro (calma)
+                        "#4b0082", // Indaco
+                        "#0000ff", // Blu
+                        "#0080ff", // Azzurro
+                        "#00ffff", // Ciano
+                        "#00ff80", // Verde acqua
+                        "#00ff00", // Verde
+                        "#80ff00", // Verde acido
+                        "#ffff00"  // Giallo (forte)
+                    ]
                 });
                 velocityLayer.addTo(map);
             } catch(e){}
         }
     }
 
-    // --- UTILS ---
+    // --- INTERAZIONE ---
     window.setLayer = function(type) {
         activeLayer = type;
         document.querySelectorAll('.layer-btn').forEach(b => { if(!b.id) b.classList.remove('active'); });
