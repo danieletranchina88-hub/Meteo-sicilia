@@ -1,7 +1,7 @@
 <!DOCTYPE html>
 <html>
 <head>
-    <title>Sicilia MeteoHub - HIGH RES</title>
+    <title>Sicilia MeteoHub - SMOOTH HD</title>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
     
@@ -56,7 +56,12 @@
         input[type=range] { flex-grow: 1; height: 5px; cursor: pointer; }
         #time-label { min-width: 140px; text-align: center; font-weight: 800; font-size: 1.4em; margin-left: 15px; text-shadow: 0 2px 5px black; }
         
-        canvas { touch-action: none; }
+        /* CSS MAGIC: Sfumatura per eliminare la griglia */
+        .smooth-layer {
+            filter: blur(4px); /* Sfuoca i pixel quadrati */
+            opacity: 0.9;
+            transform: scale(1.02); /* Leggero zoom per coprire i bordi */
+        }
     </style>
 </head>
 <body>
@@ -95,13 +100,13 @@
     var map, velocityLayer, heatCanvas, isobarCanvas;
     var currentData = null, catalog = [], activeLayer = 'wind', showIsobars = false, isPlaying = false;
     
-    // --- PALETTE COLORI AD ALTA SENSIBILITÀ ---
+    // --- PALETTE COLORI ---
     const PALETTES = {
         temp: [{v:-10,c:[255,255,255,0.6]},{v:0,c:[180,180,255,0.6]},{v:10,c:[0,200,100,0.6]},{v:20,c:[255,255,0,0.6]},{v:30,c:[255,140,0,0.6]},{v:40,c:[200,0,0,0.6]}],
         rain: [{v:0,c:[0,0,0,0]},{v:0.1,c:[0,200,255,0.6]},{v:2,c:[0,0,255,0.7]},{v:10,c:[150,0,200,0.8]}],
         rh:   [{v:20,c:[160,100,50,0.6]},{v:40,c:[200,200,200,0.4]},{v:60,c:[100,255,100,0.5]},{v:80,c:[0,150,255,0.6]},{v:95,c:[0,0,150,0.8]}],
         
-        // NUOVA PALETTE PRESSIONE: Molto più dettagliata tra 990 e 1020
+        // PALETTE PRESSIONE SENSIBILE
         press:[
             {v:980, c:[130,0,180,0.8]},   // Ciclone profondo (Viola)
             {v:995, c:[0,0,255,0.7]},     // Bassa Pressione (Blu scuro)
@@ -200,13 +205,13 @@
         }
     }
 
-    // --- CANVAS OTTIMIZZATO PER RISOLUZIONE 2.2KM ---
+    // --- CANVAS SMOOTH (Sfumato) ---
     function initRawGridLayer() {
         L.FullHeatmap = L.Layer.extend({
             onAdd: function(m) {
-                this._c = L.DomUtil.create('canvas', 'leaflet-layer');
+                this._c = L.DomUtil.create('canvas', 'leaflet-layer smooth-layer'); // AGGIUNTA CLASSE SMOOTH
                 this._c.style.pointerEvents = 'none';
-                this._c.style.imageRendering = 'pixelated'; // Importante per la nitidezza
+                // RIMOSSO image-rendering: pixelated per favorire il blur naturale
                 m.getPane('gridPane').appendChild(this._c);
                 m.on('moveend resize', this._reset, this);
                 this._reset();
@@ -225,15 +230,14 @@
                 }
                 var ctx = this._c.getContext('2d'); ctx.clearRect(0,0,this._c.width,this._c.height);
                 var m = currentData.meta;
-                var b = this._map.getBounds(); // Disegna solo visibile
+                var b = this._map.getBounds(); 
                 
-                // Calcolo dimensione pixel in base allo zoom
-                // Garantisce che i pixel siano sempre "chiusi" tra loro
                 var p1 = this._map.latLngToContainerPoint([m.la1, m.lo1]);
                 var p2 = this._map.latLngToContainerPoint([m.la1 - m.dy, m.lo1 + m.dx]);
-                var pxW = Math.ceil(p2.x - p1.x);
-                var pxH = Math.ceil(p2.y - p1.y);
-                if (pxW < 1) pxW = 1; if (pxH < 1) pxH = 1;
+                
+                // Sovrapposizione pixel per chiudere i buchi (effetto smooth)
+                var pxW = Math.ceil(p2.x - p1.x) + 1;
+                var pxH = Math.ceil(p2.y - p1.y) + 1;
 
                 for(var y=0; y<m.ny; y++) {
                     var lat = m.la1 - (y * m.dy);
@@ -253,7 +257,6 @@
                         if(c[3] > 0) {
                              var p = this._map.latLngToContainerPoint([lat, lon]);
                              ctx.fillStyle = `rgba(${c[0]},${c[1]},${c[2]},${c[3]})`; 
-                             // Usa dimensione pixel calcolata
                              ctx.fillRect(Math.floor(p.x), Math.floor(p.y), pxW, pxH);
                         }
                     }
@@ -265,7 +268,7 @@
         map.addLayer(heatCanvas);
     }
 
-    // --- ISOBARE CON ETICHETTE LEGGIBILI ---
+    // --- ISOBARE ---
     function initIsobarLayer() {
         L.IsobarLayer = L.Layer.extend({
             onAdd: function(m) {
@@ -288,20 +291,14 @@
                 }
                 var ctx = this._c.getContext('2d'); ctx.clearRect(0,0,this._c.width,this._c.height);
                 var m = currentData.meta;
-                // Genera isobare ogni 2 hPa
                 var contours = d3.contours().size([m.nx, m.ny]).thresholds(d3.range(960, 1050, 2))(currentData.press);
                 
-                ctx.lineWidth = 1.2; 
-                ctx.font = "bold 13px Roboto, Arial"; 
-                ctx.textAlign = "center"; 
-                ctx.textBaseline = "middle";
+                ctx.lineWidth = 1.2; ctx.font = "bold 13px Roboto, Arial"; ctx.textAlign = "center"; ctx.textBaseline = "middle";
                 
                 contours.forEach(function(contour) {
                     var val = contour.value;
-                    // Colore linea
                     ctx.strokeStyle = (val < 1013) ? "rgba(200, 200, 255, 0.6)" : "rgba(255, 200, 200, 0.6)"; 
                     if(Math.abs(val - 1013) < 1) ctx.strokeStyle = "rgba(255,255,255,0.8)";
-                    
                     ctx.beginPath();
                     var pathArr = [];
                     contour.coordinates.forEach(function(ring) {
@@ -318,18 +315,11 @@
                         });
                     });
                     ctx.stroke();
-
-                    // Etichette (Drawn on lines)
                     pathArr.forEach(pObj => {
-                        // Abbassato threshold per mostrare etichette anche su linee più corte
                         if(pObj.pts.length > 20) { 
                             let mid = pObj.pts[Math.floor(pObj.pts.length/2)];
-                            // Sfondo nero per contrasto
-                            ctx.fillStyle = "rgba(0,0,0,0.8)"; 
-                            ctx.fillRect(mid.x-16, mid.y-9, 32, 18);
-                            // Testo bianco
-                            ctx.fillStyle = "#fff"; 
-                            ctx.fillText(Math.round(pObj.val), mid.x, mid.y);
+                            ctx.fillStyle = "rgba(0,0,0,0.8)"; ctx.fillRect(mid.x-16, mid.y-9, 32, 18);
+                            ctx.fillStyle = "#fff"; ctx.fillText(Math.round(pObj.val), mid.x, mid.y);
                         }
                     });
                 });
