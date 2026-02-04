@@ -1,7 +1,7 @@
 <!DOCTYPE html>
 <html>
 <head>
-    <title>Sicilia MeteoHub - FINAL</title>
+    <title>Sicilia MeteoHub - HIGH RES</title>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
     
@@ -15,14 +15,13 @@
         body { margin: 0; background: #050505; font-family: 'Segoe UI', Roboto, sans-serif; color: white; overflow: hidden; }
         #map { position: absolute; top: 0; bottom: 0; width: 100%; background: #050505; }
         
-        /* UI ELEMENTI */
         #loader {
             position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%);
             background: rgba(0,0,0,0.9); padding: 20px 40px; border-radius: 30px; 
             z-index: 5000; font-weight: bold; font-size: 1.2em; border: 1px solid #444; color: #0088ff;
             text-align: center;
         }
-        
+
         #error-toast {
             position: absolute; bottom: 120px; left: 50%; transform: translateX(-50%);
             background: rgba(150, 0, 0, 0.9); padding: 10px 20px; border-radius: 8px;
@@ -57,13 +56,12 @@
         input[type=range] { flex-grow: 1; height: 5px; cursor: pointer; }
         #time-label { min-width: 140px; text-align: center; font-weight: 800; font-size: 1.4em; margin-left: 15px; text-shadow: 0 2px 5px black; }
         
-        /* Ottimizzazione Mobile */
         canvas { touch-action: none; }
     </style>
 </head>
 <body>
 
-<div id="loader">Avvio...</div>
+<div id="loader">Caricamento Mappa...</div>
 <div id="error-toast"></div>
 
 <div id="layer-menu">
@@ -76,9 +74,7 @@
 </div>
 
 <div id="picker-box"><span id="pk-val">--</span><span id="pk-unit">km/h</span></div>
-
 <div id="map"></div>
-
 <div id="bottom-bar">
     <div id="play-btn" onclick="togglePlay()">►</div>
     <input type="range" id="time-slider" min="0" max="0" value="0" step="1">
@@ -86,38 +82,35 @@
 </div>
 
 <script>
-    // --- GESTORE ERRORI DI SICUREZZA ---
+    // --- GESTORE ERRORI ---
     window.onerror = function(msg) {
-        let el = document.getElementById('error-toast');
-        el.style.display = 'block';
-        el.innerText = "⚠️ " + msg;
-        // Se c'è un errore, sblocchiamo comunque il loader
+        document.getElementById('error-toast').style.display = 'block';
+        document.getElementById('error-toast').innerText = "⚠️ " + msg;
         document.getElementById('loader').style.display = 'none';
         return false;
     };
-
-    // Timeout di sicurezza: se dopo 8 secondi è bloccato, apri la mappa
-    setTimeout(() => {
-        if(document.getElementById('loader').style.display !== 'none') {
-            console.warn("Forcing unlock");
-            document.getElementById('loader').style.display = 'none';
-        }
-    }, 8000);
+    setTimeout(() => { if(document.getElementById('loader').style.display!=='none') document.getElementById('loader').style.display='none'; }, 8000);
 
     // --- VARIABILI ---
     var map, velocityLayer, heatCanvas, isobarCanvas;
-    var currentData = null;
-    var catalog = [];
-    var activeLayer = 'wind';
-    var showIsobars = false;
-    var isPlaying = false;
-
-    // --- PALETTE COLORI PRO ---
+    var currentData = null, catalog = [], activeLayer = 'wind', showIsobars = false, isPlaying = false;
+    
+    // --- PALETTE COLORI AD ALTA SENSIBILITÀ ---
     const PALETTES = {
         temp: [{v:-10,c:[255,255,255,0.6]},{v:0,c:[180,180,255,0.6]},{v:10,c:[0,200,100,0.6]},{v:20,c:[255,255,0,0.6]},{v:30,c:[255,140,0,0.6]},{v:40,c:[200,0,0,0.6]}],
         rain: [{v:0,c:[0,0,0,0]},{v:0.1,c:[0,200,255,0.6]},{v:2,c:[0,0,255,0.7]},{v:10,c:[150,0,200,0.8]}],
         rh:   [{v:20,c:[160,100,50,0.6]},{v:40,c:[200,200,200,0.4]},{v:60,c:[100,255,100,0.5]},{v:80,c:[0,150,255,0.6]},{v:95,c:[0,0,150,0.8]}],
-        press:[{v:980,c:[100,0,200,0.7]},{v:1000,c:[0,100,255,0.6]},{v:1013,c:[0,255,100,0.3]},{v:1025,c:[255,150,0,0.5]},{v:1040,c:[200,0,0,0.6]}]
+        
+        // NUOVA PALETTE PRESSIONE: Molto più dettagliata tra 990 e 1020
+        press:[
+            {v:980, c:[130,0,180,0.8]},   // Ciclone profondo (Viola)
+            {v:995, c:[0,0,255,0.7]},     // Bassa Pressione (Blu scuro)
+            {v:1000, c:[0,150,255,0.6]},  // Depressione locale (Azzurro)
+            {v:1008, c:[100,255,200,0.4]},// Transizione (Verde acqua)
+            {v:1013, c:[255,255,255,0.1]},// Normale (Trasparente/Bianco)
+            {v:1020, c:[255,200,0,0.5]},  // Alta Pressione (Giallo)
+            {v:1035, c:[255,50,0,0.6]}    // Anticiclone (Rosso)
+        ]
     };
 
     function getColor(val, type) {
@@ -142,61 +135,35 @@
         return [last.c[0], last.c[1], last.c[2], last.c[3]];
     }
 
-    // --- AVVIO SICURO ---
     window.addEventListener('load', function() {
-        try {
-            document.getElementById('loader').innerText = "Caricamento Mappa...";
-            
-            // Inizializza Mappa
-            map = L.map('map', { zoomControl: false }).setView([37.5, 14.2], 8);
-            
-            // Base Scura
-            L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_nolabels/{z}/{x}/{y}{r}.png').addTo(map);
-            
-            // Panes
-            map.createPane('gridPane'); map.getPane('gridPane').style.zIndex = 300; 
-            map.createPane('isobarPane'); map.getPane('isobarPane').style.zIndex = 400; map.getPane('isobarPane').style.pointerEvents = 'none';
-            map.createPane('labelsPane'); map.getPane('labelsPane').style.zIndex = 500; map.getPane('labelsPane').style.pointerEvents = 'none';
-            map.createPane('velocityPane'); map.getPane('velocityPane').style.zIndex = 600; map.getPane('velocityPane').style.pointerEvents = 'none';
+        map = L.map('map', { zoomControl: false }).setView([37.5, 14.2], 8);
+        L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_nolabels/{z}/{x}/{y}{r}.png').addTo(map);
+        
+        map.createPane('gridPane'); map.getPane('gridPane').style.zIndex = 300; 
+        map.createPane('isobarPane'); map.getPane('isobarPane').style.zIndex = 400; map.getPane('isobarPane').style.pointerEvents = 'none';
+        map.createPane('labelsPane'); map.getPane('labelsPane').style.zIndex = 500; map.getPane('labelsPane').style.pointerEvents = 'none';
+        map.createPane('velocityPane'); map.getPane('velocityPane').style.zIndex = 600; map.getPane('velocityPane').style.pointerEvents = 'none';
 
-            // Etichette
-            L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_only_labels/{z}/{x}/{y}{r}.png', { pane: 'labelsPane' }).addTo(map);
+        L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_only_labels/{z}/{x}/{y}{r}.png', { pane: 'labelsPane' }).addTo(map);
 
-            // Inizializza Layer
-            initRawGridLayer();
-            initIsobarLayer();
-            
-            // Carica Dati
-            loadCatalog();
-
-        } catch(e) {
-            console.error(e);
-            document.getElementById('loader').innerText = "Errore Init";
-        }
+        initRawGridLayer();
+        initIsobarLayer();
+        loadCatalog();
     });
 
     async function loadCatalog() {
-        document.getElementById('loader').innerText = "Lettura Dati...";
         try {
             let r = await fetch('data_weather/catalog.json?v=' + Date.now());
-            if(!r.ok) throw new Error("404 Catalogo");
+            if(!r.ok) throw new Error("Catalog 404");
             catalog = await r.json();
-            
-            if (catalog.length === 0) {
-                document.getElementById('loader').innerText = "Nessun dato";
-                setTimeout(() => document.getElementById('loader').style.display = 'none', 2000);
-                return;
-            }
+            if (catalog.length === 0) throw new Error("Catalog Empty");
 
             document.getElementById('time-slider').max = catalog.length - 1;
             document.getElementById('time-slider').addEventListener('input', (e) => loadStep(parseInt(e.target.value)));
-            
-            // Carica il primo
             await loadStep(0);
         } catch(e) {
-            document.getElementById('error-toast').innerText = "Errore Dati: " + e.message;
-            document.getElementById('error-toast').style.display = 'block';
-            document.getElementById('loader').style.display = 'none';
+            console.warn(e);
+            document.getElementById('loader').innerText = "Attesa Dati...";
         }
     }
 
@@ -208,9 +175,7 @@
             let r = await fetch('data_weather/' + catalog[index].file);
             currentData = await r.json();
             updateMap();
-        } catch(e) { 
-            console.warn("Frame error", e);
-        }
+        } catch(e) {}
         document.getElementById('loader').style.display = 'none';
     }
 
@@ -226,12 +191,8 @@
                     pane: 'velocityPane',
                     displayValues: false,
                     data: [ currentData.wind_u, currentData.wind_v ], 
-                    maxVelocity: 18.0, 
-                    velocityScale: 0.005, 
-                    particleMultiplier: 1/40, // Ridotto leggermente per performance mobile
-                    lineWidth: 1.0,
-                    frameRate: 60,
-                    opacity: 0.90, 
+                    maxVelocity: 18.0, velocityScale: 0.005, particleMultiplier: 1/40, 
+                    lineWidth: 1.0, frameRate: 60, opacity: 0.90, 
                     colorScale: ["#000080", "#0044ff", "#00ddff", "#00ff55", "#ffff00", "#ff6600", "#ff0000", "#ff00ff"]
                 });
                 velocityLayer.addTo(map);
@@ -239,12 +200,13 @@
         }
     }
 
-    // --- RENDER CANVAS PRO ---
+    // --- CANVAS OTTIMIZZATO PER RISOLUZIONE 2.2KM ---
     function initRawGridLayer() {
         L.FullHeatmap = L.Layer.extend({
             onAdd: function(m) {
                 this._c = L.DomUtil.create('canvas', 'leaflet-layer');
                 this._c.style.pointerEvents = 'none';
+                this._c.style.imageRendering = 'pixelated'; // Importante per la nitidezza
                 m.getPane('gridPane').appendChild(this._c);
                 m.on('moveend resize', this._reset, this);
                 this._reset();
@@ -263,10 +225,16 @@
                 }
                 var ctx = this._c.getContext('2d'); ctx.clearRect(0,0,this._c.width,this._c.height);
                 var m = currentData.meta;
+                var b = this._map.getBounds(); // Disegna solo visibile
                 
-                // Disegna solo pixel visibili (Performance Boost)
-                var b = this._map.getBounds();
-                
+                // Calcolo dimensione pixel in base allo zoom
+                // Garantisce che i pixel siano sempre "chiusi" tra loro
+                var p1 = this._map.latLngToContainerPoint([m.la1, m.lo1]);
+                var p2 = this._map.latLngToContainerPoint([m.la1 - m.dy, m.lo1 + m.dx]);
+                var pxW = Math.ceil(p2.x - p1.x);
+                var pxH = Math.ceil(p2.y - p1.y);
+                if (pxW < 1) pxW = 1; if (pxH < 1) pxH = 1;
+
                 for(var y=0; y<m.ny; y++) {
                     var lat = m.la1 - (y * m.dy);
                     if (lat < b.getSouth() - 0.1 || lat > b.getNorth() + 0.1) continue;
@@ -283,12 +251,10 @@
                         
                         var c = getColor(val, activeLayer); 
                         if(c[3] > 0) {
-                             var pStart = this._map.latLngToContainerPoint([lat, lon]);
-                             var pEnd = this._map.latLngToContainerPoint([lat - m.dy, lon + m.dx]);
-                             var w = Math.ceil(pEnd.x - pStart.x) + 1;
-                             var h = Math.ceil(pEnd.y - pStart.y) + 1;
+                             var p = this._map.latLngToContainerPoint([lat, lon]);
                              ctx.fillStyle = `rgba(${c[0]},${c[1]},${c[2]},${c[3]})`; 
-                             ctx.fillRect(Math.floor(pStart.x), Math.floor(pStart.y), w, h);
+                             // Usa dimensione pixel calcolata
+                             ctx.fillRect(Math.floor(p.x), Math.floor(p.y), pxW, pxH);
                         }
                     }
                 }
@@ -299,7 +265,7 @@
         map.addLayer(heatCanvas);
     }
 
-    // --- ISOBARE ---
+    // --- ISOBARE CON ETICHETTE LEGGIBILI ---
     function initIsobarLayer() {
         L.IsobarLayer = L.Layer.extend({
             onAdd: function(m) {
@@ -322,13 +288,20 @@
                 }
                 var ctx = this._c.getContext('2d'); ctx.clearRect(0,0,this._c.width,this._c.height);
                 var m = currentData.meta;
+                // Genera isobare ogni 2 hPa
                 var contours = d3.contours().size([m.nx, m.ny]).thresholds(d3.range(960, 1050, 2))(currentData.press);
-                ctx.lineWidth = 1.2; ctx.font = "bold 12px Arial"; ctx.textAlign = "center"; ctx.textBaseline = "middle";
+                
+                ctx.lineWidth = 1.2; 
+                ctx.font = "bold 13px Roboto, Arial"; 
+                ctx.textAlign = "center"; 
+                ctx.textBaseline = "middle";
                 
                 contours.forEach(function(contour) {
                     var val = contour.value;
+                    // Colore linea
                     ctx.strokeStyle = (val < 1013) ? "rgba(200, 200, 255, 0.6)" : "rgba(255, 200, 200, 0.6)"; 
                     if(Math.abs(val - 1013) < 1) ctx.strokeStyle = "rgba(255,255,255,0.8)";
+                    
                     ctx.beginPath();
                     var pathArr = [];
                     contour.coordinates.forEach(function(ring) {
@@ -345,6 +318,20 @@
                         });
                     });
                     ctx.stroke();
+
+                    // Etichette (Drawn on lines)
+                    pathArr.forEach(pObj => {
+                        // Abbassato threshold per mostrare etichette anche su linee più corte
+                        if(pObj.pts.length > 20) { 
+                            let mid = pObj.pts[Math.floor(pObj.pts.length/2)];
+                            // Sfondo nero per contrasto
+                            ctx.fillStyle = "rgba(0,0,0,0.8)"; 
+                            ctx.fillRect(mid.x-16, mid.y-9, 32, 18);
+                            // Testo bianco
+                            ctx.fillStyle = "#fff"; 
+                            ctx.fillText(Math.round(pObj.val), mid.x, mid.y);
+                        }
+                    });
                 });
             },
             update: function() { this._draw(); }
@@ -352,8 +339,12 @@
         isobarCanvas = new L.IsobarLayer();
         map.addLayer(isobarCanvas);
     }
+    window.toggleIsobars = function() {
+        showIsobars = !showIsobars; document.getElementById('iso-btn').classList.toggle('active');
+        if(isobarCanvas) isobarCanvas.update();
+    }
 
-    // --- UTILS ---
+    // --- CONTROLLI ---
     window.setLayer = function(n) {
         activeLayer = n;
         document.querySelectorAll('.layer-btn').forEach(b => { if(!b.classList.contains('toggle-btn')) b.classList.remove('active'); });
@@ -365,10 +356,6 @@
         document.getElementById('pk-val').innerText = "--";
         updateMap();
     }
-    window.toggleIsobars = function() {
-        showIsobars = !showIsobars; document.getElementById('iso-btn').classList.toggle('active');
-        if(isobarCanvas) isobarCanvas.update();
-    }
     window.togglePlay = function() {
         if (isPlaying) return; isPlaying = true;
         let s = document.getElementById('time-slider');
@@ -379,8 +366,6 @@
             else { i++; s.value = i; loadStep(i); }
         }, 800);
     }
-    
-    // Mouse Event
     window.addEventListener('load', function(){
         if(!map) return;
         map.on('mousemove', function(e) {
