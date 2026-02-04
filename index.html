@@ -1,7 +1,7 @@
 <!DOCTYPE html>
 <html>
 <head>
-    <title>Sicilia MeteoHub - STABLE</title>
+    <title>Sicilia MeteoHub - DIAGNOSTIC</title>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
     
@@ -12,89 +12,108 @@
     <script src="https://d3js.org/d3.v7.min.js"></script>
     
     <style>
-        body { margin: 0; background: #050505; font-family: sans-serif; color: white; overflow: hidden; }
+        body { margin: 0; background: #050505; font-family: 'Segoe UI', Roboto, sans-serif; color: white; overflow: hidden; }
         #map { position: absolute; top: 0; bottom: 0; width: 100%; background: #050505; }
         
-        /* DIAGNOSTICA */
-        #loader {
-            position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%);
-            background: rgba(0,0,0,0.9); padding: 20px 40px; border-radius: 10px; 
-            z-index: 9999; font-weight: bold; border: 1px solid #555; text-align: center;
+        /* LOGBOX - LA SCATOLA NERA */
+        #log-console {
+            position: absolute; top: 0; left: 0; width: 100%; height: 100%;
+            background: rgba(0,0,0,0.95); z-index: 9999;
+            padding: 20px; box-sizing: border-box; font-family: monospace;
+            overflow-y: auto; color: #0f0; font-size: 14px;
+            display: block; /* Visibile all'avvio */
         }
-        #error-box { color: #ff5555; display: none; margin-top: 10px; font-size: 0.9em; white-space: pre-wrap; }
+        .log-err { color: #ff3333; font-weight: bold; border-bottom: 1px solid #ff3333; padding-bottom: 5px; margin-bottom: 5px; }
+        .log-warn { color: #ffff00; }
+        .log-info { color: #00ffff; }
+        #close-log {
+            position: absolute; top: 20px; right: 20px; padding: 10px 20px;
+            background: #333; color: white; border: 1px solid #fff; cursor: pointer;
+            z-index: 10000; display: none; /* Appare solo se tutto ok */
+        }
 
-        /* UI */
+        /* UI NORMALE (Nascosta sotto il log finché non è pronto) */
         #layer-menu {
             position: absolute; top: 10px; right: 10px; z-index: 1000;
-            background: rgba(20,20,20,0.9); padding: 8px; border-radius: 8px; 
-            display: flex; flex-direction: column; gap: 5px; width: 140px;
+            background: rgba(20, 20, 20, 0.95); backdrop-filter: blur(5px);
+            padding: 8px; border-radius: 12px; display: flex; flex-direction: column; gap: 6px;
+            border: 1px solid rgba(255, 255, 255, 0.15); width: 130px;
         }
         .layer-btn {
-            background: #333; color: #ccc; border: none; padding: 8px; border-radius: 4px;
-            cursor: pointer; text-align: left; font-size: 13px; display: flex; justify-content: space-between;
+            background: transparent; border: none; color: #ccc; padding: 8px 12px;
+            font-size: 13px; font-weight: 600; cursor: pointer; text-align: right; 
+            border-radius: 6px; display: flex; justify-content: space-between;
         }
         .layer-btn.active { background: #0066cc; color: white; }
-        
-        #basemap-selector {
-            position: absolute; top: 10px; left: 10px; z-index: 1000;
-            background: rgba(20,20,20,0.9); padding: 5px; border-radius: 8px;
-        }
-        .base-btn { background: #333; color: #aaa; border: none; padding: 5px 10px; cursor: pointer; border-radius: 4px; }
-        .base-btn.active { background: #555; color: #fff; }
+        .layer-btn.toggle-btn { border-top: 1px solid #444; margin-top: 4px; padding-top: 10px; }
+        .layer-btn.toggle-btn.active { background: #333; border: 1px solid #555; }
+
+        #basemap-selector { position: absolute; top: 20px; left: 20px; z-index: 1000; display: flex; gap: 5px; }
+        .base-btn { background: rgba(0,0,0,0.5); color: #fff; border: 1px solid #555; padding: 5px 10px; border-radius: 5px; }
+        .base-btn.active { background: #0088ff; border-color: #0088ff; }
+
+        #picker-box { position: absolute; top: 60px; left: 15px; z-index: 1000; pointer-events: none; }
+        #pk-val { font-size: 3.5em; font-weight: 900; line-height: 0.9; text-shadow: 2px 2px 0 #000; }
+        #pk-unit { color: #ccc; font-size: 1.2em; font-weight: 700; margin-left: 5px; text-shadow: 1px 1px 0 #000; }
 
         #bottom-bar {
-            position: absolute; bottom: 0; width: 100%; height: 80px;
-            background: linear-gradient(to top, black, transparent);
+            position: absolute; bottom: 0; left: 0; right: 0; height: 90px;
+            background: linear-gradient(to top, #000, transparent);
             display: flex; align-items: center; padding: 0 20px; z-index: 2000;
         }
-        #play-btn { font-size: 2em; cursor: pointer; margin-right: 15px; background: none; border: none; color: white; }
-        input[type=range] { flex-grow: 1; margin-right: 20px; }
-        
-        #picker-box { position: absolute; top: 60px; left: 15px; z-index: 1000; font-size: 2em; font-weight: bold; text-shadow: 2px 2px 0 #000; pointer-events: none; }
+        #play-btn { font-size: 2.5em; cursor: pointer; margin-right: 15px; color: #fff; }
+        input[type=range] { flex-grow: 1; height: 20px; }
+        #time-label { min-width: 140px; text-align: center; font-weight: 800; font-size: 1.4em; margin-left: 15px; text-shadow: 0 2px 5px black; }
         
         canvas.leaflet-layer { image-rendering: pixelated; }
     </style>
 </head>
 <body>
 
-<div id="loader">
-    <div id="status">Avvio Sistema...</div>
-    <div id="error-box"></div>
+<div id="log-console">
+    <div>SYSTEM BOOT...</div>
 </div>
+<button id="close-log" onclick="document.getElementById('log-console').style.display='none'">CHIUDI LOG E VAI ALLA MAPPA</button>
 
 <div id="basemap-selector">
-    <button class="base-btn active" onclick="setBase('dark')">Dark</button>
-    <button class="base-btn" onclick="setBase('sat')">Sat</button>
-    <button class="base-btn" onclick="setBase('osm')">Map</button>
+    <button class="base-btn active" onclick="setBaseMap('dark')">DARK</button>
+    <button class="base-btn" onclick="setBaseMap('sat')">SAT</button>
+    <button class="base-btn" onclick="setBaseMap('osm')">MAP</button>
 </div>
 
 <div id="layer-menu">
-    <button class="layer-btn active" onclick="setLayer('wind')">VENTO 💨</button>
-    <button class="layer-btn" onclick="setLayer('temp')">TEMP 🌡️</button>
-    <button class="layer-btn" onclick="setLayer('rain')">PIOGGIA ☔</button>
-    <button class="layer-btn" onclick="setLayer('rh')">UMIDITÀ 💧</button>
-    <button class="layer-btn" onclick="setLayer('press')">PRESS ⏲️</button>
-    <button class="layer-btn" onclick="toggleIsobars()" style="margin-top:5px; border-top:1px solid #555">ISOBARE 〰️</button>
-    <button class="layer-btn" onclick="toggleGrid()">GRIGLIA #</button>
+    <button class="layer-btn active" onclick="setLayer('wind')"><span>VENTO</span> 💨</button>
+    <button class="layer-btn" onclick="setLayer('temp')"><span>TEMP</span> 🌡️</button>
+    <button class="layer-btn" onclick="setLayer('rain')"><span>PIOGGIA</span> ☔</button>
+    <button class="layer-btn" onclick="setLayer('rh')"><span>UMIDITÀ</span> 💧</button>
+    <button class="layer-btn" onclick="setLayer('press')"><span>PRESS</span> ⏲️</button>
+    <button id="iso-btn" class="layer-btn toggle-btn" onclick="toggleIsobars()"><span>ISOBARE</span> 〰️</button>
+    <button id="grid-btn" class="layer-btn toggle-btn" onclick="toggleGrid()"><span>GRID</span> #</button>
 </div>
 
-<div id="picker-box">--</div>
+<div id="picker-box"><span id="pk-val">--</span><span id="pk-unit">km/h</span></div>
 <div id="map"></div>
 <div id="bottom-bar">
-    <button id="play-btn" onclick="togglePlay()">►</button>
-    <input type="range" id="time-slider" min="0" max="0" value="0">
+    <div id="play-btn" onclick="togglePlay()">►</div>
+    <input type="range" id="time-slider" min="0" max="0" value="0" step="1">
     <div id="time-label">--/-- --:--</div>
 </div>
 
 <script>
-    // --- GESTORE ERRORI ---
-    function fatalError(msg) {
-        document.getElementById('error-box').style.display = 'block';
-        document.getElementById('error-box').innerText = msg;
-        document.getElementById('status').innerText = "ERRORE";
-        document.getElementById('status').style.color = 'red';
+    // --- SISTEMA DI LOGGING ---
+    function log(msg, type='log') {
+        let el = document.getElementById('log-console');
+        let line = document.createElement('div');
+        let color = type === 'error' ? 'log-err' : (type === 'warn' ? 'log-warn' : (type === 'info' ? 'log-info' : ''));
+        line.className = color;
+        line.innerText = `> ${msg}`;
+        el.appendChild(line);
+        console.log(msg);
     }
-    window.onerror = function(msg) { fatalError("JS Error: " + msg); return false; };
+    window.onerror = function(msg, url, line) {
+        log(`CRITICAL JS ERROR: ${msg} (Line ${line})`, 'error');
+        return false;
+    };
 
     // --- VARIABILI ---
     var map, velocityLayer, heatCanvas, isobarCanvas, gridLayer;
@@ -114,7 +133,6 @@
         let stops = PALETTES[type];
         if(type==='rain' && val < 0.1) return [0,0,0,0];
         if(type==='wind' && val < 1) return [0,0,0,0];
-
         for(let i=0; i<stops.length-1; i++) {
             if(val>=stops[i].v && val<=stops[i+1].v) {
                 let t = (val - stops[i].v) / (stops[i+1].v - stops[i].v);
@@ -126,8 +144,13 @@
         return [last.c[0], last.c[1], last.c[2], last.c[3]];
     }
 
-    // --- SETUP ---
-    window.addEventListener('load', function() {
+    // --- MAIN ---
+    window.addEventListener('load', async function() {
+        log("Pagina caricata. Controllo librerie...");
+        if (typeof L === 'undefined') { log("ERRORE: Leaflet non caricato!", 'error'); return; }
+        if (typeof d3 === 'undefined') { log("ERRORE: D3 non caricato!", 'error'); return; }
+        log("Librerie OK. Inizializzo mappa...");
+
         try {
             map = L.map('map', { zoomControl: false }).setView([37.5, 14.2], 8);
             
@@ -137,63 +160,76 @@
 
             map.createPane('gridPane'); map.getPane('gridPane').style.zIndex = 300; 
             map.createPane('isobarPane'); map.getPane('isobarPane').style.zIndex = 400; map.getPane('isobarPane').style.pointerEvents = 'none';
+            map.createPane('gridLinesPane'); map.getPane('gridLinesPane').style.zIndex = 450; map.getPane('gridLinesPane').style.pointerEvents = 'none';
             map.createPane('labelsPane'); map.getPane('labelsPane').style.zIndex = 500; map.getPane('labelsPane').style.pointerEvents = 'none';
             map.createPane('velocityPane'); map.getPane('velocityPane').style.zIndex = 600; map.getPane('velocityPane').style.pointerEvents = 'none';
 
             L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_only_labels/{z}/{x}/{y}{r}.png', { pane: 'labelsPane' }).addTo(map);
 
+            log("Mappa creata. Inizializzo Canvas...");
             initRawGridLayer();
             initIsobarLayer();
             initGridLayer();
-            loadCatalog();
+            
+            log("Canvas OK. Scarico catalogo...");
+            await loadCatalog();
 
-        } catch(e) { fatalError("Map Init Failed: " + e.message); }
+        } catch(e) {
+            log(`ERRORE DI INIZIALIZZAZIONE: ${e.message}`, 'error');
+        }
     });
 
-    window.setBase = function(t) {
-        map.removeLayer(darkLayer); map.removeLayer(satLayer); map.removeLayer(osmLayer);
+    window.setBaseMap = function(type) {
         document.querySelectorAll('.base-btn').forEach(b => b.classList.remove('active'));
         event.target.classList.add('active');
-        if(t==='dark') darkLayer.addTo(map); else if(t==='sat') satLayer.addTo(map); else osmLayer.addTo(map);
+        map.removeLayer(darkLayer); map.removeLayer(satLayer); map.removeLayer(osmLayer);
+        if(type === 'dark') darkLayer.addTo(map); else if(type === 'sat') satLayer.addTo(map); else osmLayer.addTo(map);
     }
 
-    // --- LOAD DATA ---
     async function loadCatalog() {
-        document.getElementById('status').innerText = "Scarico Catalogo...";
         try {
-            // NOCACHE: Forza il download fresco
-            let r = await fetch('data_weather/catalog.json?nocache=' + Date.now());
-            if(!r.ok) throw new Error("Catalog 404 Not Found");
+            let r = await fetch('data_weather/catalog.json?v=' + Date.now());
+            if(!r.ok) throw new Error(`HTTP ${r.status} su catalog.json`);
             
             catalog = await r.json();
-            if(catalog.length === 0) throw new Error("Catalog Empty");
+            log(`Catalogo scaricato. Trovati ${catalog.length} frame.`, 'info');
+            
+            if (catalog.length === 0) {
+                log("ATTENZIONE: Catalogo vuoto! Lo script Python non ha salvato dati.", 'warn');
+                return;
+            }
 
             document.getElementById('time-slider').max = catalog.length - 1;
             document.getElementById('time-slider').addEventListener('input', (e) => loadStep(parseInt(e.target.value)));
             
-            loadStep(0);
+            log("Scarico primo frame...");
+            await loadStep(0);
+            
+            // SE ARRIVIAMO QUI, È TUTTO OK
+            log("TUTTO OK! Mostro pulsante di chiusura.", 'info');
+            document.getElementById('close-log').style.display = 'block';
+            
+            // Auto-chiusura dopo 3 secondi se tutto ok
+            setTimeout(() => { document.getElementById('log-console').style.display='none'; }, 2000);
+
         } catch(e) {
-            fatalError(e.message); 
-            // Sblocco di emergenza dopo 2 secondi per non bloccare la UI
-            setTimeout(() => document.getElementById('loader').style.display = 'none', 3000);
+            log(`ERRORE CATALOGO: ${e.message}`, 'error');
+            log("Suggerimento: Controlla se la cartella data_weather esiste su GitHub.", 'warn');
         }
     }
 
     async function loadStep(index) {
         if (!catalog[index]) return;
         document.getElementById('time-label').innerText = catalog[index].label;
-        document.getElementById('loader').style.display = 'block';
-        document.getElementById('status').innerText = "Carico Dati...";
         try {
-            let r = await fetch('data_weather/' + catalog[index].file);
-            if(!r.ok) throw new Error("File error");
+            let filename = catalog[index].file;
+            let r = await fetch('data_weather/' + filename);
+            if(!r.ok) throw new Error(`HTTP ${r.status} su ${filename}`);
+            
             currentData = await r.json();
             updateMap();
-            document.getElementById('loader').style.display = 'none';
         } catch(e) { 
-            console.warn(e);
-            // Non bloccare, magari il prossimo frame funziona
-            document.getElementById('loader').style.display = 'none';
+            log(`Errore Frame ${index}: ${e.message}`, 'error');
         }
     }
 
@@ -210,187 +246,94 @@
                     pane: 'velocityPane',
                     displayValues: false,
                     data: [ currentData.wind_u, currentData.wind_v ], 
-                    maxVelocity: 18.0, velocityScale: 0.005, particleMultiplier: 1/40, lineWidth: 1.0, frameRate: 60, opacity: 0.90,
+                    maxVelocity: 18.0, velocityScale: 0.005, particleMultiplier: 1/40, lineWidth: 1.0, frameRate: 60, opacity: 0.90, 
                     colorScale: ["#001f4d", "#003380", "#004db3", "#0066e6", "#0088ff", "#00aaff", "#00ccff", "#00ffff", "#33ffcc", "#66ff99", "#99ff66", "#ccff33", "#ffff00", "#ffcc00", "#ff9900", "#ff6600", "#ff3300", "#ff0000"]
                 });
                 velocityLayer.addTo(map);
-            } catch(e) {}
+            } catch(e) { log("Err Velocity: " + e.message, 'warn'); }
         }
     }
 
-    // --- CANVAS LAYERS ---
+    // --- LAYERS ---
     function initRawGridLayer() {
-        L.HeatCanvas = L.Layer.extend({
-            onAdd: function(m) {
-                this._c = L.DomUtil.create('canvas', 'leaflet-layer');
-                this._c.style.imageRendering = 'pixelated'; this._c.style.pointerEvents = 'none';
-                m.getPane('gridPane').appendChild(this._c);
-                m.on('moveend resize', this.draw, this);
-                this.draw();
-            },
+        L.HC = L.Layer.extend({
+            onAdd: function(m) { this._c = L.DomUtil.create('canvas', 'leaflet-layer'); this._c.style.imageRendering='pixelated'; this._c.style.pointerEvents='none'; m.getPane('gridPane').appendChild(this._c); m.on('moveend resize', this.draw, this); this.draw(); },
             onRemove: function(m) { m.getPane('gridPane').removeChild(this._c); m.off('moveend resize', this.draw, this); },
             draw: function() {
-                if(!this._c || !currentData || activeLayer==='wind') { 
-                    if(this._c) this._c.getContext('2d').clearRect(0,0,this._c.width,this._c.height); 
-                    return; 
-                }
-                let s = map.getSize(); this._c.width = s.x; this._c.height = s.y;
-                L.DomUtil.setPosition(this._c, map.containerPointToLayerPoint([0,0]));
-                
-                let ctx = this._c.getContext('2d');
-                let m = currentData.meta;
-                let b = map.getBounds();
-                let showNum = map.getZoom() >= 10;
-                ctx.font = "bold 10px Arial"; ctx.textAlign="center"; ctx.textBaseline="middle";
+                if(!this._c || !currentData || activeLayer==='wind') { if(this._c) this._c.getContext('2d').clearRect(0,0,this._c.width,this._c.height); return; }
+                let s=map.getSize(); this._c.width=s.x; this._c.height=s.y; L.DomUtil.setPosition(this._c, map.containerPointToLayerPoint([0,0]));
+                let ctx=this._c.getContext('2d'); let m=currentData.meta; let b=map.getBounds();
+                let showNum=map.getZoom()>=10; ctx.font="bold 10px Arial"; ctx.textAlign="center"; ctx.textBaseline="middle";
+                let p1=map.latLngToContainerPoint([m.la1, m.lo1]); let p2=map.latLngToContainerPoint([m.la1-m.dy, m.lo1+m.dx]);
+                let pxW=Math.ceil(p2.x-p1.x)+1; let pxH=Math.ceil(p2.y-p1.y)+1;
 
                 for(let y=0; y<m.ny; y++) {
-                    let lat = m.la1 - (y * m.dy);
-                    if(lat<b.getSouth()-0.05 || lat>b.getNorth()+0.05) continue;
+                    let lat = m.la1 - (y*m.dy); if(lat<b.getSouth()-0.05 || lat>b.getNorth()+0.05) continue;
                     for(let x=0; x<m.nx; x++) {
-                        let lon = m.lo1 + (x * m.dx);
-                        if(lon<b.getWest()-0.05 || lon>b.getEast()+0.05) continue;
-
-                        let idx = y*m.nx+x;
-                        let val = 0;
-                        if(activeLayer==='temp') val = currentData.temp[idx];
-                        else if(activeLayer==='rain') val = currentData.rain[idx];
-                        else if(activeLayer==='rh') val = currentData.rh?currentData.rh[idx]:0;
-                        else if(activeLayer==='press') val = currentData.press?currentData.press[idx]:1013;
-
-                        let c = getColor(val, activeLayer);
+                        let lon = m.lo1 + (x*m.dx); if(lon<b.getWest()-0.05 || lon>b.getEast()+0.05) continue;
+                        let idx = y*m.nx+x; let val=0;
+                        if(activeLayer==='temp') val=currentData.temp[idx]; else if(activeLayer==='rain') val=currentData.rain[idx]; else if(activeLayer==='rh') val=currentData.rh?currentData.rh[idx]:0; else if(activeLayer==='press') val=currentData.press?currentData.press[idx]:1013;
+                        let c=getColor(val, activeLayer);
                         if(c[3]>0) {
                             let p = map.latLngToContainerPoint([lat,lon]);
-                            let p2 = map.latLngToContainerPoint([lat-m.dy, lon+m.dx]);
-                            let w = Math.ceil(p2.x-p.x)+1, h = Math.ceil(p2.y-p.y)+1;
-                            
-                            ctx.fillStyle = `rgba(${c[0]},${c[1]},${c[2]},${c[3]})`;
-                            ctx.fillRect(Math.floor(p.x), Math.floor(p.y), w, h);
-
+                            ctx.fillStyle=`rgba(${c[0]},${c[1]},${c[2]},${c[3]})`; ctx.fillRect(Math.floor(p.x), Math.floor(p.y), pxW, pxH);
                             if(showNum && val!==0) {
-                                ctx.fillStyle="#fff"; 
-                                let txt = Math.round(val);
-                                if(activeLayer==='rain' && val<1) txt=val.toFixed(1);
-                                ctx.fillText(txt, p.x+w/2, p.y+h/2);
+                                ctx.fillStyle="#fff"; let txt=Math.round(val); if(activeLayer==='rain'&&val<1) txt=val.toFixed(1);
+                                ctx.fillText(txt, p.x+pxW/2, p.y+pxH/2);
                             }
                         }
                     }
                 }
             }
         });
-        heatCanvas = new L.HeatCanvas();
-        map.addLayer(heatCanvas);
+        heatCanvas = new L.HC(); map.addLayer(heatCanvas);
     }
 
     function initIsobarLayer() {
-        L.IsoCanvas = L.Layer.extend({
-            onAdd: function(m) {
-                this._c = L.DomUtil.create('canvas', 'leaflet-layer'); this._c.style.pointerEvents='none';
-                m.getPane('isobarPane').appendChild(this._c); m.on('moveend resize', this.draw, this); this.draw();
-            },
+        L.Iso = L.Layer.extend({
+            onAdd: function(m) { this._c = L.DomUtil.create('canvas', 'leaflet-layer'); this._c.style.pointerEvents='none'; m.getPane('isobarPane').appendChild(this._c); m.on('moveend resize', this.draw, this); this.draw(); },
             onRemove: function(m) { m.getPane('isobarPane').removeChild(this._c); m.off('moveend resize', this.draw, this); },
             draw: function() {
-                if(!this._c || !currentData || !showIsobars || !currentData.press) {
-                     if(this._c) this._c.getContext('2d').clearRect(0,0,this._c.width,this._c.height);
-                     return;
-                }
-                let s = map.getSize(); this._c.width = s.x; this._c.height = s.y;
-                L.DomUtil.setPosition(this._c, map.containerPointToLayerPoint([0,0]));
-                let ctx = this._c.getContext('2d');
-                let m = currentData.meta;
-                
-                let contours = d3.contours().size([m.nx, m.ny]).thresholds(d3.range(960, 1050, 2))(currentData.press);
-                ctx.lineWidth = 1.2; ctx.font = "bold 13px Arial"; ctx.textAlign="center"; ctx.textBaseline="middle";
-
-                contours.forEach(function(c) {
-                    ctx.strokeStyle = (c.value < 1013) ? "rgba(200,200,255,0.7)" : "rgba(255,200,200,0.7)";
-                    if(Math.abs(c.value-1013)<1) ctx.strokeStyle = "rgba(255,255,255,0.8)";
-                    ctx.beginPath();
-                    let pathArr = [];
-                    c.coordinates.forEach(r => {
-                        r.forEach(pts => {
-                            let first=true, poly=[];
-                            pts.forEach(coord => {
-                                let p = map.latLngToContainerPoint([m.la1-(coord[1]*m.dy), m.lo1+(coord[0]*m.dx)]);
-                                poly.push(p);
-                                if(first) { ctx.moveTo(p.x,p.y); first=false; } else ctx.lineTo(p.x,p.y);
-                            });
-                            pathArr.push(poly);
-                        });
-                    });
+                if(!this._c || !currentData || !showIsobars || !currentData.press) { if(this._c) this._c.getContext('2d').clearRect(0,0,this._c.width,this._c.height); return; }
+                let s=map.getSize(); this._c.width=s.x; this._c.height=s.y; L.DomUtil.setPosition(this._c, map.containerPointToLayerPoint([0,0]));
+                let ctx=this._c.getContext('2d'); let m=currentData.meta;
+                let contours=d3.contours().size([m.nx, m.ny]).thresholds(d3.range(960, 1050, 2))(currentData.press);
+                ctx.lineWidth=1.2; ctx.font="bold 13px Arial"; ctx.textAlign="center"; ctx.textBaseline="middle";
+                contours.forEach(c => {
+                    ctx.strokeStyle=(c.value<1013)?"rgba(200,200,255,0.7)":"rgba(255,200,200,0.7)";
+                    if(Math.abs(c.value-1013)<1) ctx.strokeStyle="rgba(255,255,255,0.8)";
+                    ctx.beginPath(); let pathArr=[];
+                    c.coordinates.forEach(r => { r.forEach(pts => { let first=true, poly=[]; pts.forEach(coord => { let p=map.latLngToContainerPoint([m.la1-(coord[1]*m.dy), m.lo1+(coord[0]*m.dx)]); poly.push(p); if(first) { ctx.moveTo(p.x,p.y); first=false; } else ctx.lineTo(p.x,p.y); }); pathArr.push(poly); }); });
                     ctx.stroke();
-                    pathArr.forEach(pts => {
-                        if(pts.length>30) {
-                            let mid = pts[Math.floor(pts.length/2)];
-                            ctx.fillStyle="rgba(0,0,0,0.8)"; ctx.fillRect(mid.x-14,mid.y-9,28,18);
-                            ctx.fillStyle="#fff"; ctx.fillText(Math.round(c.value), mid.x, mid.y);
-                        }
-                    });
+                    pathArr.forEach(pts => { if(pts.length>30) { let mid=pts[Math.floor(pts.length/2)]; ctx.fillStyle="rgba(0,0,0,0.8)"; ctx.fillRect(mid.x-14,mid.y-9,28,18); ctx.fillStyle="#fff"; ctx.fillText(Math.round(c.value), mid.x, mid.y); } });
                 });
             }
         });
-        isobarCanvas = new L.IsoCanvas();
-        map.addLayer(isobarCanvas);
+        isobarCanvas = new L.Iso(); map.addLayer(isobarCanvas);
     }
 
     function initGridLayer() {
-        L.GridL = L.Layer.extend({
-            onAdd: function(m) {
-                this._c = L.DomUtil.create('canvas', 'leaflet-layer'); this._c.style.pointerEvents='none';
-                m.getPane('isobarPane').appendChild(this._c); m.on('moveend resize', this.draw, this); this.draw();
-            },
-            onRemove: function(m) { m.getPane('isobarPane').removeChild(this._c); m.off('moveend resize', this.draw, this); },
+        L.GL = L.Layer.extend({
+            onAdd: function(m) { this._c = L.DomUtil.create('canvas', 'leaflet-layer'); this._c.style.pointerEvents='none'; m.getPane('gridLinesPane').appendChild(this._c); m.on('moveend resize', this.draw, this); this.draw(); },
+            onRemove: function(m) { m.getPane('gridLinesPane').removeChild(this._c); m.off('moveend resize', this.draw, this); },
             draw: function() {
-                if(!this._c) return;
-                let ctx = this._c.getContext('2d'); ctx.clearRect(0,0,this._c.width,this._c.height);
+                if(!this._c) return; let ctx=this._c.getContext('2d'); ctx.clearRect(0,0,this._c.width,this._c.height);
                 if(!showGrid) return;
-                let s = map.getSize(); this._c.width = s.x; this._c.height = s.y;
-                L.DomUtil.setPosition(this._c, map.containerPointToLayerPoint([0,0]));
-                
-                let b = map.getBounds();
-                let step = map.getZoom()>9 ? 0.1 : 0.5;
+                let s=map.getSize(); this._c.width=s.x; this._c.height=s.y; L.DomUtil.setPosition(this._c, map.containerPointToLayerPoint([0,0]));
+                let b=map.getBounds(); let step=map.getZoom()>9?0.1:0.5;
                 ctx.strokeStyle="rgba(255,255,255,0.3)"; ctx.fillStyle="rgba(255,255,255,0.6)"; ctx.font="10px Mono";
-
-                for(let lon=Math.floor(b.getWest()); lon<=Math.ceil(b.getEast()); lon+=step) {
-                    let x = map.latLngToContainerPoint([b.getSouth(),lon]).x;
-                    ctx.beginPath(); ctx.moveTo(x,0); ctx.lineTo(x,s.y); ctx.stroke();
-                    ctx.fillText(lon.toFixed(1), x+2, s.y-10);
-                }
-                for(let lat=Math.floor(b.getSouth()); lat<=Math.ceil(b.getNorth()); lat+=step) {
-                    let y = map.latLngToContainerPoint([lat,b.getWest()]).y;
-                    ctx.beginPath(); ctx.moveTo(0,y); ctx.lineTo(s.x,y); ctx.stroke();
-                    ctx.fillText(lat.toFixed(1), 5, y-2);
-                }
+                for(let lon=Math.floor(b.getWest()); lon<=Math.ceil(b.getEast()); lon+=step) { let x=map.latLngToContainerPoint([b.getSouth(),lon]).x; ctx.beginPath(); ctx.moveTo(x,0); ctx.lineTo(x,s.y); ctx.stroke(); ctx.fillText(lon.toFixed(1), x+2, s.y-10); }
+                for(let lat=Math.floor(b.getSouth()); lat<=Math.ceil(b.getNorth()); lat+=step) { let y=map.latLngToContainerPoint([lat,b.getWest()]).y; ctx.beginPath(); ctx.moveTo(0,y); ctx.lineTo(s.x,y); ctx.stroke(); ctx.fillText(lat.toFixed(1), 5, y-2); }
             }
         });
-        gridLayer = new L.GridL();
-        map.addLayer(gridLayer);
+        gridLayer = new L.GL(); map.addLayer(gridLayer);
     }
 
-    // --- CONTROLS ---
+    // --- CONTROLLI ---
     window.setLayer = function(n) {
         activeLayer=n;
         document.querySelectorAll('.layer-btn').forEach(b=>{ if(!b.textContent.includes('ISO') && !b.textContent.includes('GRI')) b.classList.remove('active'); });
-        event.target.classList.add('active');
-        document.getElementById('picker-box').innerText="--";
-        updateMap();
+        event.target.classList.add('active'); document.getElementById('picker-box').innerText="--"; updateMap();
     }
-    window.toggleIsobars=function(){ showIsobars=!showIsobars; event.target.classList.toggle('active'); updateMap(); }
-    window.toggleGrid=function(){ showGrid=!showGrid; event.target.classList.toggle('active'); updateMap(); }
-    window.togglePlay=function(){
-        if(isPlaying) return; isPlaying=true;
-        let s=document.getElementById('time-slider'), btn=document.getElementById('play-btn');
-        btn.innerText="||";
-        let i=parseInt(s.value);
-        let int=setInterval(()=>{
-            if(i>=parseInt(s.max) || !isPlaying) { clearInterval(int); isPlaying=false; btn.innerText="►"; }
-            else { i++; s.value=i; loadStep(i); }
-        },800);
-    }
-    window.addEventListener('load', ()=>{
-        map.on('mousemove', e=>{
-            if(!currentData) return;
-            let m=currentData.meta;
-            let y=Math.round((m.la1-e.latlng.lat)/m.dy), x=Math.round((e.latlng.lng-m.lo1)/m.dx);
-            if(x>=0 && x<m.nx && y>=0 && y<m.ny) {
-                let idx=y*m.nx+x;
-                let val = (acti
+    window.toggleIsobars=function(){ showIsobars=!showIsobars; document.getElementById('iso-btn').classList.toggle('active'); updateMap(); }
+    window.toggleGrid=function(){ showGrid=!showGrid; document.getElementById('grid-btn').classList.
