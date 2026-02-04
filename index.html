@@ -58,16 +58,16 @@
 
 <div id="ui-container">
     <div class="panel" style="display:flex; gap:5px;">
-        <button class="map-toggle active" onclick="setBase('dark')">DARK</button>
-        <button class="map-toggle" onclick="setBase('map')">MAPPA</button>
+        <button class="map-toggle active" onclick="setBase('dark', this)">DARK</button>
+        <button class="map-toggle" onclick="setBase('map', this)">MAPPA</button>
     </div>
 
     <div class="panel">
-        <button class="layer-btn active" onclick="setLayer('wind')">VENTO 💨</button>
-        <button class="layer-btn" onclick="setLayer('temp')">TEMP 🌡️</button>
-        <button class="layer-btn" onclick="setLayer('rain')">PIOGGIA ☔</button>
-        <button class="layer-btn" onclick="setLayer('rh')">UMIDITÀ 💧</button>
-        <button class="layer-btn" onclick="setLayer('press')">PRESS ⏲️</button>
+        <button class="layer-btn active" onclick="setLayer('wind', this)">VENTO 💨</button>
+        <button class="layer-btn" onclick="setLayer('temp', this)">TEMP 🌡️</button>
+        <button class="layer-btn" onclick="setLayer('rain', this)">PIOGGIA ☔</button>
+        <button class="layer-btn" onclick="setLayer('rh', this)">UMIDITÀ 💧</button>
+        <button class="layer-btn" onclick="setLayer('press', this)">PRESS ⏲️</button>
         <hr style="border:0; border-top:1px solid #444; margin:5px 0;">
         <button class="layer-btn" id="btn-iso" onclick="toggleIso()">ISOBARE 〰️</button>
         <button class="layer-btn" id="btn-grid" onclick="toggleGrid()">GRIGLIA #</button>
@@ -90,27 +90,24 @@
     var baseLayers = {};
     var isLightMode = false;
 
-    // --- COLORI VENTO: PRENDI ESATTAMENTE QUELLI ORIGINALI (DARK) ---
+    // Colori vento ORIGINALI (come da tuo PRO)
     const WIND_COLORS_DARK = ["#000080", "#0044ff", "#00ddff", "#00ff55", "#ffff00", "#ff6600", "#ff0000", "#ff00ff"];
 
-    // --- Variante per MAPPA (OSM) per avere contrasto su sfondo chiaro ---
-    // (stessa logica, ma più scuri e “pieni” per non sparire)
+    // Variante su mappa chiara (più scuri per visibilità)
     const WIND_COLORS_LIGHT = ["#00004d", "#0022cc", "#0077cc", "#00a83a", "#c7b700", "#cc5200", "#cc0000", "#7a007a"];
 
-    // --- PALETTE COLORI (heatmap) ---
+    // PALETTE HEATMAP
     const PALETTES = {
         temp: [{v:-10,c:[255,255,255,0.6]},{v:0,c:[180,180,255,0.6]},{v:10,c:[0,200,100,0.6]},{v:20,c:[255,255,0,0.6]},{v:30,c:[255,140,0,0.6]},{v:40,c:[200,0,0,0.6]}],
         rain: [{v:0,c:[0,0,0,0]},{v:0.1,c:[0,200,255,0.6]},{v:2,c:[0,0,255,0.7]},{v:10,c:[150,0,200,0.85]}],
         rh:   [{v:10,c:[210,160,70,0.55]},{v:30,c:[200,200,200,0.55]},{v:50,c:[130,255,130,0.55]},{v:70,c:[60,170,255,0.60]},{v:85,c:[0,90,220,0.65]},{v:95,c:[0,0,160,0.70]}],
-
-        // Pressione: blu (bassa) -> neutro (1013) -> rosso (alta)
-        // NIENTE alpha=0 su 1013: è il motivo della “macchia nera”
+        // Pressione: blu basso -> neutro -> rosso alto (no alpha=0 su 1013)
         press:[
             {v:970,c:[70,0,140,0.55]},
             {v:985,c:[0,40,200,0.55]},
             {v:995,c:[0,120,255,0.55]},
             {v:1005,c:[0,200,255,0.55]},
-            {v:1013,c:[210,210,210,0.35]},  // neutro visibile (niente buco)
+            {v:1013,c:[210,210,210,0.35]},
             {v:1020,c:[255,210,70,0.55]},
             {v:1030,c:[255,120,0,0.60]},
             {v:1045,c:[220,0,0,0.65]}
@@ -138,6 +135,10 @@
         return [last[0],last[1],last[2], last[3] ?? 0.6];
     }
 
+    function unitFor(type){
+        return type==='wind'?'km/h':(type==='temp'?'°C':(type==='rain'?'mm':(type==='rh'?'%':'hPa')));
+    }
+
     // --- SETUP INIZIALE ---
     window.addEventListener('load', function() {
         try {
@@ -146,7 +147,7 @@
             baseLayers.dark = L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_nolabels/{z}/{x}/{y}{r}.png').addTo(map);
             baseLayers.map  = L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {opacity:1.0});
 
-            // Etichette (sempre sopra)
+            // Etichette
             L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_only_labels/{z}/{x}/{y}{r}.png', {zIndex:600}).addTo(map);
 
             createCanvasLayers();
@@ -158,21 +159,21 @@
         }
     });
 
-    function setBase(type) {
+    // --- FIX: niente event.target, uso il bottone passato ---
+    function setBase(type, btnEl) {
         document.querySelectorAll('.map-toggle').forEach(b => b.classList.remove('active'));
-        event.target.classList.add('active');
+        if(btnEl) btnEl.classList.add('active');
 
         if(type==='dark') {
-            map.removeLayer(baseLayers.map);
+            if(map.hasLayer(baseLayers.map)) map.removeLayer(baseLayers.map);
             baseLayers.dark.addTo(map);
             isLightMode = false;
         } else {
-            map.removeLayer(baseLayers.dark);
+            if(map.hasLayer(baseLayers.dark)) map.removeLayer(baseLayers.dark);
             baseLayers.map.addTo(map);
             isLightMode = true;
         }
 
-        // Ri-render e aggiorna vento (per colori + performance)
         redrawAll();
     }
 
@@ -229,9 +230,7 @@
         updateWind();
     }
 
-    // --- RENDERING ---
-
-    // 1) HEATMAP (NO NUMERI: richiesto)
+    // 1) HEATMAP (NO NUMERI)
     function drawHeatmap() {
         let ctx = heatCanvas.getContext('2d');
         let s = map.getSize();
@@ -275,7 +274,7 @@
         }
     }
 
-    // 2) ISOBARE (sempre da press)
+    // 2) ISOBARE
     function drawIsobars() {
         let ctx = isoCanvas.getContext('2d');
         let s = map.getSize();
@@ -287,15 +286,24 @@
 
         let m = currentData.meta;
 
-        // Range dinamico stretto attorno ai valori presenti (più leggibile)
+        // ATTENZIONE: se press è in Pa (tipo 101300) qui freeza.
+        // Facciamo una guardia: se valori troppo alti, li convertiamo "al volo" a hPa.
         let arr = currentData.press;
-        let minP = 9999, maxP = -9999;
-        for(let i=0;i<arr.length;i++){ let v=arr[i]; if(v<minP)minP=v; if(v>maxP)maxP=v; }
-        minP = Math.floor((minP-2)/2)*2;
-        maxP = Math.ceil((maxP+2)/2)*2;
+        let maxP = -1;
+        for(let i=0;i<arr.length;i++){ if(arr[i] > maxP) maxP = arr[i]; }
+        let values = arr;
+        if(maxP > 2000) {
+            values = new Array(arr.length);
+            for(let i=0;i<arr.length;i++) values[i] = arr[i] / 100.0;
+        }
 
-        let thresholds = d3.range(minP, maxP+0.001, 2);
-        let contours = d3.contours().size([m.nx, m.ny]).thresholds(thresholds)(arr);
+        let minP = 999999, maxPh = -999999;
+        for(let i=0;i<values.length;i++){ let v=values[i]; if(v<minP)minP=v; if(v>maxPh)maxPh=v; }
+        minP = Math.floor((minP-2)/2)*2;
+        maxPh = Math.ceil((maxPh+2)/2)*2;
+
+        let thresholds = d3.range(minP, maxPh+0.001, 2);
+        let contours = d3.contours().size([m.nx, m.ny]).thresholds(thresholds)(values);
 
         ctx.lineWidth = 1.4;
         ctx.font = "bold 12px Arial";
@@ -303,8 +311,6 @@
         ctx.textBaseline = "middle";
 
         contours.forEach(c => {
-            // Colore linea in base a pressione (blu bassa / rosso alta)
-            // Su mappa chiara uso più scuro per contrasto
             let isLow = c.value < 1013;
             if(isLightMode) {
                 ctx.strokeStyle = isLow ? "rgba(0,0,120,0.85)" : "rgba(120,0,0,0.85)";
@@ -333,7 +339,6 @@
 
             ctx.stroke();
 
-            // Etichette (poche, per non appesantire)
             labelCandidates.forEach(poly => {
                 let mid = poly[Math.floor(poly.length/2)];
                 ctx.fillStyle = isLightMode ? "rgba(255,255,255,0.85)" : "rgba(0,0,0,0.70)";
@@ -370,9 +375,8 @@
         }
     }
 
-    // 4) VENTO: PRENDI PARAMETRI ORIGINALI + adattamento FPS senza “rallentare tutto”
+    // 4) VENTO (PARAMETRI ORIGINALI + adattamento FPS senza cambiare fisica del dato)
     function computeWindConfig() {
-        // Parametri originali (DAL TUO HTML PRO ORIGINALE)
         const base = {
             maxVelocity: 18.0,
             velocityScale: 0.006,
@@ -383,28 +387,19 @@
             opacity: 0.95
         };
 
-        // Adattamento prestazioni (desktop grande / dpr alto)
-        // Obiettivo: mantenere “velocità per secondo” simile anche se frameRate scende
         let s = map.getSize();
         let dpr = Math.min(2, window.devicePixelRatio || 1);
         let area = s.x * s.y * dpr * dpr;
-
-        // riferimento: 1280x720 @ dpr 1
         let ref = 1280 * 720;
 
-        // Se area è grande, abbasso frameRate e densità; ma compenso velocityScale in proporzione al frameRate
         let fr = 60;
         if(area > ref * 1.4) fr = 45;
         if(area > ref * 2.2) fr = 30;
 
-        // Densità: riduci in modo continuo (così FPS rimane stabile)
-        let densityFactor = Math.sqrt(ref / Math.max(ref, area)); // 1 -> piccolo, <1 -> grande
+        let densityFactor = Math.sqrt(ref / Math.max(ref, area));
         let pm = base.particleMultiplier * densityFactor;
 
-        // Compensa la velocità per secondo se frameRate scende
         let vs = base.velocityScale * (60 / fr);
-
-        // In più, se sei su MAPPA chiara, aumentare leggermente lineWidth aiuta visibilità senza pesare troppo
         let lw = isLightMode ? Math.max(base.lineWidth, 1.0) : base.lineWidth;
 
         return {
@@ -445,11 +440,7 @@
         }
     }
 
-    // --- INTERAZIONE: MOUSEMOVE + CLICK (ripristinato correttamente) ---
-    function unitFor(type){
-        return type==='wind'?'km/h':(type==='temp'?'°C':(type==='rain'?'mm':(type==='rh'?'%':'hPa')));
-    }
-
+    // --- PICKER (mousemove + click) ---
     function valueAtLatLng(latlng){
         if(!currentData) return null;
         let m = currentData.meta;
@@ -477,15 +468,18 @@
     }
 
     function bindPickerEvents(){
-        // mousemove (desktop) + click/tap (mobile)
         map.on('mousemove', function(e){ updatePicker(e.latlng); });
         map.on('click', function(e){ updatePicker(e.latlng); });
     }
 
-    window.setLayer = function(type) {
+    // --- FIX: niente event.target, uso il bottone passato ---
+    function setLayer(type, btnEl) {
         activeLayer = type;
-        document.querySelectorAll('.layer-btn').forEach(b => { if(!b.id) b.classList.remove('active'); });
-        event.target.classList.add('active');
+
+        document.querySelectorAll('.layer-btn').forEach(b => {
+            if(!b.id) b.classList.remove('active');
+        });
+        if(btnEl) btnEl.classList.add('active');
 
         document.getElementById('unit-display').innerText = unitFor(type);
         document.getElementById('val-display').innerText = "--";
@@ -493,6 +487,27 @@
         redrawAll();
     }
 
-    window.toggleIso = function() {
+    function toggleIso() {
         showIso = !showIso;
-      
+        document.getElementById('btn-iso').classList.toggle('active');
+        redrawAll();
+    }
+
+    function toggleGrid() {
+        showGrid = !showGrid;
+        document.getElementById('btn-grid').classList.toggle('active');
+        redrawAll();
+    }
+
+    function togglePlay() {
+        if(isPlaying) return;
+        isPlaying = true;
+
+        let s = document.getElementById('time-slider');
+        let btn = document.getElementById('play-btn');
+        btn.innerText = "❚❚";
+
+        let i = parseInt(s.value);
+        let interval = setInterval(() => {
+            if(i >= parseInt(s.max) || !isPlaying) {
+                clearInt
