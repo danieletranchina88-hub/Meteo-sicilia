@@ -82,21 +82,16 @@
 </div>
 
 <script>
-    // --- VARIABILI GLOBALI ---
     var map, velocityLayer, heatCanvas, isoCanvas, gridCanvas;
     var currentData = null, catalog = [];
     var activeLayer = 'wind', showIso = false, showGrid = false, isPlaying = false;
     var baseLayers = {};
     var isLightMode = false;
 
-    // === VENTO: COLORI ORIGINALI (DARK) presi 1:1 dal tuo PRO ===
-    const WIND_COLORS_DARK = ["#000080", "#0044ff", "#00ddff", "#00ff55", "#ffff00", "#ff6600", "#ff0000", "#ff00ff"];
-
-    // === VENTO: STESSA SCALA MA PIÙ SCURA PER MAPPA CHIARA (OSM) ===
-    // (Serve contrasto: sul bianco gli azzurri/gialli originali spariscono)
+    // VENTO: colori originali dark + versione più scura per mappa chiara
+    const WIND_COLORS_DARK  = ["#000080", "#0044ff", "#00ddff", "#00ff55", "#ffff00", "#ff6600", "#ff0000", "#ff00ff"];
     const WIND_COLORS_LIGHT = ["#000060", "#0030cc", "#0077cc", "#00aa33", "#b39b00", "#b34700", "#b30000", "#7a007a"];
 
-    // --- PALETTE COLORI (NOAA STYLE) ---
     const PALETTES = {
         temp: [{v:-10,c:[255,255,255]},{v:0,c:[180,180,255]},{v:10,c:[0,200,100]},{v:20,c:[255,255,0]},{v:30,c:[255,140,0]},{v:40,c:[200,0,0]}],
         rain: [{v:0,c:[0,0,0,0]},{v:0.1,c:[0,200,255]},{v:2,c:[0,0,255]},{v:10,c:[150,0,200]}],
@@ -109,55 +104,58 @@
         if(!p) return [0,0,0,0];
         if(type==='rain' && val<0.1) return [0,0,0,0];
         if(type==='wind' && val<1) return [0,0,0,0];
-        
+
         for(let i=0; i<p.length-1; i++) {
             if(val>=p[i].v && val<=p[i+1].v) {
                 let t = (val-p[i].v)/(p[i+1].v-p[i].v);
                 let c1=p[i].c, c2=p[i+1].c;
                 let a1 = c1.length>3?c1[3]:0.6, a2 = c2.length>3?c2[3]:0.6;
-                if(type==='press') { a1=c1.length>3?c1[3]:0.6; a2=c2.length>3?c2[3]:0.6; }
-                return [Math.round(c1[0]+(c2[0]-c1[0])*t), Math.round(c1[1]+(c2[1]-c1[1])*t), Math.round(c1[2]+(c2[2]-c1[2])*t), a1+(a2-a1)*t];
+                return [
+                    Math.round(c1[0]+(c2[0]-c1[0])*t),
+                    Math.round(c1[1]+(c2[1]-c1[1])*t),
+                    Math.round(c1[2]+(c2[2]-c1[2])*t),
+                    a1+(a2-a1)*t
+                ];
             }
         }
-        let last=p[p.length-1]; return [last.c[0],last.c[1],last.c[2], last.length>3?last[3]:0.6];
+        let last=p[p.length-1];
+        return [last.c[0], last.c[1], last.c[2], (last.c.length>3?last.c[3]:0.6)];
     }
 
-    // --- SETUP INIZIALE ---
     window.addEventListener('load', function() {
         try {
             map = L.map('map', { zoomControl: false }).setView([37.5, 14.2], 8);
-            
+
             baseLayers.dark = L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_nolabels/{z}/{x}/{y}{r}.png').addTo(map);
-            baseLayers.map = L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {opacity:1.0});
-            
+            baseLayers.map  = L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {opacity:1.0});
             L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_only_labels/{z}/{x}/{y}{r}.png', {zIndex:600}).addTo(map);
 
             createCanvasLayers();
             loadData();
-            
+
+            // Click per leggere il valore
+            map.on('click', function(e) { updateValueAt(e.latlng); });
+
         } catch(e) { document.getElementById('unit-display').innerText = "Errore Init"; }
     });
 
     function setBase(type) {
         document.querySelectorAll('.map-toggle').forEach(b => b.classList.remove('active'));
         event.target.classList.add('active');
-        
-        if(type==='dark') { 
-            map.removeLayer(baseLayers.map); 
+
+        if(type==='dark') {
+            map.removeLayer(baseLayers.map);
             baseLayers.dark.addTo(map);
             isLightMode = false;
-        } else { 
-            map.removeLayer(baseLayers.dark); 
-            baseLayers.map.addTo(map); 
+        } else {
+            map.removeLayer(baseLayers.dark);
+            baseLayers.map.addTo(map);
             isLightMode = true;
         }
-
-        // ✅ cambia anche la palette delle particelle vento in base al contrasto
         updateWind();
         redrawAll();
     }
 
-    // --- CARICAMENTO DATI ---
     async function loadData() {
         try {
             let r = await fetch('data_weather/catalog.json?t=' + Date.now());
@@ -167,11 +165,12 @@
 
             document.getElementById('time-slider').max = catalog.length - 1;
             document.getElementById('time-slider').addEventListener('input', (e) => loadStep(parseInt(e.target.value)));
-            
+
             await loadStep(0);
             document.getElementById('unit-display').innerText = "Pronto";
-
-        } catch(e) { document.getElementById('unit-display').innerText = "Errore Dati"; }
+        } catch(e) {
+            document.getElementById('unit-display').innerText = "Errore Dati";
+        }
     }
 
     async function loadStep(idx) {
@@ -200,12 +199,12 @@
             return c;
         };
         heatCanvas = mkCanvas(300);
-        isoCanvas = mkCanvas(400);
+        isoCanvas  = mkCanvas(400);
         gridCanvas = mkCanvas(450);
         map.on('moveend resize', redrawAll);
     }
 
-    // --- RENDERING ---
+    // ✅ HEATMAP SENZA NUMERI (rimosso fillText)
     function drawHeatmap() {
         let ctx = heatCanvas.getContext('2d');
         let s = map.getSize(); heatCanvas.width=s.x; heatCanvas.height=s.y;
@@ -216,8 +215,6 @@
 
         let m = currentData.meta;
         let b = map.getBounds();
-        let showNums = map.getZoom() >= 10;
-        ctx.font = "bold 10px Arial"; ctx.textAlign="center"; ctx.textBaseline="middle";
 
         for(let y=0; y<m.ny; y++) {
             let lat = m.la1 - (y*m.dy);
@@ -225,27 +222,23 @@
             for(let x=0; x<m.nx; x++) {
                 let lon = m.lo1 + (x*m.dx);
                 if(lon<b.getWest()-0.05 || lon>b.getEast()+0.05) continue;
-                
-                let idx = y*m.nx+x;
-                let val = (activeLayer==='temp')?currentData.temp[idx]: (activeLayer==='rain')?currentData.rain[idx]: (activeLayer==='rh')?currentData.rh[idx]: currentData.press[idx];
-                let c = getColor(val, activeLayer);
-                
-                if(c[3]>0) {
-                    let p1 = map.latLngToContainerPoint([lat, lon]);
-                    let p2 = map.latLngToContainerPoint([lat-m.dy, lon+m.dx]);
-                    let w = Math.ceil(p2.x - p1.x) + 1;
-                    let h = Math.ceil(p2.y - p1.y) + 1;
-                    
-                    ctx.fillStyle = `rgba(${c[0]},${c[1]},${c[2]},${c[3]})`;
-                    ctx.fillRect(Math.floor(p1.x), Math.floor(p1.y), w, h);
 
-                    if(showNums && val!==0) {
-                        ctx.fillStyle = "#fff"; ctx.lineWidth=2; ctx.strokeStyle="rgba(0,0,0,0.5)";
-                        let txt = Math.round(val);
-                        if(activeLayer==='rain' && val<1) txt=val.toFixed(1);
-                        ctx.strokeText(txt, p1.x+w/2, p1.y+h/2); ctx.fillText(txt, p1.x+w/2, p1.y+h/2);
-                    }
-                }
+                let idx = y*m.nx+x;
+                let val = (activeLayer==='temp')?currentData.temp[idx]:
+                          (activeLayer==='rain')?currentData.rain[idx]:
+                          (activeLayer==='rh')?currentData.rh[idx]:
+                          currentData.press[idx];
+
+                let c = getColor(val, activeLayer);
+                if(c[3] <= 0) continue;
+
+                let p1 = map.latLngToContainerPoint([lat, lon]);
+                let p2 = map.latLngToContainerPoint([lat-m.dy, lon+m.dx]);
+                let w = Math.ceil(p2.x - p1.x) + 1;
+                let h = Math.ceil(p2.y - p1.y) + 1;
+
+                ctx.fillStyle = `rgba(${c[0]},${c[1]},${c[2]},${c[3]})`;
+                ctx.fillRect(Math.floor(p1.x), Math.floor(p1.y), w, h);
             }
         }
     }
@@ -260,7 +253,7 @@
 
         let m = currentData.meta;
         let contours = d3.contours().size([m.nx, m.ny]).thresholds(d3.range(960, 1050, 2))(currentData.press);
-        
+
         ctx.lineWidth=1.5; ctx.font="bold 12px Arial"; ctx.textAlign="center"; ctx.textBaseline="middle";
 
         contours.forEach(c => {
@@ -298,6 +291,7 @@
         });
     }
 
+    // Griglia: solo linee (nessun numero)
     function drawGrid() {
         let ctx = gridCanvas.getContext('2d');
         let s = map.getSize(); gridCanvas.width=s.x; gridCanvas.height=s.y;
@@ -307,30 +301,24 @@
         if(!showGrid) return;
         let b = map.getBounds();
         let step = map.getZoom() > 9 ? 0.1 : 0.5;
-        
-        ctx.strokeStyle = isLightMode ? "rgba(0,0,0,0.4)" : "rgba(255,255,255,0.3)";
-        ctx.font = "10px Monospace";
-        ctx.fillStyle = isLightMode ? "#000" : "#fff";
+
+        ctx.strokeStyle = isLightMode ? "rgba(0,0,0,0.35)" : "rgba(255,255,255,0.25)";
 
         for(let lon=Math.floor(b.getWest()); lon<=Math.ceil(b.getEast()); lon+=step) {
             let x = map.latLngToContainerPoint([b.getSouth(), lon]).x;
             ctx.beginPath(); ctx.moveTo(x,0); ctx.lineTo(x,s.y); ctx.stroke();
-            ctx.fillText(lon.toFixed(1), x+2, s.y-10);
         }
         for(let lat=Math.floor(b.getSouth()); lat<=Math.ceil(b.getNorth()); lat+=step) {
             let y = map.latLngToContainerPoint([lat, b.getWest()]).y;
             ctx.beginPath(); ctx.moveTo(0,y); ctx.lineTo(s.x,y); ctx.stroke();
-            ctx.fillText(lat.toFixed(1), 5, y-2);
         }
     }
 
-    // === FIX FPS DESKTOP: tuning automatico (meno carico quando lo schermo è pesante) ===
     function getWindTuning() {
         let s = map.getSize();
         let dpr = window.devicePixelRatio || 1;
         let px = s.x * s.y * dpr * dpr;
 
-        // baseline dal tuo PRO
         let cfg = {
             maxVelocity: 18.0,
             velocityScale: 0.006,
@@ -341,13 +329,12 @@
             opacity: 0.95
         };
 
-        // soglie: più pixel = più pesante => riduci particelle e scia per alzare FPS
-        if (px > 2_500_000) { // desktop grande / dpr alto
+        if (px > 2_500_000) {
             cfg.particleMultiplier = 1/55;
             cfg.particleAge = 110;
             cfg.lineWidth = 0.7;
         }
-        if (px > 4_500_000) { // schermo enorme / 4k / dpr alto
+        if (px > 4_500_000) {
             cfg.particleMultiplier = 1/75;
             cfg.particleAge = 95;
             cfg.lineWidth = 0.6;
@@ -355,7 +342,6 @@
         return cfg;
     }
 
-    // 4. VENTO (parametri fisici dal tuo PRO + colori adattivi per base map)
     function updateWind() {
         if(velocityLayer) map.removeLayer(velocityLayer);
         if(activeLayer === 'wind' && currentData) {
@@ -366,8 +352,6 @@
                 velocityLayer = L.velocityLayer({
                     displayValues: false,
                     data: [ currentData.wind_u, currentData.wind_v ],
-
-                    // === PARAMETRI (base PRO + tuning FPS) ===
                     maxVelocity: t.maxVelocity,
                     velocityScale: t.velocityScale,
                     particleMultiplier: t.particleMultiplier,
@@ -375,8 +359,6 @@
                     particleAge: t.particleAge,
                     frameRate: t.frameRate,
                     opacity: t.opacity,
-
-                    // === COLORI: originali su dark, più scuri su OSM ===
                     colorScale: cs
                 });
                 velocityLayer.addTo(map);
@@ -384,35 +366,11 @@
         }
     }
 
-    // --- INTERAZIONE ---
-    window.setLayer = function(type) {
-        activeLayer = type;
-        document.querySelectorAll('.layer-btn').forEach(b => { if(!b.id) b.classList.remove('active'); });
-        event.target.classList.add('active');
-        let u = type==='wind'?'km/h':(type==='temp'?'°C':(type==='rain'?'mm':(type==='rh'?'%':'hPa')));
-        document.getElementById('unit-display').innerText = u;
-        document.getElementById('val-display').innerText = "--";
-        redrawAll();
-    }
-    window.toggleIso = function() { showIso=!showIso; document.getElementById('btn-iso').classList.toggle('active'); redrawAll(); }
-    window.toggleGrid = function() { showGrid=!showGrid; document.getElementById('btn-grid').classList.toggle('active'); redrawAll(); }
-    
-    window.togglePlay = function() {
-        if(isPlaying) return; isPlaying=true;
-        let s = document.getElementById('time-slider');
-        let btn = document.getElementById('play-btn'); btn.innerText = "❚❚";
-        let i = parseInt(s.value);
-        let interval = setInterval(() => {
-            if(i >= parseInt(s.max) || !isPlaying) { clearInterval(interval); isPlaying=false; btn.innerText="►"; }
-            else { i++; s.value=i; loadStep(i); }
-        }, 800);
-    }
-
-    map.on('mousemove', function(e) {
+    function updateValueAt(latlng) {
         if(!currentData) return;
         let m = currentData.meta;
-        let y = Math.round((m.la1 - e.latlng.lat) / m.dy);
-        let x = Math.round((e.latlng.lng - m.lo1) / m.dx);
+        let y = Math.round((m.la1 - latlng.lat) / m.dy);
+        let x = Math.round((latlng.lng - m.lo1) / m.dx);
         if(x>=0 && x<m.nx && y>=0 && y<m.ny) {
             let idx = y*m.nx + x;
             let val = "--";
@@ -425,8 +383,32 @@
             else if(activeLayer==='press') val = Math.round(currentData.press[idx]);
             document.getElementById('val-display').innerText = val;
         }
-    });
+    }
 
+    window.setLayer = function(type) {
+        activeLayer = type;
+        document.querySelectorAll('.layer-btn').forEach(b => { if(!b.id) b.classList.remove('active'); });
+        event.target.classList.add('active');
+
+        let u = type==='wind'?'km/h':(type==='temp'?'°C':(type==='rain'?'mm':(type==='rh'?'%':'hPa')));
+        document.getElementById('unit-display').innerText = u;
+        document.getElementById('val-display').innerText = "--";
+        redrawAll();
+    }
+
+    window.toggleIso  = function() { showIso=!showIso;  document.getElementById('btn-iso').classList.toggle('active');  redrawAll(); }
+    window.toggleGrid = function() { showGrid=!showGrid; document.getElementById('btn-grid').classList.toggle('active'); redrawAll(); }
+
+    window.togglePlay = function() {
+        if(isPlaying) return; isPlaying=true;
+        let s = document.getElementById('time-slider');
+        let btn = document.getElementById('play-btn'); btn.innerText = "❚❚";
+        let i = parseInt(s.value);
+        let interval = setInterval(() => {
+            if(i >= parseInt(s.max) || !isPlaying) { clearInterval(interval); isPlaying=false; btn.innerText="►"; }
+            else { i++; s.value=i; loadStep(i); }
+        }, 800);
+    }
 </script>
 </body>
 </html>
