@@ -1,127 +1,565 @@
 <!DOCTYPE html>
 <html>
 <head>
-  <title>Sicilia MeteoHub - DARK RELIEF</title>
+  <title>Sicilia MeteoHub - PRO (DARK RELIEF)</title>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
 
   <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
   <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
 
+  <link rel="stylesheet" href="https://unpkg.com/leaflet-velocity@1.8.0/dist/leaflet-velocity.css" />
+  <script src="https://unpkg.com/leaflet-velocity@1.8.0/dist/leaflet-velocity.js"></script>
+
+  <script src="https://d3js.org/d3.v7.min.js"></script>
+
   <style>
-    body { margin: 0; background: #050505; font-family: 'Segoe UI', Roboto, sans-serif; color: white; overflow: hidden; }
-    #map { position: absolute; top: 0; bottom: 0; width: 100%; background: #050505; }
+    body { margin: 0; background: #111; font-family: 'Segoe UI', sans-serif; color: white; overflow: hidden; }
+    #map { position: absolute; top: 0; bottom: 0; width: 100%; background: #111; }
 
-    /* UI stile tuo */
-    #basemap-selector{
-      position:absolute; top:20px; left:20px; z-index:1000;
-      background: rgba(10,10,10,0.85); backdrop-filter: blur(8px);
-      border-radius: 12px; padding: 6px; border: 1px solid rgba(255,255,255,0.15);
-      display:flex; gap:6px;
+    /* UI CONTROL */
+    #ui-container { position: absolute; top: 10px; right: 10px; z-index: 1000; display: flex; flex-direction: column; gap: 10px; align-items: flex-end; }
+    .panel { background: rgba(0,0,0,0.85); backdrop-filter: blur(6px); padding: 8px; border-radius: 14px; border: 1px solid #444; }
+    .layer-btn {
+      display: block; width: 140px; padding: 10px 12px; margin-bottom: 6px;
+      background: transparent; color: #ccc; border: none; text-align: right;
+      cursor: pointer; font-size: 13px; font-weight: 700; border-radius: 8px;
+      transition: all 0.15s;
     }
-    .base-btn{
-      background: rgba(255,255,255,0.05); color:#aaa; border:none;
-      padding: 8px 16px; border-radius: 8px; cursor:pointer;
-      font-size: 13px; font-weight: 700; transition: all .2s;
-    }
-    .base-btn:hover{ background: rgba(255,255,255,0.2); color:white; }
-    .base-btn.active{
-      background:#0088ff; color:white;
-      box-shadow: 0 2px 10px rgba(0,136,255,0.4);
-    }
+    .layer-btn:hover { background: rgba(255,255,255,0.08); color: #fff; }
+    .layer-btn.active { background: #007bff; color: white; }
 
-    /* Rilievi: rendili più “presenti” */
+    .map-toggle {
+      padding: 8px 12px; background: rgba(255,255,255,0.06); color: #fff;
+      border: 1px solid rgba(255,255,255,0.2); border-radius: 10px;
+      cursor: pointer; font-size: 12px; font-weight: 800;
+      transition: all 0.15s;
+    }
+    .map-toggle:hover { background: rgba(255,255,255,0.12); }
+    .map-toggle.active { background: #eee; color: #000; }
+
+    /* INFO & TIME */
+    #info-box { position: absolute; top: 20px; left: 20px; z-index: 1000; pointer-events: none; text-shadow: 2px 2px 0 #000; }
+    #val-display { font-size: 3.5em; font-weight: 900; line-height: 1; }
+    #unit-display { font-size: 1.2em; color: #aaa; font-weight: 800; }
+
+    #bottom-bar {
+      position: absolute; bottom: 0; left: 0; right: 0; height: 90px;
+      background: linear-gradient(to top, rgba(0,0,0,0.95), transparent);
+      display: flex; align-items: center; padding: 0 20px; z-index: 2000;
+    }
+    #play-btn { font-size: 2.5em; background: none; border: none; color: white; cursor: pointer; margin-right: 15px; }
+    #time-label { font-size: 1.4em; font-weight: 900; margin-left: 15px; min-width: 140px; text-align: center; text-shadow: 0 2px 10px #000; }
+    input[type=range] { flex-grow: 1; height: 5px; cursor: pointer; accent-color: #0088ff; }
+
+    /* Hillshade rendering */
     .hillshade-tiles {
-      mix-blend-mode: overlay;           /* fa emergere le ombre senza “lavare” tutto */
-      filter: contrast(1.35) brightness(0.85);
+      mix-blend-mode: overlay;
+      filter: contrast(1.4) brightness(0.85);
     }
 
-    /* Se vuoi ancora più rilievo, aumenta contrast e/o opacity nel JS */
+    /* Canvas: smooth */
+    canvas { image-rendering: auto; }
   </style>
 </head>
-<body>
 
-  <div id="basemap-selector">
-    <button class="base-btn active" onclick="setBaseMap('dark_relief')">DARK RILIEVI</button>
-    <button class="base-btn" onclick="setBaseMap('sat')">SATELLITE</button>
+<body>
+  <div id="info-box">
+    <div id="val-display">--</div>
+    <div id="unit-display">Caricamento...</div>
+  </div>
+
+  <div id="ui-container">
+    <div class="panel" style="display:flex; gap:6px;">
+      <button class="map-toggle active" onclick="setBase('dark')">DARK</button>
+      <button class="map-toggle" onclick="setBase('map')">MAPPA</button>
+    </div>
+
+    <div class="panel">
+      <button class="layer-btn active" onclick="setLayer('wind')">VENTO 💨</button>
+      <button class="layer-btn" onclick="setLayer('temp')">TEMP 🌡️</button>
+      <button class="layer-btn" onclick="setLayer('rain')">PIOGGIA ☔</button>
+      <button class="layer-btn" onclick="setLayer('rh')">UMIDITÀ 💧</button>
+      <button class="layer-btn" onclick="setLayer('press')">PRESS ⏲️</button>
+      <hr style="border:0; border-top:1px solid #444; margin:6px 0;">
+      <button class="layer-btn" id="btn-iso" onclick="toggleIso()">ISOBARE 〰️</button>
+      <button class="layer-btn" id="btn-grid" onclick="toggleGrid()">GRIGLIA #</button>
+    </div>
   </div>
 
   <div id="map"></div>
 
-  <script>
-    let map;
-    let darkBase, satBase, labels, hillshade;
-    let currentBase = 'dark_relief';
+  <div id="bottom-bar">
+    <button id="play-btn" onclick="togglePlay()">►</button>
+    <input type="range" id="time-slider" min="0" max="0" value="0">
+    <div id="time-label">--/-- --:--</div>
+  </div>
 
-    window.addEventListener('load', () => {
-      map = L.map('map', { zoomControl: false }).setView([37.5, 14.2], 8);
+<script>
+  // --- GLOBALS ---
+  var map, velocityLayer;
+  var heatCanvas, isoCanvas, gridCanvas;
 
-      // Panes (ordine preciso)
-      map.createPane('basePane');      map.getPane('basePane').style.zIndex = 200;
-      map.createPane('hillPane');      map.getPane('hillPane').style.zIndex = 260;
-      map.createPane('labelsPane');    map.getPane('labelsPane').style.zIndex = 600;
+  var currentData = null, catalog = [];
+  var activeLayer = 'wind';
+  var showIso = false, showGrid = false, isPlaying = false;
 
-      // --- BASE DARK ---
-      darkBase = L.tileLayer(
-        'https://{s}.basemaps.cartocdn.com/dark_nolabels/{z}/{x}/{y}{r}.png',
-        { pane: 'basePane', maxZoom: 19, opacity: 1.0, attribution: '©OpenStreetMap, ©Carto' }
-      );
+  var baseLayers = {};
+  var labelLayers = {};
+  var hillshadeLayer = null;
 
-      // --- SATELLITE ---
-      satBase = L.tileLayer(
-        'https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}',
-        { pane: 'basePane', maxZoom: 19, opacity: 1.0, attribution: 'Tiles © Esri' }
-      );
+  var isLightMode = false;
 
-      // --- HILLSHADE (RILIEVI) ---
-      // Esri World Hillshade (solo ombreggiatura)
-      hillshade = L.tileLayer(
-        'https://server.arcgisonline.com/ArcGIS/rest/services/Elevation/World_Hillshade/MapServer/tile/{z}/{y}/{x}',
-        {
-          pane: 'hillPane',
-          maxZoom: 19,
-          opacity: 0.42,              // <--- aumenta a 0.50 se vuoi rilievi ancora più marcati
-          className: 'hillshade-tiles',
-          attribution: 'Hillshade © Esri'
-        }
-      );
+  // --- PALETTES (heatmaps) ---
+  const PALETTES = {
+    temp: [
+      {v:-10,c:[255,255,255,0.55]},
+      {v:0,  c:[200,200,255,0.55]},
+      {v:10, c:[0,200,100,0.55]},
+      {v:20, c:[255,255,0,0.55]},
+      {v:30, c:[255,140,0,0.55]},
+      {v:40, c:[200,0,0,0.55]}
+    ],
+    rain: [
+      {v:0,   c:[0,0,0,0]},
+      {v:0.1, c:[0,200,255,0.55]},
+      {v:2,   c:[0,0,255,0.65]},
+      {v:10,  c:[150,0,200,0.75]}
+    ],
+    rh: [
+      {v:20,c:[200,150,50,0.55]},
+      {v:40,c:[200,200,200,0.55]},
+      {v:60,c:[100,255,100,0.55]},
+      {v:80,c:[50,150,255,0.60]},
+      {v:95,c:[0,0,200,0.65]}
+    ],
+    // Pressione: blu (bassa) -> rosso (alta), senza “buco” trasparente.
+    press: [
+      {v:980, c:[0,70,255,0.55]},
+      {v:995, c:[0,170,255,0.55]},
+      {v:1005,c:[0,255,200,0.55]},
+      {v:1013,c:[255,255,255,0.55]},
+      {v:1022,c:[255,200,0,0.55]},
+      {v:1035,c:[255,60,0,0.60]}
+    ]
+  };
 
-      // --- LABELS SEMPRE SOPRA (su dark sono perfette; su satellite aiutano) ---
-      labels = L.tileLayer(
-        'https://{s}.basemaps.cartocdn.com/dark_only_labels/{z}/{x}/{y}{r}.png',
-        { pane: 'labelsPane', maxZoom: 19, opacity: 1.0 }
-      );
+  function lerp(a,b,t){ return a+(b-a)*t; }
 
-      // Default: dark + rilievi + labels
-      darkBase.addTo(map);
-      hillshade.addTo(map);
-      labels.addTo(map);
-    });
+  function getColor(val, type) {
+    const p = PALETTES[type];
+    if(!p) return [0,0,0,0];
 
-    window.setBaseMap = function(type) {
-      document.querySelectorAll('.base-btn').forEach(b => b.classList.remove('active'));
-      event.target.classList.add('active');
+    if(type==='rain' && val < 0.1) return [0,0,0,0];
 
-      // rimuovi tutto
-      map.removeLayer(darkBase);
-      map.removeLayer(satBase);
-      map.removeLayer(hillshade);
+    for(let i=0; i<p.length-1; i++) {
+      if(val >= p[i].v && val <= p[i+1].v) {
+        const t = (val - p[i].v) / (p[i+1].v - p[i].v);
+        const c1 = p[i].c, c2 = p[i+1].c;
+        return [
+          Math.round(lerp(c1[0], c2[0], t)),
+          Math.round(lerp(c1[1], c2[1], t)),
+          Math.round(lerp(c1[2], c2[2], t)),
+          lerp(c1[3], c2[3], t)
+        ];
+      }
+    }
+    const last = p[p.length-1].c;
+    return [last[0], last[1], last[2], last[3]];
+  }
 
-      if (type === 'dark_relief') {
-        darkBase.addTo(map);
-        hillshade.addTo(map);         // rilievi ON
+  // --- INIT ---
+  window.addEventListener('load', async function() {
+    map = L.map('map', { zoomControl: false }).setView([37.5, 14.2], 8);
+
+    // Base layers
+    baseLayers.dark = L.tileLayer(
+      'https://{s}.basemaps.cartocdn.com/dark_nolabels/{z}/{x}/{y}{r}.png',
+      { maxZoom: 19, attribution: '©OpenStreetMap, ©Carto' }
+    ).addTo(map);
+
+    // Hillshade overlay (only in dark mode)
+    hillshadeLayer = L.tileLayer(
+      'https://server.arcgisonline.com/ArcGIS/rest/services/Elevation/World_Hillshade/MapServer/tile/{z}/{y}/{x}',
+      {
+        maxZoom: 19,
+        opacity: 0.42,
+        className: 'hillshade-tiles',
+        attribution: 'Hillshade © Esri'
+      }
+    ).addTo(map);
+
+    baseLayers.map = L.tileLayer(
+      'https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png',
+      { maxZoom: 19, attribution: '©OpenStreetMap' }
+    );
+
+    // Labels
+    labelLayers.dark = L.tileLayer(
+      'https://{s}.basemaps.cartocdn.com/dark_only_labels/{z}/{x}/{y}{r}.png',
+      { maxZoom: 19, attribution: '©Carto' }
+    ).addTo(map);
+
+    labelLayers.map = null; // OSM ha già le etichette
+
+    createCanvasLayers();
+    await loadCatalogAndFirstFrame();
+
+    // Mousemove + Click per picker (non blocca più: è dentro load e map esiste)
+    map.on('mousemove', updatePickerFromEvent);
+    map.on('click', updatePickerFromEvent);
+
+    document.getElementById('unit-display').innerText = unitFor(activeLayer);
+  });
+
+  function setBase(type) {
+    document.querySelectorAll('.map-toggle').forEach(b => b.classList.remove('active'));
+    event.target.classList.add('active');
+
+    if(type==='dark') {
+      isLightMode = false;
+      map.removeLayer(baseLayers.map);
+      baseLayers.dark.addTo(map);
+      if(hillshadeLayer) hillshadeLayer.addTo(map);
+
+      if(labelLayers.map) map.removeLayer(labelLayers.map);
+      if(labelLayers.dark) labelLayers.dark.addTo(map);
+    } else {
+      isLightMode = true;
+      map.removeLayer(baseLayers.dark);
+      if(hillshadeLayer) map.removeLayer(hillshadeLayer);
+      baseLayers.map.addTo(map);
+
+      if(labelLayers.dark) map.removeLayer(labelLayers.dark);
+      // labelLayers.map non serve
+    }
+
+    redrawAll();
+  }
+
+  // --- DATA LOAD ---
+  async function loadCatalogAndFirstFrame() {
+    try {
+      const r = await fetch('data_weather/catalog.json?t=' + Date.now());
+      if(!r.ok) throw new Error("catalog not found");
+      catalog = await r.json();
+      if(!catalog || catalog.length === 0) throw new Error("empty catalog");
+
+      const slider = document.getElementById('time-slider');
+      slider.max = catalog.length - 1;
+      slider.value = 0;
+      slider.addEventListener('input', (e) => loadStep(parseInt(e.target.value,10)));
+
+      await loadStep(0);
+      document.getElementById('unit-display').innerText = "Pronto";
+    } catch(e) {
+      document.getElementById('unit-display').innerText = "Errore dati";
+    }
+  }
+
+  async function loadStep(idx) {
+    if(!catalog[idx]) return;
+    document.getElementById('time-label').innerText = catalog[idx].label;
+
+    try {
+      const r = await fetch('data_weather/' + catalog[idx].file + '?t=' + Date.now());
+      if(!r.ok) throw new Error("frame not found");
+      currentData = await r.json();
+      redrawAll();
+    } catch(e) {
+      // se fallisce, lascia l’ultima frame buona
+    }
+  }
+
+  // --- CANVAS LAYERS ---
+  function createCanvasLayers() {
+    const mkCanvas = (z) => {
+      const c = L.DomUtil.create('canvas', 'leaflet-layer');
+      c.style.pointerEvents = 'none';
+      c.style.zIndex = z;
+      map.getPanes().overlayPane.appendChild(c);
+      return c;
+    };
+
+    heatCanvas = mkCanvas(300);
+    isoCanvas  = mkCanvas(400);
+    gridCanvas = mkCanvas(450);
+
+    map.on('moveend resize', redrawAll);
+  }
+
+  function redrawAll() {
+    if(!currentData) return;
+    drawHeatmap();
+    drawIsobars();
+    drawGrid();
+    updateWind();
+  }
+
+  // --- RENDER: HEATMAP (NO NUMBERS INSIDE CELLS) ---
+  function drawHeatmap() {
+    const ctx = heatCanvas.getContext('2d');
+    const s = map.getSize();
+    heatCanvas.width = s.x;
+    heatCanvas.height = s.y;
+    L.DomUtil.setPosition(heatCanvas, map.containerPointToLayerPoint([0,0]));
+    ctx.clearRect(0,0,s.x,s.y);
+
+    if(activeLayer === 'wind' || !currentData) return;
+
+    const m = currentData.meta;
+    const b = map.getBounds();
+
+    for(let y=0; y<m.ny; y++) {
+      const lat = m.la1 - (y*m.dy);
+      if(lat < b.getSouth()-0.1 || lat > b.getNorth()+0.1) continue;
+
+      for(let x=0; x<m.nx; x++) {
+        const lon = m.lo1 + (x*m.dx);
+        if(lon < b.getWest()-0.1 || lon > b.getEast()+0.1) continue;
+
+        const idx = y*m.nx + x;
+
+        let val = 0;
+        if(activeLayer==='temp') val = currentData.temp[idx];
+        else if(activeLayer==='rain') val = currentData.rain[idx];
+        else if(activeLayer==='rh')   val = currentData.rh[idx];
+        else if(activeLayer==='press') val = currentData.press[idx];
+
+        const c = getColor(val, activeLayer);
+        if(c[3] <= 0) continue;
+
+        const p1 = map.latLngToContainerPoint([lat, lon]);
+        const p2 = map.latLngToContainerPoint([lat - m.dy, lon + m.dx]);
+
+        const w = Math.ceil(p2.x - p1.x) + 1;
+        const h = Math.ceil(p2.y - p1.y) + 1;
+
+        ctx.fillStyle = `rgba(${c[0]},${c[1]},${c[2]},${c[3]})`;
+        ctx.fillRect(Math.floor(p1.x), Math.floor(p1.y), w, h);
+      }
+    }
+  }
+
+  // --- ISOBARE (solo se toggle ON) ---
+  function drawIsobars() {
+    const ctx = isoCanvas.getContext('2d');
+    const s = map.getSize();
+    isoCanvas.width = s.x;
+    isoCanvas.height = s.y;
+    L.DomUtil.setPosition(isoCanvas, map.containerPointToLayerPoint([0,0]));
+    ctx.clearRect(0,0,s.x,s.y);
+
+    if(!showIso || !currentData || !currentData.press) return;
+
+    const m = currentData.meta;
+    const values = currentData.press;
+
+    // Step 2 hPa
+    const contours = d3.contours().size([m.nx, m.ny]).thresholds(d3.range(960, 1050, 2))(values);
+
+    ctx.lineWidth = 1.4;
+    ctx.font = "900 12px Arial";
+    ctx.textAlign = "center";
+    ctx.textBaseline = "middle";
+
+    contours.forEach(c => {
+      // colori isobare diversi in base alla mappa
+      if(isLightMode) {
+        ctx.strokeStyle = (c.value < 1013) ? "rgba(0,0,0,0.75)" : "rgba(60,60,60,0.75)";
       } else {
-        satBase.addTo(map);
-        // Se vuoi rilievi anche su satellite, scommenta:
-        // hillshade.setOpacity(0.25);
-        // hillshade.addTo(map);
+        ctx.strokeStyle = (c.value < 1013) ? "rgba(120,160,255,0.85)" : "rgba(255,140,120,0.85)";
+        if(Math.abs(c.value-1013) < 1) ctx.strokeStyle = "rgba(255,255,255,0.9)";
       }
 
-      currentBase = type;
-      // labels restano sempre sopra
-      if (!map.hasLayer(labels)) labels.addTo(map);
+      ctx.beginPath();
+      const labelCandidates = [];
+
+      c.coordinates.forEach(ring => {
+        ring.forEach(pts => {
+          let first = true;
+          const linePts = [];
+          pts.forEach(coord => {
+            const lat = m.la1 - (coord[1] * m.dy);
+            const lon = m.lo1 + (coord[0] * m.dx);
+            const p = map.latLngToContainerPoint([lat, lon]);
+            linePts.push(p);
+            if(first) { ctx.moveTo(p.x, p.y); first=false; }
+            else ctx.lineTo(p.x, p.y);
+          });
+          if(linePts.length > 60) labelCandidates.push(linePts);
+        });
+      });
+
+      ctx.stroke();
+
+      // etichette (una ogni linea lunga)
+      labelCandidates.forEach(pts => {
+        const mid = pts[Math.floor(pts.length/2)];
+        const bg = isLightMode ? "rgba(255,255,255,0.8)" : "rgba(0,0,0,0.7)";
+        const fg = isLightMode ? "#000" : "#fff";
+        ctx.fillStyle = bg;
+        ctx.fillRect(mid.x-16, mid.y-9, 32, 18);
+        ctx.fillStyle = fg;
+        ctx.fillText(Math.round(c.value), mid.x, mid.y);
+      });
+    });
+  }
+
+  // --- GRIGLIA (solo linee, niente numeri) ---
+  function drawGrid() {
+    const ctx = gridCanvas.getContext('2d');
+    const s = map.getSize();
+    gridCanvas.width = s.x;
+    gridCanvas.height = s.y;
+    L.DomUtil.setPosition(gridCanvas, map.containerPointToLayerPoint([0,0]));
+    ctx.clearRect(0,0,s.x,s.y);
+
+    if(!showGrid) return;
+
+    const b = map.getBounds();
+    const step = map.getZoom() > 9 ? 0.1 : 0.5;
+
+    ctx.strokeStyle = isLightMode ? "rgba(0,0,0,0.25)" : "rgba(255,255,255,0.18)";
+    ctx.lineWidth = 1;
+
+    for(let lon=Math.floor(b.getWest()); lon<=Math.ceil(b.getEast()); lon+=step) {
+      const x = map.latLngToContainerPoint([b.getSouth(), lon]).x;
+      ctx.beginPath(); ctx.moveTo(x,0); ctx.lineTo(x,s.y); ctx.stroke();
     }
-  </script>
+    for(let lat=Math.floor(b.getSouth()); lat<=Math.ceil(b.getNorth()); lat+=step) {
+      const y = map.latLngToContainerPoint([lat, b.getWest()]).y;
+      ctx.beginPath(); ctx.moveTo(0,y); ctx.lineTo(s.x,y); ctx.stroke();
+    }
+  }
+
+  // --- WIND (PARAMETRI + COLORI ORIGINALI PRO EDITION) ---
+  function updateWind() {
+    if(velocityLayer) map.removeLayer(velocityLayer);
+    if(activeLayer !== 'wind' || !currentData) return;
+
+    // (piccolo aiuto FPS senza “alterare” la fisica: adatta solo densità particelle al device)
+    const smallScreen = Math.min(window.innerWidth, window.innerHeight) < 900;
+    const particleMult = smallScreen ? (1/55) : (1/35);
+
+    try {
+      velocityLayer = L.velocityLayer({
+        displayValues: false,
+        data: [ currentData.wind_u, currentData.wind_v ],
+
+        // === I TUOI PARAMETRI ORIGINALI ===
+        maxVelocity: 18.0,
+        velocityScale: 0.006,
+        particleMultiplier: particleMult,
+        lineWidth: 0.8,
+        particleAge: 140,
+        frameRate: 60,
+        opacity: 0.95,
+        colorScale: ["#000080", "#0044ff", "#00ddff", "#00ff55", "#ffff00", "#ff6600", "#ff0000", "#ff00ff"]
+      });
+
+      velocityLayer.addTo(map);
+    } catch(e) {
+      // se leafet-velocity fallisce, non bloccare tutto
+    }
+  }
+
+  // --- PICKER ---
+  function unitFor(type){
+    if(type==='wind') return 'km/h';
+    if(type==='temp') return '°C';
+    if(type==='rain') return 'mm';
+    if(type==='rh') return '%';
+    if(type==='press') return 'hPa';
+    return '';
+  }
+
+  function valueAtLatLng(latlng) {
+    if(!currentData || !currentData.meta) return null;
+    const m = currentData.meta;
+
+    const y = Math.round((m.la1 - latlng.lat) / m.dy);
+    const x = Math.round((latlng.lng - m.lo1) / m.dx);
+
+    if(x < 0 || x >= m.nx || y < 0 || y >= m.ny) return null;
+
+    const idx = y*m.nx + x;
+
+    if(activeLayer === 'wind') {
+      const u = currentData.wind_u.data[idx];
+      const v = currentData.wind_v.data[idx];
+      return (Math.sqrt(u*u + v*v) * 3.6);
+    }
+    if(activeLayer === 'temp') return currentData.temp[idx];
+    if(activeLayer === 'rain') return currentData.rain[idx];
+    if(activeLayer === 'rh') return currentData.rh[idx];
+    if(activeLayer === 'press') return currentData.press[idx];
+
+    return null;
+  }
+
+  function updatePickerFromEvent(e) {
+    const val = valueAtLatLng(e.latlng);
+    if(val === null || val === undefined) return;
+
+    let out = '--';
+    if(activeLayer === 'wind') out = val.toFixed(1);
+    else if(activeLayer === 'temp') out = val.toFixed(1);
+    else if(activeLayer === 'rain') out = (val < 1 ? val.toFixed(1) : val.toFixed(1));
+    else if(activeLayer === 'rh') out = Math.round(val).toString();
+    else if(activeLayer === 'press') out = Math.round(val).toString();
+
+    document.getElementById('val-display').innerText = out;
+  }
+
+  // --- UI ACTIONS ---
+  window.setLayer = function(type) {
+    activeLayer = type;
+
+    document.querySelectorAll('.layer-btn').forEach(btn => {
+      if(btn.id !== 'btn-iso' && btn.id !== 'btn-grid') btn.classList.remove('active');
+    });
+    event.target.classList.add('active');
+
+    document.getElementById('unit-display').innerText = unitFor(type);
+    document.getElementById('val-display').innerText = '--';
+
+    redrawAll();
+  };
+
+  window.toggleIso = function() {
+    showIso = !showIso;
+    document.getElementById('btn-iso').classList.toggle('active');
+    redrawAll();
+  };
+
+  window.toggleGrid = function() {
+    showGrid = !showGrid;
+    document.getElementById('btn-grid').classList.toggle('active');
+    redrawAll();
+  };
+
+  window.togglePlay = function() {
+    if(isPlaying) { isPlaying = false; document.getElementById('play-btn').innerText = "►"; return; }
+    isPlaying = true;
+
+    const s = document.getElementById('time-slider');
+    const btn = document.getElementById('play-btn');
+    btn.innerText = "❚❚";
+
+    let i = parseInt(s.value, 10);
+    const max = parseInt(s.max, 10);
+
+    const interval = setInterval(() => {
+      if(!isPlaying) { clearInterval(interval); btn.innerText = "►"; return; }
+      if(i >= max) { clearInterval(interval); isPlaying=false; btn.innerText="►"; return; }
+      i++;
+      s.value = i;
+      loadStep(i);
+    }, 800);
+  };
+</script>
 
 </body>
 </html>
+```0
