@@ -127,27 +127,7 @@
 
             createCanvasLayers();
             loadData();
-
-            // ✅ FIX CRITICO: qui map ESISTE, quindi possiamo attaccare l'evento senza crashare tutto
-            map.on('mousemove', function(e) {
-                if(!currentData) return;
-                let m = currentData.meta;
-                let y = Math.round((m.la1 - e.latlng.lat) / m.dy);
-                let x = Math.round((e.latlng.lng - m.lo1) / m.dx);
-                if(x>=0 && x<m.nx && y>=0 && y<m.ny) {
-                    let idx = y*m.nx + x;
-                    let val = "--";
-                    if(activeLayer==='wind') {
-                        let u=currentData.wind_u.data[idx], v=currentData.wind_v.data[idx];
-                        val = (Math.sqrt(u*u+v*v)*3.6).toFixed(1);
-                    } else if(activeLayer==='temp') val = currentData.temp[idx].toFixed(1);
-                    else if(activeLayer==='rain') val = currentData.rain[idx].toFixed(1);
-                    else if(activeLayer==='rh') val = Math.round(currentData.rh[idx]);
-                    else if(activeLayer==='press') val = Math.round(currentData.press[idx]);
-                    document.getElementById('val-display').innerText = val;
-                }
-            });
-
+            
         } catch(e) { document.getElementById('unit-display').innerText = "Errore Init"; }
     });
 
@@ -339,41 +319,45 @@
         }
     }
 
-    // 4. VENTO (NOAA) — colori “dinamici” tramite colorScale ARRAY (compatibile)
+    // 4. VENTO NOAA "B" (LINEARE E PROPORZIONALE)
+    // >>> MODIFICATO SOLO QUI (particelle/colore/scala velocità) <<<
     function updateWind() {
         if(velocityLayer) map.removeLayer(velocityLayer);
+
         if(activeLayer === 'wind' && currentData) {
             try {
-                // NOAA-ish: viola -> blu -> ciano -> verde -> giallo -> arancio -> rosso
-                const NOAA_COLOR_SCALE = [
-                    "#2b004f",
-                    "#4b0082",
-                    "#0000ff",
-                    "#0080ff",
-                    "#00ffff",
-                    "#00ff80",
-                    "#00ff00",
-                    "#80ff00",
-                    "#ffff00",
-                    "#ffb000",
-                    "#ff5500",
-                    "#ff0000"
-                ];
-
                 velocityLayer = L.velocityLayer({
                     displayValues: false,
                     data: [ currentData.wind_u, currentData.wind_v ],
 
-                    // FISICA: differenziazione più evidente tra velocità
-                    // (u/v in m/s)
-                    maxVelocity: 35.0,         // ~126 km/h
-                    velocityScale: 0.010,      // movimento più “leggibile”
-                    particleMultiplier: 1/140, // densità pulita
+                    // --- FISICA VISIVA LINEARE (m/s -> px/s proporzionale) ---
+                    // ICON: u/v sono in m/s. Qui NON comprimiamo: differenze ben visibili.
+                    maxVelocity: 35.0,        // ~126 km/h (evita clipping dei venti forti)
+                    velocityScale: 0.012,     // PROFILO B: "normale" (differenze nette senza sparare)
+                    
+                    // --- PARTICELLE (leggibili, non nebbia) ---
+                    particleMultiplier: 1/160,
+                    particleAge: 120,
                     lineWidth: 1.6,
                     frameRate: 60,
+                    opacity: 0.95,
 
-                    // ✅ colorScale array = il plugin colora in base alla velocità (m/s)
-                    colorScale: NOAA_COLOR_SCALE
+                    // --- COLORI NOAA DINAMICI (in base alla velocità) ---
+                    // La particella cambia colore al variare del modulo velocità (blu->verde->giallo->rosso)
+                    colorScale: [
+                        "#2b004f", // viola scuro (calma)
+                        "#4b0082", // indaco
+                        "#0000ff", // blu
+                        "#0080ff", // azzurro
+                        "#00ffff", // ciano
+                        "#00ff80", // verde acqua
+                        "#00ff00", // verde
+                        "#80ff00", // verde acido
+                        "#ffff00", // giallo
+                        "#ffb000", // arancio chiaro
+                        "#ff5500", // arancio
+                        "#ff0000"  // rosso (molto forte)
+                    ]
                 });
 
                 velocityLayer.addTo(map);
@@ -404,6 +388,34 @@
             else { i++; s.value=i; loadStep(i); }
         }, 800);
     }
+
+    // (mantengo il tuo comportamento)
+    map?.on?.('mousemove', function(e) {});
+
+    window.addEventListener('load', function(){
+        // aggancio mousemove dopo init (evita race)
+        try {
+            map.on('mousemove', function(e) {
+                if(!currentData) return;
+                let m = currentData.meta;
+                let y = Math.round((m.la1 - e.latlng.lat) / m.dy);
+                let x = Math.round((e.latlng.lng - m.lo1) / m.dx);
+                if(x>=0 && x<m.nx && y>=0 && y<m.ny) {
+                    let idx = y*m.nx + x;
+                    let val = "--";
+                    if(activeLayer==='wind') {
+                        let u=currentData.wind_u.data[idx], v=currentData.wind_v.data[idx];
+                        val = (Math.sqrt(u*u+v*v)*3.6).toFixed(1);
+                    } else if(activeLayer==='temp') val = currentData.temp[idx].toFixed(1);
+                    else if(activeLayer==='rain') val = currentData.rain[idx].toFixed(1);
+                    else if(activeLayer==='rh') val = Math.round(currentData.rh[idx]);
+                    else if(activeLayer==='press') val = Math.round(currentData.press[idx]);
+                    document.getElementById('val-display').innerText = val;
+                }
+            });
+        } catch(e) {}
+    });
+
 </script>
 </body>
 </html>
