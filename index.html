@@ -89,6 +89,13 @@
     var baseLayers = {};
     var isLightMode = false;
 
+    // === VENTO: COLORI ORIGINALI (DARK) presi 1:1 dal tuo PRO ===
+    const WIND_COLORS_DARK = ["#000080", "#0044ff", "#00ddff", "#00ff55", "#ffff00", "#ff6600", "#ff0000", "#ff00ff"];
+
+    // === VENTO: STESSA SCALA MA PIÙ SCURA PER MAPPA CHIARA (OSM) ===
+    // (Serve contrasto: sul bianco gli azzurri/gialli originali spariscono)
+    const WIND_COLORS_LIGHT = ["#000060", "#0030cc", "#0077cc", "#00aa33", "#b39b00", "#b34700", "#b30000", "#7a007a"];
+
     // --- PALETTE COLORI (NOAA STYLE) ---
     const PALETTES = {
         temp: [{v:-10,c:[255,255,255]},{v:0,c:[180,180,255]},{v:10,c:[0,200,100]},{v:20,c:[255,255,0]},{v:30,c:[255,140,0]},{v:40,c:[200,0,0]}],
@@ -121,7 +128,7 @@
             map = L.map('map', { zoomControl: false }).setView([37.5, 14.2], 8);
             
             baseLayers.dark = L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_nolabels/{z}/{x}/{y}{r}.png').addTo(map);
-            baseLayers.map = L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {opacity:1.0}); // Mappa chiara
+            baseLayers.map = L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {opacity:1.0});
             
             L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_only_labels/{z}/{x}/{y}{r}.png', {zIndex:600}).addTo(map);
 
@@ -144,16 +151,18 @@
             baseLayers.map.addTo(map); 
             isLightMode = true;
         }
-        redrawAll(); // Ridisegna per cambiare colore isobare
+
+        // ✅ cambia anche la palette delle particelle vento in base al contrasto
+        updateWind();
+        redrawAll();
     }
 
     // --- CARICAMENTO DATI ---
     async function loadData() {
         try {
-            let r = await fetch('data_weather/catalog.json?t=' + Date.now()); // Anti-cache
+            let r = await fetch('data_weather/catalog.json?t=' + Date.now());
             if(!r.ok) throw new Error("404");
             catalog = await r.json();
-            
             if(catalog.length===0) throw new Error("Empty");
 
             document.getElementById('time-slider').max = catalog.length - 1;
@@ -169,7 +178,7 @@
         if(!catalog[idx]) return;
         document.getElementById('time-label').innerText = catalog[idx].label;
         try {
-            let r = await fetch('data_weather/' + catalog[idx].file);
+            let r = await fetch('data_weather/' + catalog[idx].file + '?nocache=' + Date.now());
             currentData = await r.json();
             redrawAll();
         } catch(e) {}
@@ -197,8 +206,6 @@
     }
 
     // --- RENDERING ---
-
-    // 1. HEATMAP (Dati statici)
     function drawHeatmap() {
         let ctx = heatCanvas.getContext('2d');
         let s = map.getSize(); heatCanvas.width=s.x; heatCanvas.height=s.y;
@@ -243,7 +250,6 @@
         }
     }
 
-    // 2. ISOBARE (Smart Colors)
     function drawIsobars() {
         let ctx = isoCanvas.getContext('2d');
         let s = map.getSize(); isoCanvas.width=s.x; isoCanvas.height=s.y;
@@ -292,7 +298,6 @@
         });
     }
 
-    // 3. GRIGLIA
     function drawGrid() {
         let ctx = gridCanvas.getContext('2d');
         let s = map.getSize(); gridCanvas.width=s.x; gridCanvas.height=s.y;
@@ -319,26 +324,60 @@
         }
     }
 
-    // 4. VENTO (✅ PRESO 1:1 dal tuo PRO EDITION)
+    // === FIX FPS DESKTOP: tuning automatico (meno carico quando lo schermo è pesante) ===
+    function getWindTuning() {
+        let s = map.getSize();
+        let dpr = window.devicePixelRatio || 1;
+        let px = s.x * s.y * dpr * dpr;
+
+        // baseline dal tuo PRO
+        let cfg = {
+            maxVelocity: 18.0,
+            velocityScale: 0.006,
+            particleMultiplier: 1/35,
+            lineWidth: 0.8,
+            particleAge: 140,
+            frameRate: 60,
+            opacity: 0.95
+        };
+
+        // soglie: più pixel = più pesante => riduci particelle e scia per alzare FPS
+        if (px > 2_500_000) { // desktop grande / dpr alto
+            cfg.particleMultiplier = 1/55;
+            cfg.particleAge = 110;
+            cfg.lineWidth = 0.7;
+        }
+        if (px > 4_500_000) { // schermo enorme / 4k / dpr alto
+            cfg.particleMultiplier = 1/75;
+            cfg.particleAge = 95;
+            cfg.lineWidth = 0.6;
+        }
+        return cfg;
+    }
+
+    // 4. VENTO (parametri fisici dal tuo PRO + colori adattivi per base map)
     function updateWind() {
         if(velocityLayer) map.removeLayer(velocityLayer);
         if(activeLayer === 'wind' && currentData) {
             try {
+                let t = getWindTuning();
+                let cs = isLightMode ? WIND_COLORS_LIGHT : WIND_COLORS_DARK;
+
                 velocityLayer = L.velocityLayer({
                     displayValues: false,
                     data: [ currentData.wind_u, currentData.wind_v ],
 
-                    // === PARAMETRI ESATTI DAL TUO ORIGINALE PRO ===
-                    maxVelocity: 18.0,
-                    velocityScale: 0.006,
-                    particleMultiplier: 1/35,
-                    lineWidth: 0.8,
-                    particleAge: 140,
-                    frameRate: 60,
-                    opacity: 0.95,
+                    // === PARAMETRI (base PRO + tuning FPS) ===
+                    maxVelocity: t.maxVelocity,
+                    velocityScale: t.velocityScale,
+                    particleMultiplier: t.particleMultiplier,
+                    lineWidth: t.lineWidth,
+                    particleAge: t.particleAge,
+                    frameRate: t.frameRate,
+                    opacity: t.opacity,
 
-                    // === COLORI ESATTI DAL TUO ORIGINALE PRO ===
-                    colorScale: ["#000080", "#0044ff", "#00ddff", "#00ff55", "#ffff00", "#ff6600", "#ff0000", "#ff00ff"]
+                    // === COLORI: originali su dark, più scuri su OSM ===
+                    colorScale: cs
                 });
                 velocityLayer.addTo(map);
             } catch(e){}
@@ -387,6 +426,7 @@
             document.getElementById('val-display').innerText = val;
         }
     });
+
 </script>
 </body>
 </html>
