@@ -1,339 +1,83 @@
 <!DOCTYPE html>
 <html>
 <head>
-    <title>Sicilia MeteoHub - DIAGNOSTIC</title>
     <meta charset="utf-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Meteo CORE</title>
     
     <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
     <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
-    <link rel="stylesheet" href="https://unpkg.com/leaflet-velocity@1.8.0/dist/leaflet-velocity.css" />
-    <script src="https://unpkg.com/leaflet-velocity@1.8.0/dist/leaflet-velocity.js"></script>
     <script src="https://d3js.org/d3.v7.min.js"></script>
     
     <style>
-        body { margin: 0; background: #050505; font-family: 'Segoe UI', Roboto, sans-serif; color: white; overflow: hidden; }
-        #map { position: absolute; top: 0; bottom: 0; width: 100%; background: #050505; }
-        
-        /* LOGBOX - LA SCATOLA NERA */
-        #log-console {
-            position: absolute; top: 0; left: 0; width: 100%; height: 100%;
-            background: rgba(0,0,0,0.95); z-index: 9999;
-            padding: 20px; box-sizing: border-box; font-family: monospace;
-            overflow-y: auto; color: #0f0; font-size: 14px;
-            display: block; /* Visibile all'avvio */
-        }
-        .log-err { color: #ff3333; font-weight: bold; border-bottom: 1px solid #ff3333; padding-bottom: 5px; margin-bottom: 5px; }
-        .log-warn { color: #ffff00; }
-        .log-info { color: #00ffff; }
-        #close-log {
-            position: absolute; top: 20px; right: 20px; padding: 10px 20px;
-            background: #333; color: white; border: 1px solid #fff; cursor: pointer;
-            z-index: 10000; display: none; /* Appare solo se tutto ok */
-        }
-
-        /* UI NORMALE (Nascosta sotto il log finché non è pronto) */
-        #layer-menu {
-            position: absolute; top: 10px; right: 10px; z-index: 1000;
-            background: rgba(20, 20, 20, 0.95); backdrop-filter: blur(5px);
-            padding: 8px; border-radius: 12px; display: flex; flex-direction: column; gap: 6px;
-            border: 1px solid rgba(255, 255, 255, 0.15); width: 130px;
-        }
-        .layer-btn {
-            background: transparent; border: none; color: #ccc; padding: 8px 12px;
-            font-size: 13px; font-weight: 600; cursor: pointer; text-align: right; 
-            border-radius: 6px; display: flex; justify-content: space-between;
-        }
-        .layer-btn.active { background: #0066cc; color: white; }
-        .layer-btn.toggle-btn { border-top: 1px solid #444; margin-top: 4px; padding-top: 10px; }
-        .layer-btn.toggle-btn.active { background: #333; border: 1px solid #555; }
-
-        #basemap-selector { position: absolute; top: 20px; left: 20px; z-index: 1000; display: flex; gap: 5px; }
-        .base-btn { background: rgba(0,0,0,0.5); color: #fff; border: 1px solid #555; padding: 5px 10px; border-radius: 5px; }
-        .base-btn.active { background: #0088ff; border-color: #0088ff; }
-
-        #picker-box { position: absolute; top: 60px; left: 15px; z-index: 1000; pointer-events: none; }
-        #pk-val { font-size: 3.5em; font-weight: 900; line-height: 0.9; text-shadow: 2px 2px 0 #000; }
-        #pk-unit { color: #ccc; font-size: 1.2em; font-weight: 700; margin-left: 5px; text-shadow: 1px 1px 0 #000; }
-
-        #bottom-bar {
-            position: absolute; bottom: 0; left: 0; right: 0; height: 90px;
-            background: linear-gradient(to top, #000, transparent);
-            display: flex; align-items: center; padding: 0 20px; z-index: 2000;
-        }
-        #play-btn { font-size: 2.5em; cursor: pointer; margin-right: 15px; color: #fff; }
-        input[type=range] { flex-grow: 1; height: 20px; }
-        #time-label { min-width: 140px; text-align: center; font-weight: 800; font-size: 1.4em; margin-left: 15px; text-shadow: 0 2px 5px black; }
-        
-        canvas.leaflet-layer { image-rendering: pixelated; }
+        body { margin: 0; background: #222; color: #fff; font-family: sans-serif; }
+        #map { height: 100vh; width: 100vw; }
+        #status { position: fixed; top: 10px; left: 10px; background: red; padding: 10px; z-index: 9999; }
+        #controls { position: fixed; bottom: 20px; left: 20px; z-index: 9999; background: #000; padding: 10px; }
     </style>
 </head>
 <body>
 
-<div id="log-console">
-    <div>SYSTEM BOOT...</div>
+<div id="status">Caricamento...</div>
+<div id="controls">
+    <button onclick="loadData()">RICARICA DATI</button>
+    <span id="info">--</span>
 </div>
-<button id="close-log" onclick="document.getElementById('log-console').style.display='none'">CHIUDI LOG E VAI ALLA MAPPA</button>
-
-<div id="basemap-selector">
-    <button class="base-btn active" onclick="setBaseMap('dark')">DARK</button>
-    <button class="base-btn" onclick="setBaseMap('sat')">SAT</button>
-    <button class="base-btn" onclick="setBaseMap('osm')">MAP</button>
-</div>
-
-<div id="layer-menu">
-    <button class="layer-btn active" onclick="setLayer('wind')"><span>VENTO</span> 💨</button>
-    <button class="layer-btn" onclick="setLayer('temp')"><span>TEMP</span> 🌡️</button>
-    <button class="layer-btn" onclick="setLayer('rain')"><span>PIOGGIA</span> ☔</button>
-    <button class="layer-btn" onclick="setLayer('rh')"><span>UMIDITÀ</span> 💧</button>
-    <button class="layer-btn" onclick="setLayer('press')"><span>PRESS</span> ⏲️</button>
-    <button id="iso-btn" class="layer-btn toggle-btn" onclick="toggleIsobars()"><span>ISOBARE</span> 〰️</button>
-    <button id="grid-btn" class="layer-btn toggle-btn" onclick="toggleGrid()"><span>GRID</span> #</button>
-</div>
-
-<div id="picker-box"><span id="pk-val">--</span><span id="pk-unit">km/h</span></div>
 <div id="map"></div>
-<div id="bottom-bar">
-    <div id="play-btn" onclick="togglePlay()">►</div>
-    <input type="range" id="time-slider" min="0" max="0" value="0" step="1">
-    <div id="time-label">--/-- --:--</div>
-</div>
 
 <script>
-    // --- SISTEMA DI LOGGING ---
-    function log(msg, type='log') {
-        let el = document.getElementById('log-console');
-        let line = document.createElement('div');
-        let color = type === 'error' ? 'log-err' : (type === 'warn' ? 'log-warn' : (type === 'info' ? 'log-info' : ''));
-        line.className = color;
-        line.innerText = `> ${msg}`;
-        el.appendChild(line);
-        console.log(msg);
-    }
-    window.onerror = function(msg, url, line) {
-        log(`CRITICAL JS ERROR: ${msg} (Line ${line})`, 'error');
+    // 1. GESTIONE ERRORI
+    window.onerror = function(msg) {
+        document.getElementById('status').innerText = "ERRORE: " + msg;
         return false;
     };
 
-    // --- VARIABILI ---
-    var map, velocityLayer, heatCanvas, isobarCanvas, gridLayer;
-    var currentData = null, catalog = [], activeLayer = 'wind', showIsobars = false, showGrid = false, isPlaying = false;
-    var darkLayer, satLayer, osmLayer;
+    var map;
 
-    // --- PALETTE ---
-    const PALETTES = {
-        temp: [{v:-10,c:[255,255,255,0.6]},{v:0,c:[180,180,255,0.6]},{v:10,c:[0,200,100,0.6]},{v:20,c:[255,255,0,0.6]},{v:30,c:[255,140,0,0.6]},{v:40,c:[200,0,0,0.6]}],
-        rain: [{v:0,c:[0,0,0,0]},{v:0.1,c:[0,200,255,0.6]},{v:2,c:[0,0,255,0.7]},{v:10,c:[150,0,200,0.8]}],
-        rh:   [{v:20,c:[160,100,50,0.6]},{v:40,c:[200,200,200,0.4]},{v:60,c:[100,255,100,0.5]},{v:80,c:[0,150,255,0.6]},{v:95,c:[0,0,150,0.8]}],
-        press:[{v:980,c:[130,0,180,0.8]},{v:995,c:[0,0,255,0.7]},{v:1000,c:[0,150,255,0.6]},{v:1008,c:[100,255,200,0.4]},{v:1013,c:[255,255,255,0.1]},{v:1020,c:[255,200,0,0.5]},{v:1035,c:[255,50,0,0.6]}]
+    // 2. AVVIO
+    window.onload = function() {
+        document.getElementById('status').innerText = "Avvio Mappa...";
+        
+        try {
+            map = L.map('map').setView([37.5, 14.0], 7);
+            L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png').addTo(map);
+            document.getElementById('status').innerText = "Mappa OK. Scarico Dati...";
+            document.getElementById('status').style.background = "orange";
+            
+            loadData();
+        } catch(e) {
+            document.getElementById('status').innerText = "CRASH: " + e.message;
+        }
     };
 
-    function getColor(val, type) {
-        if (!PALETTES[type]) return [0,0,0,0];
-        let stops = PALETTES[type];
-        if(type==='rain' && val < 0.1) return [0,0,0,0];
-        if(type==='wind' && val < 1) return [0,0,0,0];
-        for(let i=0; i<stops.length-1; i++) {
-            if(val>=stops[i].v && val<=stops[i+1].v) {
-                let t = (val - stops[i].v) / (stops[i+1].v - stops[i].v);
-                let c1=stops[i].c, c2=stops[i+1].c;
-                return [ Math.round(c1[0]+(c2[0]-c1[0])*t), Math.round(c1[1]+(c2[1]-c1[1])*t), Math.round(c1[2]+(c2[2]-c1[2])*t), c1[3]+(c2[3]-c1[3])*t ];
-            }
-        } 
-        let last = stops[stops.length-1];
-        return [last.c[0], last.c[1], last.c[2], last.c[3]];
-    }
-
-    // --- MAIN ---
-    window.addEventListener('load', async function() {
-        log("Pagina caricata. Controllo librerie...");
-        if (typeof L === 'undefined') { log("ERRORE: Leaflet non caricato!", 'error'); return; }
-        if (typeof d3 === 'undefined') { log("ERRORE: D3 non caricato!", 'error'); return; }
-        log("Librerie OK. Inizializzo mappa...");
-
+    // 3. DATI
+    async function loadData() {
         try {
-            map = L.map('map', { zoomControl: false }).setView([37.5, 14.2], 8);
+            // Scarica Catalogo
+            let r = await fetch('data_weather/catalog.json?t=' + Date.now());
+            if(!r.ok) throw new Error("No Catalog (404)");
             
-            darkLayer = L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_nolabels/{z}/{x}/{y}{r}.png').addTo(map);
-            satLayer = L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}', { maxZoom: 19 });
-            osmLayer = L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', { maxZoom: 19, opacity: 0.8 });
-
-            map.createPane('gridPane'); map.getPane('gridPane').style.zIndex = 300; 
-            map.createPane('isobarPane'); map.getPane('isobarPane').style.zIndex = 400; map.getPane('isobarPane').style.pointerEvents = 'none';
-            map.createPane('gridLinesPane'); map.getPane('gridLinesPane').style.zIndex = 450; map.getPane('gridLinesPane').style.pointerEvents = 'none';
-            map.createPane('labelsPane'); map.getPane('labelsPane').style.zIndex = 500; map.getPane('labelsPane').style.pointerEvents = 'none';
-            map.createPane('velocityPane'); map.getPane('velocityPane').style.zIndex = 600; map.getPane('velocityPane').style.pointerEvents = 'none';
-
-            L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_only_labels/{z}/{x}/{y}{r}.png', { pane: 'labelsPane' }).addTo(map);
-
-            log("Mappa creata. Inizializzo Canvas...");
-            initRawGridLayer();
-            initIsobarLayer();
-            initGridLayer();
+            let catalog = await r.json();
+            document.getElementById('status').innerText = "Catalogo OK: " + catalog.length + " files";
+            document.getElementById('status').style.background = "green";
             
-            log("Canvas OK. Scarico catalogo...");
-            await loadCatalog();
+            // Scarica Primo File
+            let r2 = await fetch('data_weather/' + catalog[0].file);
+            let data = await r2.json();
+            
+            document.getElementById('info').innerText = "Dati Caricati: " + catalog[0].label;
+            
+            // Disegna Punti Semplici (Test)
+            let m = data.meta;
+            // Disegniamo solo un rettangolo blu sulla sicilia per vedere se funziona
+            L.rectangle([[m.la1, m.lo1], [m.la2, m.lo2]], {color: "#ff7800", weight: 1}).addTo(map);
 
         } catch(e) {
-            log(`ERRORE DI INIZIALIZZAZIONE: ${e.message}`, 'error');
-        }
-    });
-
-    window.setBaseMap = function(type) {
-        document.querySelectorAll('.base-btn').forEach(b => b.classList.remove('active'));
-        event.target.classList.add('active');
-        map.removeLayer(darkLayer); map.removeLayer(satLayer); map.removeLayer(osmLayer);
-        if(type === 'dark') darkLayer.addTo(map); else if(type === 'sat') satLayer.addTo(map); else osmLayer.addTo(map);
-    }
-
-    async function loadCatalog() {
-        try {
-            let r = await fetch('data_weather/catalog.json?v=' + Date.now());
-            if(!r.ok) throw new Error(`HTTP ${r.status} su catalog.json`);
-            
-            catalog = await r.json();
-            log(`Catalogo scaricato. Trovati ${catalog.length} frame.`, 'info');
-            
-            if (catalog.length === 0) {
-                log("ATTENZIONE: Catalogo vuoto! Lo script Python non ha salvato dati.", 'warn');
-                return;
-            }
-
-            document.getElementById('time-slider').max = catalog.length - 1;
-            document.getElementById('time-slider').addEventListener('input', (e) => loadStep(parseInt(e.target.value)));
-            
-            log("Scarico primo frame...");
-            await loadStep(0);
-            
-            // SE ARRIVIAMO QUI, È TUTTO OK
-            log("TUTTO OK! Mostro pulsante di chiusura.", 'info');
-            document.getElementById('close-log').style.display = 'block';
-            
-            // Auto-chiusura dopo 3 secondi se tutto ok
-            setTimeout(() => { document.getElementById('log-console').style.display='none'; }, 2000);
-
-        } catch(e) {
-            log(`ERRORE CATALOGO: ${e.message}`, 'error');
-            log("Suggerimento: Controlla se la cartella data_weather esiste su GitHub.", 'warn');
+            document.getElementById('status').innerText = "FALLITO: " + e.message;
+            document.getElementById('status').style.background = "red";
         }
     }
+</script>
 
-    async function loadStep(index) {
-        if (!catalog[index]) return;
-        document.getElementById('time-label').innerText = catalog[index].label;
-        try {
-            let filename = catalog[index].file;
-            let r = await fetch('data_weather/' + filename);
-            if(!r.ok) throw new Error(`HTTP ${r.status} su ${filename}`);
-            
-            currentData = await r.json();
-            updateMap();
-        } catch(e) { 
-            log(`Errore Frame ${index}: ${e.message}`, 'error');
-        }
-    }
-
-    function updateMap() {
-        if (!currentData) return;
-        if (heatCanvas) heatCanvas.draw();
-        if (isobarCanvas) isobarCanvas.draw();
-        if (gridLayer) gridLayer.draw();
-        if (velocityLayer) map.removeLayer(velocityLayer);
-
-        if (activeLayer === 'wind' && currentData.wind_u) {
-            try {
-                velocityLayer = L.velocityLayer({
-                    pane: 'velocityPane',
-                    displayValues: false,
-                    data: [ currentData.wind_u, currentData.wind_v ], 
-                    maxVelocity: 18.0, velocityScale: 0.005, particleMultiplier: 1/40, lineWidth: 1.0, frameRate: 60, opacity: 0.90, 
-                    colorScale: ["#001f4d", "#003380", "#004db3", "#0066e6", "#0088ff", "#00aaff", "#00ccff", "#00ffff", "#33ffcc", "#66ff99", "#99ff66", "#ccff33", "#ffff00", "#ffcc00", "#ff9900", "#ff6600", "#ff3300", "#ff0000"]
-                });
-                velocityLayer.addTo(map);
-            } catch(e) { log("Err Velocity: " + e.message, 'warn'); }
-        }
-    }
-
-    // --- LAYERS ---
-    function initRawGridLayer() {
-        L.HC = L.Layer.extend({
-            onAdd: function(m) { this._c = L.DomUtil.create('canvas', 'leaflet-layer'); this._c.style.imageRendering='pixelated'; this._c.style.pointerEvents='none'; m.getPane('gridPane').appendChild(this._c); m.on('moveend resize', this.draw, this); this.draw(); },
-            onRemove: function(m) { m.getPane('gridPane').removeChild(this._c); m.off('moveend resize', this.draw, this); },
-            draw: function() {
-                if(!this._c || !currentData || activeLayer==='wind') { if(this._c) this._c.getContext('2d').clearRect(0,0,this._c.width,this._c.height); return; }
-                let s=map.getSize(); this._c.width=s.x; this._c.height=s.y; L.DomUtil.setPosition(this._c, map.containerPointToLayerPoint([0,0]));
-                let ctx=this._c.getContext('2d'); let m=currentData.meta; let b=map.getBounds();
-                let showNum=map.getZoom()>=10; ctx.font="bold 10px Arial"; ctx.textAlign="center"; ctx.textBaseline="middle";
-                let p1=map.latLngToContainerPoint([m.la1, m.lo1]); let p2=map.latLngToContainerPoint([m.la1-m.dy, m.lo1+m.dx]);
-                let pxW=Math.ceil(p2.x-p1.x)+1; let pxH=Math.ceil(p2.y-p1.y)+1;
-
-                for(let y=0; y<m.ny; y++) {
-                    let lat = m.la1 - (y*m.dy); if(lat<b.getSouth()-0.05 || lat>b.getNorth()+0.05) continue;
-                    for(let x=0; x<m.nx; x++) {
-                        let lon = m.lo1 + (x*m.dx); if(lon<b.getWest()-0.05 || lon>b.getEast()+0.05) continue;
-                        let idx = y*m.nx+x; let val=0;
-                        if(activeLayer==='temp') val=currentData.temp[idx]; else if(activeLayer==='rain') val=currentData.rain[idx]; else if(activeLayer==='rh') val=currentData.rh?currentData.rh[idx]:0; else if(activeLayer==='press') val=currentData.press?currentData.press[idx]:1013;
-                        let c=getColor(val, activeLayer);
-                        if(c[3]>0) {
-                            let p = map.latLngToContainerPoint([lat,lon]);
-                            ctx.fillStyle=`rgba(${c[0]},${c[1]},${c[2]},${c[3]})`; ctx.fillRect(Math.floor(p.x), Math.floor(p.y), pxW, pxH);
-                            if(showNum && val!==0) {
-                                ctx.fillStyle="#fff"; let txt=Math.round(val); if(activeLayer==='rain'&&val<1) txt=val.toFixed(1);
-                                ctx.fillText(txt, p.x+pxW/2, p.y+pxH/2);
-                            }
-                        }
-                    }
-                }
-            }
-        });
-        heatCanvas = new L.HC(); map.addLayer(heatCanvas);
-    }
-
-    function initIsobarLayer() {
-        L.Iso = L.Layer.extend({
-            onAdd: function(m) { this._c = L.DomUtil.create('canvas', 'leaflet-layer'); this._c.style.pointerEvents='none'; m.getPane('isobarPane').appendChild(this._c); m.on('moveend resize', this.draw, this); this.draw(); },
-            onRemove: function(m) { m.getPane('isobarPane').removeChild(this._c); m.off('moveend resize', this.draw, this); },
-            draw: function() {
-                if(!this._c || !currentData || !showIsobars || !currentData.press) { if(this._c) this._c.getContext('2d').clearRect(0,0,this._c.width,this._c.height); return; }
-                let s=map.getSize(); this._c.width=s.x; this._c.height=s.y; L.DomUtil.setPosition(this._c, map.containerPointToLayerPoint([0,0]));
-                let ctx=this._c.getContext('2d'); let m=currentData.meta;
-                let contours=d3.contours().size([m.nx, m.ny]).thresholds(d3.range(960, 1050, 2))(currentData.press);
-                ctx.lineWidth=1.2; ctx.font="bold 13px Arial"; ctx.textAlign="center"; ctx.textBaseline="middle";
-                contours.forEach(c => {
-                    ctx.strokeStyle=(c.value<1013)?"rgba(200,200,255,0.7)":"rgba(255,200,200,0.7)";
-                    if(Math.abs(c.value-1013)<1) ctx.strokeStyle="rgba(255,255,255,0.8)";
-                    ctx.beginPath(); let pathArr=[];
-                    c.coordinates.forEach(r => { r.forEach(pts => { let first=true, poly=[]; pts.forEach(coord => { let p=map.latLngToContainerPoint([m.la1-(coord[1]*m.dy), m.lo1+(coord[0]*m.dx)]); poly.push(p); if(first) { ctx.moveTo(p.x,p.y); first=false; } else ctx.lineTo(p.x,p.y); }); pathArr.push(poly); }); });
-                    ctx.stroke();
-                    pathArr.forEach(pts => { if(pts.length>30) { let mid=pts[Math.floor(pts.length/2)]; ctx.fillStyle="rgba(0,0,0,0.8)"; ctx.fillRect(mid.x-14,mid.y-9,28,18); ctx.fillStyle="#fff"; ctx.fillText(Math.round(c.value), mid.x, mid.y); } });
-                });
-            }
-        });
-        isobarCanvas = new L.Iso(); map.addLayer(isobarCanvas);
-    }
-
-    function initGridLayer() {
-        L.GL = L.Layer.extend({
-            onAdd: function(m) { this._c = L.DomUtil.create('canvas', 'leaflet-layer'); this._c.style.pointerEvents='none'; m.getPane('gridLinesPane').appendChild(this._c); m.on('moveend resize', this.draw, this); this.draw(); },
-            onRemove: function(m) { m.getPane('gridLinesPane').removeChild(this._c); m.off('moveend resize', this.draw, this); },
-            draw: function() {
-                if(!this._c) return; let ctx=this._c.getContext('2d'); ctx.clearRect(0,0,this._c.width,this._c.height);
-                if(!showGrid) return;
-                let s=map.getSize(); this._c.width=s.x; this._c.height=s.y; L.DomUtil.setPosition(this._c, map.containerPointToLayerPoint([0,0]));
-                let b=map.getBounds(); let step=map.getZoom()>9?0.1:0.5;
-                ctx.strokeStyle="rgba(255,255,255,0.3)"; ctx.fillStyle="rgba(255,255,255,0.6)"; ctx.font="10px Mono";
-                for(let lon=Math.floor(b.getWest()); lon<=Math.ceil(b.getEast()); lon+=step) { let x=map.latLngToContainerPoint([b.getSouth(),lon]).x; ctx.beginPath(); ctx.moveTo(x,0); ctx.lineTo(x,s.y); ctx.stroke(); ctx.fillText(lon.toFixed(1), x+2, s.y-10); }
-                for(let lat=Math.floor(b.getSouth()); lat<=Math.ceil(b.getNorth()); lat+=step) { let y=map.latLngToContainerPoint([lat,b.getWest()]).y; ctx.beginPath(); ctx.moveTo(0,y); ctx.lineTo(s.x,y); ctx.stroke(); ctx.fillText(lat.toFixed(1), 5, y-2); }
-            }
-        });
-        gridLayer = new L.GL(); map.addLayer(gridLayer);
-    }
-
-    // --- CONTROLLI ---
-    window.setLayer = function(n) {
-        activeLayer=n;
-        document.querySelectorAll('.layer-btn').forEach(b=>{ if(!b.textContent.includes('ISO') && !b.textContent.includes('GRI')) b.classList.remove('active'); });
-        event.target.classList.add('active'); document.getElementById('picker-box').innerText="--"; updateMap();
-    }
-    window.toggleIsobars=function(){ showIsobars=!showIsobars; document.getElementById('iso-btn').classList.toggle('active'); updateMap(); }
-    window.toggleGrid=function(){ showGrid=!showGrid; document.getElementById('grid-btn').classList.
+</body>
+</html>
