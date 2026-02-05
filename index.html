@@ -54,7 +54,7 @@
 
     /* Dark relief overlay: più evidente */
     .hillshade-tiles {
-      mix-blend-mode: multiply;         /* rende il rilievo più “inciso” sul dark */
+      mix-blend-mode: multiply;
       filter: contrast(1.85) brightness(0.95);
     }
 
@@ -133,7 +133,7 @@
       {v:80,c:[50,150,255,0.60]},
       {v:95,c:[0,0,200,0.65]}
     ],
-    // Pressione: blu (bassa) -> rosso (alta), senza “buco” trasparente.
+    // Pressione: blu (bassa) -> rosso (alta), nessun “buco trasparente”
     press: [
       {v:980, c:[0,70,255,0.55]},
       {v:995, c:[0,170,255,0.55]},
@@ -167,22 +167,31 @@
     return [last[0], last[1], last[2], last[3]];
   }
 
+  function unitFor(type){
+    if(type==='wind') return 'km/h';
+    if(type==='temp') return '°C';
+    if(type==='rain') return 'mm';
+    if(type==='rh') return '%';
+    if(type==='press') return 'hPa';
+    return '';
+  }
+
   // --- INIT ---
   window.addEventListener('load', async function() {
     map = L.map('map', { zoomControl: false }).setView([37.5, 14.2], 8);
 
-    // Base layers (dark) + rilievo evidente (hillshade overlay)
+    // Base dark
     baseLayers.dark = L.tileLayer(
       'https://{s}.basemaps.cartocdn.com/dark_nolabels/{z}/{x}/{y}{r}.png',
       { maxZoom: 19, attribution: '©OpenStreetMap, ©Carto' }
     ).addTo(map);
 
-    // RILIEVO: hillshade sopra la dark (questo è il “dark con rilievo”)
+    // Hillshade overlay (rilievo evidente)
     hillshadeLayer = L.tileLayer(
       'https://server.arcgisonline.com/ArcGIS/rest/services/Elevation/World_Hillshade/MapServer/tile/{z}/{y}/{x}',
       {
         maxZoom: 19,
-        opacity: 0.72,                 // <<< più evidente
+        opacity: 0.72,
         className: 'hillshade-tiles',
         attribution: 'Hillshade © Esri'
       }
@@ -194,16 +203,16 @@
       { maxZoom: 19, attribution: '©OpenStreetMap' }
     );
 
-    // Labels (solo per dark)
+    // Labels per dark
     labelLayers.dark = L.tileLayer(
       'https://{s}.basemaps.cartocdn.com/dark_only_labels/{z}/{x}/{y}{r}.png',
       { maxZoom: 19, attribution: '©Carto' }
     ).addTo(map);
-    labelLayers.map = null;
 
     createCanvasLayers();
     await loadCatalogAndFirstFrame();
 
+    // Picker: ora funziona (map esiste sicuramente)
     map.on('mousemove', updatePickerFromEvent);
     map.on('click', updatePickerFromEvent);
 
@@ -219,18 +228,14 @@
       map.removeLayer(baseLayers.map);
       baseLayers.dark.addTo(map);
       if(hillshadeLayer) hillshadeLayer.addTo(map);
-
-      if(labelLayers.map) map.removeLayer(labelLayers.map);
       if(labelLayers.dark) labelLayers.dark.addTo(map);
     } else {
       isLightMode = true;
       map.removeLayer(baseLayers.dark);
       if(hillshadeLayer) map.removeLayer(hillshadeLayer);
-      baseLayers.map.addTo(map);
-
       if(labelLayers.dark) map.removeLayer(labelLayers.dark);
+      baseLayers.map.addTo(map);
     }
-
     redrawAll();
   }
 
@@ -262,6 +267,13 @@
       const r = await fetch('data_weather/' + catalog[idx].file + '?t=' + Date.now());
       if(!r.ok) throw new Error("frame not found");
       currentData = await r.json();
+      // Guard rail: se press non ha la lunghezza giusta, niente isobare/heat press
+      if(currentData && currentData.meta && Array.isArray(currentData.press)) {
+        const n = currentData.meta.nx * currentData.meta.ny;
+        if(currentData.press.length !== n) {
+          console.warn("press length mismatch:", currentData.press.length, "expected:", n);
+        }
+      }
       redrawAll();
     } catch(e) {}
   }
@@ -275,7 +287,6 @@
       map.getPanes().overlayPane.appendChild(c);
       return c;
     };
-
     heatCanvas = mkCanvas(300);
     isoCanvas  = mkCanvas(400);
     gridCanvas = mkCanvas(450);
@@ -291,7 +302,7 @@
     updateWind();
   }
 
-  // --- HEATMAP (no numeri dentro) ---
+  // --- HEATMAP (no numeri) ---
   function drawHeatmap() {
     const ctx = heatCanvas.getContext('2d');
     const s = map.getSize();
@@ -318,7 +329,7 @@
         let val = 0;
         if(activeLayer==='temp') val = currentData.temp[idx];
         else if(activeLayer==='rain') val = currentData.rain[idx];
-        else if(activeLayer==='rh')   val = currentData.rh[idx];
+        else if(activeLayer==='rh') val = currentData.rh[idx];
         else if(activeLayer==='press') val = currentData.press[idx];
 
         const c = getColor(val, activeLayer);
@@ -345,11 +356,13 @@
     L.DomUtil.setPosition(isoCanvas, map.containerPointToLayerPoint([0,0]));
     ctx.clearRect(0,0,s.x,s.y);
 
-    if(!showIso || !currentData || !currentData.press) return;
+    if(!showIso || !currentData || !Array.isArray(currentData.press)) return;
 
     const m = currentData.meta;
-    const values = currentData.press;
+    const n = m.nx * m.ny;
+    if(currentData.press.length !== n) return; // evita freeze/errore
 
+    const values = currentData.press;
     const contours = d3.contours().size([m.nx, m.ny]).thresholds(d3.range(960, 1050, 2))(values);
 
     ctx.lineWidth = 1.4;
@@ -425,19 +438,15 @@
     }
   }
 
-  // --- WIND (stessi colori e parametri originali, ma meno particelle per FPS) ---
+  // --- WIND (parametri+colori ORIGINALI; solo densità adattiva per FPS) ---
   function updateWind() {
     if(velocityLayer) map.removeLayer(velocityLayer);
     if(activeLayer !== 'wind' || !currentData) return;
 
-    // Riduzione particelle (FPS): denominatore più alto = meno particelle
     const isMobile = Math.min(window.innerWidth, window.innerHeight) < 900;
     const dpr = window.devicePixelRatio || 1;
 
-    // base: molto più leggero di prima
-    // - desktop: 1/120
-    // - mobile:  1/160
-    // - dpr alto: ancora meno
+    // Riduzione particelle per FPS (desktop + dpr alto spesso soffrono)
     let particleMult = isMobile ? (1/160) : (1/120);
     if(dpr >= 2) particleMult = isMobile ? (1/220) : (1/180);
 
@@ -446,38 +455,27 @@
         displayValues: false,
         data: [ currentData.wind_u, currentData.wind_v ],
 
-        // === PARAMETRI ORIGINALI (NON TOCCATI) ===
+        // >>> ORIGINALI dal tuo primo HTML
         maxVelocity: 18.0,
         velocityScale: 0.006,
-        particleMultiplier: particleMult,   // <<< SOLO QUESTO cambiato per FPS
+        particleMultiplier: particleMult, // SOLO questo varia per FPS
         lineWidth: 0.8,
         particleAge: 140,
         frameRate: 60,
         opacity: 0.95,
         colorScale: ["#000080", "#0044ff", "#00ddff", "#00ff55", "#ffff00", "#ff6600", "#ff0000", "#ff00ff"]
       });
-
       velocityLayer.addTo(map);
     } catch(e) {}
   }
 
-  // --- PICKER ---
-  function unitFor(type){
-    if(type==='wind') return 'km/h';
-    if(type==='temp') return '°C';
-    if(type==='rain') return 'mm';
-    if(type==='rh') return '%';
-    if(type==='press') return 'hPa';
-    return '';
-  }
-
+  // --- PICKER (mousemove + click) ---
   function valueAtLatLng(latlng) {
     if(!currentData || !currentData.meta) return null;
     const m = currentData.meta;
 
     const y = Math.round((m.la1 - latlng.lat) / m.dy);
     const x = Math.round((latlng.lng - m.lo1) / m.dx);
-
     if(x < 0 || x >= m.nx || y < 0 || y >= m.ny) return null;
 
     const idx = y*m.nx + x;
@@ -559,4 +557,3 @@
 
 </body>
 </html>
-```0
