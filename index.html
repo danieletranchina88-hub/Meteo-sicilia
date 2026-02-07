@@ -1,7 +1,7 @@
 <!DOCTYPE html>
 <html>
 <head>
-  <title>Sicilia MeteoHub - PRO (RELIEF su DARK + OSM)</title>
+  <title>Sicilia MeteoHub - PRO (RELIEF STABILE)</title>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
 
@@ -17,12 +17,12 @@
     body { margin: 0; background: #111; font-family: 'Segoe UI', sans-serif; color: white; overflow: hidden; }
     #map { position: absolute; top: 0; bottom: 0; width: 100%; background: #111; }
 
-    /* UI CONTROL */
-    #ui-container { position: absolute; top: 10px; right: 10px; z-index: 1000; display: flex; flex-direction: column; gap: 10px; align-items: flex-end; }
+    /* UI */
+    #ui-container { position: absolute; top: 10px; right: 10px; z-index: 2000; display: flex; flex-direction: column; gap: 10px; align-items: flex-end; }
     .panel { background: rgba(0,0,0,0.85); backdrop-filter: blur(6px); padding: 8px; border-radius: 14px; border: 1px solid #444; }
 
     .layer-btn {
-      display: block; width: 160px; padding: 10px 12px; margin-bottom: 6px;
+      display: block; width: 170px; padding: 10px 12px; margin-bottom: 6px;
       background: transparent; color: #ccc; border: none; text-align: right;
       cursor: pointer; font-size: 13px; font-weight: 700; border-radius: 8px;
       transition: all 0.15s;
@@ -39,33 +39,32 @@
     .map-toggle:hover { background: rgba(255,255,255,0.12); }
     .map-toggle.active { background: #eee; color: #000; }
 
-    /* INFO & TIME */
-    #info-box { position: absolute; top: 20px; left: 20px; z-index: 1000; pointer-events: none; text-shadow: 0 2px 10px #000; }
+    /* INFO */
+    #info-box { position: absolute; top: 20px; left: 20px; z-index: 2000; pointer-events: none; text-shadow: 0 2px 10px #000; }
     #val-display { font-size: 3.5em; font-weight: 900; line-height: 1; }
     #unit-display { font-size: 1.2em; color: #aaa; font-weight: 800; }
+    #status { margin-top: 6px; font-size: 12px; color: #ff6b6b; font-weight: 700; display:none; }
 
+    /* TIME */
     #bottom-bar {
       position: absolute; bottom: 0; left: 0; right: 0; height: 90px;
       background: linear-gradient(to top, rgba(0,0,0,0.95), transparent);
-      display: flex; align-items: center; padding: 0 20px; z-index: 2000;
+      display: flex; align-items: center; padding: 0 20px; z-index: 2500;
     }
     #play-btn { font-size: 2.5em; background: none; border: none; color: white; cursor: pointer; margin-right: 15px; }
     #time-label { font-size: 1.4em; font-weight: 900; margin-left: 15px; min-width: 140px; text-align: center; text-shadow: 0 2px 10px #000; }
     input[type=range] { flex-grow: 1; height: 5px; cursor: pointer; accent-color: #0088ff; }
 
-    /* ===== RILIEVI (HILLSHADE) =====
-       Dark: più inciso
-       Light: più “cartografico” (meno aggressivo) */
+    /* Hillshade styling (stabile) */
     .hillshade-dark {
       mix-blend-mode: multiply;
-      filter: contrast(2.05) brightness(0.95);
+      filter: contrast(2.2) brightness(0.95);
     }
     .hillshade-light {
       mix-blend-mode: multiply;
-      filter: contrast(1.35) brightness(1.02);
+      filter: contrast(1.35) brightness(1.05);
     }
 
-    /* Canvas: smooth */
     canvas { image-rendering: auto; }
   </style>
 </head>
@@ -74,6 +73,7 @@
   <div id="info-box">
     <div id="val-display">--</div>
     <div id="unit-display">Caricamento...</div>
+    <div id="status"></div>
   </div>
 
   <div id="ui-container">
@@ -83,7 +83,7 @@
     </div>
 
     <div class="panel">
-      <button class="layer-btn active" id="btn-wind" onclick="toggleOverlay('wind', true)">VENTO 💨</button>
+      <button class="layer-btn active" id="btn-wind" onclick="toggleWind()">VENTO 💨</button>
 
       <button class="layer-btn active" id="btn-temp" onclick="toggleOverlay('temp')">TEMP 🌡️</button>
       <button class="layer-btn" id="btn-rain" onclick="toggleOverlay('rain')">PIOGGIA ☔</button>
@@ -107,19 +107,19 @@
   </div>
 
 <script>
-  // --- GLOBALS ---
+  // ====== STATUS / DEBUG ======
+  function setStatus(msg, show=true){
+    const el = document.getElementById('status');
+    el.innerText = msg || '';
+    el.style.display = show && msg ? 'block' : 'none';
+  }
+
+  // ====== GLOBALS ======
   var map, velocityLayer;
   var heatCanvas, isoCanvas, gridCanvas;
 
   var currentData = null, catalog = [];
   var showIso = false, showGrid = false, isPlaying = false;
-
-  var baseLayers = {};
-  var labelLayers = {};
-
-  // DUE HILLSHADE: uno “dark” e uno “light”
-  var hillshadeDark = null;
-  var hillshadeLight = null;
 
   var isLightMode = false;
 
@@ -127,7 +127,13 @@
   const overlaysEnabled = new Set(['temp']);
   let windEnabled = true;
 
-  // --- PALETTES ---
+  // Base layers + relief + labels
+  var baseDark, baseOSM, labelsDark, hillshade;
+
+  // Picker
+  let lastPickedLayer = 'wind';
+
+  // ====== PALETTES ======
   const PALETTES = {
     temp: [
       {v:-10,c:[255,255,255,0.55]},
@@ -158,10 +164,11 @@
       {v:1022,c:[255,200,0,0.55]},
       {v:1035,c:[255,60,0,0.60]}
     ],
+    // nuvole: bianco -> grigio scuro (come volevi)
     cloud: [
       {v:0,   c:[255,255,255,0.00]},
-      {v:20,  c:[245,245,245,0.35]},
-      {v:50,  c:[190,190,190,0.45]},
+      {v:20,  c:[245,245,245,0.30]},
+      {v:50,  c:[200,200,200,0.42]},
       {v:80,  c:[120,120,120,0.55]},
       {v:100, c:[60,60,60,0.65]}
     ]
@@ -190,48 +197,57 @@
     return [last[0], last[1], last[2], last[3]];
   }
 
-  // --- INIT ---
+  // ====== INIT ======
   window.addEventListener('load', async function() {
     map = L.map('map', { zoomControl: false }).setView([37.5, 14.2], 8);
 
+    // Panes (ordine stabile)
+    map.createPane('basePane');       map.getPane('basePane').style.zIndex = 100;
+    map.createPane('reliefPane');     map.getPane('reliefPane').style.zIndex = 150;
+    map.createPane('labelsPane');     map.getPane('labelsPane').style.zIndex = 200;
+    map.createPane('heatPane');       map.getPane('heatPane').style.zIndex = 300;
+    map.createPane('isoPane');        map.getPane('isoPane').style.zIndex = 360;
+    map.createPane('gridPane');       map.getPane('gridPane').style.zIndex = 380;
+    map.createPane('windPane');       map.getPane('windPane').style.zIndex = 450;
+    map.getPane('windPane').style.pointerEvents = 'none';
+
     // Base DARK
-    baseLayers.dark = L.tileLayer(
+    baseDark = L.tileLayer(
       'https://{s}.basemaps.cartocdn.com/dark_nolabels/{z}/{x}/{y}{r}.png',
-      { maxZoom: 19, attribution: '©OpenStreetMap, ©Carto' }
+      { maxZoom: 19, pane: 'basePane', subdomains: 'abcd', attribution: '©OpenStreetMap, ©Carto' }
     ).addTo(map);
 
-    // Base OSM chiara
-    baseLayers.map = L.tileLayer(
+    // Base OSM (chiara)
+    baseOSM = L.tileLayer(
       'https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png',
-      { maxZoom: 19, attribution: '©OpenStreetMap' }
+      { maxZoom: 19, pane: 'basePane', subdomains: 'abc', attribution: '©OpenStreetMap' }
     );
 
-    // Labels (solo per dark)
-    labelLayers.dark = L.tileLayer(
+    // Labels (solo su dark)
+    labelsDark = L.tileLayer(
       'https://{s}.basemaps.cartocdn.com/dark_only_labels/{z}/{x}/{y}{r}.png',
-      { maxZoom: 19, attribution: '©Carto' }
+      { maxZoom: 19, pane: 'labelsPane', subdomains: 'abcd', attribution: '©Carto' }
     ).addTo(map);
 
-    // ===== HILLSHADE (RILIEVI) per ENTRAMBE le mappe =====
-    // Stesso servizio, due layer con classi + opacità diverse
-    const hillshadeUrl = 'https://server.arcgisonline.com/ArcGIS/rest/services/Elevation/World_Hillshade/MapServer/tile/{z}/{y}/{x}';
+    // RILIEVI (Wikimedia hillshading — più stabile e “free”)
+    hillshade = L.tileLayer(
+      'https://tiles.wmflabs.org/hillshading/{z}/{x}/{y}.png',
+      {
+        maxZoom: 17,
+        pane: 'reliefPane',
+        opacity: 0.80,
+        className: 'hillshade-dark'
+      }
+    ).addTo(map);
 
-    hillshadeDark = L.tileLayer(hillshadeUrl, {
-      maxZoom: 19,
-      opacity: 0.80,
-      className: 'hillshade-dark',
-      attribution: 'Hillshade © Esri'
-    }).addTo(map);
-
-    hillshadeLight = L.tileLayer(hillshadeUrl, {
-      maxZoom: 19,
-      opacity: 0.45,
-      className: 'hillshade-light',
-      attribution: 'Hillshade © Esri'
-    });
-    // (non la aggiungo subito: la attivo solo su OSM)
+    // Handlers error tile (ti dice se il problema è la mappa)
+    attachTileError(baseDark, 'BASE DARK');
+    attachTileError(baseOSM, 'BASE OSM');
+    attachTileError(labelsDark, 'LABELS');
+    attachTileError(hillshade, 'HILLSHADE');
 
     createCanvasLayers();
+
     await loadCatalogAndFirstFrame();
 
     map.on('mousemove', updatePickerFromEvent);
@@ -240,43 +256,47 @@
     document.getElementById('unit-display').innerText = unitFor(lastPickedLayer);
   });
 
+  function attachTileError(layer, name){
+    layer.on('tileerror', () => {
+      setStatus(`Errore tile: ${name} (rete/limite server)`);
+    });
+    layer.on('load', () => {
+      // quando almeno una volta carica, togli warning
+      setStatus('', false);
+    });
+  }
+
+  // ====== BASE SWITCH ======
   function setBase(type) {
     document.querySelectorAll('.map-toggle').forEach(b => b.classList.remove('active'));
     event.target.classList.add('active');
 
-    if(type==='dark') {
+    if(type === 'dark'){
       isLightMode = false;
+      if(map.hasLayer(baseOSM)) map.removeLayer(baseOSM);
+      if(!map.hasLayer(baseDark)) baseDark.addTo(map);
+      if(!map.hasLayer(labelsDark)) labelsDark.addTo(map);
 
-      // base
-      map.removeLayer(baseLayers.map);
-      baseLayers.dark.addTo(map);
-
-      // rilievi: dark on, light off
-      if(hillshadeLight && map.hasLayer(hillshadeLight)) map.removeLayer(hillshadeLight);
-      if(hillshadeDark && !map.hasLayer(hillshadeDark)) hillshadeDark.addTo(map);
-
-      // labels
-      if(labelLayers.dark && !map.hasLayer(labelLayers.dark)) labelLayers.dark.addTo(map);
+      hillshade.setOpacity(0.80);
+      hillshade.getContainer()?.classList.remove('hillshade-light');
+      hillshade.getContainer()?.classList.add('hillshade-dark');
 
     } else {
       isLightMode = true;
+      if(map.hasLayer(baseDark)) map.removeLayer(baseDark);
+      if(map.hasLayer(labelsDark)) map.removeLayer(labelsDark);
+      if(!map.hasLayer(baseOSM)) baseOSM.addTo(map);
 
-      // base
-      map.removeLayer(baseLayers.dark);
-      baseLayers.map.addTo(map);
-
-      // rilievi: light on, dark off
-      if(hillshadeDark && map.hasLayer(hillshadeDark)) map.removeLayer(hillshadeDark);
-      if(hillshadeLight && !map.hasLayer(hillshadeLight)) hillshadeLight.addTo(map);
-
-      // labels (dark off)
-      if(labelLayers.dark && map.hasLayer(labelLayers.dark)) map.removeLayer(labelLayers.dark);
+      hillshade.setOpacity(0.45);
+      hillshade.getContainer()?.classList.remove('hillshade-dark');
+      hillshade.getContainer()?.classList.add('hillshade-light');
     }
 
     redrawAll();
   }
+  window.setBase = setBase;
 
-  // --- DATA LOAD ---
+  // ====== DATA LOAD ======
   async function loadCatalogAndFirstFrame() {
     try {
       const r = await fetch('data_weather/catalog.json?t=' + Date.now());
@@ -293,6 +313,7 @@
       document.getElementById('unit-display').innerText = "Pronto";
     } catch(e) {
       document.getElementById('unit-display').innerText = "Errore dati";
+      setStatus("Non trovo data_weather/catalog.json (o è vuoto).");
     }
   }
 
@@ -305,22 +326,23 @@
       if(!r.ok) throw new Error("frame not found");
       currentData = await r.json();
       redrawAll();
-    } catch(e) {}
+    } catch(e) {
+      setStatus("Frame non caricato (controlla data_weather/...).");
+    }
   }
 
-  // --- CANVAS LAYERS ---
+  // ====== CANVAS LAYERS ======
   function createCanvasLayers() {
-    const mkCanvas = (z) => {
+    const mkCanvas = (paneName) => {
       const c = L.DomUtil.create('canvas', 'leaflet-layer');
       c.style.pointerEvents = 'none';
-      c.style.zIndex = z;
-      map.getPanes().overlayPane.appendChild(c);
+      map.getPane(paneName).appendChild(c);
       return c;
     };
 
-    heatCanvas = mkCanvas(300);
-    isoCanvas  = mkCanvas(400);
-    gridCanvas = mkCanvas(450);
+    heatCanvas = mkCanvas('heatPane');
+    isoCanvas  = mkCanvas('isoPane');
+    gridCanvas = mkCanvas('gridPane');
 
     map.on('moveend resize', redrawAll);
   }
@@ -333,12 +355,11 @@
     updateWind();
   }
 
-  // --- HEATMAP MULTI ---
+  // ====== HEATMAP MULTI ======
   function drawHeatmapMulti() {
     const ctx = heatCanvas.getContext('2d');
     const s = map.getSize();
-    heatCanvas.width = s.x;
-    heatCanvas.height = s.y;
+    heatCanvas.width = s.x; heatCanvas.height = s.y;
     L.DomUtil.setPosition(heatCanvas, map.containerPointToLayerPoint([0,0]));
     ctx.clearRect(0,0,s.x,s.y);
 
@@ -348,29 +369,25 @@
     const b = map.getBounds();
 
     const order = ['press','temp','rh','cloud','rain'];
-
     const cloudMin = 20;
     const rainMin  = 0.2;
 
-    function withAlpha(col, mul){
-      return [col[0], col[1], col[2], Math.max(0, Math.min(1, col[3] * mul))];
+    function alphaMul(layer){
+      if(layer === 'cloud') return windEnabled ? 0.35 : 0.55;
+      if(layer === 'rain')  return windEnabled ? 0.70 : 0.78;
+      return windEnabled ? 0.72 : 0.92;
+    }
+
+    function composite(layer){
+      if(layer === 'cloud') return 'screen';
+      return 'source-over';
     }
 
     for (const layer of order) {
       if (!overlaysEnabled.has(layer)) continue;
 
-      let alphaMul = 1.0;
-
-      if (layer === 'cloud') {
-        alphaMul = windEnabled ? 0.38 : 0.55;
-        ctx.globalCompositeOperation = 'screen';
-      } else if (layer === 'rain') {
-        alphaMul = windEnabled ? 0.70 : 0.78;
-        ctx.globalCompositeOperation = 'source-over';
-      } else {
-        alphaMul = windEnabled ? 0.72 : 0.92;
-        ctx.globalCompositeOperation = 'source-over';
-      }
+      ctx.globalCompositeOperation = composite(layer);
+      const mul = alphaMul(layer);
 
       for(let y=0; y<m.ny; y++) {
         const lat = m.la1 - (y*m.dy);
@@ -397,12 +414,11 @@
           let c = getColor(val, layer);
           if(c[3] <= 0) continue;
 
-          c = withAlpha(c, alphaMul);
+          c = [c[0], c[1], c[2], Math.max(0, Math.min(1, c[3] * mul))];
           if(c[3] <= 0) continue;
 
           const p1 = map.latLngToContainerPoint([lat, lon]);
           const p2 = map.latLngToContainerPoint([lat - m.dy, lon + m.dx]);
-
           const w = Math.ceil(p2.x - p1.x) + 1;
           const h = Math.ceil(p2.y - p1.y) + 1;
 
@@ -415,21 +431,18 @@
     }
   }
 
-  // --- ISOBARE ---
+  // ====== ISOBARE ======
   function drawIsobars() {
     const ctx = isoCanvas.getContext('2d');
     const s = map.getSize();
-    isoCanvas.width = s.x;
-    isoCanvas.height = s.y;
+    isoCanvas.width = s.x; isoCanvas.height = s.y;
     L.DomUtil.setPosition(isoCanvas, map.containerPointToLayerPoint([0,0]));
     ctx.clearRect(0,0,s.x,s.y);
 
     if(!showIso || !currentData || !currentData.press) return;
 
     const m = currentData.meta;
-    const values = currentData.press;
-
-    const contours = d3.contours().size([m.nx, m.ny]).thresholds(d3.range(960, 1050, 2))(values);
+    const contours = d3.contours().size([m.nx, m.ny]).thresholds(d3.range(960, 1050, 2))(currentData.press);
 
     ctx.lineWidth = 1.4;
     ctx.font = "900 12px Arial";
@@ -437,7 +450,8 @@
     ctx.textBaseline = "middle";
 
     contours.forEach(c => {
-      ctx.strokeStyle = isLightMode ? "rgba(0,0,0,0.75)" : "rgba(255,255,255,0.55)";
+      // come mi hai chiesto: su DARK sempre bianche
+      ctx.strokeStyle = isLightMode ? "rgba(0,0,0,0.75)" : "rgba(255,255,255,0.65)";
 
       ctx.beginPath();
       const labelCandidates = [];
@@ -472,12 +486,11 @@
     });
   }
 
-  // --- GRIGLIA (solo linee) ---
+  // ====== GRID ======
   function drawGrid() {
     const ctx = gridCanvas.getContext('2d');
     const s = map.getSize();
-    gridCanvas.width = s.x;
-    gridCanvas.height = s.y;
+    gridCanvas.width = s.x; gridCanvas.height = s.y;
     L.DomUtil.setPosition(gridCanvas, map.containerPointToLayerPoint([0,0]));
     ctx.clearRect(0,0,s.x,s.y);
 
@@ -499,7 +512,7 @@
     }
   }
 
-  // --- WIND ---
+  // ====== WIND ======
   function updateWind() {
     if(velocityLayer) map.removeLayer(velocityLayer);
     if(!windEnabled || !currentData) return;
@@ -511,10 +524,11 @@
     if(dpr >= 2) particleMult = isMobile ? (1/240) : (1/190);
 
     const windColorsDark = ["#000080", "#0044ff", "#00ddff", "#00ff55", "#ffff00", "#ff6600", "#ff0000", "#ff00ff"];
-    const windColorsLight = ["#00124d", "#0033cc", "#0077ff", "#00a3a3", "#00b030", "#b38600", "#cc3300", "#7a007a"];
+    const windColorsLight = ["#00124d", "#0033cc", "#0077ff", "#007a7a", "#009a2b", "#8a6500", "#b32000", "#5a005a"];
 
     try {
       velocityLayer = L.velocityLayer({
+        pane: 'windPane',
         displayValues: false,
         data: [ currentData.wind_u, currentData.wind_v ],
 
@@ -527,14 +541,13 @@
         opacity: 0.95,
         colorScale: isLightMode ? windColorsLight : windColorsDark
       });
-
       velocityLayer.addTo(map);
-    } catch(e) {}
+    } catch(e) {
+      setStatus("Errore layer vento (leaflet-velocity).");
+    }
   }
 
-  // --- PICKER ---
-  let lastPickedLayer = 'wind';
-
+  // ====== PICKER ======
   function unitFor(type){
     if(type==='wind') return 'km/h';
     if(type==='temp') return '°C';
@@ -579,20 +592,68 @@
     if(layer === 'wind') out = val.toFixed(1);
     else if(layer === 'temp') out = val.toFixed(1);
     else if(layer === 'rain') out = val.toFixed(1);
-    else if(layer === 'rh') out = Math.round(val).toString();
-    else if(layer === 'press') out = Math.round(val).toString();
-    else if(layer === 'cloud') out = Math.round(val).toString();
+    else out = Math.round(val).toString();
 
     document.getElementById('val-display').innerText = out;
     document.getElementById('unit-display').innerText = unitFor(layer);
   }
 
-  // --- UI ACTIONS ---
-  window.toggleOverlay = function(layer, exclusiveForWind=false) {
-    if(exclusiveForWind) {
-      windEnabled = !windEnabled;
-      document.getElementById('btn-wind').classList.toggle('active', windEnabled);
-      lastPickedLayer = 'wind';
-      document.getElementById('unit-display').innerText = unitFor('wind');
-      document.getElementById('val-display').innerText = '--';
-      redrawAl
+  // ====== UI ACTIONS ======
+  window.toggleWind = function(){
+    windEnabled = !windEnabled;
+    document.getElementById('btn-wind').classList.toggle('active', windEnabled);
+    lastPickedLayer = 'wind';
+    document.getElementById('unit-display').innerText = unitFor('wind');
+    document.getElementById('val-display').innerText = '--';
+    redrawAll();
+  };
+
+  window.toggleOverlay = function(layer) {
+    if(overlaysEnabled.has(layer)) overlaysEnabled.delete(layer);
+    else overlaysEnabled.add(layer);
+
+    const btn = document.getElementById('btn-' + layer);
+    if(btn) btn.classList.toggle('active', overlaysEnabled.has(layer));
+
+    lastPickedLayer = layer;
+    document.getElementById('unit-display').innerText = unitFor(layer);
+    document.getElementById('val-display').innerText = '--';
+
+    redrawAll();
+  };
+
+  window.toggleIso = function() {
+    showIso = !showIso;
+    document.getElementById('btn-iso').classList.toggle('active', showIso);
+    redrawAll();
+  };
+
+  window.toggleGrid = function() {
+    showGrid = !showGrid;
+    document.getElementById('btn-grid').classList.toggle('active', showGrid);
+    redrawAll();
+  };
+
+  window.togglePlay = function() {
+    if(isPlaying) { isPlaying = false; document.getElementById('play-btn').innerText = "►"; return; }
+    isPlaying = true;
+
+    const s = document.getElementById('time-slider');
+    const btn = document.getElementById('play-btn');
+    btn.innerText = "❚❚";
+
+    let i = parseInt(s.value, 10);
+    const max = parseInt(s.max, 10);
+
+    const interval = setInterval(() => {
+      if(!isPlaying) { clearInterval(interval); btn.innerText = "►"; return; }
+      if(i >= max) { clearInterval(interval); isPlaying=false; btn.innerText="►"; return; }
+      i++;
+      s.value = i;
+      loadStep(i);
+    }, 800);
+  };
+</script>
+
+</body>
+</html>
