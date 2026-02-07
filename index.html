@@ -21,9 +21,9 @@
     #ui-container { position: absolute; top: 10px; right: 10px; z-index: 1000; display: flex; flex-direction: column; gap: 10px; align-items: flex-end; }
     .panel { background: rgba(0,0,0,0.85); backdrop-filter: blur(6px); padding: 8px; border-radius: 14px; border: 1px solid #444; }
     .layer-btn {
-      display: block; width: 140px; padding: 10px 12px; margin-bottom: 6px;
+      display: block; width: 150px; padding: 10px 12px; margin-bottom: 6px;
       background: transparent; color: #ccc; border: none; text-align: right;
-      cursor: pointer; font-size: 13px; font-weight: 700; border-radius: 8px;
+      cursor: pointer; font-size: 13px; font-weight: 800; border-radius: 8px;
       transition: all 0.15s;
     }
     .layer-btn:hover { background: rgba(255,255,255,0.08); color: #fff; }
@@ -32,7 +32,7 @@
     .map-toggle {
       padding: 8px 12px; background: rgba(255,255,255,0.06); color: #fff;
       border: 1px solid rgba(255,255,255,0.2); border-radius: 10px;
-      cursor: pointer; font-size: 12px; font-weight: 800;
+      cursor: pointer; font-size: 12px; font-weight: 900;
       transition: all 0.15s;
     }
     .map-toggle:hover { background: rgba(255,255,255,0.12); }
@@ -40,8 +40,8 @@
 
     /* INFO & TIME */
     #info-box { position: absolute; top: 20px; left: 20px; z-index: 1000; pointer-events: none; text-shadow: 0 2px 10px #000; }
-    #val-display { font-size: 3.5em; font-weight: 900; line-height: 1; }
-    #unit-display { font-size: 1.2em; color: #aaa; font-weight: 800; }
+    #val-display { font-size: 3.5em; font-weight: 950; line-height: 1; }
+    #unit-display { font-size: 1.2em; color: #aaa; font-weight: 850; }
 
     #bottom-bar {
       position: absolute; bottom: 0; left: 0; right: 0; height: 90px;
@@ -49,16 +49,15 @@
       display: flex; align-items: center; padding: 0 20px; z-index: 2000;
     }
     #play-btn { font-size: 2.5em; background: none; border: none; color: white; cursor: pointer; margin-right: 15px; }
-    #time-label { font-size: 1.4em; font-weight: 900; margin-left: 15px; min-width: 140px; text-align: center; text-shadow: 0 2px 10px #000; }
+    #time-label { font-size: 1.4em; font-weight: 950; margin-left: 15px; min-width: 140px; text-align: center; text-shadow: 0 2px 10px #000; }
     input[type=range] { flex-grow: 1; height: 5px; cursor: pointer; accent-color: #0088ff; }
 
     /* Dark relief overlay: più evidente */
     .hillshade-tiles{
-      mix-blend-mode: overlay;              /* più contrasto su dark */
+      mix-blend-mode: overlay;
       filter: contrast(2.15) brightness(0.85) saturate(1.05);
     }
 
-    /* Canvas: smooth */
     canvas { image-rendering: auto; }
   </style>
 </head>
@@ -76,12 +75,16 @@
     </div>
 
     <div class="panel">
-      <button class="layer-btn active" onclick="setLayer('wind')">VENTO 💨</button>
-      <button class="layer-btn" onclick="setLayer('temp')">TEMP 🌡️</button>
-      <button class="layer-btn" onclick="setLayer('rain')">PIOGGIA ☔</button>
-      <button class="layer-btn" onclick="setLayer('rh')">UMIDITÀ 💧</button>
-      <button class="layer-btn" onclick="setLayer('press')">PRESS ⏲️</button>
-      <button class="layer-btn" onclick="setLayer('cloud')">NUVOLE ☁️</button>
+      <!-- Vento: toggle indipendente -->
+      <button class="layer-btn active" id="btn-wind" onclick="toggleWind()">VENTO 💨</button>
+
+      <!-- Overlay multi-selezione -->
+      <button class="layer-btn" id="btn-temp"  onclick="toggleOverlay('temp')">TEMP 🌡️</button>
+      <button class="layer-btn" id="btn-rain"  onclick="toggleOverlay('rain')">PIOGGIA ☔</button>
+      <button class="layer-btn" id="btn-rh"    onclick="toggleOverlay('rh')">UMIDITÀ 💧</button>
+      <button class="layer-btn" id="btn-press" onclick="toggleOverlay('press')">PRESS ⏲️</button>
+      <button class="layer-btn" id="btn-cloud" onclick="toggleOverlay('cloud')">NUVOLE ☁️</button>
+
       <hr style="border:0; border-top:1px solid #444; margin:6px 0;">
       <button class="layer-btn" id="btn-iso" onclick="toggleIso()">ISOBARE 〰️</button>
       <button class="layer-btn" id="btn-grid" onclick="toggleGrid()">GRIGLIA #</button>
@@ -102,13 +105,18 @@
   var heatCanvas, isoCanvas, gridCanvas;
 
   var currentData = null, catalog = [];
-  var activeLayer = 'wind';
   var showIso = false, showGrid = false, isPlaying = false;
+
+  // Vento toggle
+  var windEnabled = true;
+
+  // Overlay attivi (multi)
+  var overlaysEnabled = new Set();      // es: {'rain','cloud'}
+  var primaryOverlay = null;            // overlay "in evidenza" per picker/unità (ultimo cliccato)
 
   var baseLayers = {};
   var labelLayers = {};
   var hillshadeLayer = null;
-
   var isLightMode = false;
 
   // --- PALETTES (heatmaps) ---
@@ -134,7 +142,6 @@
       {v:80,c:[50,150,255,0.60]},
       {v:95,c:[0,0,200,0.65]}
     ],
-    // Pressione: blu (bassa) -> rosso (alta), senza “buco”
     press: [
       {v:980, c:[0,70,255,0.55]},
       {v:995, c:[0,170,255,0.55]},
@@ -143,14 +150,15 @@
       {v:1022,c:[255,200,0,0.55]},
       {v:1035,c:[255,60,0,0.60]}
     ],
-    // Nuvole: 0-100% (grigio -> bianco)
+    // NUVOLE: bianco -> grigio scuro (come vuoi tu)
+    // 0% quasi invisibile; 100% grigio scuro più opaco
     cloud: [
-      {v:0,   c:[0,0,0,0]},
-      {v:10,  c:[120,120,120,0.20]},
-      {v:30,  c:[160,160,160,0.35]},
-      {v:60,  c:[200,200,200,0.50]},
-      {v:85,  c:[235,235,235,0.65]},
-      {v:100, c:[255,255,255,0.75]}
+      {v:0,   c:[255,255,255,0.00]},
+      {v:10,  c:[245,245,245,0.20]},
+      {v:30,  c:[225,225,225,0.35]},
+      {v:60,  c:[190,190,190,0.50]},
+      {v:85,  c:[140,140,140,0.62]},
+      {v:100, c:[80,80,80,0.75]}
     ]
   };
 
@@ -181,30 +189,26 @@
   window.addEventListener('load', async function() {
     map = L.map('map', { zoomControl: false }).setView([37.5, 14.2], 8);
 
-    // Base dark
     baseLayers.dark = L.tileLayer(
       'https://{s}.basemaps.cartocdn.com/dark_nolabels/{z}/{x}/{y}{r}.png',
       { maxZoom: 19, attribution: '©OpenStreetMap, ©Carto' }
     ).addTo(map);
 
-    // Rilievo (hillshade) sopra dark
     hillshadeLayer = L.tileLayer(
       'https://server.arcgisonline.com/ArcGIS/rest/services/Elevation/World_Hillshade/MapServer/tile/{z}/{y}/{x}',
       {
         maxZoom: 19,
-        opacity: 0.82,                 // più evidente
+        opacity: 0.82,
         className: 'hillshade-tiles',
         attribution: 'Hillshade © Esri'
       }
     ).addTo(map);
 
-    // Base chiara
     baseLayers.map = L.tileLayer(
       'https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png',
       { maxZoom: 19, attribution: '©OpenStreetMap' }
     );
 
-    // Labels (solo per dark)
     labelLayers.dark = L.tileLayer(
       'https://{s}.basemaps.cartocdn.com/dark_only_labels/{z}/{x}/{y}{r}.png',
       { maxZoom: 19, attribution: '©Carto' }
@@ -213,11 +217,10 @@
     createCanvasLayers();
     await loadCatalogAndFirstFrame();
 
-    // Picker: mouse + click
     map.on('mousemove', updatePickerFromEvent);
     map.on('click', updatePickerFromEvent);
 
-    document.getElementById('unit-display').innerText = unitFor(activeLayer);
+    updateUnitDisplay();
   });
 
   function setBase(type) {
@@ -292,14 +295,14 @@
 
   function redrawAll() {
     if(!currentData) return;
-    drawHeatmap();
+    drawHeatmapMulti();  // multi overlay
     drawIsobars();
     drawGrid();
     updateWind();
   }
 
-  // --- HEATMAP (no numeri dentro) ---
-  function drawHeatmap() {
+  // --- HEATMAP MULTI (disegna tutti gli overlay attivi, in ordine stabile) ---
+  function drawHeatmapMulti() {
     const ctx = heatCanvas.getContext('2d');
     const s = map.getSize();
     heatCanvas.width = s.x;
@@ -307,41 +310,48 @@
     L.DomUtil.setPosition(heatCanvas, map.containerPointToLayerPoint([0,0]));
     ctx.clearRect(0,0,s.x,s.y);
 
-    if(activeLayer === 'wind' || !currentData) return;
+    if(!currentData || overlaysEnabled.size === 0) return;
 
     const m = currentData.meta;
     const b = map.getBounds();
 
-    for(let y=0; y<m.ny; y++) {
-      const lat = m.la1 - (y*m.dy);
-      if(lat < b.getSouth()-0.1 || lat > b.getNorth()+0.1) continue;
+    // Ordine disegno (sinottico): press sotto, poi temp/rh, poi cloud, poi rain sopra
+    const order = ['press','temp','rh','cloud','rain'];
 
-      for(let x=0; x<m.nx; x++) {
-        const lon = m.lo1 + (x*m.dx);
-        if(lon < b.getWest()-0.1 || lon > b.getEast()+0.1) continue;
+    for (const layer of order) {
+      if (!overlaysEnabled.has(layer)) continue;
 
-        const idx = y*m.nx + x;
+      for(let y=0; y<m.ny; y++) {
+        const lat = m.la1 - (y*m.dy);
+        if(lat < b.getSouth()-0.1 || lat > b.getNorth()+0.1) continue;
 
-        let val = 0;
-        if(activeLayer==='temp') val = currentData.temp?.[idx];
-        else if(activeLayer==='rain') val = currentData.rain?.[idx];
-        else if(activeLayer==='rh')   val = currentData.rh?.[idx];
-        else if(activeLayer==='press') val = currentData.press?.[idx];
-        else if(activeLayer==='cloud') val = currentData.cloud?.[idx];
+        for(let x=0; x<m.nx; x++) {
+          const lon = m.lo1 + (x*m.dx);
+          if(lon < b.getWest()-0.1 || lon > b.getEast()+0.1) continue;
 
-        if(val === undefined || val === null) continue;
+          const idx = y*m.nx + x;
 
-        const c = getColor(val, activeLayer);
-        if(c[3] <= 0) continue;
+          let val = null;
+          if(layer==='temp')  val = currentData.temp?.[idx];
+          if(layer==='rain')  val = currentData.rain?.[idx];
+          if(layer==='rh')    val = currentData.rh?.[idx];
+          if(layer==='press') val = currentData.press?.[idx];
+          if(layer==='cloud') val = currentData.cloud?.[idx];
 
-        const p1 = map.latLngToContainerPoint([lat, lon]);
-        const p2 = map.latLngToContainerPoint([lat - m.dy, lon + m.dx]);
+          if(val === undefined || val === null) continue;
 
-        const w = Math.ceil(p2.x - p1.x) + 1;
-        const h = Math.ceil(p2.y - p1.y) + 1;
+          const c = getColor(val, layer);
+          if(c[3] <= 0) continue;
 
-        ctx.fillStyle = `rgba(${c[0]},${c[1]},${c[2]},${c[3]})`;
-        ctx.fillRect(Math.floor(p1.x), Math.floor(p1.y), w, h);
+          const p1 = map.latLngToContainerPoint([lat, lon]);
+          const p2 = map.latLngToContainerPoint([lat - m.dy, lon + m.dx]);
+
+          const w = Math.ceil(p2.x - p1.x) + 1;
+          const h = Math.ceil(p2.y - p1.y) + 1;
+
+          ctx.fillStyle = `rgba(${c[0]},${c[1]},${c[2]},${c[3]})`;
+          ctx.fillRect(Math.floor(p1.x), Math.floor(p1.y), w, h);
+        }
       }
     }
   }
@@ -370,11 +380,9 @@
     ctx.textBaseline = "middle";
 
     contours.forEach(c => {
-      // Richiesta tua:
-      // - mappa DARK => isobare BIANCHE
-      // - mappa chiara => scure per contrasto
+      // tua richiesta: dark => bianche
       if(isLightMode) ctx.strokeStyle = "rgba(0,0,0,0.75)";
-      else ctx.strokeStyle = "rgba(255,255,255,0.80)";
+      else ctx.strokeStyle = "rgba(255,255,255,0.85)";
 
       ctx.beginPath();
       const labelCandidates = [];
@@ -397,7 +405,6 @@
 
       ctx.stroke();
 
-      // Etichette (sempre leggibili)
       labelCandidates.forEach(pts => {
         const mid = pts[Math.floor(pts.length/2)];
         const bg = isLightMode ? "rgba(255,255,255,0.85)" : "rgba(0,0,0,0.70)";
@@ -410,7 +417,7 @@
     });
   }
 
-  // --- GRIGLIA (solo linee, zero numeri) ---
+  // --- GRIGLIA (solo linee) ---
   function drawGrid() {
     const ctx = gridCanvas.getContext('2d');
     const s = map.getSize();
@@ -437,31 +444,21 @@
     }
   }
 
-  // --- WIND (palette originale su dark; palette più scura su mappa chiara; meno particelle per FPS) ---
+  // --- WIND (palette originale su dark; più scura su mappa chiara; meno particelle per FPS) ---
   function updateWind() {
     if(velocityLayer) map.removeLayer(velocityLayer);
-    if(activeLayer !== 'wind' || !currentData) return;
+    if(!windEnabled || !currentData) return;
 
-    // Riduzione particelle (FPS): denominatore più alto = meno particelle
     const isMobile = Math.min(window.innerWidth, window.innerHeight) < 900;
     const dpr = window.devicePixelRatio || 1;
 
     let particleMult = isMobile ? (1/170) : (1/130);
     if(dpr >= 2) particleMult = isMobile ? (1/240) : (1/190);
 
-    // Colori:
-    // - DARK: esattamente i tuoi originali
-    // - MAPPA chiara: più scuri/contrastati (si vedono davvero)
     const windColorsDark = ["#000080", "#0044ff", "#00ddff", "#00ff55", "#ffff00", "#ff6600", "#ff0000", "#ff00ff"];
     const windColorsLight = [
-      "#001a4d",  // navy molto scuro
-      "#0033a0",  // blu scuro
-      "#0066cc",  // blu deciso
-      "#008a7a",  // teal scuro
-      "#1a7f00",  // verde scuro
-      "#b38f00",  // ocra scura
-      "#b30000",  // rosso scuro
-      "#660066"   // viola scuro
+      "#001a4d", "#0033a0", "#0066cc", "#008a7a",
+      "#1a7f00", "#b38f00", "#b30000", "#660066"
     ];
 
     try {
@@ -469,14 +466,13 @@
         displayValues: false,
         data: [ currentData.wind_u, currentData.wind_v ],
 
-        // === PARAMETRI ORIGINALI (non toccati) ===
         maxVelocity: 18.0,
         velocityScale: 0.006,
-        particleMultiplier: particleMult,   // SOLO questo per FPS
+        particleMultiplier: particleMult,
         lineWidth: 0.8,
         particleAge: 140,
         frameRate: 60,
-        opacity: isLightMode ? 0.92 : 0.95, // su chiaro leggermente meno “sparato”
+        opacity: isLightMode ? 0.92 : 0.95,
         colorScale: isLightMode ? windColorsLight : windColorsDark
       });
 
@@ -484,7 +480,7 @@
     } catch(e) {}
   }
 
-  // --- PICKER ---
+  // --- PICKER / UNITÀ ---
   function unitFor(type){
     if(type==='wind') return 'km/h';
     if(type==='temp') return '°C';
@@ -495,7 +491,18 @@
     return '';
   }
 
-  function valueAtLatLng(latlng) {
+  function updateUnitDisplay() {
+    // priorità: se c’è un primary overlay, mostra quello; altrimenti se vento on mostra km/h
+    if(primaryOverlay && overlaysEnabled.has(primaryOverlay)) {
+      document.getElementById('unit-display').innerText = unitFor(primaryOverlay);
+    } else if (windEnabled) {
+      document.getElementById('unit-display').innerText = unitFor('wind');
+    } else {
+      document.getElementById('unit-display').innerText = '—';
+    }
+  }
+
+  function valueAtLatLng(latlng, which) {
     if(!currentData || !currentData.meta) return null;
     const m = currentData.meta;
 
@@ -503,64 +510,88 @@
     const x = Math.round((latlng.lng - m.lo1) / m.dx);
 
     if(x < 0 || x >= m.nx || y < 0 || y >= m.ny) return null;
-
     const idx = y*m.nx + x;
 
-    if(activeLayer === 'wind') {
+    if(which === 'wind') {
       const u = currentData.wind_u?.data?.[idx];
       const v = currentData.wind_v?.data?.[idx];
       if(u === undefined || v === undefined) return null;
       return (Math.sqrt(u*u + v*v) * 3.6);
     }
-    if(activeLayer === 'temp') return currentData.temp?.[idx] ?? null;
-    if(activeLayer === 'rain') return currentData.rain?.[idx] ?? null;
-    if(activeLayer === 'rh') return currentData.rh?.[idx] ?? null;
-    if(activeLayer === 'press') return currentData.press?.[idx] ?? null;
-    if(activeLayer === 'cloud') return currentData.cloud?.[idx] ?? null;
+    if(which === 'temp')  return currentData.temp?.[idx] ?? null;
+    if(which === 'rain')  return currentData.rain?.[idx] ?? null;
+    if(which === 'rh')    return currentData.rh?.[idx] ?? null;
+    if(which === 'press') return currentData.press?.[idx] ?? null;
+    if(which === 'cloud') return currentData.cloud?.[idx] ?? null;
 
     return null;
   }
 
   function updatePickerFromEvent(e) {
     if(!e || !e.latlng) return;
-    const val = valueAtLatLng(e.latlng);
+
+    // Se ho un overlay primario, leggo quello; altrimenti vento (se attivo)
+    let which = null;
+    if(primaryOverlay && overlaysEnabled.has(primaryOverlay)) which = primaryOverlay;
+    else if(windEnabled) which = 'wind';
+    else return;
+
+    const val = valueAtLatLng(e.latlng, which);
     if(val === null || val === undefined) return;
 
     let out = '--';
-    if(activeLayer === 'wind') out = val.toFixed(1);
-    else if(activeLayer === 'temp') out = val.toFixed(1);
-    else if(activeLayer === 'rain') out = val.toFixed(1);
-    else if(activeLayer === 'rh') out = Math.round(val).toString();
-    else if(activeLayer === 'press') out = Math.round(val).toString();
-    else if(activeLayer === 'cloud') out = Math.round(val).toString();
+    if(which === 'wind') out = val.toFixed(1);
+    else if(which === 'temp') out = val.toFixed(1);
+    else if(which === 'rain') out = val.toFixed(1);
+    else if(which === 'rh') out = Math.round(val).toString();
+    else if(which === 'press') out = Math.round(val).toString();
+    else if(which === 'cloud') out = Math.round(val).toString();
 
     document.getElementById('val-display').innerText = out;
   }
 
   // --- UI ACTIONS ---
-  window.setLayer = function(type) {
-    activeLayer = type;
-
-    document.querySelectorAll('.layer-btn').forEach(btn => {
-      if(btn.id !== 'btn-iso' && btn.id !== 'btn-grid') btn.classList.remove('active');
-    });
-    event.target.classList.add('active');
-
-    document.getElementById('unit-display').innerText = unitFor(type);
+  window.toggleWind = function() {
+    windEnabled = !windEnabled;
+    document.getElementById('btn-wind').classList.toggle('active', windEnabled);
     document.getElementById('val-display').innerText = '--';
+    updateUnitDisplay();
+    redrawAll();
+  };
 
+  window.toggleOverlay = function(type) {
+    const btn = document.getElementById('btn-' + type);
+
+    if(overlaysEnabled.has(type)) {
+      overlaysEnabled.delete(type);
+      btn.classList.remove('active');
+
+      // se era primario, scegli un altro overlay rimasto (ultimo “in ordine” preferenziale)
+      if(primaryOverlay === type) {
+        primaryOverlay = null;
+        const fallbackOrder = ['rain','cloud','rh','temp','press'];
+        for(const k of fallbackOrder) { if(overlaysEnabled.has(k)) { primaryOverlay = k; break; } }
+      }
+    } else {
+      overlaysEnabled.add(type);
+      btn.classList.add('active');
+      primaryOverlay = type; // ultimo cliccato = primario
+    }
+
+    document.getElementById('val-display').innerText = '--';
+    updateUnitDisplay();
     redrawAll();
   };
 
   window.toggleIso = function() {
     showIso = !showIso;
-    document.getElementById('btn-iso').classList.toggle('active');
+    document.getElementById('btn-iso').classList.toggle('active', showIso);
     redrawAll();
   };
 
   window.toggleGrid = function() {
     showGrid = !showGrid;
-    document.getElementById('btn-grid').classList.toggle('active');
+    document.getElementById('btn-grid').classList.toggle('active', showGrid);
     redrawAll();
   };
 
