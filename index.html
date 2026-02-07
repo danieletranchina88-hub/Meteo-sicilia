@@ -39,7 +39,7 @@
     .map-toggle.active { background: #eee; color: #000; }
 
     /* INFO & TIME */
-    #info-box { position: absolute; top: 20px; left: 20px; z-index: 1000; pointer-events: none; text-shadow: 2px 2px 0 #000; }
+    #info-box { position: absolute; top: 20px; left: 20px; z-index: 1000; pointer-events: none; text-shadow: 0 2px 10px #000; }
     #val-display { font-size: 3.5em; font-weight: 900; line-height: 1; }
     #unit-display { font-size: 1.2em; color: #aaa; font-weight: 800; }
 
@@ -52,12 +52,13 @@
     #time-label { font-size: 1.4em; font-weight: 900; margin-left: 15px; min-width: 140px; text-align: center; text-shadow: 0 2px 10px #000; }
     input[type=range] { flex-grow: 1; height: 5px; cursor: pointer; accent-color: #0088ff; }
 
-    /* Hillshade più “inciso” sul dark */
-    .hillshade-tiles {
-      mix-blend-mode: multiply;
-      filter: contrast(2.0) brightness(0.9);
+    /* Dark relief overlay: più evidente */
+    .hillshade-tiles{
+      mix-blend-mode: overlay;              /* più contrasto su dark */
+      filter: contrast(2.15) brightness(0.85) saturate(1.05);
     }
 
+    /* Canvas: smooth */
     canvas { image-rendering: auto; }
   </style>
 </head>
@@ -70,16 +71,17 @@
 
   <div id="ui-container">
     <div class="panel" style="display:flex; gap:6px;">
-      <button class="map-toggle active" id="btn-dark" onclick="setBase('dark')">DARK</button>
-      <button class="map-toggle" id="btn-map" onclick="setBase('map')">MAPPA</button>
+      <button class="map-toggle active" onclick="setBase('dark')">DARK</button>
+      <button class="map-toggle" onclick="setBase('map')">MAPPA</button>
     </div>
 
     <div class="panel">
-      <button class="layer-btn active" id="btn-wind" onclick="setLayer('wind')">VENTO 💨</button>
-      <button class="layer-btn" id="btn-temp" onclick="setLayer('temp')">TEMP 🌡️</button>
-      <button class="layer-btn" id="btn-rain" onclick="setLayer('rain')">PIOGGIA ☔</button>
-      <button class="layer-btn" id="btn-rh" onclick="setLayer('rh')">UMIDITÀ 💧</button>
-      <button class="layer-btn" id="btn-press" onclick="setLayer('press')">PRESS ⏲️</button>
+      <button class="layer-btn active" onclick="setLayer('wind')">VENTO 💨</button>
+      <button class="layer-btn" onclick="setLayer('temp')">TEMP 🌡️</button>
+      <button class="layer-btn" onclick="setLayer('rain')">PIOGGIA ☔</button>
+      <button class="layer-btn" onclick="setLayer('rh')">UMIDITÀ 💧</button>
+      <button class="layer-btn" onclick="setLayer('press')">PRESS ⏲️</button>
+      <button class="layer-btn" onclick="setLayer('cloud')">NUVOLE ☁️</button>
       <hr style="border:0; border-top:1px solid #444; margin:6px 0;">
       <button class="layer-btn" id="btn-iso" onclick="toggleIso()">ISOBARE 〰️</button>
       <button class="layer-btn" id="btn-grid" onclick="toggleGrid()">GRIGLIA #</button>
@@ -132,7 +134,7 @@
       {v:80,c:[50,150,255,0.60]},
       {v:95,c:[0,0,200,0.65]}
     ],
-    // blu (bassa) -> rosso (alta), senza “buco”
+    // Pressione: blu (bassa) -> rosso (alta), senza “buco”
     press: [
       {v:980, c:[0,70,255,0.55]},
       {v:995, c:[0,170,255,0.55]},
@@ -140,15 +142,17 @@
       {v:1013,c:[255,255,255,0.55]},
       {v:1022,c:[255,200,0,0.55]},
       {v:1035,c:[255,60,0,0.60]}
+    ],
+    // Nuvole: 0-100% (grigio -> bianco)
+    cloud: [
+      {v:0,   c:[0,0,0,0]},
+      {v:10,  c:[120,120,120,0.20]},
+      {v:30,  c:[160,160,160,0.35]},
+      {v:60,  c:[200,200,200,0.50]},
+      {v:85,  c:[235,235,235,0.65]},
+      {v:100, c:[255,255,255,0.75]}
     ]
   };
-
-  // --- WIND COLORS ---
-  // ORIGINALI (dark)
-  const WIND_COLORS_DARK = ["#000080", "#0044ff", "#00ddff", "#00ff55", "#ffff00", "#ff6600", "#ff0000", "#ff00ff"];
-
-  // LIGHT MODE: più contrasto su OpenStreet (scuri/saturi)
-  const WIND_COLORS_LIGHT = ["#0b0b0b", "#222222", "#003366", "#0055aa", "#006400", "#b8860b", "#8b0000", "#5a0000"];
 
   function lerp(a,b,t){ return a+(b-a)*t; }
 
@@ -183,12 +187,12 @@
       { maxZoom: 19, attribution: '©OpenStreetMap, ©Carto' }
     ).addTo(map);
 
-    // Hillshade per rilievi evidenti
+    // Rilievo (hillshade) sopra dark
     hillshadeLayer = L.tileLayer(
       'https://server.arcgisonline.com/ArcGIS/rest/services/Elevation/World_Hillshade/MapServer/tile/{z}/{y}/{x}',
       {
         maxZoom: 19,
-        opacity: 0.78,
+        opacity: 0.82,                 // più evidente
         className: 'hillshade-tiles',
         attribution: 'Hillshade © Esri'
       }
@@ -200,7 +204,7 @@
       { maxZoom: 19, attribution: '©OpenStreetMap' }
     );
 
-    // Labels (dark)
+    // Labels (solo per dark)
     labelLayers.dark = L.tileLayer(
       'https://{s}.basemaps.cartocdn.com/dark_only_labels/{z}/{x}/{y}{r}.png',
       { maxZoom: 19, attribution: '©Carto' }
@@ -209,6 +213,7 @@
     createCanvasLayers();
     await loadCatalogAndFirstFrame();
 
+    // Picker: mouse + click
     map.on('mousemove', updatePickerFromEvent);
     map.on('click', updatePickerFromEvent);
 
@@ -216,26 +221,20 @@
   });
 
   function setBase(type) {
-    document.getElementById('btn-dark').classList.remove('active');
-    document.getElementById('btn-map').classList.remove('active');
+    document.querySelectorAll('.map-toggle').forEach(b => b.classList.remove('active'));
+    event.target.classList.add('active');
 
     if(type==='dark') {
-      document.getElementById('btn-dark').classList.add('active');
       isLightMode = false;
-
       map.removeLayer(baseLayers.map);
       baseLayers.dark.addTo(map);
-
       if(hillshadeLayer) hillshadeLayer.addTo(map);
       if(labelLayers.dark) labelLayers.dark.addTo(map);
     } else {
-      document.getElementById('btn-map').classList.add('active');
       isLightMode = true;
-
       map.removeLayer(baseLayers.dark);
       if(hillshadeLayer) map.removeLayer(hillshadeLayer);
       if(labelLayers.dark) map.removeLayer(labelLayers.dark);
-
       baseLayers.map.addTo(map);
     }
 
@@ -299,7 +298,7 @@
     updateWind();
   }
 
-  // --- HEATMAP (no numeri) ---
+  // --- HEATMAP (no numeri dentro) ---
   function drawHeatmap() {
     const ctx = heatCanvas.getContext('2d');
     const s = map.getSize();
@@ -324,16 +323,20 @@
         const idx = y*m.nx + x;
 
         let val = 0;
-        if(activeLayer==='temp') val = currentData.temp[idx];
-        else if(activeLayer==='rain') val = currentData.rain[idx];
-        else if(activeLayer==='rh')   val = currentData.rh[idx];
-        else if(activeLayer==='press') val = currentData.press[idx];
+        if(activeLayer==='temp') val = currentData.temp?.[idx];
+        else if(activeLayer==='rain') val = currentData.rain?.[idx];
+        else if(activeLayer==='rh')   val = currentData.rh?.[idx];
+        else if(activeLayer==='press') val = currentData.press?.[idx];
+        else if(activeLayer==='cloud') val = currentData.cloud?.[idx];
+
+        if(val === undefined || val === null) continue;
 
         const c = getColor(val, activeLayer);
         if(c[3] <= 0) continue;
 
         const p1 = map.latLngToContainerPoint([lat, lon]);
         const p2 = map.latLngToContainerPoint([lat - m.dy, lon + m.dx]);
+
         const w = Math.ceil(p2.x - p1.x) + 1;
         const h = Math.ceil(p2.y - p1.y) + 1;
 
@@ -357,17 +360,21 @@
     const m = currentData.meta;
     const values = currentData.press;
 
-    const contours = d3.contours().size([m.nx, m.ny]).thresholds(d3.range(960, 1050, 2))(values);
+    const contours = d3.contours()
+      .size([m.nx, m.ny])
+      .thresholds(d3.range(960, 1050, 2))(values);
 
-    ctx.lineWidth = 1.4;
+    ctx.lineWidth = 1.5;
     ctx.font = "900 12px Arial";
     ctx.textAlign = "center";
     ctx.textBaseline = "middle";
 
     contours.forEach(c => {
-      // ✅ richiesto: su dark TUTTO BIANCO
-      if(!isLightMode) ctx.strokeStyle = "rgba(255,255,255,0.85)";
-      else ctx.strokeStyle = "rgba(0,0,0,0.70)";
+      // Richiesta tua:
+      // - mappa DARK => isobare BIANCHE
+      // - mappa chiara => scure per contrasto
+      if(isLightMode) ctx.strokeStyle = "rgba(0,0,0,0.75)";
+      else ctx.strokeStyle = "rgba(255,255,255,0.80)";
 
       ctx.beginPath();
       const labelCandidates = [];
@@ -384,16 +391,16 @@
             if(first) { ctx.moveTo(p.x, p.y); first=false; }
             else ctx.lineTo(p.x, p.y);
           });
-          if(linePts.length > 60) labelCandidates.push(linePts);
+          if(linePts.length > 70) labelCandidates.push(linePts);
         });
       });
 
       ctx.stroke();
 
-      // label
+      // Etichette (sempre leggibili)
       labelCandidates.forEach(pts => {
         const mid = pts[Math.floor(pts.length/2)];
-        const bg = isLightMode ? "rgba(255,255,255,0.85)" : "rgba(0,0,0,0.75)";
+        const bg = isLightMode ? "rgba(255,255,255,0.85)" : "rgba(0,0,0,0.70)";
         const fg = isLightMode ? "#000" : "#fff";
         ctx.fillStyle = bg;
         ctx.fillRect(mid.x-16, mid.y-9, 32, 18);
@@ -403,7 +410,7 @@
     });
   }
 
-  // --- GRIGLIA (solo linee, NO VALORI) ---
+  // --- GRIGLIA (solo linee, zero numeri) ---
   function drawGrid() {
     const ctx = gridCanvas.getContext('2d');
     const s = map.getSize();
@@ -417,7 +424,7 @@
     const b = map.getBounds();
     const step = map.getZoom() > 9 ? 0.1 : 0.5;
 
-    ctx.strokeStyle = isLightMode ? "rgba(0,0,0,0.25)" : "rgba(255,255,255,0.18)";
+    ctx.strokeStyle = isLightMode ? "rgba(0,0,0,0.22)" : "rgba(255,255,255,0.18)";
     ctx.lineWidth = 1;
 
     for(let lon=Math.floor(b.getWest()); lon<=Math.ceil(b.getEast()); lon+=step) {
@@ -430,31 +437,47 @@
     }
   }
 
-  // --- WIND (parametri originali, palette cambia in base alla mappa) ---
+  // --- WIND (palette originale su dark; palette più scura su mappa chiara; meno particelle per FPS) ---
   function updateWind() {
     if(velocityLayer) map.removeLayer(velocityLayer);
     if(activeLayer !== 'wind' || !currentData) return;
 
+    // Riduzione particelle (FPS): denominatore più alto = meno particelle
     const isMobile = Math.min(window.innerWidth, window.innerHeight) < 900;
     const dpr = window.devicePixelRatio || 1;
 
-    let particleMult = isMobile ? (1/160) : (1/120);
-    if(dpr >= 2) particleMult = isMobile ? (1/220) : (1/180);
+    let particleMult = isMobile ? (1/170) : (1/130);
+    if(dpr >= 2) particleMult = isMobile ? (1/240) : (1/190);
+
+    // Colori:
+    // - DARK: esattamente i tuoi originali
+    // - MAPPA chiara: più scuri/contrastati (si vedono davvero)
+    const windColorsDark = ["#000080", "#0044ff", "#00ddff", "#00ff55", "#ffff00", "#ff6600", "#ff0000", "#ff00ff"];
+    const windColorsLight = [
+      "#001a4d",  // navy molto scuro
+      "#0033a0",  // blu scuro
+      "#0066cc",  // blu deciso
+      "#008a7a",  // teal scuro
+      "#1a7f00",  // verde scuro
+      "#b38f00",  // ocra scura
+      "#b30000",  // rosso scuro
+      "#660066"   // viola scuro
+    ];
 
     try {
       velocityLayer = L.velocityLayer({
         displayValues: false,
         data: [ currentData.wind_u, currentData.wind_v ],
 
+        // === PARAMETRI ORIGINALI (non toccati) ===
         maxVelocity: 18.0,
         velocityScale: 0.006,
-        particleMultiplier: particleMult,
+        particleMultiplier: particleMult,   // SOLO questo per FPS
         lineWidth: 0.8,
         particleAge: 140,
         frameRate: 60,
-        opacity: 0.95,
-
-        colorScale: isLightMode ? WIND_COLORS_LIGHT : WIND_COLORS_DARK
+        opacity: isLightMode ? 0.92 : 0.95, // su chiaro leggermente meno “sparato”
+        colorScale: isLightMode ? windColorsLight : windColorsDark
       });
 
       velocityLayer.addTo(map);
@@ -468,6 +491,7 @@
     if(type==='rain') return 'mm';
     if(type==='rh') return '%';
     if(type==='press') return 'hPa';
+    if(type==='cloud') return '%';
     return '';
   }
 
@@ -477,23 +501,28 @@
 
     const y = Math.round((m.la1 - latlng.lat) / m.dy);
     const x = Math.round((latlng.lng - m.lo1) / m.dx);
+
     if(x < 0 || x >= m.nx || y < 0 || y >= m.ny) return null;
 
     const idx = y*m.nx + x;
 
     if(activeLayer === 'wind') {
-      const u = currentData.wind_u.data[idx];
-      const v = currentData.wind_v.data[idx];
+      const u = currentData.wind_u?.data?.[idx];
+      const v = currentData.wind_v?.data?.[idx];
+      if(u === undefined || v === undefined) return null;
       return (Math.sqrt(u*u + v*v) * 3.6);
     }
-    if(activeLayer === 'temp') return currentData.temp[idx];
-    if(activeLayer === 'rain') return currentData.rain[idx];
-    if(activeLayer === 'rh') return currentData.rh[idx];
-    if(activeLayer === 'press') return currentData.press[idx];
+    if(activeLayer === 'temp') return currentData.temp?.[idx] ?? null;
+    if(activeLayer === 'rain') return currentData.rain?.[idx] ?? null;
+    if(activeLayer === 'rh') return currentData.rh?.[idx] ?? null;
+    if(activeLayer === 'press') return currentData.press?.[idx] ?? null;
+    if(activeLayer === 'cloud') return currentData.cloud?.[idx] ?? null;
+
     return null;
   }
 
   function updatePickerFromEvent(e) {
+    if(!e || !e.latlng) return;
     const val = valueAtLatLng(e.latlng);
     if(val === null || val === undefined) return;
 
@@ -503,23 +532,19 @@
     else if(activeLayer === 'rain') out = val.toFixed(1);
     else if(activeLayer === 'rh') out = Math.round(val).toString();
     else if(activeLayer === 'press') out = Math.round(val).toString();
+    else if(activeLayer === 'cloud') out = Math.round(val).toString();
 
     document.getElementById('val-display').innerText = out;
   }
 
   // --- UI ACTIONS ---
-  function clearLayerButtons() {
-    ['btn-wind','btn-temp','btn-rain','btn-rh','btn-press'].forEach(id=>{
-      const el=document.getElementById(id);
-      if(el) el.classList.remove('active');
-    });
-  }
-
   window.setLayer = function(type) {
     activeLayer = type;
 
-    clearLayerButtons();
-    document.getElementById('btn-'+type).classList.add('active');
+    document.querySelectorAll('.layer-btn').forEach(btn => {
+      if(btn.id !== 'btn-iso' && btn.id !== 'btn-grid') btn.classList.remove('active');
+    });
+    event.target.classList.add('active');
 
     document.getElementById('unit-display').innerText = unitFor(type);
     document.getElementById('val-display').innerText = '--';
