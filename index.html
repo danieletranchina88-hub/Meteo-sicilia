@@ -1,7 +1,7 @@
 <!DOCTYPE html>
 <html>
 <head>
-  <title>Sicilia MeteoHub - PRO (DARK RELIEF)</title>
+  <title>Sicilia MeteoHub - PRO (DARK RELIEF + MULTI-LAYER)</title>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
 
@@ -20,10 +20,11 @@
     /* UI CONTROL */
     #ui-container { position: absolute; top: 10px; right: 10px; z-index: 1000; display: flex; flex-direction: column; gap: 10px; align-items: flex-end; }
     .panel { background: rgba(0,0,0,0.85); backdrop-filter: blur(6px); padding: 8px; border-radius: 14px; border: 1px solid #444; }
+
     .layer-btn {
-      display: block; width: 150px; padding: 10px 12px; margin-bottom: 6px;
+      display: block; width: 160px; padding: 10px 12px; margin-bottom: 6px;
       background: transparent; color: #ccc; border: none; text-align: right;
-      cursor: pointer; font-size: 13px; font-weight: 800; border-radius: 8px;
+      cursor: pointer; font-size: 13px; font-weight: 700; border-radius: 8px;
       transition: all 0.15s;
     }
     .layer-btn:hover { background: rgba(255,255,255,0.08); color: #fff; }
@@ -32,7 +33,7 @@
     .map-toggle {
       padding: 8px 12px; background: rgba(255,255,255,0.06); color: #fff;
       border: 1px solid rgba(255,255,255,0.2); border-radius: 10px;
-      cursor: pointer; font-size: 12px; font-weight: 900;
+      cursor: pointer; font-size: 12px; font-weight: 800;
       transition: all 0.15s;
     }
     .map-toggle:hover { background: rgba(255,255,255,0.12); }
@@ -40,8 +41,8 @@
 
     /* INFO & TIME */
     #info-box { position: absolute; top: 20px; left: 20px; z-index: 1000; pointer-events: none; text-shadow: 0 2px 10px #000; }
-    #val-display { font-size: 3.5em; font-weight: 950; line-height: 1; }
-    #unit-display { font-size: 1.2em; color: #aaa; font-weight: 850; }
+    #val-display { font-size: 3.5em; font-weight: 900; line-height: 1; }
+    #unit-display { font-size: 1.2em; color: #aaa; font-weight: 800; }
 
     #bottom-bar {
       position: absolute; bottom: 0; left: 0; right: 0; height: 90px;
@@ -49,15 +50,16 @@
       display: flex; align-items: center; padding: 0 20px; z-index: 2000;
     }
     #play-btn { font-size: 2.5em; background: none; border: none; color: white; cursor: pointer; margin-right: 15px; }
-    #time-label { font-size: 1.4em; font-weight: 950; margin-left: 15px; min-width: 140px; text-align: center; text-shadow: 0 2px 10px #000; }
+    #time-label { font-size: 1.4em; font-weight: 900; margin-left: 15px; min-width: 140px; text-align: center; text-shadow: 0 2px 10px #000; }
     input[type=range] { flex-grow: 1; height: 5px; cursor: pointer; accent-color: #0088ff; }
 
     /* Dark relief overlay: più evidente */
-    .hillshade-tiles{
-      mix-blend-mode: overlay;
-      filter: contrast(2.15) brightness(0.85) saturate(1.05);
+    .hillshade-tiles {
+      mix-blend-mode: multiply;
+      filter: contrast(1.95) brightness(0.95);
     }
 
+    /* Canvas: smooth */
     canvas { image-rendering: auto; }
   </style>
 </head>
@@ -76,16 +78,17 @@
 
     <div class="panel">
       <!-- Vento: toggle indipendente -->
-      <button class="layer-btn active" id="btn-wind" onclick="toggleWind()">VENTO 💨</button>
+      <button class="layer-btn active" id="btn-wind" onclick="toggleOverlay('wind', true)">VENTO 💨</button>
 
-      <!-- Overlay multi-selezione -->
-      <button class="layer-btn" id="btn-temp"  onclick="toggleOverlay('temp')">TEMP 🌡️</button>
-      <button class="layer-btn" id="btn-rain"  onclick="toggleOverlay('rain')">PIOGGIA ☔</button>
-      <button class="layer-btn" id="btn-rh"    onclick="toggleOverlay('rh')">UMIDITÀ 💧</button>
+      <!-- Campi continui: multi-selezione -->
+      <button class="layer-btn active" id="btn-temp" onclick="toggleOverlay('temp')">TEMP 🌡️</button>
+      <button class="layer-btn" id="btn-rain" onclick="toggleOverlay('rain')">PIOGGIA ☔</button>
+      <button class="layer-btn" id="btn-rh" onclick="toggleOverlay('rh')">UMIDITÀ 💧</button>
       <button class="layer-btn" id="btn-press" onclick="toggleOverlay('press')">PRESS ⏲️</button>
       <button class="layer-btn" id="btn-cloud" onclick="toggleOverlay('cloud')">NUVOLE ☁️</button>
 
       <hr style="border:0; border-top:1px solid #444; margin:6px 0;">
+
       <button class="layer-btn" id="btn-iso" onclick="toggleIso()">ISOBARE 〰️</button>
       <button class="layer-btn" id="btn-grid" onclick="toggleGrid()">GRIGLIA #</button>
     </div>
@@ -107,19 +110,20 @@
   var currentData = null, catalog = [];
   var showIso = false, showGrid = false, isPlaying = false;
 
-  // Vento toggle
-  var windEnabled = true;
-
-  // Overlay attivi (multi)
-  var overlaysEnabled = new Set();      // es: {'rain','cloud'}
-  var primaryOverlay = null;            // overlay "in evidenza" per picker/unità (ultimo cliccato)
-
   var baseLayers = {};
   var labelLayers = {};
   var hillshadeLayer = null;
+
   var isLightMode = false;
 
+  // Multi-layer overlay state
+  // - overlaysEnabled: set di layer "heatmap" attivi (temp/rain/rh/press/cloud)
+  // - windEnabled: vento toggle indipendente
+  const overlaysEnabled = new Set(['temp']); // di default temp on
+  let windEnabled = true;
+
   // --- PALETTES (heatmaps) ---
+  // Nuvole: bianco -> grigio scuro
   const PALETTES = {
     temp: [
       {v:-10,c:[255,255,255,0.55]},
@@ -142,6 +146,7 @@
       {v:80,c:[50,150,255,0.60]},
       {v:95,c:[0,0,200,0.65]}
     ],
+    // Pressione: blu (bassa) -> rosso (alta), senza buco trasparente
     press: [
       {v:980, c:[0,70,255,0.55]},
       {v:995, c:[0,170,255,0.55]},
@@ -150,15 +155,13 @@
       {v:1022,c:[255,200,0,0.55]},
       {v:1035,c:[255,60,0,0.60]}
     ],
-    // NUVOLE: bianco -> grigio scuro (come vuoi tu)
-    // 0% quasi invisibile; 100% grigio scuro più opaco
+    // Cloud cover (%) -> white to dark gray (not transparent by default; we control alpha dynamically)
     cloud: [
       {v:0,   c:[255,255,255,0.00]},
-      {v:10,  c:[245,245,245,0.20]},
-      {v:30,  c:[225,225,225,0.35]},
-      {v:60,  c:[190,190,190,0.50]},
-      {v:85,  c:[140,140,140,0.62]},
-      {v:100, c:[80,80,80,0.75]}
+      {v:20,  c:[245,245,245,0.35]},
+      {v:50,  c:[190,190,190,0.45]},
+      {v:80,  c:[120,120,120,0.55]},
+      {v:100, c:[60,60,60,0.65]}
     ]
   };
 
@@ -189,26 +192,31 @@
   window.addEventListener('load', async function() {
     map = L.map('map', { zoomControl: false }).setView([37.5, 14.2], 8);
 
+    // Base layers (dark)
     baseLayers.dark = L.tileLayer(
       'https://{s}.basemaps.cartocdn.com/dark_nolabels/{z}/{x}/{y}{r}.png',
       { maxZoom: 19, attribution: '©OpenStreetMap, ©Carto' }
     ).addTo(map);
 
+    // RILIEVO (hillshade) SOPRA dark
+    // Nota: questo servizio a volte è “soft”; qui lo rendiamo evidente via opacity + CSS
     hillshadeLayer = L.tileLayer(
       'https://server.arcgisonline.com/ArcGIS/rest/services/Elevation/World_Hillshade/MapServer/tile/{z}/{y}/{x}',
       {
         maxZoom: 19,
-        opacity: 0.82,
+        opacity: 0.78,
         className: 'hillshade-tiles',
         attribution: 'Hillshade © Esri'
       }
     ).addTo(map);
 
+    // Base chiara
     baseLayers.map = L.tileLayer(
       'https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png',
       { maxZoom: 19, attribution: '©OpenStreetMap' }
     );
 
+    // Labels: solo su dark (come nel tuo stile)
     labelLayers.dark = L.tileLayer(
       'https://{s}.basemaps.cartocdn.com/dark_only_labels/{z}/{x}/{y}{r}.png',
       { maxZoom: 19, attribution: '©Carto' }
@@ -220,7 +228,8 @@
     map.on('mousemove', updatePickerFromEvent);
     map.on('click', updatePickerFromEvent);
 
-    updateUnitDisplay();
+    // Inizializza unit display
+    document.getElementById('unit-display').innerText = activePickerUnit();
   });
 
   function setBase(type) {
@@ -241,6 +250,7 @@
       baseLayers.map.addTo(map);
     }
 
+    // Aggiorna colori vento in base alla base-map (contrasto)
     redrawAll();
   }
 
@@ -295,13 +305,13 @@
 
   function redrawAll() {
     if(!currentData) return;
-    drawHeatmapMulti();  // multi overlay
+    drawHeatmapMulti();
     drawIsobars();
     drawGrid();
     updateWind();
   }
 
-  // --- HEATMAP MULTI (disegna tutti gli overlay attivi, in ordine stabile) ---
+  // --- HEATMAP MULTI-LAYER (evita fango: soglie + alpha dinamico + blend per nuvole) ---
   function drawHeatmapMulti() {
     const ctx = heatCanvas.getContext('2d');
     const s = map.getSize();
@@ -315,11 +325,33 @@
     const m = currentData.meta;
     const b = map.getBounds();
 
-    // Ordine disegno (sinottico): press sotto, poi temp/rh, poi cloud, poi rain sopra
+    // Ordine sinottico consigliato
     const order = ['press','temp','rh','cloud','rain'];
+
+    // soglie anti-rumore
+    const cloudMin = 20;   // % sotto cui non disegno nuvole
+    const rainMin  = 0.2;  // mm sotto cui non disegno pioggia
+
+    function withAlpha(col, mul){
+      return [col[0], col[1], col[2], Math.max(0, Math.min(1, col[3] * mul))];
+    }
 
     for (const layer of order) {
       if (!overlaysEnabled.has(layer)) continue;
+
+      let alphaMul = 1.0;
+
+      // Scelte: nuvole "velo" (screen) così non ammazzano il vento
+      if (layer === 'cloud') {
+        alphaMul = windEnabled ? 0.38 : 0.55;
+        ctx.globalCompositeOperation = 'screen';
+      } else if (layer === 'rain') {
+        alphaMul = windEnabled ? 0.70 : 0.78;
+        ctx.globalCompositeOperation = 'source-over';
+      } else {
+        alphaMul = windEnabled ? 0.72 : 0.92;
+        ctx.globalCompositeOperation = 'source-over';
+      }
 
       for(let y=0; y<m.ny; y++) {
         const lat = m.la1 - (y*m.dy);
@@ -340,7 +372,13 @@
 
           if(val === undefined || val === null) continue;
 
-          const c = getColor(val, layer);
+          if(layer==='cloud' && val < cloudMin) continue;
+          if(layer==='rain'  && val < rainMin) continue;
+
+          let c = getColor(val, layer);
+          if(c[3] <= 0) continue;
+
+          c = withAlpha(c, alphaMul);
           if(c[3] <= 0) continue;
 
           const p1 = map.latLngToContainerPoint([lat, lon]);
@@ -353,10 +391,12 @@
           ctx.fillRect(Math.floor(p1.x), Math.floor(p1.y), w, h);
         }
       }
+
+      ctx.globalCompositeOperation = 'source-over';
     }
   }
 
-  // --- ISOBARE ---
+  // --- ISOBARE (bianche su dark, scure su light) ---
   function drawIsobars() {
     const ctx = isoCanvas.getContext('2d');
     const s = map.getSize();
@@ -370,19 +410,16 @@
     const m = currentData.meta;
     const values = currentData.press;
 
-    const contours = d3.contours()
-      .size([m.nx, m.ny])
-      .thresholds(d3.range(960, 1050, 2))(values);
+    const contours = d3.contours().size([m.nx, m.ny]).thresholds(d3.range(960, 1050, 2))(values);
 
-    ctx.lineWidth = 1.5;
+    ctx.lineWidth = 1.4;
     ctx.font = "900 12px Arial";
     ctx.textAlign = "center";
     ctx.textBaseline = "middle";
 
     contours.forEach(c => {
-      // tua richiesta: dark => bianche
-      if(isLightMode) ctx.strokeStyle = "rgba(0,0,0,0.75)";
-      else ctx.strokeStyle = "rgba(255,255,255,0.85)";
+      // Richiesta: su dark bianche
+      ctx.strokeStyle = isLightMode ? "rgba(0,0,0,0.75)" : "rgba(255,255,255,0.55)";
 
       ctx.beginPath();
       const labelCandidates = [];
@@ -399,15 +436,16 @@
             if(first) { ctx.moveTo(p.x, p.y); first=false; }
             else ctx.lineTo(p.x, p.y);
           });
-          if(linePts.length > 70) labelCandidates.push(linePts);
+          if(linePts.length > 60) labelCandidates.push(linePts);
         });
       });
 
       ctx.stroke();
 
+      // Etichette leggere
       labelCandidates.forEach(pts => {
         const mid = pts[Math.floor(pts.length/2)];
-        const bg = isLightMode ? "rgba(255,255,255,0.85)" : "rgba(0,0,0,0.70)";
+        const bg = isLightMode ? "rgba(255,255,255,0.85)" : "rgba(0,0,0,0.65)";
         const fg = isLightMode ? "#000" : "#fff";
         ctx.fillStyle = bg;
         ctx.fillRect(mid.x-16, mid.y-9, 32, 18);
@@ -417,7 +455,7 @@
     });
   }
 
-  // --- GRIGLIA (solo linee) ---
+  // --- GRIGLIA (solo linee, niente numeri) ---
   function drawGrid() {
     const ctx = gridCanvas.getContext('2d');
     const s = map.getSize();
@@ -431,7 +469,7 @@
     const b = map.getBounds();
     const step = map.getZoom() > 9 ? 0.1 : 0.5;
 
-    ctx.strokeStyle = isLightMode ? "rgba(0,0,0,0.22)" : "rgba(255,255,255,0.18)";
+    ctx.strokeStyle = isLightMode ? "rgba(0,0,0,0.25)" : "rgba(255,255,255,0.18)";
     ctx.lineWidth = 1;
 
     for(let lon=Math.floor(b.getWest()); lon<=Math.ceil(b.getEast()); lon+=step) {
@@ -444,7 +482,7 @@
     }
   }
 
-  // --- WIND (palette originale su dark; più scura su mappa chiara; meno particelle per FPS) ---
+  // --- WIND (stessi colori/parametri originali + colori più scuri su base chiara + meno particelle FPS) ---
   function updateWind() {
     if(velocityLayer) map.removeLayer(velocityLayer);
     if(!windEnabled || !currentData) return;
@@ -455,24 +493,23 @@
     let particleMult = isMobile ? (1/170) : (1/130);
     if(dpr >= 2) particleMult = isMobile ? (1/240) : (1/190);
 
+    // colori originali (dark) e variante più contrastata (light)
     const windColorsDark = ["#000080", "#0044ff", "#00ddff", "#00ff55", "#ffff00", "#ff6600", "#ff0000", "#ff00ff"];
-    const windColorsLight = [
-      "#001a4d", "#0033a0", "#0066cc", "#008a7a",
-      "#1a7f00", "#b38f00", "#b30000", "#660066"
-    ];
+    const windColorsLight = ["#00124d", "#0033cc", "#0077ff", "#00a3a3", "#00b030", "#b38600", "#cc3300", "#7a007a"];
 
     try {
       velocityLayer = L.velocityLayer({
         displayValues: false,
         data: [ currentData.wind_u, currentData.wind_v ],
 
+        // === PARAMETRI ORIGINALI ===
         maxVelocity: 18.0,
         velocityScale: 0.006,
         particleMultiplier: particleMult,
         lineWidth: 0.8,
         particleAge: 140,
         frameRate: 60,
-        opacity: isLightMode ? 0.92 : 0.95,
+        opacity: 0.95,
         colorScale: isLightMode ? windColorsLight : windColorsDark
       });
 
@@ -480,7 +517,14 @@
     } catch(e) {}
   }
 
-  // --- PICKER / UNITÀ ---
+  // --- PICKER ---
+  function activePickerUnit() {
+    // Mostra unità in base al "layer primario" selezionato:
+    // priorità: wind se attivo e bottone premuto/ultimo click, altrimenti ultimo layer togglato.
+    // qui teniamo semplice: se vento attivo e non ci sono overlay -> km/h, altrimenti unità del "lastPickedLayer"
+    return unitFor(lastPickedLayer);
+  }
+
   function unitFor(type){
     if(type==='wind') return 'km/h';
     if(type==='temp') return '°C';
@@ -491,18 +535,12 @@
     return '';
   }
 
-  function updateUnitDisplay() {
-    // priorità: se c’è un primary overlay, mostra quello; altrimenti se vento on mostra km/h
-    if(primaryOverlay && overlaysEnabled.has(primaryOverlay)) {
-      document.getElementById('unit-display').innerText = unitFor(primaryOverlay);
-    } else if (windEnabled) {
-      document.getElementById('unit-display').innerText = unitFor('wind');
-    } else {
-      document.getElementById('unit-display').innerText = '—';
-    }
-  }
+  // Il picker segue questo "layer target"
+  // - se clicchi VENTO: picker mostra vento
+  // - altrimenti mostra l’ultimo overlay togglato
+  let lastPickedLayer = 'wind';
 
-  function valueAtLatLng(latlng, which) {
+  function valueAtLatLng(latlng, layer) {
     if(!currentData || !currentData.meta) return null;
     const m = currentData.meta;
 
@@ -510,76 +548,66 @@
     const x = Math.round((latlng.lng - m.lo1) / m.dx);
 
     if(x < 0 || x >= m.nx || y < 0 || y >= m.ny) return null;
+
     const idx = y*m.nx + x;
 
-    if(which === 'wind') {
-      const u = currentData.wind_u?.data?.[idx];
-      const v = currentData.wind_v?.data?.[idx];
-      if(u === undefined || v === undefined) return null;
+    if(layer === 'wind') {
+      const u = currentData.wind_u.data[idx];
+      const v = currentData.wind_v.data[idx];
       return (Math.sqrt(u*u + v*v) * 3.6);
     }
-    if(which === 'temp')  return currentData.temp?.[idx] ?? null;
-    if(which === 'rain')  return currentData.rain?.[idx] ?? null;
-    if(which === 'rh')    return currentData.rh?.[idx] ?? null;
-    if(which === 'press') return currentData.press?.[idx] ?? null;
-    if(which === 'cloud') return currentData.cloud?.[idx] ?? null;
+    if(layer === 'temp') return currentData.temp?.[idx];
+    if(layer === 'rain') return currentData.rain?.[idx];
+    if(layer === 'rh') return currentData.rh?.[idx];
+    if(layer === 'press') return currentData.press?.[idx];
+    if(layer === 'cloud') return currentData.cloud?.[idx];
 
     return null;
   }
 
   function updatePickerFromEvent(e) {
-    if(!e || !e.latlng) return;
-
-    // Se ho un overlay primario, leggo quello; altrimenti vento (se attivo)
-    let which = null;
-    if(primaryOverlay && overlaysEnabled.has(primaryOverlay)) which = primaryOverlay;
-    else if(windEnabled) which = 'wind';
-    else return;
-
-    const val = valueAtLatLng(e.latlng, which);
+    const layer = lastPickedLayer;
+    const val = valueAtLatLng(e.latlng, layer);
     if(val === null || val === undefined) return;
 
     let out = '--';
-    if(which === 'wind') out = val.toFixed(1);
-    else if(which === 'temp') out = val.toFixed(1);
-    else if(which === 'rain') out = val.toFixed(1);
-    else if(which === 'rh') out = Math.round(val).toString();
-    else if(which === 'press') out = Math.round(val).toString();
-    else if(which === 'cloud') out = Math.round(val).toString();
+    if(layer === 'wind') out = val.toFixed(1);
+    else if(layer === 'temp') out = val.toFixed(1);
+    else if(layer === 'rain') out = val.toFixed(1);
+    else if(layer === 'rh') out = Math.round(val).toString();
+    else if(layer === 'press') out = Math.round(val).toString();
+    else if(layer === 'cloud') out = Math.round(val).toString();
 
     document.getElementById('val-display').innerText = out;
+    document.getElementById('unit-display').innerText = unitFor(layer);
   }
 
   // --- UI ACTIONS ---
-  window.toggleWind = function() {
-    windEnabled = !windEnabled;
-    document.getElementById('btn-wind').classList.toggle('active', windEnabled);
-    document.getElementById('val-display').innerText = '--';
-    updateUnitDisplay();
-    redrawAll();
-  };
-
-  window.toggleOverlay = function(type) {
-    const btn = document.getElementById('btn-' + type);
-
-    if(overlaysEnabled.has(type)) {
-      overlaysEnabled.delete(type);
-      btn.classList.remove('active');
-
-      // se era primario, scegli un altro overlay rimasto (ultimo “in ordine” preferenziale)
-      if(primaryOverlay === type) {
-        primaryOverlay = null;
-        const fallbackOrder = ['rain','cloud','rh','temp','press'];
-        for(const k of fallbackOrder) { if(overlaysEnabled.has(k)) { primaryOverlay = k; break; } }
-      }
-    } else {
-      overlaysEnabled.add(type);
-      btn.classList.add('active');
-      primaryOverlay = type; // ultimo cliccato = primario
+  // toggleOverlay(layer, exclusiveForWind=false)
+  // - per vento: usa exclusiveForWind=true così il pulsante gestisce windEnabled e picker
+  // - per gli altri: multi-selezione
+  window.toggleOverlay = function(layer, exclusiveForWind=false) {
+    if(exclusiveForWind) {
+      windEnabled = !windEnabled;
+      document.getElementById('btn-wind').classList.toggle('active', windEnabled);
+      lastPickedLayer = 'wind';
+      document.getElementById('unit-display').innerText = unitFor('wind');
+      document.getElementById('val-display').innerText = '--';
+      redrawAll();
+      return;
     }
 
+    if(overlaysEnabled.has(layer)) overlaysEnabled.delete(layer);
+    else overlaysEnabled.add(layer);
+
+    const btn = document.getElementById('btn-' + layer);
+    if(btn) btn.classList.toggle('active', overlaysEnabled.has(layer));
+
+    // picker segue l'ultimo layer togglato (utile per click)
+    lastPickedLayer = layer;
+    document.getElementById('unit-display').innerText = unitFor(layer);
     document.getElementById('val-display').innerText = '--';
-    updateUnitDisplay();
+
     redrawAll();
   };
 
@@ -618,3 +646,4 @@
 
 </body>
 </html>
+```0
