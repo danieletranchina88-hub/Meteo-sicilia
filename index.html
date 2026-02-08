@@ -1,7 +1,7 @@
 <!DOCTYPE html>
 <html>
 <head>
-  <title>Sicilia MeteoHub - PRO (RELIEF)</title>
+  <title>Sicilia MeteoHub - PRO (MAPY OUTDOOR)</title>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
 
@@ -17,31 +17,23 @@
     body { margin: 0; background: #111; font-family: 'Segoe UI', sans-serif; color: white; overflow: hidden; }
     #map { position: absolute; top: 0; bottom: 0; width: 100%; background: #111; }
 
-    /* UI CONTROL */
-    #ui-container { position: absolute; top: 10px; right: 10px; z-index: 1000; display: flex; flex-direction: column; gap: 10px; align-items: flex-end; }
-    .panel { background: rgba(0,0,0,0.85); backdrop-filter: blur(6px); padding: 8px; border-radius: 14px; border: 1px solid #444; }
-    .layer-btn {
-      display: block; width: 140px; padding: 10px 12px; margin-bottom: 6px;
-      background: transparent; color: #ccc; border: none; text-align: right;
-      cursor: pointer; font-size: 13px; font-weight: 700; border-radius: 8px;
-      transition: all 0.15s;
-    }
-    .layer-btn:hover { background: rgba(255,255,255,0.08); color: #fff; }
-    .layer-btn.active { background: #007bff; color: white; }
-
-    .map-toggle {
-      padding: 8px 12px; background: rgba(255,255,255,0.06); color: #fff;
-      border: 1px solid rgba(255,255,255,0.2); border-radius: 10px;
-      cursor: pointer; font-size: 12px; font-weight: 800;
-      transition: all 0.15s;
-    }
-    .map-toggle:hover { background: rgba(255,255,255,0.12); }
-    .map-toggle.active { background: #eee; color: #000; }
-
     /* INFO & TIME */
     #info-box { position: absolute; top: 20px; left: 20px; z-index: 1000; pointer-events: none; text-shadow: 0 2px 10px rgba(0,0,0,0.9); }
     #val-display { font-size: 3.5em; font-weight: 900; line-height: 1; }
-    #unit-display { font-size: 1.2em; color: #aaa; font-weight: 800; }
+    #unit-display { font-size: 1.2em; color: #eee; font-weight: 800; }
+
+    /* UI CONTROL */
+    #ui-container { position: absolute; top: 10px; right: 10px; z-index: 1000; display: flex; flex-direction: column; gap: 10px; align-items: flex-end; }
+    .panel { background: rgba(0,0,0,0.80); backdrop-filter: blur(6px); padding: 10px; border-radius: 14px; border: 1px solid rgba(255,255,255,0.15); }
+
+    .layer-btn {
+      display: block; width: 150px; padding: 10px 12px; margin-bottom: 6px;
+      background: transparent; color: #ddd; border: none; text-align: right;
+      cursor: pointer; font-size: 13px; font-weight: 800; border-radius: 10px;
+      transition: all 0.15s;
+    }
+    .layer-btn:hover { background: rgba(255,255,255,0.10); color: #fff; }
+    .layer-btn.active { background: #007bff; color: white; }
 
     #bottom-bar {
       position: absolute; bottom: 0; left: 0; right: 0; height: 90px;
@@ -51,18 +43,6 @@
     #play-btn { font-size: 2.5em; background: none; border: none; color: white; cursor: pointer; margin-right: 15px; }
     #time-label { font-size: 1.4em; font-weight: 900; margin-left: 15px; min-width: 140px; text-align: center; text-shadow: 0 2px 10px #000; }
     input[type=range] { flex-grow: 1; height: 5px; cursor: pointer; accent-color: #0088ff; }
-
-    /* Hillshade overlay: due modalità (dark vs light) */
-    .hillshade-dark {
-      opacity: 0.92;
-      filter: contrast(2.4) brightness(1.10);
-      mix-blend-mode: screen; /* su dark evidenzia le creste */
-    }
-    .hillshade-light {
-      opacity: 0.65;
-      filter: contrast(1.7) brightness(0.95);
-      mix-blend-mode: multiply; /* su chiara incide bene */
-    }
 
     canvas { image-rendering: auto; }
   </style>
@@ -75,11 +55,6 @@
   </div>
 
   <div id="ui-container">
-    <div class="panel" style="display:flex; gap:6px;">
-      <button class="map-toggle active" onclick="setBase('dark')">DARK</button>
-      <button class="map-toggle" onclick="setBase('mapy')">MAPPA</button>
-    </div>
-
     <div class="panel">
       <button class="layer-btn active" onclick="setLayer('wind')">VENTO 💨</button>
       <button class="layer-btn" onclick="setLayer('temp')">TEMP 🌡️</button>
@@ -87,7 +62,7 @@
       <button class="layer-btn" onclick="setLayer('rh')">UMIDITÀ 💧</button>
       <button class="layer-btn" onclick="setLayer('press')">PRESSIONE 🧭</button>
       <button class="layer-btn" onclick="setLayer('cloud')">NUVOLE ☁️</button>
-      <hr style="border:0; border-top:1px solid #444; margin:6px 0;">
+      <hr style="border:0; border-top:1px solid rgba(255,255,255,0.15); margin:8px 0;">
       <button class="layer-btn" id="btn-iso" onclick="toggleIso()">ISOBARE 〰️</button>
       <button class="layer-btn" id="btn-grid" onclick="toggleGrid()">GRIGLIA #</button>
     </div>
@@ -105,17 +80,11 @@
   // --- GLOBALS ---
   var map, velocityLayer;
   var heatCanvas, isoCanvas, gridCanvas;
-
   var currentData = null, catalog = [];
   var activeLayer = 'wind';
   var showIso = false, showGrid = false, isPlaying = false;
 
-  var baseLayers = {};
-  var hillshadeLayer = null;
-  var isLightMode = false; // true quando MAPPA chiara
-
-  // --- PALETTES (heatmaps) ---
-  // Nuvole: bianco -> grigio scuro (come volevi)
+  // === PALETTES (heatmaps) ===
   const PALETTES = {
     temp: [
       {v:-10,c:[255,255,255,0.55]},
@@ -146,6 +115,7 @@
       {v:1022,c:[255,200,0,0.55]},
       {v:1035,c:[255,60,0,0.60]}
     ],
+    // Nuvole: bianco -> grigio scuro
     cloud: [
       {v:0,   c:[255,255,255,0.00]},
       {v:10,  c:[245,245,245,0.20]},
@@ -184,29 +154,11 @@
   window.addEventListener('load', async function() {
     map = L.map('map', { zoomControl: false }).setView([37.5, 14.2], 8);
 
-    // DARK base
-    baseLayers.dark = L.tileLayer(
-      'https://{s}.basemaps.cartocdn.com/dark_nolabels/{z}/{x}/{y}{r}.png',
-      { maxZoom: 19, attribution: '©OpenStreetMap, ©Carto' }
-    ).addTo(map);
-
-    // MAPPA con rilievi: Mapy "turist" (outdoor-like)  1
-    baseLayers.mapy = L.tileLayer(
+    // === UNA SOLA MAPPA: MAPY (turist/outdoor) ===
+    // tile URL: https://mapserver.mapy.cz/turist-m/{z}-{x}-{y}
+    L.tileLayer(
       'https://mapserver.mapy.cz/turist-m/{z}-{x}-{y}',
       { maxZoom: 18, attribution: '©Seznam.cz, ©OpenStreetMap (CC BY-SA)' }
-    );
-
-    // Hillshade overlay (rilievo ben visibile)
-    // Nota: lo useremo sia su dark che su mapy, con classi diverse.
-    hillshadeLayer = L.tileLayer(
-      'https://server.arcgisonline.com/ArcGIS/rest/services/Elevation/World_Hillshade/MapServer/tile/{z}/{y}/{x}',
-      { maxZoom: 19, opacity: 1.0, className: 'hillshade-dark', attribution: 'Hillshade © Esri' }
-    ).addTo(map);
-
-    // Labels sopra il dark (per mapy non servono)
-    baseLayers.darkLabels = L.tileLayer(
-      'https://{s}.basemaps.cartocdn.com/dark_only_labels/{z}/{x}/{y}{r}.png',
-      { maxZoom: 19 }
     ).addTo(map);
 
     createCanvasLayers();
@@ -217,42 +169,6 @@
 
     document.getElementById('unit-display').innerText = unitFor(activeLayer);
   });
-
-  function setBase(type) {
-    document.querySelectorAll('.map-toggle').forEach(b => b.classList.remove('active'));
-    event.target.classList.add('active');
-
-    if(type === 'dark') {
-      isLightMode = false;
-
-      if(map.hasLayer(baseLayers.mapy)) map.removeLayer(baseLayers.mapy);
-      baseLayers.dark.addTo(map);
-      baseLayers.darkLabels.addTo(map);
-
-      // hillshade “dark mode”
-      map.removeLayer(hillshadeLayer);
-      hillshadeLayer = L.tileLayer(
-        'https://server.arcgisonline.com/ArcGIS/rest/services/Elevation/World_Hillshade/MapServer/tile/{z}/{y}/{x}',
-        { maxZoom: 19, opacity: 1.0, className: 'hillshade-dark', attribution: 'Hillshade © Esri' }
-      ).addTo(map);
-
-    } else {
-      isLightMode = true;
-
-      if(map.hasLayer(baseLayers.dark)) map.removeLayer(baseLayers.dark);
-      if(map.hasLayer(baseLayers.darkLabels)) map.removeLayer(baseLayers.darkLabels);
-      baseLayers.mapy.addTo(map);
-
-      // hillshade “light mode” (più discreto)
-      map.removeLayer(hillshadeLayer);
-      hillshadeLayer = L.tileLayer(
-        'https://server.arcgisonline.com/ArcGIS/rest/services/Elevation/World_Hillshade/MapServer/tile/{z}/{y}/{x}',
-        { maxZoom: 19, opacity: 1.0, className: 'hillshade-light', attribution: 'Hillshade © Esri' }
-      ).addTo(map);
-    }
-
-    redrawAll();
-  }
 
   // --- DATA LOAD ---
   async function loadCatalogAndFirstFrame() {
@@ -311,7 +227,7 @@
     updateWind();
   }
 
-  // --- HEATMAP (senza numeri dentro) ---
+  // --- HEATMAP ---
   function drawHeatmap() {
     const ctx = heatCanvas.getContext('2d');
     const s = map.getSize();
@@ -373,19 +289,14 @@
 
     const contours = d3.contours().size([m.nx, m.ny]).thresholds(d3.range(960, 1050, 2))(values);
 
-    ctx.lineWidth = 1.4;
+    ctx.lineWidth = 1.2;
     ctx.font = "900 12px Arial";
     ctx.textAlign = "center";
     ctx.textBaseline = "middle";
 
     contours.forEach(c => {
-      // Richiesta: su DARK isobare bianche
-      if(!isLightMode) {
-        ctx.strokeStyle = "rgba(255,255,255,0.85)";
-      } else {
-        // su chiara: scure per contrasto
-        ctx.strokeStyle = "rgba(0,0,0,0.55)";
-      }
+      // su mappa chiara: linee scure
+      ctx.strokeStyle = "rgba(0,0,0,0.55)";
 
       ctx.beginPath();
       const labelCandidates = [];
@@ -410,17 +321,15 @@
 
       labelCandidates.forEach(pts => {
         const mid = pts[Math.floor(pts.length/2)];
-        const bg = isLightMode ? "rgba(255,255,255,0.75)" : "rgba(0,0,0,0.65)";
-        const fg = isLightMode ? "#000" : "#fff";
-        ctx.fillStyle = bg;
+        ctx.fillStyle = "rgba(255,255,255,0.75)";
         ctx.fillRect(mid.x-16, mid.y-9, 32, 18);
-        ctx.fillStyle = fg;
+        ctx.fillStyle = "#000";
         ctx.fillText(Math.round(c.value), mid.x, mid.y);
       });
     });
   }
 
-  // --- GRIGLIA (solo linee, niente numeri) ---
+  // --- GRIGLIA (solo linee) ---
   function drawGrid() {
     const ctx = gridCanvas.getContext('2d');
     const s = map.getSize();
@@ -434,7 +343,7 @@
     const b = map.getBounds();
     const step = map.getZoom() > 9 ? 0.1 : 0.5;
 
-    ctx.strokeStyle = isLightMode ? "rgba(0,0,0,0.20)" : "rgba(255,255,255,0.18)";
+    ctx.strokeStyle = "rgba(0,0,0,0.20)";
     ctx.lineWidth = 1;
 
     for(let lon=Math.floor(b.getWest()); lon<=Math.ceil(b.getEast()); lon+=step) {
@@ -447,9 +356,7 @@
     }
   }
 
-  // --- WIND ---
-  // DARK: identico al tuo originale (colorScale e parametri)
-  // MAPPA chiara: colori più scuri/contrastati (stessi parametri fisici)
+  // --- WIND (tuoi parametri originali, colori originali) ---
   function updateWind() {
     if(velocityLayer) map.removeLayer(velocityLayer);
     if(activeLayer !== 'wind' || !currentData) return;
@@ -457,19 +364,16 @@
     const isMobile = Math.min(window.innerWidth, window.innerHeight) < 900;
     const dpr = window.devicePixelRatio || 1;
 
-    // meno particelle = più FPS (senza “falsare” la fisica: la fisica la decide u/v, non il numero di particelle)
+    // meno particelle = più FPS (non cambia “fisica”, solo densità)
     let particleMult = isMobile ? (1/200) : (1/150);
     if(dpr >= 2) particleMult = isMobile ? (1/260) : (1/200);
-
-    const windColorsDark = ["#000080", "#0044ff", "#00ddff", "#00ff55", "#ffff00", "#ff6600", "#ff0000", "#ff00ff"];
-    const windColorsLight = ["#001133", "#002a8f", "#0044ff", "#0088cc", "#00aa55", "#cccc00", "#cc5500", "#aa0000"];
 
     try {
       velocityLayer = L.velocityLayer({
         displayValues: false,
         data: [ currentData.wind_u, currentData.wind_v ],
 
-        // === I TUOI PARAMETRI ORIGINALI ===
+        // === i tuoi parametri originali ===
         maxVelocity: 18.0,
         velocityScale: 0.006,
         particleMultiplier: particleMult,
@@ -477,8 +381,7 @@
         particleAge: 140,
         frameRate: 60,
         opacity: 0.95,
-
-        colorScale: isLightMode ? windColorsLight : windColorsDark
+        colorScale: ["#000080", "#0044ff", "#00ddff", "#00ff55", "#ffff00", "#ff6600", "#ff0000", "#ff00ff"]
       });
 
       velocityLayer.addTo(map);
