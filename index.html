@@ -1,7 +1,7 @@
 <!DOCTYPE html>
 <html>
 <head>
-  <title>Sicilia MeteoHub - PRO (RELIEF FIX)</title>
+  <title>Sicilia MeteoHub - PRO (RELIEF)</title>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
 
@@ -21,9 +21,9 @@
     #ui-container { position: absolute; top: 10px; right: 10px; z-index: 1000; display: flex; flex-direction: column; gap: 10px; align-items: flex-end; }
     .panel { background: rgba(0,0,0,0.85); backdrop-filter: blur(6px); padding: 8px; border-radius: 14px; border: 1px solid #444; }
     .layer-btn {
-      display: block; width: 160px; padding: 10px 12px; margin-bottom: 6px;
+      display: block; width: 140px; padding: 10px 12px; margin-bottom: 6px;
       background: transparent; color: #ccc; border: none; text-align: right;
-      cursor: pointer; font-size: 13px; font-weight: 800; border-radius: 8px;
+      cursor: pointer; font-size: 13px; font-weight: 700; border-radius: 8px;
       transition: all 0.15s;
     }
     .layer-btn:hover { background: rgba(255,255,255,0.08); color: #fff; }
@@ -32,16 +32,16 @@
     .map-toggle {
       padding: 8px 12px; background: rgba(255,255,255,0.06); color: #fff;
       border: 1px solid rgba(255,255,255,0.2); border-radius: 10px;
-      cursor: pointer; font-size: 12px; font-weight: 900;
+      cursor: pointer; font-size: 12px; font-weight: 800;
       transition: all 0.15s;
     }
     .map-toggle:hover { background: rgba(255,255,255,0.12); }
     .map-toggle.active { background: #eee; color: #000; }
 
     /* INFO & TIME */
-    #info-box { position: absolute; top: 20px; left: 20px; z-index: 1000; pointer-events: none; text-shadow: 0 2px 12px rgba(0,0,0,0.9); }
-    #val-display { font-size: 3.6em; font-weight: 1000; line-height: 1; letter-spacing: -1px; }
-    #unit-display { font-size: 1.2em; color: #aaa; font-weight: 900; }
+    #info-box { position: absolute; top: 20px; left: 20px; z-index: 1000; pointer-events: none; text-shadow: 0 2px 10px rgba(0,0,0,0.9); }
+    #val-display { font-size: 3.5em; font-weight: 900; line-height: 1; }
+    #unit-display { font-size: 1.2em; color: #aaa; font-weight: 800; }
 
     #bottom-bar {
       position: absolute; bottom: 0; left: 0; right: 0; height: 90px;
@@ -49,17 +49,19 @@
       display: flex; align-items: center; padding: 0 20px; z-index: 2000;
     }
     #play-btn { font-size: 2.5em; background: none; border: none; color: white; cursor: pointer; margin-right: 15px; }
-    #time-label { font-size: 1.4em; font-weight: 1000; margin-left: 15px; min-width: 140px; text-align: center; text-shadow: 0 2px 10px #000; }
+    #time-label { font-size: 1.4em; font-weight: 900; margin-left: 15px; min-width: 140px; text-align: center; text-shadow: 0 2px 10px #000; }
     input[type=range] { flex-grow: 1; height: 5px; cursor: pointer; accent-color: #0088ff; }
 
-    /* --- RILIEVI: classi diverse per dark/light --- */
-    .relief-dark {
-      mix-blend-mode: screen;      /* rilievo chiaro su dark */
-      filter: invert(1) contrast(2.8) brightness(1.2);
+    /* Hillshade overlay: due modalità (dark vs light) */
+    .hillshade-dark {
+      opacity: 0.92;
+      filter: contrast(2.4) brightness(1.10);
+      mix-blend-mode: screen; /* su dark evidenzia le creste */
     }
-    .relief-light {
-      mix-blend-mode: multiply;    /* rilievo scuro su mappa chiara */
-      filter: contrast(2.2) brightness(1.05);
+    .hillshade-light {
+      opacity: 0.65;
+      filter: contrast(1.7) brightness(0.95);
+      mix-blend-mode: multiply; /* su chiara incide bene */
     }
 
     canvas { image-rendering: auto; }
@@ -75,7 +77,7 @@
   <div id="ui-container">
     <div class="panel" style="display:flex; gap:6px;">
       <button class="map-toggle active" onclick="setBase('dark')">DARK</button>
-      <button class="map-toggle" onclick="setBase('map')">MAPPA</button>
+      <button class="map-toggle" onclick="setBase('mapy')">MAPPA</button>
     </div>
 
     <div class="panel">
@@ -83,9 +85,8 @@
       <button class="layer-btn" onclick="setLayer('temp')">TEMP 🌡️</button>
       <button class="layer-btn" onclick="setLayer('rain')">PIOGGIA ☔</button>
       <button class="layer-btn" onclick="setLayer('rh')">UMIDITÀ 💧</button>
-      <button class="layer-btn" onclick="setLayer('press')">PRESSIONE ⏲️</button>
+      <button class="layer-btn" onclick="setLayer('press')">PRESSIONE 🧭</button>
       <button class="layer-btn" onclick="setLayer('cloud')">NUVOLE ☁️</button>
-
       <hr style="border:0; border-top:1px solid #444; margin:6px 0;">
       <button class="layer-btn" id="btn-iso" onclick="toggleIso()">ISOBARE 〰️</button>
       <button class="layer-btn" id="btn-grid" onclick="toggleGrid()">GRIGLIA #</button>
@@ -109,12 +110,12 @@
   var activeLayer = 'wind';
   var showIso = false, showGrid = false, isPlaying = false;
 
-  // Base layers
-  var baseDark, baseOSM, labelsDark;
-  var reliefDark = null, reliefLight = null;
-  var isLightMode = false;
+  var baseLayers = {};
+  var hillshadeLayer = null;
+  var isLightMode = false; // true quando MAPPA chiara
 
   // --- PALETTES (heatmaps) ---
+  // Nuvole: bianco -> grigio scuro (come volevi)
   const PALETTES = {
     temp: [
       {v:-10,c:[255,255,255,0.55]},
@@ -146,18 +147,14 @@
       {v:1035,c:[255,60,0,0.60]}
     ],
     cloud: [
-      {v:0,   c:[0,0,0,0]},
-      {v:10,  c:[255,255,255,0.22]},
-      {v:30,  c:[220,220,220,0.28]},
-      {v:60,  c:[160,160,160,0.35]},
-      {v:85,  c:[110,110,110,0.45]},
-      {v:100, c:[70,70,70,0.55]}
+      {v:0,   c:[255,255,255,0.00]},
+      {v:10,  c:[245,245,245,0.20]},
+      {v:30,  c:[230,230,230,0.35]},
+      {v:60,  c:[200,200,200,0.50]},
+      {v:85,  c:[140,140,140,0.60]},
+      {v:100, c:[80,80,80,0.70]}
     ]
   };
-
-  // Wind colors: originali + versione contrastata su mappa chiara
-  const WIND_COLORS_DARK = ["#000080", "#0044ff", "#00ddff", "#00ff55", "#ffff00", "#ff6600", "#ff0000", "#ff00ff"];
-  const WIND_COLORS_LIGHT = ["#00004d", "#0033cc", "#0077cc", "#009944", "#b3b300", "#cc5200", "#b30000", "#7a007a"];
 
   function lerp(a,b,t){ return a+(b-a)*t; }
 
@@ -165,7 +162,7 @@
     const p = PALETTES[type];
     if(!p) return [0,0,0,0];
     if(type==='rain' && val < 0.1) return [0,0,0,0];
-    if(type==='cloud' && val < 5) return [0,0,0,0];
+    if(type==='cloud' && val < 1) return [0,0,0,0];
 
     for(let i=0; i<p.length-1; i++) {
       if(val >= p[i].v && val <= p[i+1].v) {
@@ -187,53 +184,30 @@
   window.addEventListener('load', async function() {
     map = L.map('map', { zoomControl: false }).setView([37.5, 14.2], 8);
 
-    // Panes (ordine)
-    map.createPane('basePane');   map.getPane('basePane').style.zIndex = 100;
-    map.createPane('reliefPane'); map.getPane('reliefPane').style.zIndex = 150;
-    map.createPane('labelsPane'); map.getPane('labelsPane').style.zIndex = 200;
-
-    // Base dark + labels
-    baseDark = L.tileLayer(
+    // DARK base
+    baseLayers.dark = L.tileLayer(
       'https://{s}.basemaps.cartocdn.com/dark_nolabels/{z}/{x}/{y}{r}.png',
-      { maxZoom: 19, pane: 'basePane', attribution: '©OpenStreetMap, ©Carto' }
+      { maxZoom: 19, attribution: '©OpenStreetMap, ©Carto' }
     ).addTo(map);
 
-    labelsDark = L.tileLayer(
+    // MAPPA con rilievi: Mapy "turist" (outdoor-like)  1
+    baseLayers.mapy = L.tileLayer(
+      'https://mapserver.mapy.cz/turist-m/{z}-{x}-{y}',
+      { maxZoom: 18, attribution: '©Seznam.cz, ©OpenStreetMap (CC BY-SA)' }
+    );
+
+    // Hillshade overlay (rilievo ben visibile)
+    // Nota: lo useremo sia su dark che su mapy, con classi diverse.
+    hillshadeLayer = L.tileLayer(
+      'https://server.arcgisonline.com/ArcGIS/rest/services/Elevation/World_Hillshade/MapServer/tile/{z}/{y}/{x}',
+      { maxZoom: 19, opacity: 1.0, className: 'hillshade-dark', attribution: 'Hillshade © Esri' }
+    ).addTo(map);
+
+    // Labels sopra il dark (per mapy non servono)
+    baseLayers.darkLabels = L.tileLayer(
       'https://{s}.basemaps.cartocdn.com/dark_only_labels/{z}/{x}/{y}{r}.png',
-      { maxZoom: 19, pane: 'labelsPane', attribution: '©Carto' }
+      { maxZoom: 19 }
     ).addTo(map);
-
-    // Base OSM chiara
-    baseOSM = L.tileLayer(
-      'https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png',
-      { maxZoom: 19, pane: 'basePane', attribution: '©OpenStreetMap' }
-    );
-
-    // === RILIEVO STABILE: Esri World Hillshade (molto più affidabile) ===
-    // Dark: più forte + filtro invert/screen
-    reliefDark = L.tileLayer(
-      'https://server.arcgisonline.com/ArcGIS/rest/services/Elevation/World_Hillshade/MapServer/tile/{z}/{y}/{x}',
-      {
-        maxZoom: 13,
-        pane: 'reliefPane',
-        opacity: 0.95,
-        className: 'relief-dark',
-        attribution: 'Hillshade © Esri'
-      }
-    ).addTo(map);
-
-    // Light: multiply “inciso” su OSM (un po’ meno forte)
-    reliefLight = L.tileLayer(
-      'https://server.arcgisonline.com/ArcGIS/rest/services/Elevation/World_Hillshade/MapServer/tile/{z}/{y}/{x}',
-      {
-        maxZoom: 13,
-        pane: 'reliefPane',
-        opacity: 0.75,
-        className: 'relief-light',
-        attribution: 'Hillshade © Esri'
-      }
-    );
-    // NB: reliefLight lo attivo solo su MAPPA
 
     createCanvasLayers();
     await loadCatalogAndFirstFrame();
@@ -244,7 +218,6 @@
     document.getElementById('unit-display').innerText = unitFor(activeLayer);
   });
 
-  // --- BASE SWITCH ---
   function setBase(type) {
     document.querySelectorAll('.map-toggle').forEach(b => b.classList.remove('active'));
     event.target.classList.add('active');
@@ -252,27 +225,34 @@
     if(type === 'dark') {
       isLightMode = false;
 
-      if (map.hasLayer(baseOSM)) map.removeLayer(baseOSM);
-      if (!map.hasLayer(baseDark)) baseDark.addTo(map);
-      if (!map.hasLayer(labelsDark)) labelsDark.addTo(map);
+      if(map.hasLayer(baseLayers.mapy)) map.removeLayer(baseLayers.mapy);
+      baseLayers.dark.addTo(map);
+      baseLayers.darkLabels.addTo(map);
 
-      if (reliefLight && map.hasLayer(reliefLight)) map.removeLayer(reliefLight);
-      if (reliefDark && !map.hasLayer(reliefDark)) reliefDark.addTo(map);
+      // hillshade “dark mode”
+      map.removeLayer(hillshadeLayer);
+      hillshadeLayer = L.tileLayer(
+        'https://server.arcgisonline.com/ArcGIS/rest/services/Elevation/World_Hillshade/MapServer/tile/{z}/{y}/{x}',
+        { maxZoom: 19, opacity: 1.0, className: 'hillshade-dark', attribution: 'Hillshade © Esri' }
+      ).addTo(map);
 
     } else {
       isLightMode = true;
 
-      if (map.hasLayer(baseDark)) map.removeLayer(baseDark);
-      if (map.hasLayer(labelsDark)) map.removeLayer(labelsDark);
-      if (!map.hasLayer(baseOSM)) baseOSM.addTo(map);
+      if(map.hasLayer(baseLayers.dark)) map.removeLayer(baseLayers.dark);
+      if(map.hasLayer(baseLayers.darkLabels)) map.removeLayer(baseLayers.darkLabels);
+      baseLayers.mapy.addTo(map);
 
-      if (reliefDark && map.hasLayer(reliefDark)) map.removeLayer(reliefDark);
-      if (reliefLight && !map.hasLayer(reliefLight)) reliefLight.addTo(map);
+      // hillshade “light mode” (più discreto)
+      map.removeLayer(hillshadeLayer);
+      hillshadeLayer = L.tileLayer(
+        'https://server.arcgisonline.com/ArcGIS/rest/services/Elevation/World_Hillshade/MapServer/tile/{z}/{y}/{x}',
+        { maxZoom: 19, opacity: 1.0, className: 'hillshade-light', attribution: 'Hillshade © Esri' }
+      ).addTo(map);
     }
 
     redrawAll();
   }
-  window.setBase = setBase;
 
   // --- DATA LOAD ---
   async function loadCatalogAndFirstFrame() {
@@ -331,7 +311,7 @@
     updateWind();
   }
 
-  // --- HEATMAP ---
+  // --- HEATMAP (senza numeri dentro) ---
   function drawHeatmap() {
     const ctx = heatCanvas.getContext('2d');
     const s = map.getSize();
@@ -356,11 +336,11 @@
         const idx = y*m.nx + x;
 
         let val = 0;
-        if(activeLayer==='temp') val = currentData.temp?.[idx] ?? 0;
-        else if(activeLayer==='rain') val = currentData.rain?.[idx] ?? 0;
-        else if(activeLayer==='rh')   val = currentData.rh?.[idx] ?? 0;
-        else if(activeLayer==='press') val = currentData.press?.[idx] ?? 0;
-        else if(activeLayer==='cloud') val = currentData.cloud?.[idx] ?? 0;
+        if(activeLayer==='temp') val = currentData.temp[idx];
+        else if(activeLayer==='rain') val = currentData.rain[idx];
+        else if(activeLayer==='rh')   val = currentData.rh[idx];
+        else if(activeLayer==='press') val = currentData.press[idx];
+        else if(activeLayer==='cloud') val = (currentData.cloud ? currentData.cloud[idx] : 0);
 
         const c = getColor(val, activeLayer);
         if(c[3] <= 0) continue;
@@ -377,7 +357,7 @@
     }
   }
 
-  // --- ISOBARE (bianche su dark) ---
+  // --- ISOBARE ---
   function drawIsobars() {
     const ctx = isoCanvas.getContext('2d');
     const s = map.getSize();
@@ -393,13 +373,19 @@
 
     const contours = d3.contours().size([m.nx, m.ny]).thresholds(d3.range(960, 1050, 2))(values);
 
-    ctx.lineWidth = 1.35;
+    ctx.lineWidth = 1.4;
     ctx.font = "900 12px Arial";
     ctx.textAlign = "center";
     ctx.textBaseline = "middle";
 
     contours.forEach(c => {
-      ctx.strokeStyle = isLightMode ? "rgba(0,0,0,0.70)" : "rgba(255,255,255,0.60)";
+      // Richiesta: su DARK isobare bianche
+      if(!isLightMode) {
+        ctx.strokeStyle = "rgba(255,255,255,0.85)";
+      } else {
+        // su chiara: scure per contrasto
+        ctx.strokeStyle = "rgba(0,0,0,0.55)";
+      }
 
       ctx.beginPath();
       const labelCandidates = [];
@@ -416,7 +402,7 @@
             if(first) { ctx.moveTo(p.x, p.y); first=false; }
             else ctx.lineTo(p.x, p.y);
           });
-          if(linePts.length > 70) labelCandidates.push(linePts);
+          if(linePts.length > 60) labelCandidates.push(linePts);
         });
       });
 
@@ -424,7 +410,7 @@
 
       labelCandidates.forEach(pts => {
         const mid = pts[Math.floor(pts.length/2)];
-        const bg = isLightMode ? "rgba(255,255,255,0.80)" : "rgba(0,0,0,0.70)";
+        const bg = isLightMode ? "rgba(255,255,255,0.75)" : "rgba(0,0,0,0.65)";
         const fg = isLightMode ? "#000" : "#fff";
         ctx.fillStyle = bg;
         ctx.fillRect(mid.x-16, mid.y-9, 32, 18);
@@ -434,7 +420,7 @@
     });
   }
 
-  // --- GRIGLIA ---
+  // --- GRIGLIA (solo linee, niente numeri) ---
   function drawGrid() {
     const ctx = gridCanvas.getContext('2d');
     const s = map.getSize();
@@ -448,7 +434,7 @@
     const b = map.getBounds();
     const step = map.getZoom() > 9 ? 0.1 : 0.5;
 
-    ctx.strokeStyle = isLightMode ? "rgba(0,0,0,0.25)" : "rgba(255,255,255,0.18)";
+    ctx.strokeStyle = isLightMode ? "rgba(0,0,0,0.20)" : "rgba(255,255,255,0.18)";
     ctx.lineWidth = 1;
 
     for(let lon=Math.floor(b.getWest()); lon<=Math.ceil(b.getEast()); lon+=step) {
@@ -462,6 +448,8 @@
   }
 
   // --- WIND ---
+  // DARK: identico al tuo originale (colorScale e parametri)
+  // MAPPA chiara: colori più scuri/contrastati (stessi parametri fisici)
   function updateWind() {
     if(velocityLayer) map.removeLayer(velocityLayer);
     if(activeLayer !== 'wind' || !currentData) return;
@@ -469,16 +457,19 @@
     const isMobile = Math.min(window.innerWidth, window.innerHeight) < 900;
     const dpr = window.devicePixelRatio || 1;
 
-    let particleMult = isMobile ? (1/160) : (1/120);
-    if(dpr >= 2) particleMult = isMobile ? (1/220) : (1/180);
+    // meno particelle = più FPS (senza “falsare” la fisica: la fisica la decide u/v, non il numero di particelle)
+    let particleMult = isMobile ? (1/200) : (1/150);
+    if(dpr >= 2) particleMult = isMobile ? (1/260) : (1/200);
 
-    const windColors = isLightMode ? WIND_COLORS_LIGHT : WIND_COLORS_DARK;
+    const windColorsDark = ["#000080", "#0044ff", "#00ddff", "#00ff55", "#ffff00", "#ff6600", "#ff0000", "#ff00ff"];
+    const windColorsLight = ["#001133", "#002a8f", "#0044ff", "#0088cc", "#00aa55", "#cccc00", "#cc5500", "#aa0000"];
 
     try {
       velocityLayer = L.velocityLayer({
         displayValues: false,
         data: [ currentData.wind_u, currentData.wind_v ],
 
+        // === I TUOI PARAMETRI ORIGINALI ===
         maxVelocity: 18.0,
         velocityScale: 0.006,
         particleMultiplier: particleMult,
@@ -486,8 +477,10 @@
         particleAge: 140,
         frameRate: 60,
         opacity: 0.95,
-        colorScale: windColors
+
+        colorScale: isLightMode ? windColorsLight : windColorsDark
       });
+
       velocityLayer.addTo(map);
     } catch(e) {}
   }
@@ -511,6 +504,7 @@
     const x = Math.round((latlng.lng - m.lo1) / m.dx);
 
     if(x < 0 || x >= m.nx || y < 0 || y >= m.ny) return null;
+
     const idx = y*m.nx + x;
 
     if(activeLayer === 'wind') {
@@ -518,28 +512,29 @@
       const v = currentData.wind_v.data[idx];
       return (Math.sqrt(u*u + v*v) * 3.6);
     }
-    if(activeLayer === 'temp') return currentData.temp?.[idx];
-    if(activeLayer === 'rain') return currentData.rain?.[idx];
-    if(activeLayer === 'rh') return currentData.rh?.[idx];
-    if(activeLayer === 'press') return currentData.press?.[idx];
-    if(activeLayer === 'cloud') return currentData.cloud?.[idx];
+    if(activeLayer === 'temp') return currentData.temp[idx];
+    if(activeLayer === 'rain') return currentData.rain[idx];
+    if(activeLayer === 'rh') return currentData.rh[idx];
+    if(activeLayer === 'press') return currentData.press[idx];
+    if(activeLayer === 'cloud') return (currentData.cloud ? currentData.cloud[idx] : 0);
 
     return null;
   }
 
   function updatePickerFromEvent(e) {
     const val = valueAtLatLng(e.latlng);
-    if(val === null || val === undefined || Number.isNaN(val)) return;
+    if(val === null || val === undefined) return;
 
     let out = '--';
     if(activeLayer === 'wind') out = val.toFixed(1);
-    else if(activeLayer === 'temp') out = Number(val).toFixed(1);
-    else if(activeLayer === 'rain') out = Number(val).toFixed(1);
+    else if(activeLayer === 'temp') out = val.toFixed(1);
+    else if(activeLayer === 'rain') out = val.toFixed(1);
     else if(activeLayer === 'rh') out = Math.round(val).toString();
     else if(activeLayer === 'press') out = Math.round(val).toString();
     else if(activeLayer === 'cloud') out = Math.round(val).toString();
 
     document.getElementById('val-display').innerText = out;
+    document.getElementById('unit-display').innerText = unitFor(activeLayer);
   }
 
   // --- UI ACTIONS ---
