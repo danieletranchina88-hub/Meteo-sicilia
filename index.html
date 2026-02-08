@@ -1,7 +1,7 @@
 <!DOCTYPE html>
 <html>
 <head>
-  <title>Sicilia MeteoHub - PRO (DARK+LIGHT RELIEF)</title>
+  <title>Sicilia MeteoHub - PRO (RELIEF FIX)</title>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
 
@@ -52,14 +52,14 @@
     #time-label { font-size: 1.4em; font-weight: 1000; margin-left: 15px; min-width: 140px; text-align: center; text-shadow: 0 2px 10px #000; }
     input[type=range] { flex-grow: 1; height: 5px; cursor: pointer; accent-color: #0088ff; }
 
-    /* --- RILIEVI SUPER VISIBILI --- */
-    .hillshade-light {
-      mix-blend-mode: multiply;
-      filter: contrast(2.6) brightness(1.05);
+    /* --- RILIEVI: classi diverse per dark/light --- */
+    .relief-dark {
+      mix-blend-mode: screen;      /* rilievo chiaro su dark */
+      filter: invert(1) contrast(2.8) brightness(1.2);
     }
-    .hillshade-dark {
-      mix-blend-mode: screen;
-      filter: invert(1) contrast(2.8) brightness(1.25);
+    .relief-light {
+      mix-blend-mode: multiply;    /* rilievo scuro su mappa chiara */
+      filter: contrast(2.2) brightness(1.05);
     }
 
     canvas { image-rendering: auto; }
@@ -111,7 +111,7 @@
 
   // Base layers
   var baseDark, baseOSM, labelsDark;
-  var hillshadeDark = null, hillshadeLight = null;
+  var reliefDark = null, reliefLight = null;
   var isLightMode = false;
 
   // --- PALETTES (heatmaps) ---
@@ -137,7 +137,6 @@
       {v:80,c:[50,150,255,0.60]},
       {v:95,c:[0,0,200,0.65]}
     ],
-    // Pressione: blu (bassa) -> rosso (alta), senza “buco”
     press: [
       {v:980, c:[0,70,255,0.55]},
       {v:995, c:[0,170,255,0.55]},
@@ -146,7 +145,6 @@
       {v:1022,c:[255,200,0,0.55]},
       {v:1035,c:[255,60,0,0.60]}
     ],
-    // Nuvolosità: bianco -> grigio scuro (come richiesto)
     cloud: [
       {v:0,   c:[0,0,0,0]},
       {v:10,  c:[255,255,255,0.22]},
@@ -157,9 +155,8 @@
     ]
   };
 
-  // --- WIND COLORS (originali, ma più contrasto su OSM) ---
+  // Wind colors: originali + versione contrastata su mappa chiara
   const WIND_COLORS_DARK = ["#000080", "#0044ff", "#00ddff", "#00ff55", "#ffff00", "#ff6600", "#ff0000", "#ff00ff"];
-  // Su mappa chiara: stessi “passi”, ma colori più scuri/contrastati
   const WIND_COLORS_LIGHT = ["#00004d", "#0033cc", "#0077cc", "#009944", "#b3b300", "#cc5200", "#b30000", "#7a007a"];
 
   function lerp(a,b,t){ return a+(b-a)*t; }
@@ -212,17 +209,31 @@
       { maxZoom: 19, pane: 'basePane', attribution: '©OpenStreetMap' }
     );
 
-    // RILIEVI (Wikimedia hillshading) - 2 versioni per VISIBILITÀ MASSIMA
-    hillshadeDark = L.tileLayer(
-      'https://tiles.wmflabs.org/hillshading/{z}/{x}/{y}.png',
-      { maxZoom: 17, pane: 'reliefPane', opacity: 0.95, className: 'hillshade-dark' }
+    // === RILIEVO STABILE: Esri World Hillshade (molto più affidabile) ===
+    // Dark: più forte + filtro invert/screen
+    reliefDark = L.tileLayer(
+      'https://server.arcgisonline.com/ArcGIS/rest/services/Elevation/World_Hillshade/MapServer/tile/{z}/{y}/{x}',
+      {
+        maxZoom: 13,
+        pane: 'reliefPane',
+        opacity: 0.95,
+        className: 'relief-dark',
+        attribution: 'Hillshade © Esri'
+      }
     ).addTo(map);
 
-    hillshadeLight = L.tileLayer(
-      'https://tiles.wmflabs.org/hillshading/{z}/{x}/{y}.png',
-      { maxZoom: 17, pane: 'reliefPane', opacity: 0.70, className: 'hillshade-light' }
+    // Light: multiply “inciso” su OSM (un po’ meno forte)
+    reliefLight = L.tileLayer(
+      'https://server.arcgisonline.com/ArcGIS/rest/services/Elevation/World_Hillshade/MapServer/tile/{z}/{y}/{x}',
+      {
+        maxZoom: 13,
+        pane: 'reliefPane',
+        opacity: 0.75,
+        className: 'relief-light',
+        attribution: 'Hillshade © Esri'
+      }
     );
-    // NB: hillshadeLight lo aggiungiamo solo quando passi a MAPPA
+    // NB: reliefLight lo attivo solo su MAPPA
 
     createCanvasLayers();
     await loadCatalogAndFirstFrame();
@@ -243,11 +254,10 @@
 
       if (map.hasLayer(baseOSM)) map.removeLayer(baseOSM);
       if (!map.hasLayer(baseDark)) baseDark.addTo(map);
-
       if (!map.hasLayer(labelsDark)) labelsDark.addTo(map);
 
-      if (hillshadeLight && map.hasLayer(hillshadeLight)) map.removeLayer(hillshadeLight);
-      if (hillshadeDark && !map.hasLayer(hillshadeDark)) hillshadeDark.addTo(map);
+      if (reliefLight && map.hasLayer(reliefLight)) map.removeLayer(reliefLight);
+      if (reliefDark && !map.hasLayer(reliefDark)) reliefDark.addTo(map);
 
     } else {
       isLightMode = true;
@@ -256,8 +266,8 @@
       if (map.hasLayer(labelsDark)) map.removeLayer(labelsDark);
       if (!map.hasLayer(baseOSM)) baseOSM.addTo(map);
 
-      if (hillshadeDark && map.hasLayer(hillshadeDark)) map.removeLayer(hillshadeDark);
-      if (hillshadeLight && !map.hasLayer(hillshadeLight)) hillshadeLight.addTo(map);
+      if (reliefDark && map.hasLayer(reliefDark)) map.removeLayer(reliefDark);
+      if (reliefLight && !map.hasLayer(reliefLight)) reliefLight.addTo(map);
     }
 
     redrawAll();
@@ -321,7 +331,7 @@
     updateWind();
   }
 
-  // --- HEATMAP (no numeri dentro) ---
+  // --- HEATMAP ---
   function drawHeatmap() {
     const ctx = heatCanvas.getContext('2d');
     const s = map.getSize();
@@ -350,7 +360,7 @@
         else if(activeLayer==='rain') val = currentData.rain?.[idx] ?? 0;
         else if(activeLayer==='rh')   val = currentData.rh?.[idx] ?? 0;
         else if(activeLayer==='press') val = currentData.press?.[idx] ?? 0;
-        else if(activeLayer==='cloud') val = currentData.cloud?.[idx] ?? 0; // se non c'è, resta 0
+        else if(activeLayer==='cloud') val = currentData.cloud?.[idx] ?? 0;
 
         const c = getColor(val, activeLayer);
         if(c[3] <= 0) continue;
@@ -367,7 +377,7 @@
     }
   }
 
-  // --- ISOBARE (bianche su dark, scure su light) ---
+  // --- ISOBARE (bianche su dark) ---
   function drawIsobars() {
     const ctx = isoCanvas.getContext('2d');
     const s = map.getSize();
@@ -389,8 +399,7 @@
     ctx.textBaseline = "middle";
 
     contours.forEach(c => {
-      // richiesto: su dark -> bianche
-      ctx.strokeStyle = isLightMode ? "rgba(0,0,0,0.70)" : "rgba(255,255,255,0.55)";
+      ctx.strokeStyle = isLightMode ? "rgba(0,0,0,0.70)" : "rgba(255,255,255,0.60)";
 
       ctx.beginPath();
       const labelCandidates = [];
@@ -413,7 +422,6 @@
 
       ctx.stroke();
 
-      // Etichette (come prima)
       labelCandidates.forEach(pts => {
         const mid = pts[Math.floor(pts.length/2)];
         const bg = isLightMode ? "rgba(255,255,255,0.80)" : "rgba(0,0,0,0.70)";
@@ -426,7 +434,7 @@
     });
   }
 
-  // --- GRIGLIA (solo linee) ---
+  // --- GRIGLIA ---
   function drawGrid() {
     const ctx = gridCanvas.getContext('2d');
     const s = map.getSize();
@@ -453,12 +461,11 @@
     }
   }
 
-  // --- WIND (parametri originali + colori adattivi per contrasto) ---
+  // --- WIND ---
   function updateWind() {
     if(velocityLayer) map.removeLayer(velocityLayer);
     if(activeLayer !== 'wind' || !currentData) return;
 
-    // Riduzione particelle per FPS
     const isMobile = Math.min(window.innerWidth, window.innerHeight) < 900;
     const dpr = window.devicePixelRatio || 1;
 
@@ -472,7 +479,6 @@
         displayValues: false,
         data: [ currentData.wind_u, currentData.wind_v ],
 
-        // === PARAMETRI ORIGINALI ===
         maxVelocity: 18.0,
         velocityScale: 0.006,
         particleMultiplier: particleMult,
@@ -482,7 +488,6 @@
         opacity: 0.95,
         colorScale: windColors
       });
-
       velocityLayer.addTo(map);
     } catch(e) {}
   }
@@ -587,4 +592,3 @@
 
 </body>
 </html>
-```0
