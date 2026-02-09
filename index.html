@@ -19,7 +19,7 @@
 
     /* INFO */
     #info-box {
-      position: absolute; top: 20px; left: 20px; z-index: 1200;
+      position: absolute; top: 20px; left: 20px; z-index: 1300;
       pointer-events: none; text-shadow: 2px 2px 0 #000;
     }
     #val-display { font-size: 3.8em; font-weight: 900; line-height: 0.95; }
@@ -27,7 +27,7 @@
 
     /* UI */
     #ui-container {
-      position: absolute; top: 10px; right: 10px; z-index: 1200;
+      position: absolute; top: 10px; right: 10px; z-index: 1300;
       display: flex; flex-direction: column; gap: 10px; align-items: flex-end;
     }
     .panel {
@@ -39,6 +39,29 @@
       border: 1px solid rgba(255,255,255,0.14);
       box-shadow: 0 10px 30px rgba(0,0,0,0.55);
     }
+
+    /* Basemap selector (DARK / SAT) */
+    #basemap-selector { display:flex; gap:6px; justify-content:flex-end; }
+    .base-btn {
+      background: rgba(255,255,255,0.06);
+      color: #cfcfcf;
+      border: 1px solid rgba(255,255,255,0.14);
+      padding: 8px 12px;
+      border-radius: 10px;
+      cursor: pointer;
+      font-size: 12px;
+      font-weight: 900;
+      transition: all .15s;
+      user-select: none;
+    }
+    .base-btn:hover { background: rgba(255,255,255,0.12); color:#fff; }
+    .base-btn.active {
+      background: #0088ff;
+      border-color: rgba(0,136,255,0.45);
+      color: #fff;
+      box-shadow: 0 0 18px rgba(0,136,255,0.25);
+    }
+
     .layer-btn {
       display: block; width: 170px;
       padding: 10px 12px; margin-bottom: 6px;
@@ -119,7 +142,14 @@
 
   <div id="ui-container">
     <div class="panel">
-      <!-- MULTI-SELEZIONE: sono tutti toggle -->
+      <div id="basemap-selector">
+        <button class="base-btn active" onclick="setBaseMap('dark')">DARK</button>
+        <button class="base-btn" onclick="setBaseMap('sat')">SATELLITE</button>
+      </div>
+    </div>
+
+    <div class="panel">
+      <!-- MULTI-SELEZIONE -->
       <button class="layer-btn active" data-layer="wind" onclick="toggleLayer(this)">VENTO 💨</button>
       <button class="layer-btn" data-layer="temp" onclick="toggleLayer(this)">TEMP 🌡️</button>
       <button class="layer-btn" data-layer="rain" onclick="toggleLayer(this)">PIOGGIA ☔</button>
@@ -150,16 +180,19 @@
   // --- GLOBALS ---
   let map, velocityLayer;
   let heatCanvas, isoCanvas, gridCanvas;
-
   let currentData = null, catalog = [];
   let showIso = false, showGrid = false, isPlaying = false;
 
-  // Multi-layer state
-  const activeLayers = new Set(['wind']); // puoi avere più livelli attivi
-  let primaryLayer = 'wind';              // per unità + picker (ultimo cliccato)
+  // Basemap
+  let darkBase, satBase, darkLabels;
+  let baseMode = 'dark';
+  let isLightBasemap = false; // satellite = più chiaro -> adattiamo layer
 
-  // --- PALETTES (heatmaps) ---
-  // Nuvole: bianco -> grigio scuro
+  // Multi-layer state
+  const activeLayers = new Set(['wind']);
+  let primaryLayer = 'wind';
+
+  // --- PALETTES ---
   const PALETTES = {
     temp: [
       {v:-10,c:[255,255,255,0.60]},
@@ -200,16 +233,12 @@
     ]
   };
 
-  // “Importanza” visiva: serve per distribuire la trasparenza quando hai più layer accesi
-  const LAYER_WEIGHT = {
-    cloud: 0.55,   // deve stare “dietro”, altrimenti copre tutto
-    press: 0.70,
-    rh:    0.75,
-    temp:  0.85,
-    rain:  0.95
-  };
+  const LAYER_WEIGHT = { cloud: 0.55, press: 0.70, rh: 0.75, temp: 0.85, rain: 0.95 };
 
-  const WIND_COLOR_SCALE = ["#000080", "#0044ff", "#00ddff", "#00ff55", "#ffff00", "#ff6600", "#ff0000", "#ff00ff"];
+  // WIND color scales: dark (originale) + satellite (più scura/contrastata)
+  const WIND_COLOR_DARK = ["#000080", "#0044ff", "#00ddff", "#00ff55", "#ffff00", "#ff6600", "#ff0000", "#ff00ff"];
+  // Variante più “scura” per basemap chiara (evita ciano/giallo pallidi che spariscono)
+  const WIND_COLOR_LIGHT = ["#001133", "#002a88", "#0044ff", "#0077ff", "#00aa66", "#ffb000", "#ff5500", "#cc00ff"];
 
   function lerp(a,b,t){ return a+(b-a)*t; }
 
@@ -249,19 +278,24 @@
     try {
       map = L.map('map', { zoomControl: false }).setView([37.5, 14.2], 8);
 
-      // Basemap stabile
-      const base = L.tileLayer(
+      darkBase = L.tileLayer(
         'https://{s}.basemaps.cartocdn.com/dark_nolabels/{z}/{x}/{y}{r}.png',
         { maxZoom: 19, attribution: '©OpenStreetMap, ©CARTO' }
       ).addTo(map);
 
-      // Labels sopra
-      L.tileLayer(
+      satBase = L.tileLayer(
+        'https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}',
+        { maxZoom: 19, attribution: 'Tiles © Esri' }
+      );
+
+      // Labels utili soprattutto sul dark; sul sat li lasciamo comunque (aiuta orientamento)
+      darkLabels = L.tileLayer(
         'https://{s}.basemaps.cartocdn.com/dark_only_labels/{z}/{x}/{y}{r}.png',
         { maxZoom: 19, attribution: '©CARTO' }
       ).addTo(map);
 
-      base.on('tileerror', () => status("Tile basemap non caricate (server/URL bloccato). Prova rete diversa o DNS."));
+      darkBase.on('tileerror', () => status("Tile DARK non caricate (server/URL bloccato)."));
+      satBase.on('tileerror', () => status("Tile SATELLITE non caricate (server/URL bloccato)."));
 
       createCanvasLayers();
       await loadCatalogAndFirstFrame();
@@ -274,6 +308,29 @@
       status("Errore init mappa: " + (e && e.message ? e.message : e));
     }
   });
+
+  // --- BASEMAP TOGGLE ---
+  window.setBaseMap = function(mode) {
+    document.querySelectorAll('.base-btn').forEach(b => b.classList.remove('active'));
+    event.target.classList.add('active');
+
+    if(mode === 'dark') {
+      baseMode = 'dark';
+      isLightBasemap = false;
+      map.removeLayer(satBase);
+      darkBase.addTo(map);
+      if(darkLabels) darkLabels.addTo(map);
+    } else {
+      baseMode = 'sat';
+      isLightBasemap = true;
+      map.removeLayer(darkBase);
+      satBase.addTo(map);
+      // Labels: restano per orientarsi (se vuoi toglierle su sat, dimmelo)
+      if(darkLabels) darkLabels.addTo(map);
+    }
+
+    redrawAll();
+  };
 
   // --- DATA LOAD ---
   async function loadCatalogAndFirstFrame() {
@@ -306,7 +363,7 @@
       currentData = await r.json();
       redrawAll();
     } catch(e) {
-      status("Errore caricamento frame: " + (e && e.message ? e.message : e));
+      status("Errore frame: " + (e && e.message ? e.message : e));
     }
   }
 
@@ -334,39 +391,32 @@
     updateWind();
   }
 
-  // --- SMART OPACITY (per evitare “pasta” quando attivi più layer) ---
+  // --- SMART OPACITY ---
   function computeAlphaMultipliers() {
-    // heat layers attivi (escluso wind)
     const heatActives = Array.from(activeLayers).filter(l => l !== 'wind');
     const n = heatActives.length;
-
-    // nessun heat layer
     if(n === 0) return { multipliers: {}, heatGlobal: 1.0 };
 
-    // somma pesi
     let sumW = 0;
     heatActives.forEach(l => { sumW += (LAYER_WEIGHT[l] ?? 0.75); });
 
-    // se c'è anche il vento attivo, “spingo” la leggibilità delle particelle:
-    // riduco globalmente gli heat overlays e riduco ancora le nuvole.
     const windOn = activeLayers.has('wind');
-    const heatGlobal = windOn ? 0.75 : 1.0;
+    // su sat (più chiaro) riduco un filo gli overlay per non “sporcare” e far sparire vento/isobare
+    let heatGlobal = windOn ? 0.75 : 1.0;
+    if(isLightBasemap) heatGlobal *= 0.90;
 
     const multipliers = {};
     heatActives.forEach(l => {
       const w = (LAYER_WEIGHT[l] ?? 0.75);
-      // quota relativa del layer
       let m = (w / sumW);
-
-      // base boost per non rendere tutto troppo trasparente
       m *= 1.45;
-
-      // clamp ragionato
       m = Math.max(0.18, Math.min(0.75, m));
 
-      // nuvole: ancora più “dietro” se insieme ad altri
       if(l === 'cloud' && n >= 2) m *= 0.70;
       if(l === 'cloud' && windOn) m *= 0.75;
+
+      // su basemap chiara: nuvole e RH un po' meno opache, così non coprono tutto
+      if(isLightBasemap && (l === 'cloud' || l === 'rh')) m *= 0.85;
 
       multipliers[l] = Math.max(0.12, Math.min(0.75, m));
     });
@@ -374,7 +424,7 @@
     return { multipliers, heatGlobal };
   }
 
-  // --- MULTI-HEATMAP: disegna più layer sullo stesso canvas, con alpha intelligente ---
+  // --- MULTI-HEATMAP ---
   function drawHeatmapMulti() {
     const ctx = heatCanvas.getContext('2d');
     const s = map.getSize();
@@ -388,15 +438,10 @@
     const m = currentData.meta;
     const b = map.getBounds();
 
-    // quali heat layers sono attivi
     const heatActives = Array.from(activeLayers).filter(l => l !== 'wind');
     if(heatActives.length === 0) return;
 
-    // alpha multipliers “smart”
     const { multipliers, heatGlobal } = computeAlphaMultipliers();
-
-    // ordine di rendering: così evitiamo che una cosa “sporca” l’altra
-    // (prima background morbidi, poi più “informativi”)
     const ORDER = ['cloud', 'press', 'rh', 'temp', 'rain'];
     const layersToDraw = ORDER.filter(x => heatActives.includes(x));
 
@@ -430,17 +475,19 @@
           let c = getColor(val, layer);
           if(c[3] <= 0) continue;
 
-          // applico la logica “smart”
           let a = c[3] * (multipliers[layer] ?? 0.5) * heatGlobal;
 
-          // ulteriore regola anti-“pasta”:
-          // se pioggia è forte, non voglio che pressione/temp la coprano.
-          // quindi la pioggia resta leggibile, gli altri calano un filo.
+          // su sat: alzo un filo il contrasto (meno trasparenza) per TEMP/RAIN, ma non per CLOUD
+          if(isLightBasemap) {
+            if(layer === 'temp' || layer === 'rain' || layer === 'press') a *= 1.05;
+            if(layer === 'cloud') a *= 0.90;
+          }
+
+          // Anti-pasta con pioggia
           if(layer !== 'rain' && (currentData.rain?.[idx] ?? 0) >= 2 && activeLayers.has('rain')) {
             a *= 0.82;
           }
 
-          // clamp finale
           a = Math.max(0, Math.min(0.85, a));
           if(a <= 0.01) continue;
 
@@ -451,7 +498,7 @@
     }
   }
 
-  // --- ISOBARE (bianche sul dark) ---
+  // --- ISOBARE: dark bianche, su sat nere (contrasto) ---
   function drawIsobars() {
     const ctx = isoCanvas.getContext('2d');
     const s = map.getSize();
@@ -469,13 +516,14 @@
       .size([m.nx, m.ny])
       .thresholds(d3.range(960, 1050, 2))(values);
 
-    ctx.lineWidth = 1.3;
+    ctx.lineWidth = isLightBasemap ? 1.4 : 1.3;
     ctx.font = "900 12px Arial";
     ctx.textAlign = "center";
     ctx.textBaseline = "middle";
 
     contours.forEach(c => {
-      ctx.strokeStyle = "rgba(255,255,255,0.65)";
+      // contrasto basemap
+      ctx.strokeStyle = isLightBasemap ? "rgba(0,0,0,0.75)" : "rgba(255,255,255,0.65)";
 
       ctx.beginPath();
       const labelCandidates = [];
@@ -500,9 +548,11 @@
 
       labelCandidates.forEach(pts => {
         const mid = pts[Math.floor(pts.length/2)];
-        ctx.fillStyle = "rgba(0,0,0,0.55)";
+        const bg = isLightBasemap ? "rgba(255,255,255,0.75)" : "rgba(0,0,0,0.55)";
+        const fg = isLightBasemap ? "#000" : "#fff";
+        ctx.fillStyle = bg;
         ctx.fillRect(mid.x-16, mid.y-9, 32, 18);
-        ctx.fillStyle = "#fff";
+        ctx.fillStyle = fg;
         ctx.fillText(Math.round(c.value), mid.x, mid.y);
       });
     });
@@ -522,7 +572,7 @@
     const b = map.getBounds();
     const step = map.getZoom() > 9 ? 0.1 : 0.5;
 
-    ctx.strokeStyle = "rgba(255,255,255,0.15)";
+    ctx.strokeStyle = isLightBasemap ? "rgba(0,0,0,0.18)" : "rgba(255,255,255,0.15)";
     ctx.lineWidth = 1;
 
     for(let lon=Math.floor(b.getWest()); lon<=Math.ceil(b.getEast()); lon+=step) {
@@ -535,7 +585,7 @@
     }
   }
 
-  // --- WIND (parametri originali + meno particelle per FPS) ---
+  // --- WIND: su sat colori più contrastati ---
   function updateWind() {
     if(velocityLayer) map.removeLayer(velocityLayer);
     if(!activeLayers.has('wind') || !currentData) return;
@@ -546,6 +596,11 @@
     let particleMult = isMobile ? (1/160) : (1/120);
     if(dpr >= 2) particleMult = isMobile ? (1/220) : (1/180);
 
+    // su sat: leggermente più spesso per vedersi meglio
+    const lw = isLightBasemap ? 1.05 : 0.8;
+    const op = isLightBasemap ? 0.98 : 0.95;
+    const colors = isLightBasemap ? WIND_COLOR_LIGHT : WIND_COLOR_DARK;
+
     try {
       velocityLayer = L.velocityLayer({
         displayValues: false,
@@ -554,11 +609,11 @@
         maxVelocity: 18.0,
         velocityScale: 0.006,
         particleMultiplier: particleMult,
-        lineWidth: 0.8,
+        lineWidth: lw,
         particleAge: 140,
         frameRate: 60,
-        opacity: 0.95,
-        colorScale: WIND_COLOR_SCALE
+        opacity: op,
+        colorScale: colors
       });
 
       velocityLayer.addTo(map);
@@ -567,7 +622,7 @@
     }
   }
 
-  // --- PICKER (usa primaryLayer: l’ultimo cliccato) ---
+  // --- PICKER (primaryLayer) ---
   function valueAtLatLng(latlng, whichLayer) {
     if(!currentData || !currentData.meta) return null;
     const m = currentData.meta;
@@ -576,7 +631,6 @@
     const x = Math.round((latlng.lng - m.lo1) / m.dx);
 
     if(x < 0 || x >= m.nx || y < 0 || y >= m.ny) return null;
-
     const idx = y*m.nx + x;
 
     if(whichLayer === 'wind') {
@@ -597,7 +651,6 @@
   }
 
   function updatePickerFromEvent(e) {
-    // se il primaryLayer non è attivo, scelgo un layer attivo “sensato”
     let pickLayer = primaryLayer;
     if(!activeLayers.has(pickLayer)) {
       pickLayer = activeLayers.has('wind') ? 'wind' : (Array.from(activeLayers)[0] || 'wind');
@@ -615,6 +668,7 @@
     else if(pickLayer === 'cloud') out = Math.round(Number(val)).toString();
 
     document.getElementById('val-display').innerText = out;
+    document.getElementById('unit-display').innerText = unitFor(pickLayer);
   }
 
   // --- UI ACTIONS ---
@@ -622,7 +676,6 @@
     const layer = btn.getAttribute('data-layer');
     if(!layer) return;
 
-    // Toggle
     if(activeLayers.has(layer)) {
       activeLayers.delete(layer);
       btn.classList.remove('active');
@@ -631,7 +684,6 @@
       btn.classList.add('active');
     }
 
-    // Primary = ultimo cliccato (anche se lo spegni, resta primary finché non scegli altro)
     primaryLayer = layer;
     document.getElementById('unit-display').innerText = unitFor(primaryLayer);
     document.getElementById('val-display').innerText = '--';
