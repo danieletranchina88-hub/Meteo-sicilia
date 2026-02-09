@@ -1,7 +1,7 @@
 <!DOCTYPE html>
 <html>
 <head>
-  <title>Sicilia MeteoHub - PRO (HD Smooth + Multi-layer)</title>
+  <title>Sicilia MeteoHub - PRO (HD Bright + Multi-layer)</title>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
 
@@ -105,7 +105,6 @@
   var currentData = null, catalog = [];
   var showIso = false, showGrid = false, isPlaying = false;
 
-  // Multi-layer
   var enabledLayers = new Set(['wind']);
   var pickerLayer = 'wind';
   var lastFrameInterval = null;
@@ -113,47 +112,46 @@
   var baseLayers = {};
   var labelLayers = {};
   var hillshadeLayer = null;
-  var isLightMode = false; // SAT = chiaro
+  var isLightMode = false;
 
-  // PALETTE
+  // === Palette più brillanti + alpha più alto ===
   const PALETTES = {
     temp: [
-      {v:-10,c:[255,255,255,0.60]},
-      {v:0,  c:[200,200,255,0.60]},
-      {v:10, c:[0,200,100,0.60]},
-      {v:20, c:[255,255,0,0.62]},
-      {v:30, c:[255,140,0,0.65]},
-      {v:40, c:[200,0,0,0.70]}
+      {v:-10,c:[255,255,255,0.78]},
+      {v:0,  c:[190,210,255,0.80]},
+      {v:10, c:[0,235,130,0.80]},
+      {v:20, c:[255,240,0,0.84]},
+      {v:30, c:[255,120,0,0.86]},
+      {v:40, c:[255,0,0,0.90]}
     ],
     rain: [
       {v:0,   c:[0,0,0,0]},
-      {v:0.1, c:[0,200,255,0.55]},
-      {v:2,   c:[0,0,255,0.70]},
-      {v:10,  c:[150,0,200,0.80]}
+      {v:0.1, c:[0,230,255,0.70]},
+      {v:2,   c:[0,80,255,0.82]},
+      {v:10,  c:[220,0,255,0.88]}
     ],
     rh: [
-      {v:20,c:[200,150,50,0.55]},
-      {v:40,c:[200,200,200,0.55]},
-      {v:60,c:[100,255,100,0.55]},
-      {v:80,c:[50,150,255,0.62]},
-      {v:95,c:[0,0,200,0.70]}
+      {v:20,c:[255,170,0,0.70]},
+      {v:40,c:[220,220,220,0.70]},
+      {v:60,c:[0,255,120,0.72]},
+      {v:80,c:[0,170,255,0.78]},
+      {v:95,c:[0,0,255,0.84]}
     ],
     press: [
-      {v:980, c:[0,70,255,0.58]},
-      {v:995, c:[0,170,255,0.58]},
-      {v:1005,c:[0,255,200,0.58]},
-      {v:1013,c:[255,255,255,0.58]},
-      {v:1022,c:[255,200,0,0.58]},
-      {v:1035,c:[255,60,0,0.64]}
+      {v:980, c:[0,90,255,0.74]},
+      {v:995, c:[0,210,255,0.74]},
+      {v:1005,c:[0,255,210,0.76]},
+      {v:1013,c:[255,255,255,0.76]},
+      {v:1022,c:[255,210,0,0.78]},
+      {v:1035,c:[255,60,0,0.82]}
     ],
-    // nuvole: bianco -> grigio scuro
     cloud: [
       {v:0,   c:[255,255,255,0.00]},
-      {v:10,  c:[245,245,245,0.18]},
-      {v:30,  c:[220,220,220,0.26]},
-      {v:60,  c:[160,160,160,0.34]},
-      {v:85,  c:[90, 90, 90, 0.44]},
-      {v:100, c:[40, 40, 40, 0.55]}
+      {v:10,  c:[245,245,245,0.22]},
+      {v:30,  c:[220,220,220,0.32]},
+      {v:60,  c:[160,160,160,0.42]},
+      {v:85,  c:[90, 90, 90, 0.55]},
+      {v:100, c:[40, 40, 40, 0.65]}
     ]
   };
 
@@ -189,7 +187,6 @@
     return '';
   }
 
-  // INIT
   window.addEventListener('load', async function() {
     map = L.map('map', { zoomControl: false }).setView([37.5, 14.2], 8);
 
@@ -259,7 +256,6 @@
     redrawAll();
   }
 
-  // DATA LOAD
   async function loadCatalogAndFirstFrame() {
     try {
       const r = await fetch('data_weather/catalog.json?t=' + Date.now());
@@ -291,7 +287,6 @@
     } catch(e) {}
   }
 
-  // CANVAS
   function createCanvasLayers() {
     const mkCanvas = (z) => {
       const c = L.DomUtil.create('canvas', 'leaflet-layer');
@@ -310,13 +305,12 @@
 
   function redrawAll() {
     if(!currentData) return;
-    drawHeatRasterSmooth();  // <<< qui spariscono i quadretti
+    drawHeatRasterSmooth();
     drawIsobars();
     drawGrid();
     updateWind();
   }
 
-  // MULTI-LAYER UI
   function syncLayerButtons(){
     document.querySelectorAll('.layer-btn[data-layer]').forEach(btn=>{
       const k = btn.getAttribute('data-layer');
@@ -350,11 +344,7 @@
     redrawAll();
   };
 
-  // === HEAT RASTER SMOOTH (NO QUADRATI) ===
-  // Strategia:
-  // 1) costruisco ImageData nx*ny (un pixel = un punto/cella del modello)
-  // 2) disegno l’immagine stirata sul bbox della griglia (lo1,la1)-(lo2,la2)
-  // 3) ctx.imageSmoothingEnabled = true => interpolazione (spariscono i blocchi)
+  // === più opaco + più brillante ===
   function drawHeatRasterSmooth() {
     const ctx = heatCanvas.getContext('2d');
 
@@ -378,7 +368,6 @@
 
     const m = currentData.meta;
 
-    // bounding box della griglia in pixel
     const pNW = map.latLngToContainerPoint([m.la1, m.lo1]);
     const pSE = map.latLngToContainerPoint([m.la2, m.lo2]);
     const x0 = Math.min(pNW.x, pSE.x);
@@ -386,7 +375,6 @@
     const w  = Math.abs(pSE.x - pNW.x);
     const h  = Math.abs(pSE.y - pNW.y);
 
-    // offscreen nx*ny
     const off = document.createElement('canvas');
     off.width = m.nx;
     off.height = m.ny;
@@ -396,14 +384,13 @@
 
     const windOn = enabledLayers.has('wind');
 
-    // “evidenti” + trasparenza intelligente:
-    // - se SAT: aumento un filo gli heat (perché chiaro)
-    // - se wind attivo: riduco un filo per non coprire le particelle
-    const satBoost = isLightMode ? 1.22 : 1.00;
-    const windDamp = windOn ? 0.80 : 1.00;
+    // Boost aumentato
+    const satBoost = isLightMode ? 1.35 : 1.08;
+    // smorzo meno quando c’è il vento (per mantenere brillantezza)
+    const windDamp = windOn ? 0.88 : 1.00;
 
-    // più layer = meno alpha per layer, ma non troppo basso
-    const basePerLayer = Math.max(0.22, (0.95 / enabledHeat.length));
+    // più layer = alpha per layer, ma più alto di prima
+    const basePerLayer = Math.max(0.30, (1.25 / enabledHeat.length));
     const perLayerAlphaMul = basePerLayer * satBoost * windDamp;
 
     function valAt(idx, key){
@@ -415,7 +402,6 @@
       return 0;
     }
 
-    // compositing semplice: sommo contributi (clamp 0..255)
     for(let y=0; y<m.ny; y++){
       for(let x=0; x<m.nx; x++){
         const idx = y*m.nx + x;
@@ -427,9 +413,8 @@
           let c = getColor(v, key);
           if(c[3] <= 0) continue;
 
-          let a = Math.min(0.95, c[3] * perLayerAlphaMul);
-          // nuvole sempre un po' più leggere
-          if(key === 'cloud') a *= 0.85;
+          let a = Math.min(0.98, c[3] * perLayerAlphaMul);
+          if(key === 'cloud') a *= 0.90;
 
           R += c[0] * a;
           G += c[1] * a;
@@ -447,7 +432,6 @@
 
     octx.putImageData(img, 0, 0);
 
-    // draw con smoothing
     ctx.save();
     ctx.imageSmoothingEnabled = true;
     ctx.globalCompositeOperation = 'source-over';
@@ -455,7 +439,6 @@
     ctx.restore();
   }
 
-  // ISOBARE
   function drawIsobars() {
     const ctx = isoCanvas.getContext('2d');
     const dpr = Math.min(2.0, window.devicePixelRatio || 1);
@@ -476,14 +459,13 @@
     const values = currentData.press;
     const contours = d3.contours().size([m.nx, m.ny]).thresholds(d3.range(960, 1050, 2))(values);
 
-    ctx.lineWidth = 1.4;
+    ctx.lineWidth = 1.6;
     ctx.font = "900 12px Arial";
     ctx.textAlign = "center";
     ctx.textBaseline = "middle";
 
     contours.forEach(c => {
-      // richiesto: su DARK bianche
-      ctx.strokeStyle = (!isLightMode) ? "rgba(255,255,255,0.85)" : "rgba(0,0,0,0.70)";
+      ctx.strokeStyle = (!isLightMode) ? "rgba(255,255,255,0.92)" : "rgba(0,0,0,0.75)";
 
       ctx.beginPath();
       const labelCandidates = [];
@@ -508,7 +490,7 @@
 
       labelCandidates.forEach(pts => {
         const mid = pts[Math.floor(pts.length/2)];
-        const bg = isLightMode ? "rgba(255,255,255,0.82)" : "rgba(0,0,0,0.70)";
+        const bg = isLightMode ? "rgba(255,255,255,0.85)" : "rgba(0,0,0,0.72)";
         const fg = isLightMode ? "#000" : "#fff";
         ctx.fillStyle = bg;
         ctx.fillRect(mid.x-16, mid.y-9, 32, 18);
@@ -518,7 +500,6 @@
     });
   }
 
-  // GRIGLIA (solo linee)
   function drawGrid() {
     const ctx = gridCanvas.getContext('2d');
     const dpr = Math.min(2.0, window.devicePixelRatio || 1);
@@ -551,7 +532,6 @@
     }
   }
 
-  // WIND
   function updateWind() {
     if(velocityLayer) map.removeLayer(velocityLayer);
     if(!enabledLayers.has('wind') || !currentData) return;
@@ -562,8 +542,10 @@
     let particleMult = isMobile ? (1/190) : (1/145);
     if(dpr >= 2) particleMult = isMobile ? (1/270) : (1/210);
 
-    const colorsDark = ["#000080", "#0044ff", "#00ddff", "#00ff55", "#ffff00", "#ff6600", "#ff0000", "#ff00ff"];
-    const colorsSat  = ["#001040", "#0033aa", "#0077cc", "#00aa66", "#cccc00", "#cc5500", "#cc0000", "#7a007a"];
+    // più brillante e contrastato
+    const colorsDark = ["#0000ff", "#0066ff", "#00e5ff", "#00ff66", "#fff000", "#ff7a00", "#ff0000", "#ff00ff"];
+    // su SAT: più scuro/contrasto, ma vivid
+    const colorsSat  = ["#001060", "#0038cc", "#0088ff", "#00cc66", "#d6d600", "#ff6600", "#cc0000", "#7a007a"];
 
     try {
       velocityLayer = L.velocityLayer({
@@ -572,17 +554,16 @@
         maxVelocity: 18.0,
         velocityScale: 0.006,
         particleMultiplier: particleMult,
-        lineWidth: 0.8,
+        lineWidth: 0.9,
         particleAge: 140,
         frameRate: 60,
-        opacity: 0.95,
+        opacity: 1.00,
         colorScale: (isLightMode ? colorsSat : colorsDark)
       });
       velocityLayer.addTo(map);
     } catch(e) {}
   }
 
-  // PICKER
   function valueAtLatLng(latlng) {
     if(!currentData || !currentData.meta) return null;
     const m = currentData.meta;
@@ -624,7 +605,6 @@
     document.getElementById('unit-display').innerText = unitFor(pickerLayer);
   }
 
-  // TOGGLES
   window.toggleIso = function() {
     showIso = !showIso;
     document.getElementById('btn-iso').classList.toggle('active');
