@@ -1,89 +1,103 @@
 <!DOCTYPE html>
 <html>
 <head>
-  <title>Sicilia MeteoHub - PRO (DARK RELIEF)</title>
+  <title>Sicilia MeteoHub - SHARP EDITION</title>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
 
   <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
   <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
-
   <link rel="stylesheet" href="https://unpkg.com/leaflet-velocity@1.8.0/dist/leaflet-velocity.css" />
   <script src="https://unpkg.com/leaflet-velocity@1.8.0/dist/leaflet-velocity.js"></script>
 
   <script src="https://d3js.org/d3.v7.min.js"></script>
 
   <style>
-    body { margin: 0; background: #111; font-family: 'Segoe UI', sans-serif; color: white; overflow: hidden; }
-    #map { position: absolute; top: 0; bottom: 0; width: 100%; background: #111; }
+    body { margin: 0; background: #1a1a1a; font-family: 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; color: white; overflow: hidden; }
+    #map { position: absolute; top: 0; bottom: 0; width: 100%; background: #1a1a1a; }
 
-    /* UI CONTROL */
+    /* UI PANELS */
     #ui-container { position: absolute; top: 10px; right: 10px; z-index: 1000; display: flex; flex-direction: column; gap: 10px; align-items: flex-end; }
-    .panel { background: rgba(0,0,0,0.85); backdrop-filter: blur(6px); padding: 8px; border-radius: 14px; border: 1px solid #444; }
+    .panel { background: rgba(20,20,20,0.9); backdrop-filter: blur(10px); padding: 12px; border-radius: 12px; border: 1px solid rgba(255,255,255,0.15); box-shadow: 0 8px 30px rgba(0,0,0,0.5); }
+
     .layer-btn {
-      display: block; width: 140px; padding: 10px 12px; margin-bottom: 6px;
+      display: block; width: 140px; padding: 10px; margin-bottom: 5px;
       background: transparent; color: #ccc; border: none; text-align: right;
-      cursor: pointer; font-size: 13px; font-weight: 700; border-radius: 8px;
-      transition: all 0.15s;
+      cursor: pointer; font-size: 14px; font-weight: 700; border-radius: 8px;
+      transition: all .2s; border-right: 4px solid transparent;
     }
-    .layer-btn:hover { background: rgba(255,255,255,0.08); color: #fff; }
-    .layer-btn.active { background: #007bff; color: white; }
+    .layer-btn:hover { background: rgba(255,255,255,0.1); color: #fff; }
+    .layer-btn.active { background: linear-gradient(90deg, rgba(0,120,255,0.1), rgba(0,120,255,0.2)); color: #fff; border-right: 4px solid #0088ff; }
+    
+    .layer-btn.toggle { color: #aaa; font-size: 12px; margin-top: 5px; }
+    .layer-btn.toggle.active { color: #fff; border-right: 4px solid #fff; }
 
     .map-toggle {
-      padding: 8px 12px; background: rgba(255,255,255,0.06); color: #fff;
-      border: 1px solid rgba(255,255,255,0.2); border-radius: 10px;
-      cursor: pointer; font-size: 12px; font-weight: 800;
-      transition: all 0.15s;
+      padding: 6px 12px; background: rgba(255,255,255,0.1); color: #ccc;
+      border: 1px solid rgba(255,255,255,0.2); border-radius: 6px;
+      cursor: pointer; font-size: 11px; font-weight: bold;
     }
-    .map-toggle:hover { background: rgba(255,255,255,0.12); }
-    .map-toggle.active { background: #eee; color: #000; }
+    .map-toggle.active { background: #0088ff; color: #fff; border-color: #0088ff; }
 
-    /* INFO & TIME */
+    /* INFO BOX (Valore Mouse) */
     #info-box { position: absolute; top: 20px; left: 20px; z-index: 1000; pointer-events: none; text-shadow: 2px 2px 0 #000; }
-    #val-display { font-size: 3.5em; font-weight: 900; line-height: 1; }
-    #unit-display { font-size: 1.2em; color: #aaa; font-weight: 800; }
+    #val-display { font-size: 3.5em; font-weight: 900; line-height: 0.9; letter-spacing: -1px; }
+    #unit-display { font-size: 1.2em; color: #aaa; font-weight: 700; text-transform: uppercase; }
 
+    /* BOTTOM BAR */
     #bottom-bar {
-      position: absolute; bottom: 0; left: 0; right: 0; height: 90px;
-      background: linear-gradient(to top, rgba(0,0,0,0.95), transparent);
-      display: flex; align-items: center; padding: 0 20px; z-index: 2000;
+      position: absolute; bottom: 0; left: 0; right: 0; height: 100px;
+      background: linear-gradient(to top, #000 0%, rgba(0,0,0,0.8) 60%, transparent 100%);
+      display: flex; align-items: center; padding: 0 30px 20px 30px; z-index: 2000;
     }
-    #play-btn { font-size: 2.5em; background: none; border: none; color: white; cursor: pointer; margin-right: 15px; }
-    #time-label { font-size: 1.4em; font-weight: 900; margin-left: 15px; min-width: 140px; text-align: center; text-shadow: 0 2px 10px #000; }
-    input[type=range] { flex-grow: 1; height: 5px; cursor: pointer; accent-color: #0088ff; }
+    #play-btn { font-size: 2.5em; background: none; border: none; color: #fff; cursor: pointer; margin-right: 20px; filter: drop-shadow(0 0 5px black); }
+    #time-label { font-size: 1.4em; font-weight: 800; margin-left: 20px; min-width: 160px; text-align: center; text-shadow: 2px 2px 0 #000; font-variant-numeric: tabular-nums; }
+    input[type=range] { flex-grow: 1; height: 6px; cursor: pointer; accent-color: #0088ff; background: rgba(255,255,255,0.2); border-radius: 3px; }
 
-    /* Dark relief overlay: più evidente */
-    .hillshade-tiles {
-      mix-blend-mode: multiply;
-      filter: contrast(1.85) brightness(0.95);
+    /* Canvas sharp rendering (PIXEL PERFECT) */
+    canvas.leaflet-layer { 
+        image-rendering: -moz-crisp-edges;
+        image-rendering: -webkit-optimize-contrast;
+        image-rendering: pixelated;
+        image-rendering: optimizeSpeed;               
     }
+    
+    /* LEGENDA DINAMICA */
+    #legend-bar { margin-top: 10px; width: 140px; height: 12px; border-radius: 6px; border: 1px solid rgba(255,255,255,0.3); }
+    #legend-labels { display: flex; justify-content: space-between; font-size: 10px; color: #ccc; font-weight: bold; margin-top: 2px; }
 
-    /* Canvas: smooth */
-    canvas { image-rendering: auto; }
   </style>
 </head>
 
-<body>
+<body class="mode-dark">
+
   <div id="info-box">
     <div id="val-display">--</div>
     <div id="unit-display">Caricamento...</div>
   </div>
 
   <div id="ui-container">
-    <div class="panel" style="display:flex; gap:6px;">
+    <div class="panel" style="display:flex; gap:6px; justify-content: flex-end;">
       <button class="map-toggle active" onclick="setBase('dark')">DARK</button>
-      <button class="map-toggle" onclick="setBase('map')">MAPPA</button>
+      <button class="map-toggle" onclick="setBase('sat')">SAT</button>
     </div>
 
     <div class="panel">
-      <button class="layer-btn active" onclick="setLayer('wind')">VENTO 💨</button>
-      <button class="layer-btn" onclick="setLayer('temp')">TEMP 🌡️</button>
-      <button class="layer-btn" onclick="setLayer('rain')">PIOGGIA ☔</button>
-      <button class="layer-btn" onclick="setLayer('rh')">UMIDITÀ 💧</button>
-      <button class="layer-btn" onclick="setLayer('press')">PRESS ⏲️</button>
-      <hr style="border:0; border-top:1px solid #444; margin:6px 0;">
-      <button class="layer-btn" id="btn-iso" onclick="toggleIso()">ISOBARE 〰️</button>
-      <button class="layer-btn" id="btn-grid" onclick="toggleGrid()">GRIGLIA #</button>
+      <button class="layer-btn active" onclick="toggleLayer('wind')">VENTO 💨</button>
+      <button class="layer-btn" onclick="toggleLayer('temp')">TEMP 🌡️</button>
+      <button class="layer-btn" onclick="toggleLayer('rain')">PIOGGIA ☔</button>
+      <button class="layer-btn" onclick="toggleLayer('rh')">UMIDITÀ 💧</button>
+      <button class="layer-btn" onclick="toggleLayer('press')">PRESSIONE ⏲️</button>
+      <button class="layer-btn" onclick="toggleLayer('clouds')">NUVOLE ☁️</button>
+      
+      <div id="legend-bar"></div>
+      <div id="legend-labels">
+          <span id="l-min"></span><span id="l-max"></span>
+      </div>
+
+      <hr style="border:0; border-top:1px solid rgba(255,255,255,0.1); margin:10px 0;">
+      <button class="layer-btn toggle" id="btn-iso" onclick="toggleIso()">ISOBARE 〰️</button>
+      <button class="layer-btn toggle" id="btn-grid" onclick="toggleGrid()">GRIGLIA #</button>
     </div>
   </div>
 
@@ -96,507 +110,463 @@
   </div>
 
 <script>
-  // --- GLOBALS ---
-  var map, velocityLayer;
-  var heatCanvas, isoCanvas, gridCanvas;
+  // =========================
+  // GLOBALS
+  // =========================
+  let map, velocityLayer;
+  let isoCanvas, gridCanvas;
+  const scalarCanvases = {};
+  const scalarOffscreen = {}; 
+  let currentData = null, catalog = [];
 
-  var currentData = null, catalog = [];
-  var activeLayer = 'wind';
-  var showIso = false, showGrid = false, isPlaying = false;
+  let showIso = false, showGrid = false, isPlaying = false;
+  let baseLayers = {}, labelsLayers = {}, hillshadeLayer = null;
+  let baseMode = 'dark';
 
-  var baseLayers = {};
-  var labelLayers = {};
-  var hillshadeLayer = null;
-
-  var isLightMode = false;
+  // Stato Layer attivi
+  const enabled = { wind: true, temp: false, rain: false, rh: false, press: false, clouds: false };
 
   // =========================
-  //  TEMPERATURE: 1°C = 1 COLORE (DISCRETO), -15..45
-  //  Palette "Turbo" molto contrastata (stile meteo / telerilevamento)
+  // PALETTE DEFINITE (STEPPED)
   // =========================
-  function clamp(x,a,b){ return Math.max(a, Math.min(b, x)); }
+  
+  // Stile Meteociel/Windy (Netto)
+  const TEMP_STOPS = [
+    {v: -30, c: [255, 255, 255]}, // Gelo Bianco
+    {v: -20, c: [255,   0, 255]}, // Magenta
+    {v: -10, c: [120,   0, 140]}, // Viola
+    {v:  -5, c: [  0,   0, 140]}, // Blu Notte
+    {v:   0, c: [  0,   0, 255]}, // Blu Puro
+    {v:   4, c: [  0, 120, 255]}, // Azzurro
+    {v:   8, c: [  0, 200, 255]}, // Ciano
+    {v:  12, c: [  0, 180,   0]}, // Verde Scuro
+    {v:  16, c: [  0, 255,   0]}, // Verde Acceso
+    {v:  20, c: [255, 255,   0]}, // Giallo
+    {v:  24, c: [255, 170,   0]}, // Arancio
+    {v:  28, c: [255,  80,   0]}, // Rosso Arancio
+    {v:  32, c: [255,   0,   0]}, // Rosso Puro
+    {v:  36, c: [160,   0,   0]}, // Rosso Scuro
+    {v:  40, c: [100,   0,   0]}, // Marrone
+    {v:  45, c: [255, 200, 255]}  // Bianco/Rosa (Estremo)
+  ];
 
-  function turboColor(t){
-    t = clamp(t, 0, 1);
-    const r = 34.61 + t*(1172.33 + t*(-10793.56 + t*(33300.12 + t*(-38394.49 + t*14825.05))));
-    const g = 23.31 + t*(557.33 + t*(1225.33 + t*(-3574.96 + t*(3202.04 + t*(-887.49)))));
-    const b = 27.2  + t*(3211.1 + t*(-15327.97 + t*(27814.0 + t*(-22569.18 + t*6838.66))));
-    return [
-      Math.round(clamp(r,0,255)),
-      Math.round(clamp(g,0,255)),
-      Math.round(clamp(b,0,255))
-    ];
-  }
+  const RAIN_STOPS = [
+    {v: 0.1, c: [150, 230, 255]}, // Azzurrino
+    {v: 2.0, c: [  0, 150, 255]}, // Blu
+    {v: 10,  c: [  0,   0, 200]}, // Blu scuro
+    {v: 30,  c: [255,   0, 255]}, // Viola
+    {v: 100, c: [255, 255,   0]}  // Giallo (Nubifragio)
+  ];
 
-  function buildTempLUT(tMin, tMax){
-    const lut = {};
-    for(let T=tMin; T<=tMax; T++){
-      const t = (T - tMin) / (tMax - tMin);
-      lut[T] = turboColor(t);
+  const RH_STOPS = [ // Umidità (Secco -> Umido)
+    {v: 10, c: [255, 100,   0]}, // Arancio (Secco)
+    {v: 30, c: [255, 255,   0]}, // Giallo
+    {v: 60, c: [150, 255, 150]}, // Verde
+    {v: 90, c: [100, 200, 255]}, // Azzurro
+    {v: 98, c: [ 50,  50, 255]}  // Blu (Saturazione)
+  ];
+  
+  const PRESS_STOPS = [
+      {v: 980, c: [0, 0, 180]},   // Bassa
+      {v: 1000, c: [0, 100, 255]},
+      {v: 1012, c: [255, 255, 255]}, // Neutro
+      {v: 1025, c: [255, 100, 0]},
+      {v: 1040, c: [200, 0, 0]}   // Alta
+  ];
+
+  // FUNZIONE COLORE "A GRADINI" (NETTA)
+  // Se il valore è tra due step, prende il colore INFERIORE senza sfumare
+  function colorStepped(val, stops){
+    if(val <= stops[0].v) return stops[0].c;
+    if(val >= stops[stops.length-1].v) return stops[stops.length-1].c;
+    
+    for(let i=0; i < stops.length-1; i++){
+        if(val >= stops[i].v && val < stops[i+1].v){
+            return stops[i].c; // Niente interpolazione! Colore puro.
+        }
     }
-    return lut;
+    return stops[stops.length-1].c;
   }
-
-  const TEMP_MIN = -15;
-  const TEMP_MAX = 45;
-  const TEMP_LUT = buildTempLUT(TEMP_MIN, TEMP_MAX);
-
-  function tempToRGB_discrete(tempC){
-    const T = Math.round(tempC);     // 1°C = 1 colore
-    const Tc = clamp(T, TEMP_MIN, TEMP_MAX);
-    return TEMP_LUT[Tc];
-  }
-
-  // --- PALETTES (heatmaps) ---
-  // NB: TEMP non usa più stops: usa LUT discreta 1°C (sopra).
-  const PALETTES = {
-    rain: [
-      {v:0,   c:[0,0,0,0]},
-      {v:0.1, c:[0,200,255,0.60]},
-      {v:2,   c:[0,0,255,0.72]},
-      {v:10,  c:[150,0,200,0.85]}
-    ],
-    rh: [
-      {v:20,c:[200,150,50,0.60]},
-      {v:40,c:[200,200,200,0.60]},
-      {v:60,c:[100,255,100,0.60]},
-      {v:80,c:[50,150,255,0.68]},
-      {v:95,c:[0,0,200,0.75]}
-    ],
-    // Pressione: blu (bassa) -> rosso (alta), senza “buco” trasparente.
-    press: [
-      {v:980, c:[0,70,255,0.62]},
-      {v:995, c:[0,170,255,0.62]},
-      {v:1005,c:[0,255,200,0.62]},
-      {v:1013,c:[255,255,255,0.62]},
-      {v:1022,c:[255,200,0,0.62]},
-      {v:1035,c:[255,60,0,0.68]}
-    ]
-  };
-
-  function lerp(a,b,t){ return a+(b-a)*t; }
-
-  function colorFromStops(val, stops){
-    for(let i=0; i<stops.length-1; i++){
-      if(val >= stops[i].v && val <= stops[i+1].v){
-        const t = (val - stops[i].v) / (stops[i+1].v - stops[i].v);
-        const c1 = stops[i].c, c2 = stops[i+1].c;
-        return [
-          Math.round(lerp(c1[0], c2[0], t)),
-          Math.round(lerp(c1[1], c2[1], t)),
-          Math.round(lerp(c1[2], c2[2], t)),
-          lerp(c1[3], c2[3], t)
-        ];
+  
+  // FUNZIONE COLORE SFUMATO (Solo per Nuvole, più bello)
+  function colorSmooth(val, stops){
+      // ... logica lerp classica ...
+      if(val<=stops[0].v) return stops[0].c;
+      for(let i=0; i<stops.length-1; i++){
+          if(val>=stops[i].v && val<=stops[i+1].v){
+              let t = (val-stops[i].v)/(stops[i+1].v-stops[i].v);
+              let c1=stops[i].c, c2=stops[i+1].c;
+              return [
+                  Math.round(c1[0]+(c2[0]-c1[0])*t),
+                  Math.round(c1[1]+(c2[1]-c1[1])*t),
+                  Math.round(c1[2]+(c2[2]-c1[2])*t)
+              ];
+          }
       }
-    }
-    const last = stops[stops.length-1].c;
-    return [last[0], last[1], last[2], last[3]];
+      return stops[stops.length-1].c;
   }
 
-  function getColor(val, type){
-    if(type === 'temp'){
-      // 1°C = 1 colore, alpha gestita fuori
-      const rgb = tempToRGB_discrete(val);
-      return [rgb[0], rgb[1], rgb[2], 0.70]; // alpha base (poi può variare)
-    }
-    if(!PALETTES[type]) return [0,0,0,0];
-    if(type==='rain' && val < 0.1) return [0,0,0,0];
-    return colorFromStops(val, PALETTES[type]);
-  }
-
-  function unitFor(type){
-    if(type==='wind') return 'km/h';
-    if(type==='temp') return '°C';
-    if(type==='rain') return 'mm';
-    if(type==='rh') return '%';
-    if(type==='press') return 'hPa';
+  function unitFor(layer){
+    if(layer==='wind') return 'km/h';
+    if(layer==='temp') return '°C';
+    if(layer==='rain') return 'mm';
+    if(layer==='rh') return '%';
+    if(layer==='press') return 'hPa';
+    if(layer==='clouds') return '%';
     return '';
   }
 
-  // --- INIT ---
-  window.addEventListener('load', async function() {
-    map = L.map('map', { zoomControl: false }).setView([37.5, 14.2], 8);
+  // =========================
+  // INIT
+  // =========================
+  window.addEventListener('load', async () => {
+    map = L.map('map', { zoomControl:false }).setView([37.5, 14.2], 8);
 
-    // Base layers (dark) + rilievo evidente (hillshade overlay)
-    baseLayers.dark = L.tileLayer(
-      'https://{s}.basemaps.cartocdn.com/dark_nolabels/{z}/{x}/{y}{r}.png',
-      { maxZoom: 19, attribution: '©OpenStreetMap, ©Carto' }
-    ).addTo(map);
+    // LAYERS DI BASE
+    baseLayers.dark = L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_nolabels/{z}/{x}/{y}{r}.png', { maxZoom: 19 }).addTo(map);
+    baseLayers.sat = L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}', { maxZoom: 19 });
 
-    hillshadeLayer = L.tileLayer(
-      'https://server.arcgisonline.com/ArcGIS/rest/services/Elevation/World_Hillshade/MapServer/tile/{z}/{y}/{x}',
-      {
-        maxZoom: 19,
-        opacity: 0.72,
-        className: 'hillshade-tiles',
-        attribution: 'Hillshade © Esri'
-      }
-    ).addTo(map);
-
-    baseLayers.map = L.tileLayer(
-      'https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png',
-      { maxZoom: 19, attribution: '©OpenStreetMap' }
-    );
-
-    // Labels (solo per dark)
-    labelLayers.dark = L.tileLayer(
-      'https://{s}.basemaps.cartocdn.com/dark_only_labels/{z}/{x}/{y}{r}.png',
-      { maxZoom: 19, attribution: '©Carto' }
-    ).addTo(map);
-    labelLayers.map = null;
+    labelsLayers.dark = L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_only_labels/{z}/{x}/{y}{r}.png', { maxZoom: 19, opacity: 0.9, pane: 'overlayPane' }).addTo(map);
+    labelsLayers.sat = L.tileLayer('https://{s}.basemaps.cartocdn.com/light_only_labels/{z}/{x}/{y}{r}.png', { maxZoom: 19, opacity: 0.9, pane: 'overlayPane' });
+    
+    // Hillshade (Rilievi 3D)
+    hillshadeLayer = L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/Elevation/World_Hillshade/MapServer/tile/{z}/{y}/{x}', { 
+        maxZoom: 19, opacity: 0.4, className: 'hillshade' 
+    }).addTo(map);
 
     createCanvasLayers();
-    await loadCatalogAndFirstFrame();
+    await loadCatalog();
 
     map.on('mousemove', updatePickerFromEvent);
     map.on('click', updatePickerFromEvent);
-
-    document.getElementById('unit-display').innerText = unitFor(activeLayer);
+    document.getElementById('unit-display').innerText = "Pronto";
+    updateLegendUI();
   });
 
-  function setBase(type) {
-    document.querySelectorAll('.map-toggle').forEach(b => b.classList.remove('active'));
-    event.target.classList.add('active');
-
-    if(type==='dark') {
-      isLightMode = false;
-      map.removeLayer(baseLayers.map);
-      baseLayers.dark.addTo(map);
-      if(hillshadeLayer) hillshadeLayer.addTo(map);
-
-      if(labelLayers.map) map.removeLayer(labelLayers.map);
-      if(labelLayers.dark) labelLayers.dark.addTo(map);
-    } else {
-      isLightMode = true;
-      map.removeLayer(baseLayers.dark);
-      if(hillshadeLayer) map.removeLayer(hillshadeLayer);
-      baseLayers.map.addTo(map);
-
-      if(labelLayers.dark) map.removeLayer(labelLayers.dark);
-    }
-
-    redrawAll();
-  }
-
-  // --- DATA LOAD ---
-  async function loadCatalogAndFirstFrame() {
-    try {
-      const r = await fetch('data_weather/catalog.json?t=' + Date.now());
-      if(!r.ok) throw new Error("catalog not found");
-      catalog = await r.json();
-      if(!catalog || catalog.length === 0) throw new Error("empty catalog");
-
-      const slider = document.getElementById('time-slider');
-      slider.max = catalog.length - 1;
-      slider.value = 0;
-      slider.addEventListener('input', (e) => loadStep(parseInt(e.target.value,10)));
-
-      await loadStep(0);
-      document.getElementById('unit-display').innerText = "Pronto";
-    } catch(e) {
-      document.getElementById('unit-display').innerText = "Errore dati";
-    }
-  }
-
-  async function loadStep(idx) {
-    if(!catalog[idx]) return;
-    document.getElementById('time-label').innerText = catalog[idx].label;
-
-    try {
-      const r = await fetch('data_weather/' + catalog[idx].file + '?t=' + Date.now());
-      if(!r.ok) throw new Error("frame not found");
-      currentData = await r.json();
-      redrawAll();
-    } catch(e) {}
-  }
-
-  // --- CANVAS LAYERS ---
-  function createCanvasLayers() {
+  function createCanvasLayers(){
     const mkCanvas = (z) => {
       const c = L.DomUtil.create('canvas', 'leaflet-layer');
       c.style.pointerEvents = 'none';
       c.style.zIndex = z;
+      // TRUCCO PER RENDERIZZAZIONE NETTA (PIXEL ART STYLE)
+      c.style.imageRendering = 'pixelated'; 
       map.getPanes().overlayPane.appendChild(c);
       return c;
     };
-
-    heatCanvas = mkCanvas(300);
-    isoCanvas  = mkCanvas(400);
+    scalarCanvases.temp   = mkCanvas(300);
+    scalarCanvases.rain   = mkCanvas(310);
+    scalarCanvases.rh     = mkCanvas(320);
+    scalarCanvases.press  = mkCanvas(330);
+    scalarCanvases.clouds = mkCanvas(340);
+    isoCanvas  = mkCanvas(420);
     gridCanvas = mkCanvas(450);
-
     map.on('moveend resize', redrawAll);
   }
 
-  function redrawAll() {
-    if(!currentData) return;
-    drawHeatmap();
+  // =========================
+  // LOGICA BASE E DATI
+  // =========================
+  window.setBase = function(type){
+    document.querySelectorAll('.map-toggle').forEach(b => b.classList.remove('active'));
+    event.target.classList.add('active');
+    baseMode = type;
+    document.body.className = type==='dark' ? 'mode-dark' : 'mode-sat';
+
+    if(type==='dark'){
+      map.removeLayer(baseLayers.sat); baseLayers.dark.addTo(map);
+      map.removeLayer(labelsLayers.sat); labelsLayers.dark.addTo(map);
+    } else {
+      map.removeLayer(baseLayers.dark); baseLayers.sat.addTo(map);
+      map.removeLayer(labelsLayers.dark); labelsLayers.sat.addTo(map);
+    }
+    redrawAll();
+    updateWind();
+  }
+
+  async function loadCatalog(){
+    try{
+      const r = await fetch('data_weather/catalog.json?t=' + Date.now());
+      catalog = await r.json();
+      const s = document.getElementById('time-slider');
+      s.max = catalog.length-1;
+      s.addEventListener('input', e => loadStep(parseInt(e.target.value)));
+      await loadStep(0);
+    } catch(e){ document.getElementById('unit-display').innerText = "No Data"; }
+  }
+
+  async function loadStep(idx){
+    if(!catalog[idx]) return;
+    document.getElementById('time-label').innerText = catalog[idx].label;
+    try{
+      const r = await fetch('data_weather/' + catalog[idx].file + '?t=' + Date.now());
+      currentData = await r.json();
+      for(const k of Object.keys(scalarOffscreen)) delete scalarOffscreen[k]; // Reset cache
+      redrawAll();
+    }catch(e){}
+  }
+
+  window.toggleLayer = function(layer){
+    enabled[layer] = !enabled[layer];
+    event.target.classList.toggle('active', enabled[layer]);
+    document.getElementById('unit-display').innerText = unitFor(layer);
+    updateLegendUI();
+    redrawAll();
+  }
+  
+  // Aggiorna la barra colorata in base al layer attivo
+  function updateLegendUI() {
+      const bar = document.getElementById('legend-bar');
+      const min = document.getElementById('l-min');
+      const max = document.getElementById('l-max');
+      
+      // Logica semplice: prende l'ultimo attivato o default
+      let active = 'wind';
+      if(enabled.temp) active = 'temp';
+      else if(enabled.rain) active = 'rain';
+      else if(enabled.rh) active = 'rh';
+      else if(enabled.press) active = 'press';
+      
+      if(active === 'temp') {
+          bar.style.background = 'linear-gradient(to right, #fff, #f0f, #00f, #0ff, #0f0, #ff0, #f00, #fff)';
+          min.innerText = "-10°"; max.innerText = "+45°";
+      } else if(active === 'rain') {
+          bar.style.background = 'linear-gradient(to right, transparent, #0ff, #00f, #f0f, #ff0)';
+          min.innerText = "0mm"; max.innerText = "100mm";
+      } else if(active === 'rh') {
+          bar.style.background = 'linear-gradient(to right, #f80, #ff0, #afa, #0af, #00f)';
+          min.innerText = "10%"; max.innerText = "100%";
+      } else if(active === 'wind') {
+          bar.style.background = 'linear-gradient(to right, #004, #04f, #0fd, #0f4, #ff0, #f80, #f00, #f0f)';
+          min.innerText = "0"; max.innerText = "100 km/h";
+      } else {
+          bar.style.background = 'transparent'; min.innerText = ""; max.innerText = "";
+      }
+  }
+
+  window.toggleIso = function(){ showIso = !showIso; document.getElementById('btn-iso').classList.toggle('active'); redrawAll(); }
+  window.toggleGrid = function(){ showGrid = !showGrid; document.getElementById('btn-grid').classList.toggle('active'); redrawAll(); }
+
+  // =========================
+  // RENDER GRAFICO HD
+  // =========================
+  function redrawAll(){
+    if(!currentData || !currentData.meta) return;
+    drawScalarsHD();
     drawIsobars();
     drawGrid();
     updateWind();
   }
 
-  // --- HEATMAP (no numeri dentro) ---
-  function drawHeatmap() {
-    const ctx = heatCanvas.getContext('2d');
-    const s = map.getSize();
-    heatCanvas.width = s.x;
-    heatCanvas.height = s.y;
-    L.DomUtil.setPosition(heatCanvas, map.containerPointToLayerPoint([0,0]));
-    ctx.clearRect(0,0,s.x,s.y);
-
-    if(activeLayer === 'wind' || !currentData) return;
-
+  function drawScalarsHD(){
     const m = currentData.meta;
-    const b = map.getBounds();
+    const bounds = { nw: L.latLng(m.la1, m.lo1), se: L.latLng(m.la2, m.lo2) };
+    const nw = map.latLngToContainerPoint(bounds.nw);
+    const se = map.latLngToContainerPoint(bounds.se);
+    const w = Math.ceil(se.x - nw.x);
+    const h = Math.ceil(se.y - nw.y);
 
-    // opacità “intelligente” (se vuoi aumentare ancora, alza baseAlpha)
-    const baseAlpha = (activeLayer === 'temp') ? 0.72 : 0.62;
+    for(const layer of ['temp','press','rain','rh','clouds']){
+      const canvas = scalarCanvases[layer];
+      const ctx = canvas.getContext('2d');
+      const size = map.getSize();
+      canvas.width = size.x; canvas.height = size.y;
+      L.DomUtil.setPosition(canvas, map.containerPointToLayerPoint([0,0]));
+      ctx.clearRect(0,0,size.x,size.y);
 
-    for(let y=0; y<m.ny; y++) {
-      const lat = m.la1 - (y*m.dy);
-      if(lat < b.getSouth()-0.1 || lat > b.getNorth()+0.1) continue;
+      if(!enabled[layer]) continue;
 
-      for(let x=0; x<m.nx; x++) {
-        const lon = m.lo1 + (x*m.dx);
-        if(lon < b.getWest()-0.1 || lon > b.getEast()+0.1) continue;
+      const off = getOrBuildOffscreen(layer, m);
+      if(!off) continue;
 
-        const idx = y*m.nx + x;
-
-        let val = 0;
-        if(activeLayer==='temp') val = currentData.temp[idx];
-        else if(activeLayer==='rain') val = currentData.rain[idx];
-        else if(activeLayer==='rh')   val = currentData.rh[idx];
-        else if(activeLayer==='press') val = currentData.press[idx];
-
-        const c = getColor(val, activeLayer);
-        let a = c[3];
-
-        // uniforma un po' l’alpha in base al layer
-        if(activeLayer === 'temp') a = baseAlpha;
-        else if(activeLayer === 'press') a = Math.max(0.58, a);
-        else if(activeLayer === 'rh') a = Math.max(0.55, a);
-
-        if(a <= 0) continue;
-
-        const p1 = map.latLngToContainerPoint([lat, lon]);
-        const p2 = map.latLngToContainerPoint([lat - m.dy, lon + m.dx]);
-
-        const w = Math.ceil(p2.x - p1.x) + 1;
-        const h = Math.ceil(p2.y - p1.y) + 1;
-
-        ctx.fillStyle = `rgba(${c[0]},${c[1]},${c[2]},${a})`;
-        ctx.fillRect(Math.floor(p1.x), Math.floor(p1.y), w, h);
-      }
+      ctx.save();
+      // OPACITÀ FORTE PER EFFETTO SOLIDO (NETTO)
+      ctx.globalAlpha = (layer === 'clouds') ? 0.5 : 0.85; 
+      
+      // DISABILITA INTERPOLAZIONE: FONDAMENTALE PER L'EFFETTO "NETTO"
+      ctx.imageSmoothingEnabled = false; 
+      
+      ctx.drawImage(off.c, Math.floor(nw.x), Math.floor(nw.y), w, h);
+      ctx.restore();
     }
   }
 
-  // --- ISOBARE ---
-  function drawIsobars() {
+  function getOrBuildOffscreen(layer, meta){
+    const key = layer + '|' + (meta.refTime || '');
+    if(scalarOffscreen[layer] && scalarOffscreen[layer].key === key) return scalarOffscreen[layer];
+
+    const nx = meta.nx, ny = meta.ny;
+    const c = document.createElement('canvas');
+    c.width = nx; c.height = ny;
+    const ctx = c.getContext('2d');
+    const img = ctx.createImageData(nx, ny);
+    const data = img.data;
+
+    let arr = null;
+    if(layer==='temp') arr = currentData.temp;
+    else if(layer==='press') arr = currentData.press;
+    else if(layer==='rain') arr = currentData.rain;
+    else if(layer==='rh') arr = currentData.rh;
+    else if(layer==='clouds') arr = currentData.cloud || currentData.clouds;
+
+    if(!arr) return null;
+
+    for(let i=0; i<nx*ny; i++){
+      let v = arr[i];
+      let rgb = [0,0,0], a = 0;
+
+      if(layer === 'temp'){
+        rgb = colorStepped(v, TEMP_STOPS); // USO LA FUNZIONE STEPPED!
+        a = 230; // Quasi opaco
+      } 
+      else if(layer === 'rain' && v > 0.1){
+        rgb = colorStepped(v, RAIN_STOPS);
+        a = 230;
+      }
+      else if(layer === 'rh'){
+        rgb = colorStepped(v, RH_STOPS);
+        a = 200;
+      }
+      else if(layer === 'press'){
+        rgb = colorStepped(v, PRESS_STOPS);
+        a = 200;
+      }
+      else if(layer === 'clouds'){
+        rgb = [v*2.5, v*2.5, v*2.5]; // Scala di grigi
+        // Le nuvole stanno meglio sfumate
+        a = Math.min(255, v * 2);
+      }
+
+      const p = i*4;
+      data[p] = rgb[0]; data[p+1] = rgb[1]; data[p+2] = rgb[2]; data[p+3] = a;
+    }
+
+    ctx.putImageData(img, 0, 0);
+    scalarOffscreen[layer] = { c, ctx, img, key };
+    return scalarOffscreen[layer];
+  }
+
+  // =========================
+  // ISOBARE & GRID
+  // =========================
+  function drawIsobars(){
     const ctx = isoCanvas.getContext('2d');
-    const s = map.getSize();
-    isoCanvas.width = s.x;
-    isoCanvas.height = s.y;
+    const size = map.getSize();
+    isoCanvas.width = size.x; isoCanvas.height = size.y;
     L.DomUtil.setPosition(isoCanvas, map.containerPointToLayerPoint([0,0]));
-    ctx.clearRect(0,0,s.x,s.y);
+    ctx.clearRect(0,0,size.x,size.y);
 
     if(!showIso || !currentData || !currentData.press) return;
 
     const m = currentData.meta;
-    const values = currentData.press;
+    const contours = d3.contours().size([m.nx, m.ny]).thresholds(d3.range(960, 1050, 2))(currentData.press);
 
-    const contours = d3.contours().size([m.nx, m.ny]).thresholds(d3.range(960, 1050, 2))(values);
-
-    ctx.lineWidth = 1.4;
-    ctx.font = "900 12px Arial";
-    ctx.textAlign = "center";
-    ctx.textBaseline = "middle";
+    ctx.lineWidth = 1.2;
+    ctx.strokeStyle = "rgba(255,255,255,0.6)"; 
+    if(baseMode==='sat') ctx.strokeStyle = "rgba(0,0,0,0.5)";
 
     contours.forEach(c => {
-      if(isLightMode) {
-        ctx.strokeStyle = (c.value < 1013) ? "rgba(0,0,0,0.75)" : "rgba(60,60,60,0.75)";
-      } else {
-        ctx.strokeStyle = (c.value < 1013) ? "rgba(120,160,255,0.85)" : "rgba(255,140,120,0.85)";
-        if(Math.abs(c.value-1013) < 1) ctx.strokeStyle = "rgba(255,255,255,0.9)";
-      }
-
       ctx.beginPath();
-      const labelCandidates = [];
-
       c.coordinates.forEach(ring => {
         ring.forEach(pts => {
           let first = true;
-          const linePts = [];
           pts.forEach(coord => {
             const lat = m.la1 - (coord[1] * m.dy);
             const lon = m.lo1 + (coord[0] * m.dx);
             const p = map.latLngToContainerPoint([lat, lon]);
-            linePts.push(p);
-            if(first) { ctx.moveTo(p.x, p.y); first=false; }
-            else ctx.lineTo(p.x, p.y);
+            if(first){ ctx.moveTo(p.x,p.y); first=false; }
+            else ctx.lineTo(p.x,p.y);
           });
-          if(linePts.length > 60) labelCandidates.push(linePts);
         });
       });
-
       ctx.stroke();
-
-      labelCandidates.forEach(pts => {
-        const mid = pts[Math.floor(pts.length/2)];
-        const bg = isLightMode ? "rgba(255,255,255,0.8)" : "rgba(0,0,0,0.7)";
-        const fg = isLightMode ? "#000" : "#fff";
-        ctx.fillStyle = bg;
-        ctx.fillRect(mid.x-16, mid.y-9, 32, 18);
-        ctx.fillStyle = fg;
-        ctx.fillText(Math.round(c.value), mid.x, mid.y);
-      });
     });
   }
 
-  // --- GRIGLIA (solo linee) ---
-  function drawGrid() {
+  function drawGrid(){
     const ctx = gridCanvas.getContext('2d');
-    const s = map.getSize();
-    gridCanvas.width = s.x;
-    gridCanvas.height = s.y;
+    const size = map.getSize();
+    gridCanvas.width = size.x; gridCanvas.height = size.y;
     L.DomUtil.setPosition(gridCanvas, map.containerPointToLayerPoint([0,0]));
-    ctx.clearRect(0,0,s.x,s.y);
-
+    ctx.clearRect(0,0,size.x,size.y);
     if(!showGrid) return;
-
+    
+    // Disegna griglia
+    const step = 0.5; 
     const b = map.getBounds();
-    const step = map.getZoom() > 9 ? 0.1 : 0.5;
-
-    ctx.strokeStyle = isLightMode ? "rgba(0,0,0,0.25)" : "rgba(255,255,255,0.18)";
-    ctx.lineWidth = 1;
-
-    for(let lon=Math.floor(b.getWest()); lon<=Math.ceil(b.getEast()); lon+=step) {
-      const x = map.latLngToContainerPoint([b.getSouth(), lon]).x;
-      ctx.beginPath(); ctx.moveTo(x,0); ctx.lineTo(x,s.y); ctx.stroke();
+    ctx.strokeStyle = "rgba(255,255,255,0.2)";
+    ctx.beginPath();
+    for(let lon=Math.floor(b.getWest()); lon<=Math.ceil(b.getEast()); lon+=step){
+        const x = map.latLngToContainerPoint([b.getSouth(), lon]).x;
+        ctx.moveTo(x, 0); ctx.lineTo(x, size.y);
     }
-    for(let lat=Math.floor(b.getSouth()); lat<=Math.ceil(b.getNorth()); lat+=step) {
-      const y = map.latLngToContainerPoint([lat, b.getWest()]).y;
-      ctx.beginPath(); ctx.moveTo(0,y); ctx.lineTo(s.x,y); ctx.stroke();
+    for(let lat=Math.floor(b.getSouth()); lat<=Math.ceil(b.getNorth()); lat+=step){
+        const y = map.latLngToContainerPoint([lat, b.getWest()]).y;
+        ctx.moveTo(0, y); ctx.lineTo(size.x, y);
     }
+    ctx.stroke();
   }
 
-  // --- WIND (stessi colori e parametri originali, ma meno particelle per FPS) ---
-  function updateWind() {
-    if(velocityLayer) map.removeLayer(velocityLayer);
-    if(activeLayer !== 'wind' || !currentData) return;
+  // =========================
+  // VENTO (PARTICELLE)
+  // =========================
+  function updateWind(){
+    if(velocityLayer) { map.removeLayer(velocityLayer); velocityLayer = null; }
+    if(!enabled.wind || !currentData) return;
 
-    const isMobile = Math.min(window.innerWidth, window.innerHeight) < 900;
-    const dpr = window.devicePixelRatio || 1;
-
-    let particleMult = isMobile ? (1/160) : (1/120);
-    if(dpr >= 2) particleMult = isMobile ? (1/220) : (1/180);
-
-    try {
-      velocityLayer = L.velocityLayer({
-        displayValues: false,
-        data: [ currentData.wind_u, currentData.wind_v ],
-
-        // === PARAMETRI ORIGINALI (NON TOCCATI) ===
-        maxVelocity: 18.0,
-        velocityScale: 0.006,
-        particleMultiplier: particleMult,
-        lineWidth: 0.8,
-        particleAge: 140,
-        frameRate: 60,
-        opacity: 0.95,
-        colorScale: ["#000080", "#0044ff", "#00ddff", "#00ff55", "#ffff00", "#ff6600", "#ff0000", "#ff00ff"]
-      });
-
-      velocityLayer.addTo(map);
-    } catch(e) {}
+    const windColors = ["#001040", "#0030cc", "#00a0ff", "#00ff80", "#ffff00", "#ff7a00", "#ff0000", "#b000ff"];
+    
+    velocityLayer = L.velocityLayer({
+      displayValues: false,
+      data: [ currentData.wind_u, currentData.wind_v ],
+      maxVelocity: 18.0,
+      velocityScale: 0.005,
+      particleMultiplier: 1/150, // Più leggere per non coprire i colori sotto
+      lineWidth: 1.2,
+      particleAge: 100,
+      frameRate: 40,
+      opacity: 0.9,
+      colorScale: windColors
+    });
+    velocityLayer.addTo(map);
   }
 
-  // --- PICKER ---
-  function valueAtLatLng(latlng) {
-    if(!currentData || !currentData.meta) return null;
+  // =========================
+  // PICKER
+  // =========================
+  function updatePickerFromEvent(e){
+    if(!currentData) return;
     const m = currentData.meta;
-
-    const y = Math.round((m.la1 - latlng.lat) / m.dy);
-    const x = Math.round((latlng.lng - m.lo1) / m.dx);
-
-    if(x < 0 || x >= m.nx || y < 0 || y >= m.ny) return null;
-
+    const y = Math.round((m.la1 - e.latlng.lat) / m.dy);
+    const x = Math.round((e.latlng.lng - m.lo1) / m.dx);
+    if(x<0||x>=m.nx||y<0||y>=m.ny) return;
     const idx = y*m.nx + x;
 
-    if(activeLayer === 'wind') {
-      const u = currentData.wind_u.data[idx];
-      const v = currentData.wind_v.data[idx];
-      return (Math.sqrt(u*u + v*v) * 3.6);
-    }
-    if(activeLayer === 'temp') return currentData.temp[idx];
-    if(activeLayer === 'rain') return currentData.rain[idx];
-    if(activeLayer === 'rh') return currentData.rh[idx];
-    if(activeLayer === 'press') return currentData.press[idx];
+    let val = '--', unit = '';
+    
+    // Priorità visualizzazione valore
+    if(enabled.wind) {
+        const u = currentData.wind_u.data[idx], v = currentData.wind_v.data[idx];
+        val = (Math.sqrt(u*u+v*v)*3.6).toFixed(1); unit = 'km/h';
+    } else if(enabled.temp) { val = currentData.temp[idx].toFixed(1); unit = '°C'; }
+    else if(enabled.rain) { val = currentData.rain[idx].toFixed(1); unit = 'mm'; }
+    else if(enabled.rh) { val = currentData.rh[idx].toFixed(0); unit = '%'; }
+    else if(enabled.press) { val = currentData.press[idx].toFixed(0); unit = 'hPa'; }
 
-    return null;
+    document.getElementById('val-display').innerText = val;
+    document.getElementById('unit-display').innerText = unit;
   }
 
-  function updatePickerFromEvent(e) {
-    const val = valueAtLatLng(e.latlng);
-    if(val === null || val === undefined) return;
-
-    let out = '--';
-    if(activeLayer === 'wind') out = val.toFixed(1);
-    else if(activeLayer === 'temp') out = val.toFixed(1);
-    else if(activeLayer === 'rain') out = val.toFixed(1);
-    else if(activeLayer === 'rh') out = Math.round(val).toString();
-    else if(activeLayer === 'press') out = Math.round(val).toString();
-
-    document.getElementById('val-display').innerText = out;
-  }
-
-  // --- UI ACTIONS ---
-  window.setLayer = function(type) {
-    activeLayer = type;
-
-    document.querySelectorAll('.layer-btn').forEach(btn => {
-      if(btn.id !== 'btn-iso' && btn.id !== 'btn-grid') btn.classList.remove('active');
-    });
-    event.target.classList.add('active');
-
-    document.getElementById('unit-display').innerText = unitFor(type);
-    document.getElementById('val-display').innerText = '--';
-
-    redrawAll();
-  };
-
-  window.toggleIso = function() {
-    showIso = !showIso;
-    document.getElementById('btn-iso').classList.toggle('active');
-    redrawAll();
-  };
-
-  window.toggleGrid = function() {
-    showGrid = !showGrid;
-    document.getElementById('btn-grid').classList.toggle('active');
-    redrawAll();
-  };
-
-  window.togglePlay = function() {
-    if(isPlaying) { isPlaying = false; document.getElementById('play-btn').innerText = "►"; return; }
-    isPlaying = true;
-
+  window.togglePlay = function(){
+    if(isPlaying){ isPlaying=false; document.getElementById('play-btn').innerText="►"; return; }
+    isPlaying=true; document.getElementById('play-btn').innerText="❚❚";
     const s = document.getElementById('time-slider');
-    const btn = document.getElementById('play-btn');
-    btn.innerText = "❚❚";
-
-    let i = parseInt(s.value, 10);
-    const max = parseInt(s.max, 10);
-
+    let i = parseInt(s.value);
     const interval = setInterval(() => {
-      if(!isPlaying) { clearInterval(interval); btn.innerText = "►"; return; }
-      if(i >= max) { clearInterval(interval); isPlaying=false; btn.innerText="►"; return; }
-      i++;
-      s.value = i;
-      loadStep(i);
+        if(!isPlaying || i>=s.max){ clearInterval(interval); isPlaying=false; document.getElementById('play-btn').innerText="►"; return; }
+        i++; s.value=i; loadStep(i);
     }, 800);
-  };
-</script>
+  }
 
+</script>
 </body>
 </html>
-```0
