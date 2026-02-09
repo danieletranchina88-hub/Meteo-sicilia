@@ -149,7 +149,6 @@
     </div>
 
     <div class="panel">
-      <!-- MULTI-SELEZIONE -->
       <button class="layer-btn active" data-layer="wind" onclick="toggleLayer(this)">VENTO 💨</button>
       <button class="layer-btn" data-layer="temp" onclick="toggleLayer(this)">TEMP 🌡️</button>
       <button class="layer-btn" data-layer="rain" onclick="toggleLayer(this)">PIOGGIA ☔</button>
@@ -186,7 +185,7 @@
   // Basemap
   let darkBase, satBase, darkLabels;
   let baseMode = 'dark';
-  let isLightBasemap = false; // satellite = più chiaro -> adattiamo layer
+  let isLightBasemap = false; // satellite = più chiaro
 
   // Multi-layer state
   const activeLayers = new Set(['wind']);
@@ -235,10 +234,21 @@
 
   const LAYER_WEIGHT = { cloud: 0.55, press: 0.70, rh: 0.75, temp: 0.85, rain: 0.95 };
 
-  // WIND color scales: dark (originale) + satellite (più scura/contrastata)
+  // WIND color scales:
   const WIND_COLOR_DARK = ["#000080", "#0044ff", "#00ddff", "#00ff55", "#ffff00", "#ff6600", "#ff0000", "#ff00ff"];
-  // Variante più “scura” per basemap chiara (evita ciano/giallo pallidi che spariscono)
-  const WIND_COLOR_LIGHT = ["#001133", "#002a88", "#0044ff", "#0077ff", "#00aa66", "#ffb000", "#ff5500", "#cc00ff"];
+
+  // SAT: più contrasto e più scuri (si leggono su satellite chiaro)
+  const WIND_COLOR_SAT_CONTRAST = [
+    "#001022", // blu quasi nero
+    "#002a88", // blu scuro
+    "#0044ff", // blu
+    "#00b7ff", // azzurro più saturo (non pallido)
+    "#00cc55", // verde più scuro
+    "#ffd000", // giallo acceso
+    "#ff5a00", // arancio forte
+    "#ff0033", // rosso forte
+    "#b000ff"  // viola
+  ];
 
   function lerp(a,b,t){ return a+(b-a)*t; }
 
@@ -288,14 +298,13 @@
         { maxZoom: 19, attribution: 'Tiles © Esri' }
       );
 
-      // Labels utili soprattutto sul dark; sul sat li lasciamo comunque (aiuta orientamento)
       darkLabels = L.tileLayer(
         'https://{s}.basemaps.cartocdn.com/dark_only_labels/{z}/{x}/{y}{r}.png',
         { maxZoom: 19, attribution: '©CARTO' }
       ).addTo(map);
 
-      darkBase.on('tileerror', () => status("Tile DARK non caricate (server/URL bloccato)."));
-      satBase.on('tileerror', () => status("Tile SATELLITE non caricate (server/URL bloccato)."));
+      darkBase.on('tileerror', () => status("Tile DARK non caricate (server/URL)."));
+      satBase.on('tileerror', () => status("Tile SATELLITE non caricate (server/URL)."));
 
       createCanvasLayers();
       await loadCatalogAndFirstFrame();
@@ -325,8 +334,7 @@
       isLightBasemap = true;
       map.removeLayer(darkBase);
       satBase.addTo(map);
-      // Labels: restano per orientarsi (se vuoi toglierle su sat, dimmelo)
-      if(darkLabels) darkLabels.addTo(map);
+      if(darkLabels) darkLabels.addTo(map); // labels aiutano orientamento
     }
 
     redrawAll();
@@ -401,24 +409,30 @@
     heatActives.forEach(l => { sumW += (LAYER_WEIGHT[l] ?? 0.75); });
 
     const windOn = activeLayers.has('wind');
-    // su sat (più chiaro) riduco un filo gli overlay per non “sporcare” e far sparire vento/isobare
-    let heatGlobal = windOn ? 0.75 : 1.0;
-    if(isLightBasemap) heatGlobal *= 0.90;
+    let heatGlobal = windOn ? 0.78 : 1.0;
+
+    // Satellite: rendiamo più evidente (tu hai chiesto più opaco),
+    // ma senza coprire il vento: aumento moderato + bilanciamento per layer.
+    if(isLightBasemap) heatGlobal *= 1.12;
 
     const multipliers = {};
     heatActives.forEach(l => {
       const w = (LAYER_WEIGHT[l] ?? 0.75);
       let m = (w / sumW);
-      m *= 1.45;
-      m = Math.max(0.18, Math.min(0.75, m));
+      m *= 1.55;
+      m = Math.max(0.20, Math.min(0.85, m));
 
+      // nuvole sempre più “leggere”
       if(l === 'cloud' && n >= 2) m *= 0.70;
       if(l === 'cloud' && windOn) m *= 0.75;
 
-      // su basemap chiara: nuvole e RH un po' meno opache, così non coprono tutto
+      // SAT: alziamo un po' TEMP (richiesta), e teniamo cloud più controllata
+      if(isLightBasemap && l === 'temp') m *= 1.18;
+      if(isLightBasemap && l === 'press') m *= 1.08;
+      if(isLightBasemap && l === 'rain') m *= 1.10;
       if(isLightBasemap && (l === 'cloud' || l === 'rh')) m *= 0.85;
 
-      multipliers[l] = Math.max(0.12, Math.min(0.75, m));
+      multipliers[l] = Math.max(0.14, Math.min(0.90, m));
     });
 
     return { multipliers, heatGlobal };
@@ -477,18 +491,12 @@
 
           let a = c[3] * (multipliers[layer] ?? 0.5) * heatGlobal;
 
-          // su sat: alzo un filo il contrasto (meno trasparenza) per TEMP/RAIN, ma non per CLOUD
-          if(isLightBasemap) {
-            if(layer === 'temp' || layer === 'rain' || layer === 'press') a *= 1.05;
-            if(layer === 'cloud') a *= 0.90;
-          }
-
-          // Anti-pasta con pioggia
+          // Se piove forte e rain è attivo, riduci gli altri un pelo
           if(layer !== 'rain' && (currentData.rain?.[idx] ?? 0) >= 2 && activeLayers.has('rain')) {
             a *= 0.82;
           }
 
-          a = Math.max(0, Math.min(0.85, a));
+          a = Math.max(0, Math.min(0.92, a));
           if(a <= 0.01) continue;
 
           ctx.fillStyle = `rgba(${c[0]},${c[1]},${c[2]},${a})`;
@@ -498,7 +506,7 @@
     }
   }
 
-  // --- ISOBARE: dark bianche, su sat nere (contrasto) ---
+  // --- ISOBARE: dark bianche, satellite nere ---
   function drawIsobars() {
     const ctx = isoCanvas.getContext('2d');
     const s = map.getSize();
@@ -516,14 +524,13 @@
       .size([m.nx, m.ny])
       .thresholds(d3.range(960, 1050, 2))(values);
 
-    ctx.lineWidth = isLightBasemap ? 1.4 : 1.3;
+    ctx.lineWidth = isLightBasemap ? 1.5 : 1.4;
     ctx.font = "900 12px Arial";
     ctx.textAlign = "center";
     ctx.textBaseline = "middle";
 
     contours.forEach(c => {
-      // contrasto basemap
-      ctx.strokeStyle = isLightBasemap ? "rgba(0,0,0,0.75)" : "rgba(255,255,255,0.65)";
+      ctx.strokeStyle = isLightBasemap ? "rgba(0,0,0,0.78)" : "rgba(255,255,255,0.80)";
 
       ctx.beginPath();
       const labelCandidates = [];
@@ -585,7 +592,7 @@
     }
   }
 
-  // --- WIND: su sat colori più contrastati ---
+  // --- WIND: più contrasto su SAT ---
   function updateWind() {
     if(velocityLayer) map.removeLayer(velocityLayer);
     if(!activeLayers.has('wind') || !currentData) return;
@@ -596,16 +603,17 @@
     let particleMult = isMobile ? (1/160) : (1/120);
     if(dpr >= 2) particleMult = isMobile ? (1/220) : (1/180);
 
-    // su sat: leggermente più spesso per vedersi meglio
-    const lw = isLightBasemap ? 1.05 : 0.8;
-    const op = isLightBasemap ? 0.98 : 0.95;
-    const colors = isLightBasemap ? WIND_COLOR_LIGHT : WIND_COLOR_DARK;
+    // Su satellite: linee più spesse + più opache per distinguere
+    const lw = isLightBasemap ? 1.25 : 0.8;
+    const op = isLightBasemap ? 0.995 : 0.95;
+    const colors = isLightBasemap ? WIND_COLOR_SAT_CONTRAST : WIND_COLOR_DARK;
 
     try {
       velocityLayer = L.velocityLayer({
         displayValues: false,
         data: [ currentData.wind_u, currentData.wind_v ],
 
+        // parametri originali
         maxVelocity: 18.0,
         velocityScale: 0.006,
         particleMultiplier: particleMult,
