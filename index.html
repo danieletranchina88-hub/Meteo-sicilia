@@ -1,7 +1,7 @@
 <!DOCTYPE html>
 <html>
 <head>
-  <title>Sicilia MeteoHub - PRO (Continuous Gradients)</title>
+  <title>Sicilia MeteoHub - PRO (HD MultiLayer)</title>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
 
@@ -14,53 +14,60 @@
   <script src="https://d3js.org/d3.v7.min.js"></script>
 
   <style>
-    body { margin:0; background:#111; font-family:'Segoe UI', sans-serif; color:#fff; overflow:hidden; }
-    #map { position:absolute; inset:0; background:#111; }
+    body { margin: 0; background: #111; font-family: 'Segoe UI', sans-serif; color: white; overflow: hidden; }
+    #map { position: absolute; top: 0; bottom: 0; width: 100%; background: #111; }
 
-    #ui-container { position:absolute; top:10px; right:10px; z-index:1000; display:flex; flex-direction:column; gap:10px; align-items:flex-end; }
-    .panel { background:rgba(0,0,0,0.86); backdrop-filter:blur(6px); padding:8px; border-radius:14px; border:1px solid #444; }
+    /* UI */
+    #ui-container { position: absolute; top: 10px; right: 10px; z-index: 1000; display: flex; flex-direction: column; gap: 10px; align-items: flex-end; }
+    .panel { background: rgba(0,0,0,0.82); backdrop-filter: blur(8px); padding: 10px; border-radius: 14px; border: 1px solid rgba(255,255,255,0.15); box-shadow: 0 10px 25px rgba(0,0,0,0.45); }
 
     .layer-btn{
-      display:block; width:165px; padding:10px 12px; margin-bottom:6px;
-      background:transparent; color:#d0d0d0; border:none; text-align:right;
-      cursor:pointer; font-size:13px; font-weight:900; border-radius:8px;
-      transition:all 0.15s; user-select:none;
+      display:block; width: 150px; padding: 10px 12px; margin-bottom: 6px;
+      background: transparent; color: #d0d0d0; border: none; text-align: right;
+      cursor:pointer; font-size: 13px; font-weight: 800; border-radius: 10px;
+      transition: all .15s;
     }
-    .layer-btn:hover { background:rgba(255,255,255,0.08); color:#fff; }
-    .layer-btn.active { background:#007bff; color:#fff; }
-    .layer-btn.small { width:165px; font-weight:850; opacity:0.95; }
+    .layer-btn:hover{ background: rgba(255,255,255,0.08); color: #fff; }
+    .layer-btn.active{ background: linear-gradient(90deg, #007bff, #0040aa); color:#fff; border:1px solid rgba(120,180,255,0.45); box-shadow: 0 0 16px rgba(0,120,255,0.35); }
+
+    .layer-btn.small { font-weight: 800; opacity: 0.9; }
+    .layer-btn.toggle { color:#bdbdbd; }
+    .layer-btn.toggle.active{ background: rgba(255,255,255,0.16); border:1px solid rgba(255,255,255,0.22); box-shadow:none; }
 
     .map-toggle{
-      padding:8px 12px; background:rgba(255,255,255,0.06); color:#fff;
-      border:1px solid rgba(255,255,255,0.2); border-radius:10px;
-      cursor:pointer; font-size:12px; font-weight:900;
-      transition:all 0.15s; user-select:none;
+      padding: 8px 12px; background: rgba(255,255,255,0.08); color:#fff;
+      border: 1px solid rgba(255,255,255,0.22); border-radius: 10px;
+      cursor:pointer; font-size: 12px; font-weight: 900; transition: all .15s;
     }
-    .map-toggle:hover { background:rgba(255,255,255,0.12); }
-    .map-toggle.active { background:#eee; color:#000; }
+    .map-toggle:hover{ background: rgba(255,255,255,0.14); }
+    .map-toggle.active{ background:#eee; color:#000; }
 
-    #info-box { position:absolute; top:18px; left:18px; z-index:1000; pointer-events:none; text-shadow:2px 2px 0 #000; }
-    #val-display { font-size:3.5em; font-weight:900; line-height:1; }
-    #unit-display { font-size:1.15em; color:#bbb; font-weight:900; }
+    /* Info */
+    #info-box{ position:absolute; top: 16px; left: 16px; z-index:1000; pointer-events:none; text-shadow: 0 2px 10px rgba(0,0,0,0.95); }
+    #val-display{ font-size: 3.2em; font-weight: 1000; line-height: 0.95; }
+    #unit-display{ font-size: 1.05em; color:#cfcfcf; font-weight: 900; }
 
+    /* Bottom bar */
     #bottom-bar{
-      position:absolute; bottom:0; left:0; right:0; height:90px;
-      background:linear-gradient(to top, rgba(0,0,0,0.95), transparent);
-      display:flex; align-items:center; padding:0 20px; z-index:2000;
+      position:absolute; bottom:0; left:0; right:0; height: 92px;
+      background: linear-gradient(to top, rgba(0,0,0,0.92), transparent);
+      display:flex; align-items:center; padding: 0 18px; z-index:2000;
     }
-    #play-btn{ font-size:2.5em; background:none; border:none; color:#fff; cursor:pointer; margin-right:15px; }
-    #time-label{ font-size:1.4em; font-weight:900; margin-left:15px; min-width:140px; text-align:center; text-shadow:0 2px 10px #000; }
-    input[type=range]{ flex-grow:1; height:5px; cursor:pointer; accent-color:#0088ff; }
+    #play-btn{ font-size: 2.4em; background:none; border:none; color:#fff; cursor:pointer; margin-right: 14px; }
+    #time-label{ font-size: 1.25em; font-weight: 1000; margin-left: 12px; min-width: 140px; text-align:center; text-shadow: 0 2px 10px rgba(0,0,0,0.95); }
+    input[type=range]{ flex-grow:1; height: 5px; cursor:pointer; accent-color:#0088ff; }
 
-    .hillshade-tiles{
-      mix-blend-mode:multiply;
-      filter:contrast(1.85) brightness(0.95);
-    }
-    canvas { image-rendering:auto; }
+    /* Hillshade blend: diverso per dark/sat */
+    .hillshade-tiles { opacity: 0.70; }
+    body.mode-dark .hillshade-tiles { mix-blend-mode: multiply; filter: contrast(1.6) brightness(0.9); }
+    body.mode-sat  .hillshade-tiles { mix-blend-mode: overlay;   filter: contrast(1.35) brightness(1.05); }
+
+    /* Canvas smoothing (HD) */
+    canvas.leaflet-layer { image-rendering: auto; }
   </style>
 </head>
 
-<body>
+<body class="mode-dark">
   <div id="info-box">
     <div id="val-display">--</div>
     <div id="unit-display">Caricamento...</div>
@@ -73,16 +80,17 @@
     </div>
 
     <div class="panel">
-      <button class="layer-btn active" data-layer="wind"  onclick="toggleLayer('wind', event)">VENTO 💨</button>
-      <button class="layer-btn"        data-layer="temp"  onclick="toggleLayer('temp', event)">TEMP 🌡️</button>
-      <button class="layer-btn"        data-layer="rain"  onclick="toggleLayer('rain', event)">PIOGGIA ☔</button>
-      <button class="layer-btn"        data-layer="rh"    onclick="toggleLayer('rh', event)">UMIDITÀ 💧</button>
-      <button class="layer-btn"        data-layer="press" onclick="toggleLayer('press', event)">PRESS ⏲️</button>
-      <button class="layer-btn"        data-layer="cloud" onclick="toggleLayer('cloud', event)">NUVOLE ☁️</button>
+      <!-- Multi-layer: questi sono toggle -->
+      <button class="layer-btn active" onclick="toggleLayer('wind')">VENTO 💨</button>
+      <button class="layer-btn" onclick="toggleLayer('temp')">TEMP 🌡️</button>
+      <button class="layer-btn" onclick="toggleLayer('rain')">PIOGGIA ☔</button>
+      <button class="layer-btn" onclick="toggleLayer('rh')">UMIDITÀ 💧</button>
+      <button class="layer-btn" onclick="toggleLayer('press')">PRESSIONE ⏲️</button>
+      <button class="layer-btn" onclick="toggleLayer('clouds')">NUVOLE ☁️</button>
 
-      <hr style="border:0; border-top:1px solid #444; margin:6px 0;">
-      <button class="layer-btn small" id="btn-iso"  onclick="toggleIso()">ISOBARE 〰️</button>
-      <button class="layer-btn small" id="btn-grid" onclick="toggleGrid()">GRIGLIA #</button>
+      <hr style="border:0; border-top:1px solid rgba(255,255,255,0.12); margin:8px 0;">
+      <button class="layer-btn toggle" id="btn-iso" onclick="toggleIso()">ISOBARE 〰️</button>
+      <button class="layer-btn toggle" id="btn-grid" onclick="toggleGrid()">GRIGLIA #</button>
     </div>
   </div>
 
@@ -95,264 +103,166 @@
   </div>
 
 <script>
-  var map, velocityLayer;
-  var heatCanvas, isoCanvas, gridCanvas;
+  // =========================
+  // GLOBALS
+  // =========================
+  let map, velocityLayer;
+  let isoCanvas, gridCanvas;
 
-  var currentData = null, catalog = [];
-  var showIso = false, showGrid = false, isPlaying = false;
+  // uno “scalar canvas” per ogni layer: temp/rain/rh/press/clouds (per gestire opacità separata)
+  const scalarCanvases = {};
+  const scalarOffscreen = {}; // cache per frame: {layer:{c,ctx,imgData,lastKey}}
+  let currentData = null, catalog = [];
 
-  var enabledLayers = new Set(['wind']);
-  var pickerLayer = 'wind';
-  var lastFrameInterval = null;
+  let showIso = false, showGrid = false, isPlaying = false;
 
-  var baseLayers = {};
-  var labelLayers = {};
-  var hillshadeLayer = null;
-  var isLightMode = false;
+  let baseLayers = {}, labelsLayers = {}, hillshadeLayer = null;
+  let baseMode = 'dark'; // 'dark' | 'sat'
 
-  // === Opacità: trasparente ma leggibile (su SAT aumentiamo un filo) ===
-  const LAYER_OPACITY = {
-    temp:  0.60,
-    press: 0.55,
-    rain:  0.70,
-    rh:    0.55,
-    cloud: 0.42
+  // Multi-layer state
+  const enabled = {
+    wind: true,
+    temp: false,
+    rain: false,
+    rh: false,
+    press: false,
+    clouds: false
   };
 
-  // ==== UTIL: clamp + lerp + interpolateColor ====
-  function clamp(x, a, b){ return Math.max(a, Math.min(b, x)); }
+  // =========================
+  // PALETTES (continuous)
+  // =========================
+
+  // Temperature: -15..45 (stops “tipo app”: viola→blu→ciano→verde→giallo→arancio→rosso→rosso scuro)
+  const TEMP_STOPS = [
+    {v:-15, c:[120,  0,255]}, // viola
+    {v:-10, c:[ 70,  0,255]},
+    {v: -5, c:[  0, 80,255]}, // blu
+    {v:  0, c:[  0,170,255]}, // azzurro
+    {v:  5, c:[  0,255,255]}, // ciano
+    {v: 10, c:[  0,255,140]}, // verde acqua
+    {v: 15, c:[  0,220,  0]}, // verde
+    {v: 20, c:[170,255,  0]}, // giallo-verde
+    {v: 25, c:[255,255,  0]}, // giallo
+    {v: 30, c:[255,170,  0]}, // arancio
+    {v: 35, c:[255, 80,  0]}, // rosso-arancio
+    {v: 40, c:[255,  0,  0]}, // rosso
+    {v: 45, c:[150,  0,  0]}  // rosso scuro
+  ];
+
+  // Pressione (hPa): 980..1040 (bassa blu/viola → alta arancio/rosso)
+  const PRESS_STOPS = [
+    {v: 980, c:[ 90,  0,180]},
+    {v: 990, c:[  0, 70,255]},
+    {v:1000, c:[  0,170,255]},
+    {v:1010, c:[  0,255,200]},
+    {v:1013, c:[255,255,255]}, // neutro
+    {v:1020, c:[255,220,  0]},
+    {v:1030, c:[255,120,  0]},
+    {v:1040, c:[220,  0,  0]}
+  ];
+
+  // RH (%): secco→umido (marrone→grigio→verde→blu)
+  const RH_STOPS = [
+    {v:  0, c:[200,140, 40]},
+    {v: 30, c:[200,200,200]},
+    {v: 60, c:[ 80,255, 80]},
+    {v: 80, c:[ 80,170,255]},
+    {v:100, c:[  0, 60,200]}
+  ];
+
+  // Pioggia (mm): leggero→forte (ciano→blu→viola)
+  const RAIN_STOPS = [
+    {v: 0.0, c:[  0,  0,  0]}, // trasparente gestita a parte
+    {v: 0.2, c:[  0,200,255]},
+    {v: 2.0, c:[  0, 80,255]},
+    {v:10.0, c:[140,  0,200]},
+    {v:30.0, c:[255,  0,255]}
+  ];
+
+  // Nuvole (0..100): bianco -> grigio scuro (come volevi)
+  const CLOUD_STOPS = [
+    {v:  0, c:[255,255,255]},
+    {v: 60, c:[150,150,150]},
+    {v:100, c:[ 60, 60, 60]}
+  ];
+
   function lerp(a,b,t){ return a + (b-a)*t; }
-  function lerpColor(c1,c2,t){
-    return [
-      Math.round(lerp(c1[0], c2[0], t)),
-      Math.round(lerp(c1[1], c2[1], t)),
-      Math.round(lerp(c1[2], c2[2], t))
-    ];
-  }
 
-  // ==== PALETTE CONTINUE (color stops) ====
-  // NB: puoi cambiare min/max e stop senza toccare il resto.
-  const CONTINUOUS = {
-    // TEMP: viola -> blu -> ciano -> verde -> giallo -> arancio -> rosso -> rosso scuro
-    // Range consigliato per Sicilia: -10..45 (ma regge oltre con clamp)
-    temp: {
-  min: -15, max: 45,
-  stops: [
-    {v:-15, c:[ 70,  0, 160]}, // viola freddo
-    {v:-12, c:[ 55,  0, 190]}, // viola/blu
-    {v:-10, c:[ 20, 40, 255]}, // blu
-    {v: -8, c:[  0, 90, 255]}, // blu più chiaro
-    {v: -6, c:[  0,140, 255]}, // azzurro
-    {v: -4, c:[  0,190, 255]}, // ciano
-    {v: -2, c:[  0,240, 255]}, // ciano chiaro
+  function colorFromStops(val, stops){
+    if(val <= stops[0].v) return stops[0].c;
+    if(val >= stops[stops.length-1].v) return stops[stops.length-1].c;
 
-    {v:  0, c:[  0,255, 220]}, // ciano/verde acqua
-    {v:  2, c:[  0,255, 170]}, // verde acqua
-    {v:  4, c:[  0,255, 120]}, // verde
-    {v:  6, c:[ 60,255,  60]}, // verde chiaro
-    {v:  8, c:[120,255,   0]}, // giallo-verde
-    {v: 10, c:[170,255,   0]}, // giallo-verde caldo
-    {v: 12, c:[220,255,   0]}, // giallo
-
-    {v: 14, c:[255,245,   0]}, // giallo caldo
-    {v: 16, c:[255,220,   0]}, // giallo/arancio
-    {v: 18, c:[255,200,   0]}, // arancio chiaro
-    {v: 20, c:[255,175,   0]}, // arancio
-    {v: 22, c:[255,150,   0]}, // arancio forte
-    {v: 24, c:[255,120,   0]}, // arancio/rosso
-    {v: 26, c:[255, 95,   0]}, // rosso-arancio
-
-    {v: 28, c:[255, 70,   0]}, // rosso-arancio più caldo
-    {v: 30, c:[255, 45,   0]}, // rosso
-    {v: 32, c:[255, 20,   0]}, // rosso vivo
-    {v: 34, c:[255,  0,   0]}, // rosso pieno
-    {v: 36, c:[230,  0,   0]}, // rosso scuro
-    {v: 38, c:[205,  0,   0]}, // rosso più scuro
-    {v: 40, c:[180,  0,   0]}, // rosso scurissimo
-    {v: 42, c:[160,  0,   0]}, // quasi bordeaux
-    {v: 45, c:[140,  0,   0]}  // molto caldo (rosso scuro)
-  ]
-},
-
-    // PRESS (hPa): blu (bassa) -> ciano -> verde -> giallo -> arancio -> rosso (alta)
-    press: {
-      min: 980, max: 1040,
-      stops: [
-        {v: 980, c:[  0, 70,255]},
-        {v: 995, c:[  0,190,255]},
-        {v:1005, c:[  0,255,200]},
-        {v:1013, c:[255,255,255]},
-        {v:1022, c:[255,210,  0]},
-        {v:1030, c:[255,120,  0]},
-        {v:1040, c:[255,  0,  0]}
-      ]
-    },
-
-    // RAIN (mm): 0 trasparente, poi ciano -> blu -> viola -> magenta
-    rain: {
-      min: 0, max: 50,
-      transparentBelow: 0.1,
-      stops: [
-        {v: 0.1, c:[  0,220,255]},
-        {v: 2.0, c:[  0,120,255]},
-        {v:10.0, c:[  0,  0,255]},
-        {v:25.0, c:[120,  0,255]},
-        {v:50.0, c:[255,  0,255]}
-      ]
-    },
-
-    // RH (%): secca arancio -> neutro -> verde -> blu
-    rh: {
-      min: 0, max: 100,
-      stops: [
-        {v:  0, c:[255,170,  0]},
-        {v: 40, c:[220,220,220]},
-        {v: 60, c:[  0,255,120]},
-        {v: 80, c:[  0,170,255]},
-        {v:100, c:[  0,  0,255]}
-      ]
-    },
-
-    // CLOUD (%): bianco -> grigio scuro (copertura crescente)
-    cloud: {
-      min: 0, max: 100,
-      transparentBelow: 2,
-      stops: [
-        {v:  0, c:[255,255,255]},
-        {v: 30, c:[210,210,210]},
-        {v: 60, c:[140,140,140]},
-        {v: 85, c:[ 80, 80, 80]},
-        {v:100, c:[ 30, 30, 30]}
-      ]
-    }
-  };
-
-  function colorFromStops(val, spec){
-    // clamp sul range palette
-    const v = clamp(val, spec.min, spec.max);
-    const stops = spec.stops;
-
-    // trova segmento [i, i+1]
     for(let i=0;i<stops.length-1;i++){
       const a = stops[i], b = stops[i+1];
-      if(v >= a.v && v <= b.v){
-        const t = (v - a.v) / (b.v - a.v || 1);
-        return lerpColor(a.c, b.c, t);
+      if(val >= a.v && val <= b.v){
+        const t = (val-a.v)/(b.v-a.v);
+        return [
+          Math.round(lerp(a.c[0], b.c[0], t)),
+          Math.round(lerp(a.c[1], b.c[1], t)),
+          Math.round(lerp(a.c[2], b.c[2], t))
+        ];
       }
     }
-    // fallback
-    return (v < stops[0].v) ? stops[0].c : stops[stops.length-1].c;
+    return stops[stops.length-1].c;
   }
 
-  function unitFor(type){
-    if(type==='wind') return 'km/h';
-    if(type==='temp') return '°C';
-    if(type==='rain') return 'mm';
-    if(type==='rh') return '%';
-    if(type==='press') return 'hPa';
-    if(type==='cloud') return '%';
+  function unitFor(layer){
+    if(layer==='wind') return 'km/h';
+    if(layer==='temp') return '°C';
+    if(layer==='rain') return 'mm';
+    if(layer==='rh') return '%';
+    if(layer==='press') return 'hPa';
+    if(layer==='clouds') return '%';
     return '';
   }
 
-  window.addEventListener('load', async function() {
+  // =========================
+  // INIT MAP
+  // =========================
+  window.addEventListener('load', async () => {
     map = L.map('map', { zoomControl:false }).setView([37.5, 14.2], 8);
 
-    map.createPane('labelsPane');
-    map.getPane('labelsPane').style.zIndex = 650;
-    map.getPane('labelsPane').style.pointerEvents = 'none';
-
+    // DARK
     baseLayers.dark = L.tileLayer(
       'https://{s}.basemaps.cartocdn.com/dark_nolabels/{z}/{x}/{y}{r}.png',
-      { maxZoom: 19, attribution: '©OpenStreetMap, ©Carto' }
+      { maxZoom: 19, attribution:'©OpenStreetMap, ©CARTO' }
     ).addTo(map);
 
-    hillshadeLayer = L.tileLayer(
-      'https://server.arcgisonline.com/ArcGIS/rest/services/Elevation/World_Hillshade/MapServer/tile/{z}/{y}/{x}',
-      { maxZoom: 19, opacity: 0.72, className:'hillshade-tiles', attribution:'Hillshade © Esri' }
-    ).addTo(map);
-
+    // SATELLITE
     baseLayers.sat = L.tileLayer(
       'https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}',
       { maxZoom: 19, attribution:'Tiles © Esri' }
     );
 
-    labelLayers.dark = L.tileLayer(
+    // Labels: dark + light labels (per satellite)
+    labelsLayers.dark = L.tileLayer(
       'https://{s}.basemaps.cartocdn.com/dark_only_labels/{z}/{x}/{y}{r}.png',
-      { maxZoom: 19, pane:'labelsPane', attribution:'©Carto' }
+      { maxZoom: 19, opacity: 0.95, attribution:'©CARTO' }
     ).addTo(map);
 
-    labelLayers.sat = L.tileLayer(
-      'https://server.arcgisonline.com/ArcGIS/rest/services/Reference/World_Boundaries_and_Places/MapServer/tile/{z}/{y}/{x}',
-      { maxZoom: 19, pane:'labelsPane', opacity: 0.95, attribution:'Labels © Esri' }
+    labelsLayers.sat = L.tileLayer(
+      'https://{s}.basemaps.cartocdn.com/light_only_labels/{z}/{x}/{y}{r}.png',
+      { maxZoom: 19, opacity: 0.90, attribution:'©CARTO' }
     );
 
-    createCanvasLayers();
-    await loadCatalogAndFirstFrame();
+    // Hillshade overlay (rilievi)
+    hillshadeLayer = L.tileLayer(
+      'https://server.arcgisonline.com/ArcGIS/rest/services/Elevation/World_Hillshade/MapServer/tile/{z}/{y}/{x}',
+      { maxZoom: 19, className: 'hillshade-tiles', attribution:'Hillshade © Esri' }
+    ).addTo(map);
 
+    createCanvasLayers();
+    await loadCatalog();
+
+    // Picker: mousemove + click
     map.on('mousemove', updatePickerFromEvent);
     map.on('click', updatePickerFromEvent);
 
-    document.getElementById('unit-display').innerText = unitFor(pickerLayer);
-    syncLayerButtons();
+    document.getElementById('unit-display').innerText = "Pronto";
   });
 
-  function setBase(type) {
-    document.querySelectorAll('.map-toggle').forEach(b => b.classList.remove('active'));
-    event.target.classList.add('active');
-
-    if(type === 'dark') {
-      isLightMode = false;
-      if(map.hasLayer(baseLayers.sat)) map.removeLayer(baseLayers.sat);
-      baseLayers.dark.addTo(map);
-      if(hillshadeLayer && !map.hasLayer(hillshadeLayer)) hillshadeLayer.addTo(map);
-
-      if(labelLayers.sat && map.hasLayer(labelLayers.sat)) map.removeLayer(labelLayers.sat);
-      if(labelLayers.dark && !map.hasLayer(labelLayers.dark)) labelLayers.dark.addTo(map);
-    } else {
-      isLightMode = true;
-      if(map.hasLayer(baseLayers.dark)) map.removeLayer(baseLayers.dark);
-      if(hillshadeLayer && map.hasLayer(hillshadeLayer)) map.removeLayer(hillshadeLayer);
-      baseLayers.sat.addTo(map);
-
-      if(labelLayers.dark && map.hasLayer(labelLayers.dark)) map.removeLayer(labelLayers.dark);
-      if(labelLayers.sat && !map.hasLayer(labelLayers.sat)) labelLayers.sat.addTo(map);
-    }
-
-    redrawAll();
-  }
-
-  async function loadCatalogAndFirstFrame() {
-    try {
-      const r = await fetch('data_weather/catalog.json?t=' + Date.now());
-      if(!r.ok) throw new Error("catalog not found");
-      catalog = await r.json();
-      if(!catalog || catalog.length === 0) throw new Error("empty catalog");
-
-      const slider = document.getElementById('time-slider');
-      slider.max = catalog.length - 1;
-      slider.value = 0;
-      slider.addEventListener('input', (e) => loadStep(parseInt(e.target.value,10)));
-
-      await loadStep(0);
-      document.getElementById('unit-display').innerText = "Pronto";
-    } catch(e) {
-      document.getElementById('unit-display').innerText = "Errore dati";
-    }
-  }
-
-  async function loadStep(idx) {
-    if(!catalog[idx]) return;
-    document.getElementById('time-label').innerText = catalog[idx].label;
-
-    try {
-      const r = await fetch('data_weather/' + catalog[idx].file + '?t=' + Date.now());
-      if(!r.ok) throw new Error("frame not found");
-      currentData = await r.json();
-      redrawAll();
-    } catch(e) {}
-  }
-
-  function createCanvasLayers() {
+  function createCanvasLayers(){
     const mkCanvas = (z) => {
       const c = L.DomUtil.create('canvas', 'leaflet-layer');
       c.style.pointerEvents = 'none';
@@ -360,139 +270,313 @@
       map.getPanes().overlayPane.appendChild(c);
       return c;
     };
-    heatCanvas = mkCanvas(300);
-    isoCanvas  = mkCanvas(400);
+
+    // canvas scalari separati (così gestisci alpha e overlay in modo pulito)
+    scalarCanvases.temp   = mkCanvas(300);
+    scalarCanvases.rain   = mkCanvas(310);
+    scalarCanvases.rh     = mkCanvas(320);
+    scalarCanvases.press  = mkCanvas(330);
+    scalarCanvases.clouds = mkCanvas(340);
+
+    isoCanvas  = mkCanvas(420);
     gridCanvas = mkCanvas(450);
+
     map.on('moveend resize', redrawAll);
   }
 
-  function redrawAll() {
-    if(!currentData) return;
-    drawHeatLayersContinuous();
+  // =========================
+  // BASE SWITCH
+  // =========================
+  window.setBase = function(type){
+    document.querySelectorAll('.map-toggle').forEach(b => b.classList.remove('active'));
+    event.target.classList.add('active');
+
+    baseMode = type;
+    document.body.classList.toggle('mode-dark', type==='dark');
+    document.body.classList.toggle('mode-sat', type==='sat');
+
+    // swap base
+    if(type==='dark'){
+      map.removeLayer(baseLayers.sat);
+      baseLayers.dark.addTo(map);
+
+      map.removeLayer(labelsLayers.sat);
+      labelsLayers.dark.addTo(map);
+
+      if(hillshadeLayer) hillshadeLayer.addTo(map);
+    } else {
+      map.removeLayer(baseLayers.dark);
+      baseLayers.sat.addTo(map);
+
+      map.removeLayer(labelsLayers.dark);
+      labelsLayers.sat.addTo(map);
+
+      if(hillshadeLayer) hillshadeLayer.addTo(map);
+    }
+
+    redrawAll();
+    updateWind(); // perché cambiano colori/contrasto
+  }
+
+  // =========================
+  // DATA LOADING
+  // =========================
+  async function loadCatalog(){
+    try{
+      const r = await fetch('data_weather/catalog.json?t=' + Date.now());
+      if(!r.ok) throw new Error('catalog missing');
+      catalog = await r.json();
+      if(!catalog || !catalog.length) throw new Error('empty catalog');
+
+      const s = document.getElementById('time-slider');
+      s.max = catalog.length-1;
+      s.value = 0;
+      s.addEventListener('input', e => loadStep(parseInt(e.target.value,10)));
+
+      await loadStep(0);
+    } catch(e){
+      document.getElementById('unit-display').innerText = "Errore dati";
+    }
+  }
+
+  async function loadStep(idx){
+    if(!catalog[idx]) return;
+    document.getElementById('time-label').innerText = catalog[idx].label;
+
+    try{
+      const r = await fetch('data_weather/' + catalog[idx].file + '?t=' + Date.now());
+      if(!r.ok) throw new Error('frame missing');
+      currentData = await r.json();
+
+      // reset cache offscreen per frame
+      for(const k of Object.keys(scalarOffscreen)) delete scalarOffscreen[k];
+
+      redrawAll();
+    }catch(e){}
+  }
+
+  // =========================
+  // MULTI-LAYER TOGGLE
+  // =========================
+  window.toggleLayer = function(layer){
+    enabled[layer] = !enabled[layer];
+    event.target.classList.toggle('active', enabled[layer]);
+
+    // unit display: se clicchi un layer, mostra la sua unità per picker
+    document.getElementById('unit-display').innerText = unitFor(layer);
+    document.getElementById('val-display').innerText = '--';
+
+    redrawAll();
+  }
+
+  window.toggleIso = function(){
+    showIso = !showIso;
+    document.getElementById('btn-iso').classList.toggle('active', showIso);
+    redrawAll();
+  }
+
+  window.toggleGrid = function(){
+    showGrid = !showGrid;
+    document.getElementById('btn-grid').classList.toggle('active', showGrid);
+    redrawAll();
+  }
+
+  // =========================
+  // SMART OPACITY
+  // =========================
+  function computeAlphas(){
+    const scalars = ['temp','press','rain','rh','clouds'].filter(k => enabled[k]);
+    const n = scalars.length;
+
+    // Base alpha (più trasparente su sat perché già “ricca”)
+    const base = (baseMode==='sat') ? 0.55 : 0.50;
+
+    // Se più layer, abbasso un po' ognuno per leggibilità
+    const each = n ? Math.min(0.72, base + 0.10) / Math.sqrt(n) : 0;
+
+    const out = {};
+    for(const k of scalars){
+      out[k] = each;
+    }
+
+    // Nuvole sempre più leggere (se attive), per non “uccidere” tutto
+    if(out.clouds !== undefined){
+      out.clouds = Math.min(out.clouds, 0.33);
+    }
+
+    // Pioggia un filo più “decisa”
+    if(out.rain !== undefined){
+      out.rain = Math.min(0.55, out.rain + 0.10);
+    }
+
+    // Temperatura leggermente più presente (come mi hai chiesto)
+    if(out.temp !== undefined){
+      out.temp = Math.min(0.62, out.temp + 0.10);
+    }
+
+    return out;
+  }
+
+  // =========================
+  // RENDER: SCALARS (HD smooth)
+  // =========================
+  function redrawAll(){
+    if(!currentData || !currentData.meta) return;
+
+    drawScalarsHD();
     drawIsobars();
     drawGrid();
     updateWind();
   }
 
-  function syncLayerButtons(){
-    document.querySelectorAll('.layer-btn[data-layer]').forEach(btn=>{
-      const k = btn.getAttribute('data-layer');
-      btn.classList.toggle('active', enabledLayers.has(k));
-      if(k === pickerLayer){
-        btn.style.outline = "2px solid rgba(255,255,255,0.35)";
-        btn.style.outlineOffset = "1px";
-      } else {
-        btn.style.outline = "none";
-      }
-    });
-  }
-
-  window.toggleLayer = function(layer, ev){
-    if(ev && ev.shiftKey){
-      pickerLayer = layer;
-      document.getElementById('unit-display').innerText = unitFor(pickerLayer);
-      syncLayerButtons();
-      return;
-    }
-
-    if(enabledLayers.has(layer)) enabledLayers.delete(layer);
-    else enabledLayers.add(layer);
-
-    if(!enabledLayers.has(pickerLayer)){
-      pickerLayer = enabledLayers.values().next().value || 'wind';
-      document.getElementById('unit-display').innerText = unitFor(pickerLayer);
-    }
-    syncLayerButtons();
-    redrawAll();
-  };
-
-  function setupCanvasHiDPI(canvas){
-    const ctx = canvas.getContext('2d');
-    const dpr = Math.min(2.0, window.devicePixelRatio || 1);
-    const s = map.getSize();
-    canvas.width  = Math.floor(s.x * dpr);
-    canvas.height = Math.floor(s.y * dpr);
-    canvas.style.width  = s.x + "px";
-    canvas.style.height = s.y + "px";
-    L.DomUtil.setPosition(canvas, map.containerPointToLayerPoint([0,0]));
-    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-    ctx.clearRect(0,0,s.x,s.y);
-    ctx.imageSmoothingEnabled = true;
-    return {ctx, s, dpr};
-  }
-
-  // === CONTINUOUS HEAT LAYERS: niente quadretti, gradienti fluidi ===
-  function drawHeatLayersContinuous(){
-    const {ctx, s} = setupCanvasHiDPI(heatCanvas);
-    if(!currentData || !currentData.meta) return;
-
+  function drawScalarsHD(){
     const m = currentData.meta;
+    const bounds = dataBounds(m);
 
-    const heatKeys = ['temp','press','rain','rh','cloud'];
-    const enabledHeat = heatKeys.filter(k => enabledLayers.has(k));
-    if(enabledHeat.length === 0) return;
+    const nw = map.latLngToContainerPoint(bounds.nw);
+    const se = map.latLngToContainerPoint(bounds.se);
 
-    const pNW = map.latLngToContainerPoint([m.la1, m.lo1]);
-    const pSE = map.latLngToContainerPoint([m.la2, m.lo2]);
-    const x0 = Math.min(pNW.x, pSE.x);
-    const y0 = Math.min(pNW.y, pSE.y);
-    const w  = Math.abs(pSE.x - pNW.x);
-    const h  = Math.abs(pSE.y - pNW.y);
+    const w = se.x - nw.x;
+    const h = se.y - nw.y;
 
-    const drawOrder = ['temp','press','rh','rain','cloud'].filter(k => enabledHeat.includes(k));
+    const alphas = computeAlphas();
 
-    for(const key of drawOrder){
-      const spec = CONTINUOUS[key];
-      if(!spec) continue;
+    // per ogni layer scalare
+    for(const layer of ['temp','press','rain','rh','clouds']){
+      const canvas = scalarCanvases[layer];
+      const ctx = canvas.getContext('2d');
 
-      const off = document.createElement('canvas');
-      off.width = m.nx;
-      off.height = m.ny;
-      const octx = off.getContext('2d');
-      const img = octx.createImageData(m.nx, m.ny);
-      const d = img.data;
+      const size = map.getSize();
+      canvas.width = size.x; canvas.height = size.y;
+      L.DomUtil.setPosition(canvas, map.containerPointToLayerPoint([0,0]));
+      ctx.clearRect(0,0,size.x,size.y);
 
-      for(let y=0;y<m.ny;y++){
-        for(let x=0;x<m.nx;x++){
-          const idx = y*m.nx + x;
+      if(!enabled[layer]) continue;
 
-          let val = 0;
-          if(key==='temp')  val = currentData.temp[idx];
-          if(key==='press') val = currentData.press[idx];
-          if(key==='rain')  val = currentData.rain[idx];
-          if(key==='rh')    val = currentData.rh[idx];
-          if(key==='cloud') val = currentData.cloud ? currentData.cloud[idx] : 0;
-
-          // trasparenza sotto soglia (rain/cloud)
-          if(spec.transparentBelow !== undefined && val < spec.transparentBelow){
-            const o = (y*m.nx + x)*4;
-            d[o+3] = 0;
-            continue;
-          }
-
-          const rgb = colorFromStops(val, spec);
-          const o = (y*m.nx + x)*4;
-          d[o+0] = rgb[0];
-          d[o+1] = rgb[1];
-          d[o+2] = rgb[2];
-          d[o+3] = 255;
-        }
-      }
-
-      octx.putImageData(img,0,0);
+      // genera offscreen (nx x ny) una volta per frame
+      const off = getOrBuildOffscreen(layer, m);
+      if(!off) continue;
 
       ctx.save();
-      let alpha = LAYER_OPACITY[key] ?? 0.6;
-      if(isLightMode) alpha = Math.min(0.85, alpha + 0.10); // su sat più presente
-      ctx.globalAlpha = alpha;
-
-      ctx.drawImage(off, x0, y0, w, h);
+      ctx.globalAlpha = alphas[layer] ?? 0.5;
+      ctx.imageSmoothingEnabled = true;
+      ctx.imageSmoothingQuality = 'high';
+      ctx.drawImage(off.c, nw.x, nw.y, w, h);
       ctx.restore();
     }
   }
 
-  function drawIsobars() {
-    const {ctx, s} = setupCanvasHiDPI(isoCanvas);
+  function dataBounds(meta){
+    // la1 (north), lo1 (west), la2 (south), lo2 (east) già in meta
+    return {
+      nw: L.latLng(meta.la1, meta.lo1),
+      se: L.latLng(meta.la2, meta.lo2)
+    };
+  }
+
+  function getOrBuildOffscreen(layer, meta){
+    if(!currentData) return null;
+
+    // chiave cache: layer + refTime (se presente)
+    const key = layer + '|' + (meta.refTime || '');
+
+    if(scalarOffscreen[layer] && scalarOffscreen[layer].key === key){
+      return scalarOffscreen[layer];
+    }
+
+    const nx = meta.nx, ny = meta.ny;
+
+    // crea canvas offscreen nx×ny
+    const c = document.createElement('canvas');
+    c.width = nx; c.height = ny;
+    const ctx = c.getContext('2d', { willReadFrequently: false });
+
+    const img = ctx.createImageData(nx, ny);
+    const data = img.data; // Uint8ClampedArray
+
+    // prendi array
+    let arr = null;
+
+    if(layer === 'temp') arr = currentData.temp;
+    else if(layer === 'press') arr = currentData.press;
+    else if(layer === 'rain') arr = currentData.rain;
+    else if(layer === 'rh') arr = currentData.rh;
+    else if(layer === 'clouds'){
+      // >>> QUI: se il tuo JSON usa un nome diverso, cambia solo questa riga <<<
+      arr = currentData.clouds; // 0..100
+      if(!arr) arr = currentData.cloud; // fallback
+    }
+
+    if(!arr || arr.length !== nx*ny){
+      // se manca, non disegnare
+      scalarOffscreen[layer] = { c, ctx, img, key, missing:true };
+      return null;
+    }
+
+    // palette e gestione trasparenza per layer
+    for(let i=0;i<nx*ny;i++){
+      let v = arr[i];
+      let rgb = [0,0,0];
+      let a = 255;
+
+      if(layer === 'temp'){
+        // clamp -15..45
+        if(v < -15) v = -15;
+        if(v > 45)  v = 45;
+        rgb = colorFromStops(v, TEMP_STOPS);
+        a = 255;
+      }
+      else if(layer === 'press'){
+        rgb = colorFromStops(v, PRESS_STOPS);
+        a = 255;
+      }
+      else if(layer === 'rh'){
+        // clamp 0..100
+        if(v < 0) v = 0;
+        if(v > 100) v = 100;
+        rgb = colorFromStops(v, RH_STOPS);
+        a = 255;
+      }
+      else if(layer === 'rain'){
+        // sotto 0.1 quasi trasparente
+        if(v < 0.1){
+          a = 0;
+          rgb = [0,0,0];
+        } else {
+          rgb = colorFromStops(v, RAIN_STOPS);
+          a = 255;
+        }
+      }
+      else if(layer === 'clouds'){
+        if(v < 0) v = 0;
+        if(v > 100) v = 100;
+        rgb = colorFromStops(v, CLOUD_STOPS);
+        // nuvole: più “leggere” già qui, poi l’alpha globale fa il resto
+        a = Math.round(lerp(0, 255, v/100));
+      }
+
+      const p = i*4;
+      data[p]   = rgb[0];
+      data[p+1] = rgb[1];
+      data[p+2] = rgb[2];
+      data[p+3] = a;
+    }
+
+    ctx.putImageData(img, 0, 0);
+
+    scalarOffscreen[layer] = { c, ctx, img, key };
+    return scalarOffscreen[layer];
+  }
+
+  // =========================
+  // ISOBARE (bianche su dark)
+  // =========================
+  function drawIsobars(){
+    const ctx = isoCanvas.getContext('2d');
+    const size = map.getSize();
+    isoCanvas.width = size.x; isoCanvas.height = size.y;
+    L.DomUtil.setPosition(isoCanvas, map.containerPointToLayerPoint([0,0]));
+    ctx.clearRect(0,0,size.x,size.y);
 
     if(!showIso || !currentData || !currentData.press) return;
 
@@ -503,14 +587,19 @@
       .size([m.nx, m.ny])
       .thresholds(d3.range(960, 1050, 2))(values);
 
-    ctx.lineWidth = 1.7;
+    ctx.lineWidth = 1.35;
     ctx.font = "900 12px Arial";
     ctx.textAlign = "center";
     ctx.textBaseline = "middle";
 
-    contours.forEach(c => {
-      ctx.strokeStyle = (!isLightMode) ? "rgba(255,255,255,0.95)" : "rgba(0,0,0,0.75)";
+    // dark: bianche
+    // sat: nere/grigie
+    const stroke = (baseMode==='dark') ? "rgba(255,255,255,0.70)" : "rgba(0,0,0,0.60)";
+    const labelBg = (baseMode==='dark') ? "rgba(0,0,0,0.65)" : "rgba(255,255,255,0.80)";
+    const labelFg = (baseMode==='dark') ? "#fff" : "#000";
 
+    contours.forEach(c => {
+      ctx.strokeStyle = stroke;
       ctx.beginPath();
       const labelCandidates = [];
 
@@ -523,133 +612,148 @@
             const lon = m.lo1 + (coord[0] * m.dx);
             const p = map.latLngToContainerPoint([lat, lon]);
             linePts.push(p);
-            if(first) { ctx.moveTo(p.x, p.y); first=false; }
-            else ctx.lineTo(p.x, p.y);
+            if(first){ ctx.moveTo(p.x,p.y); first=false; }
+            else ctx.lineTo(p.x,p.y);
           });
-          if(linePts.length > 60) labelCandidates.push(linePts);
+          if(linePts.length > 70) labelCandidates.push(linePts);
         });
       });
 
       ctx.stroke();
 
-      labelCandidates.forEach(pts => {
+      // etichetta ogni tanto
+      labelCandidates.slice(0, 2).forEach(pts => {
         const mid = pts[Math.floor(pts.length/2)];
-        const bg = isLightMode ? "rgba(255,255,255,0.85)" : "rgba(0,0,0,0.72)";
-        const fg = isLightMode ? "#000" : "#fff";
-        ctx.fillStyle = bg;
-        ctx.fillRect(mid.x-16, mid.y-9, 32, 18);
-        ctx.fillStyle = fg;
+        ctx.fillStyle = labelBg;
+        ctx.fillRect(mid.x-17, mid.y-9, 34, 18);
+        ctx.fillStyle = labelFg;
         ctx.fillText(Math.round(c.value), mid.x, mid.y);
       });
     });
   }
 
-  function drawGrid() {
-    const {ctx, s} = setupCanvasHiDPI(gridCanvas);
+  // =========================
+  // GRID (solo linee)
+  // =========================
+  function drawGrid(){
+    const ctx = gridCanvas.getContext('2d');
+    const size = map.getSize();
+    gridCanvas.width = size.x; gridCanvas.height = size.y;
+    L.DomUtil.setPosition(gridCanvas, map.containerPointToLayerPoint([0,0]));
+    ctx.clearRect(0,0,size.x,size.y);
+
     if(!showGrid) return;
 
     const b = map.getBounds();
     const step = map.getZoom() > 9 ? 0.1 : 0.5;
 
-    ctx.strokeStyle = isLightMode ? "rgba(0,0,0,0.20)" : "rgba(255,255,255,0.16)";
+    ctx.strokeStyle = (baseMode==='dark') ? "rgba(255,255,255,0.18)" : "rgba(0,0,0,0.18)";
     ctx.lineWidth = 1;
 
-    for(let lon=Math.floor(b.getWest()); lon<=Math.ceil(b.getEast()); lon+=step) {
+    for(let lon=Math.floor(b.getWest()); lon<=Math.ceil(b.getEast()); lon+=step){
       const x = map.latLngToContainerPoint([b.getSouth(), lon]).x;
-      ctx.beginPath(); ctx.moveTo(x,0); ctx.lineTo(x,s.y); ctx.stroke();
+      ctx.beginPath(); ctx.moveTo(x,0); ctx.lineTo(x,size.y); ctx.stroke();
     }
-    for(let lat=Math.floor(b.getSouth()); lat<=Math.ceil(b.getNorth()); lat+=step) {
+    for(let lat=Math.floor(b.getSouth()); lat<=Math.ceil(b.getNorth()); lat+=step){
       const y = map.latLngToContainerPoint([lat, b.getWest()]).y;
-      ctx.beginPath(); ctx.moveTo(0,y); ctx.lineTo(s.x,y); ctx.stroke();
+      ctx.beginPath(); ctx.moveTo(0,y); ctx.lineTo(size.x,y); ctx.stroke();
     }
   }
 
-  function updateWind() {
-    if(velocityLayer) map.removeLayer(velocityLayer);
-    if(!enabledLayers.has('wind') || !currentData) return;
+  // =========================
+  // WIND (contrasto adattivo)
+  // =========================
+  function updateWind(){
+    if(velocityLayer) { map.removeLayer(velocityLayer); velocityLayer = null; }
+    if(!enabled.wind || !currentData) return;
 
+    // densità particelle adattiva (FPS)
     const isMobile = Math.min(window.innerWidth, window.innerHeight) < 900;
     const dpr = window.devicePixelRatio || 1;
+    let particleMult = isMobile ? (1/200) : (1/140);
+    if(dpr >= 2) particleMult = isMobile ? (1/260) : (1/200);
 
-    let particleMult = isMobile ? (1/190) : (1/145);
-    if(dpr >= 2) particleMult = isMobile ? (1/270) : (1/210);
+    // palette vento: su sat serve più contrasto (colori più “scuri”/decisi)
+    const windColorsDark = ["#000080", "#0044ff", "#00ddff", "#00ff55", "#ffff00", "#ff6600", "#ff0000", "#ff00ff"];
+    const windColorsSat  = ["#001040", "#0030cc", "#00a0ff", "#00ff80", "#ffff00", "#ff7a00", "#ff0000", "#b000ff"];
 
-    const colorsDark = ["#0000ff", "#0066ff", "#00e5ff", "#00ff66", "#fff000", "#ff7a00", "#ff0000", "#ff00ff"];
-    const colorsSat  = ["#001040", "#0030a8", "#0070ff", "#00b85a", "#c8b800", "#ff6a00", "#c00000", "#6a006a"];
-
-    try {
+    try{
       velocityLayer = L.velocityLayer({
         displayValues: false,
         data: [ currentData.wind_u, currentData.wind_v ],
         maxVelocity: 18.0,
         velocityScale: 0.006,
         particleMultiplier: particleMult,
-        lineWidth: 0.9,
+        lineWidth: (baseMode==='sat') ? 1.1 : 0.9,
         particleAge: 140,
         frameRate: 60,
-        opacity: 1.0,
-        colorScale: (isLightMode ? colorsSat : colorsDark)
+        opacity: (baseMode==='sat') ? 1.0 : 0.95,
+        colorScale: (baseMode==='sat') ? windColorsSat : windColorsDark
       });
       velocityLayer.addTo(map);
-    } catch(e) {}
+    }catch(e){}
   }
 
-  function valueAtLatLng(latlng) {
+  // =========================
+  // PICKER (valore sotto mouse/click)
+  // =========================
+  function valueAtLatLng(latlng){
     if(!currentData || !currentData.meta) return null;
     const m = currentData.meta;
 
     const y = Math.round((m.la1 - latlng.lat) / m.dy);
     const x = Math.round((latlng.lng - m.lo1) / m.dx);
-
     if(x < 0 || x >= m.nx || y < 0 || y >= m.ny) return null;
     const idx = y*m.nx + x;
 
-    if(pickerLayer === 'wind') {
-      const u = currentData.wind_u.data[idx];
-      const v = currentData.wind_v.data[idx];
-      return (Math.sqrt(u*u + v*v) * 3.6);
+    // priorità: se più layer attivi, mostra il primo attivo in lista (puoi cambiare ordine)
+    const order = ['temp','press','rain','rh','clouds','wind'];
+    for(const k of order){
+      if(!enabled[k]) continue;
+
+      if(k==='wind'){
+        const u = currentData.wind_u.data[idx];
+        const v = currentData.wind_v.data[idx];
+        return { layer:'wind', value: Math.sqrt(u*u+v*v)*3.6 };
+      }
+      if(k==='temp')   return { layer:'temp', value: currentData.temp[idx] };
+      if(k==='press')  return { layer:'press', value: currentData.press[idx] };
+      if(k==='rain')   return { layer:'rain', value: currentData.rain[idx] };
+      if(k==='rh')     return { layer:'rh', value: currentData.rh[idx] };
+      if(k==='clouds'){
+        const arr = currentData.clouds || currentData.cloud;
+        if(!arr) continue;
+        return { layer:'clouds', value: arr[idx] };
+      }
     }
-    if(pickerLayer === 'temp') return currentData.temp[idx];
-    if(pickerLayer === 'rain') return currentData.rain[idx];
-    if(pickerLayer === 'rh') return currentData.rh[idx];
-    if(pickerLayer === 'press') return currentData.press[idx];
-    if(pickerLayer === 'cloud') return currentData.cloud ? currentData.cloud[idx] : null;
     return null;
   }
 
-  function updatePickerFromEvent(e) {
-    const val = valueAtLatLng(e.latlng);
-    if(val === null || val === undefined) return;
+  function updatePickerFromEvent(e){
+    const out = valueAtLatLng(e.latlng);
+    if(!out) return;
 
-    let out = '--';
-    if(pickerLayer === 'wind') out = val.toFixed(1);
-    else if(pickerLayer === 'temp') out = val.toFixed(1);
-    else if(pickerLayer === 'rain') out = val.toFixed(1);
-    else if(pickerLayer === 'rh') out = Math.round(val).toString();
-    else if(pickerLayer === 'press') out = Math.round(val).toString();
-    else if(pickerLayer === 'cloud') out = Math.round(val).toString();
+    const v = out.value;
+    let txt = '--';
 
-    document.getElementById('val-display').innerText = out;
-    document.getElementById('unit-display').innerText = unitFor(pickerLayer);
+    if(out.layer==='wind') txt = v.toFixed(1);
+    else if(out.layer==='temp') txt = v.toFixed(1);
+    else if(out.layer==='rain') txt = v.toFixed(1);
+    else if(out.layer==='press') txt = Math.round(v).toString();
+    else if(out.layer==='rh') txt = Math.round(v).toString();
+    else if(out.layer==='clouds') txt = Math.round(v).toString();
+
+    document.getElementById('val-display').innerText = txt;
+    document.getElementById('unit-display').innerText = unitFor(out.layer);
   }
 
-  window.toggleIso = function() {
-    showIso = !showIso;
-    document.getElementById('btn-iso').classList.toggle('active');
-    redrawAll();
-  };
-
-  window.toggleGrid = function() {
-    showGrid = !showGrid;
-    document.getElementById('btn-grid').classList.toggle('active');
-    redrawAll();
-  };
-
-  window.togglePlay = function() {
-    if(isPlaying) {
+  // =========================
+  // PLAY
+  // =========================
+  window.togglePlay = function(){
+    if(isPlaying){
       isPlaying = false;
       document.getElementById('play-btn').innerText = "►";
-      if(lastFrameInterval) { clearInterval(lastFrameInterval); lastFrameInterval = null; }
       return;
     }
     isPlaying = true;
@@ -661,15 +765,14 @@
     let i = parseInt(s.value, 10);
     const max = parseInt(s.max, 10);
 
-    lastFrameInterval = setInterval(() => {
-      if(!isPlaying) { clearInterval(lastFrameInterval); lastFrameInterval=null; btn.innerText="►"; return; }
-      if(i >= max) { clearInterval(lastFrameInterval); lastFrameInterval=null; isPlaying=false; btn.innerText="►"; return; }
+    const interval = setInterval(() => {
+      if(!isPlaying){ clearInterval(interval); btn.innerText="►"; return; }
+      if(i >= max){ clearInterval(interval); isPlaying=false; btn.innerText="►"; return; }
       i++;
       s.value = i;
       loadStep(i);
     }, 800);
-  };
+  }
 </script>
-
 </body>
 </html>
