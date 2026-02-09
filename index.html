@@ -1,7 +1,7 @@
 <!DOCTYPE html>
 <html>
 <head>
-  <title>Sicilia MeteoHub - PRO (Discrete + Transparent Layers)</title>
+  <title>Sicilia MeteoHub - PRO (Continuous Gradients)</title>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
 
@@ -56,7 +56,6 @@
       mix-blend-mode:multiply;
       filter:contrast(1.85) brightness(0.95);
     }
-
     canvas { image-rendering:auto; }
   </style>
 </head>
@@ -111,77 +110,117 @@
   var hillshadeLayer = null;
   var isLightMode = false;
 
-  // === Opacità per layer: trasparente ma leggibile ===
+  // === Opacità: trasparente ma leggibile (su SAT aumentiamo un filo) ===
   const LAYER_OPACITY = {
-    temp:  0.62,
-    press: 0.58,
-    rain:  0.72,
-    rh:    0.58,
-    cloud: 0.45
+    temp:  0.60,
+    press: 0.55,
+    rain:  0.70,
+    rh:    0.55,
+    cloud: 0.42
   };
 
-  // === Palette a CLASSI NETTE (step colors) ===
-  // (Fasce volutamente “staccate” per distinguere bene)
-  const DISCRETE = {
-    temp: [
-      {t:-100, c:[ 60,  0, 120]}, // viola scuro
-      {t:  0,  c:[  0,  80, 255]}, // blu
-      {t:  5,  c:[  0, 190, 255]}, // azzurro
-      {t: 10,  c:[  0, 255, 140]}, // verde acqua
-      {t: 15,  c:[180, 255,   0]}, // giallo-verde
-      {t: 20,  c:[255, 200,   0]}, // giallo
-      {t: 25,  c:[255, 120,   0]}, // arancio
-      {t: 30,  c:[255,  40,   0]}, // rosso-arancio
-      {t: 35,  c:[255,   0,   0]}  // rosso
-    ],
-    press: [
-      {t:-1e9, c:[  0,  70, 255]}, // bassa: blu
-      {t: 995, c:[  0, 200, 255]},
-      {t:1005, c:[  0, 255, 200]},
-      {t:1012, c:[255, 255, 255]}, // vicino “neutro”
-      {t:1020, c:[255, 210,   0]},
-      {t:1026, c:[255, 120,   0]},
-      {t:1032, c:[255,  40,   0]}
-    ],
-    rain: [
-      {t:0.0,  c:[  0,   0,   0], a0:true}, // 0 = trasparente
-      {t:0.2,  c:[  0, 220, 255]}, // pioggerella
-      {t:1.0,  c:[  0, 120, 255]}, // debole
-      {t:5.0,  c:[  0,   0, 255]}, // moderata
-      {t:15.0, c:[120,   0, 255]}, // forte
-      {t:30.0, c:[255,   0, 255]}  // molto forte
-    ],
-    rh: [
-      {t:-1e9, c:[255, 170,   0]}, // secca
-      {t: 40,  c:[230, 230, 230]}, // medio
-      {t: 60,  c:[  0, 255, 120]}, // umida
-      {t: 75,  c:[  0, 170, 255]}, // molto umida
-      {t: 90,  c:[  0,   0, 255]}  // saturazione
-    ],
-    cloud: [
-      {t:0,    c:[255, 255, 255], a0:true}, // 0 = quasi trasparente
-      {t:10,   c:[240, 240, 240]},
-      {t:30,   c:[200, 200, 200]},
-      {t:60,   c:[140, 140, 140]},
-      {t:85,   c:[ 80,  80,  80]},
-      {t:100,  c:[ 30,  30,  30]}
-    ]
+  // ==== UTIL: clamp + lerp + interpolateColor ====
+  function clamp(x, a, b){ return Math.max(a, Math.min(b, x)); }
+  function lerp(a,b,t){ return a + (b-a)*t; }
+  function lerpColor(c1,c2,t){
+    return [
+      Math.round(lerp(c1[0], c2[0], t)),
+      Math.round(lerp(c1[1], c2[1], t)),
+      Math.round(lerp(c1[2], c2[2], t))
+    ];
+  }
+
+  // ==== PALETTE CONTINUE (color stops) ====
+  // NB: puoi cambiare min/max e stop senza toccare il resto.
+  const CONTINUOUS = {
+    // TEMP: viola -> blu -> ciano -> verde -> giallo -> arancio -> rosso -> rosso scuro
+    // Range consigliato per Sicilia: -10..45 (ma regge oltre con clamp)
+    temp: {
+      min: -10, max: 45,
+      stops: [
+        {v:-10, c:[ 90,  0, 140]},  // viola freddo
+        {v: -5, c:[ 40,  0, 200]},  // viola/blu
+        {v:  0, c:[  0, 60, 255]},  // blu
+        {v:  5, c:[  0,160, 255]},  // azzurro
+        {v: 10, c:[  0,255, 210]},  // ciano/verde acqua
+        {v: 15, c:[  0,255,  90]},  // verde
+        {v: 20, c:[140,255,   0]},  // giallo-verde
+        {v: 25, c:[255,220,   0]},  // giallo
+        {v: 30, c:[255,140,   0]},  // arancio
+        {v: 35, c:[255, 60,   0]},  // rosso-arancio
+        {v: 40, c:[220,  0,   0]},  // rosso
+        {v: 45, c:[120,  0,   0]}   // rosso scuro
+      ]
+    },
+
+    // PRESS (hPa): blu (bassa) -> ciano -> verde -> giallo -> arancio -> rosso (alta)
+    press: {
+      min: 980, max: 1040,
+      stops: [
+        {v: 980, c:[  0, 70,255]},
+        {v: 995, c:[  0,190,255]},
+        {v:1005, c:[  0,255,200]},
+        {v:1013, c:[255,255,255]},
+        {v:1022, c:[255,210,  0]},
+        {v:1030, c:[255,120,  0]},
+        {v:1040, c:[255,  0,  0]}
+      ]
+    },
+
+    // RAIN (mm): 0 trasparente, poi ciano -> blu -> viola -> magenta
+    rain: {
+      min: 0, max: 50,
+      transparentBelow: 0.1,
+      stops: [
+        {v: 0.1, c:[  0,220,255]},
+        {v: 2.0, c:[  0,120,255]},
+        {v:10.0, c:[  0,  0,255]},
+        {v:25.0, c:[120,  0,255]},
+        {v:50.0, c:[255,  0,255]}
+      ]
+    },
+
+    // RH (%): secca arancio -> neutro -> verde -> blu
+    rh: {
+      min: 0, max: 100,
+      stops: [
+        {v:  0, c:[255,170,  0]},
+        {v: 40, c:[220,220,220]},
+        {v: 60, c:[  0,255,120]},
+        {v: 80, c:[  0,170,255]},
+        {v:100, c:[  0,  0,255]}
+      ]
+    },
+
+    // CLOUD (%): bianco -> grigio scuro (copertura crescente)
+    cloud: {
+      min: 0, max: 100,
+      transparentBelow: 2,
+      stops: [
+        {v:  0, c:[255,255,255]},
+        {v: 30, c:[210,210,210]},
+        {v: 60, c:[140,140,140]},
+        {v: 85, c:[ 80, 80, 80]},
+        {v:100, c:[ 30, 30, 30]}
+      ]
+    }
   };
 
-  function pickDiscrete(val, key){
-    const arr = DISCRETE[key];
-    if(!arr) return {rgb:[0,0,0], alpha:0};
-    // trova ultimo stop con t <= val
-    let chosen = arr[0];
-    for(let i=0;i<arr.length;i++){
-      if(val >= arr[i].t) chosen = arr[i];
-      else break;
+  function colorFromStops(val, spec){
+    // clamp sul range palette
+    const v = clamp(val, spec.min, spec.max);
+    const stops = spec.stops;
+
+    // trova segmento [i, i+1]
+    for(let i=0;i<stops.length-1;i++){
+      const a = stops[i], b = stops[i+1];
+      if(v >= a.v && v <= b.v){
+        const t = (v - a.v) / (b.v - a.v || 1);
+        return lerpColor(a.c, b.c, t);
+      }
     }
-    // regole “zero” trasparente per rain/cloud
-    if(chosen.a0 && (key==='rain' || key==='cloud')){
-      if(val <= chosen.t) return {rgb: chosen.c, alpha: 0};
-    }
-    return {rgb: chosen.c, alpha: 1};
+    // fallback
+    return (v < stops[0].v) ? stops[0].c : stops[stops.length-1].c;
   }
 
   function unitFor(type){
@@ -308,7 +347,7 @@
 
   function redrawAll() {
     if(!currentData) return;
-    drawHeatLayersSeparate();   // <<<<< QUI: render separato, NO impasto
+    drawHeatLayersContinuous();
     drawIsobars();
     drawGrid();
     updateWind();
@@ -328,7 +367,6 @@
   }
 
   window.toggleLayer = function(layer, ev){
-    // SHIFT+click => scegli layer che legge i valori (senza cambiare enabled)
     if(ev && ev.shiftKey){
       pickerLayer = layer;
       document.getElementById('unit-display').innerText = unitFor(pickerLayer);
@@ -347,7 +385,6 @@
     redrawAll();
   };
 
-  // === Render “HD” con dpr + smoothing, MA con colori netti e layer separati ===
   function setupCanvasHiDPI(canvas){
     const ctx = canvas.getContext('2d');
     const dpr = Math.min(2.0, window.devicePixelRatio || 1);
@@ -363,7 +400,8 @@
     return {ctx, s, dpr};
   }
 
-  function drawHeatLayersSeparate(){
+  // === CONTINUOUS HEAT LAYERS: niente quadretti, gradienti fluidi ===
+  function drawHeatLayersContinuous(){
     const {ctx, s} = setupCanvasHiDPI(heatCanvas);
     if(!currentData || !currentData.meta) return;
 
@@ -373,7 +411,6 @@
     const enabledHeat = heatKeys.filter(k => enabledLayers.has(k));
     if(enabledHeat.length === 0) return;
 
-    // bounding box del dataset sulla mappa
     const pNW = map.latLngToContainerPoint([m.la1, m.lo1]);
     const pSE = map.latLngToContainerPoint([m.la2, m.lo2]);
     const x0 = Math.min(pNW.x, pSE.x);
@@ -381,13 +418,12 @@
     const w  = Math.abs(pSE.x - pNW.x);
     const h  = Math.abs(pSE.y - pNW.y);
 
-    // ordine di disegno (dal “più di sfondo” al “più informativo”)
-    // nuvole devono stare sopra ma con opacità bassa
     const drawOrder = ['temp','press','rh','rain','cloud'].filter(k => enabledHeat.includes(k));
 
-    // per ogni layer: creiamo un raster nx*ny, poi lo “stretchiamo” sulla mappa
     for(const key of drawOrder){
-      // offscreen a risoluzione griglia (nx*ny) -> poi scaled e smooth
+      const spec = CONTINUOUS[key];
+      if(!spec) continue;
+
       const off = document.createElement('canvas');
       off.width = m.nx;
       off.height = m.ny;
@@ -406,30 +442,29 @@
           if(key==='rh')    val = currentData.rh[idx];
           if(key==='cloud') val = currentData.cloud ? currentData.cloud[idx] : 0;
 
-          const pick = pickDiscrete(val, key);
-          const o = (y*m.nx + x)*4;
-
-          if(pick.alpha === 0){
-            d[o+0]=0; d[o+1]=0; d[o+2]=0; d[o+3]=0;
-          } else {
-            d[o+0]=pick.rgb[0];
-            d[o+1]=pick.rgb[1];
-            d[o+2]=pick.rgb[2];
-            d[o+3]=255; // alpha pieno nel raster, poi regoliamo globalAlpha sotto
+          // trasparenza sotto soglia (rain/cloud)
+          if(spec.transparentBelow !== undefined && val < spec.transparentBelow){
+            const o = (y*m.nx + x)*4;
+            d[o+3] = 0;
+            continue;
           }
+
+          const rgb = colorFromStops(val, spec);
+          const o = (y*m.nx + x)*4;
+          d[o+0] = rgb[0];
+          d[o+1] = rgb[1];
+          d[o+2] = rgb[2];
+          d[o+3] = 255;
         }
       }
 
       octx.putImageData(img,0,0);
 
-      // opacità layer (trasparente ma visibile)
       ctx.save();
-      ctx.globalAlpha = LAYER_OPACITY[key] || 0.6;
+      let alpha = LAYER_OPACITY[key] ?? 0.6;
+      if(isLightMode) alpha = Math.min(0.85, alpha + 0.10); // su sat più presente
+      ctx.globalAlpha = alpha;
 
-      // su SAT (chiaro) aumentiamo un filo l’opacità per non “sparire”
-      if(isLightMode) ctx.globalAlpha = Math.min(0.85, ctx.globalAlpha + 0.08);
-
-      // draw
       ctx.drawImage(off, x0, y0, w, h);
       ctx.restore();
     }
@@ -453,7 +488,6 @@
     ctx.textBaseline = "middle";
 
     contours.forEach(c => {
-      // richiesto: dark -> bianche nette
       ctx.strokeStyle = (!isLightMode) ? "rgba(255,255,255,0.95)" : "rgba(0,0,0,0.75)";
 
       ctx.beginPath();
@@ -519,7 +553,6 @@
     let particleMult = isMobile ? (1/190) : (1/145);
     if(dpr >= 2) particleMult = isMobile ? (1/270) : (1/210);
 
-    // più contrasto: su SAT usiamo più scuro, su DARK più “neon”
     const colorsDark = ["#0000ff", "#0066ff", "#00e5ff", "#00ff66", "#fff000", "#ff7a00", "#ff0000", "#ff00ff"];
     const colorsSat  = ["#001040", "#0030a8", "#0070ff", "#00b85a", "#c8b800", "#ff6a00", "#c00000", "#6a006a"];
 
