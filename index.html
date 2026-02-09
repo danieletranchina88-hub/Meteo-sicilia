@@ -1,7 +1,7 @@
 <!DOCTYPE html>
 <html>
 <head>
-  <title>Sicilia MeteoHub - PRO (STABILE)</title>
+  <title>Sicilia MeteoHub - PRO (MULTI-LAYER SMART)</title>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
 
@@ -40,12 +40,13 @@
       box-shadow: 0 10px 30px rgba(0,0,0,0.55);
     }
     .layer-btn {
-      display: block; width: 160px;
+      display: block; width: 170px;
       padding: 10px 12px; margin-bottom: 6px;
       background: transparent; color: #cfcfcf; border: none; text-align: right;
       cursor: pointer; font-size: 13px; font-weight: 800; border-radius: 10px;
       transition: all 0.15s;
       letter-spacing: 0.2px;
+      user-select: none;
     }
     .layer-btn:hover { background: rgba(255,255,255,0.08); color: #fff; }
     .layer-btn.active {
@@ -103,10 +104,7 @@
       background: #0088ff; border: 2px solid white; margin-top: -7px;
     }
 
-    /* CANVAS SMOOTH */
     canvas { image-rendering: auto; }
-
-    /* Leaflet (nascondo attribution se vuoi puoi commentare) */
     .leaflet-control-attribution { opacity: 0.7; }
   </style>
 </head>
@@ -121,12 +119,14 @@
 
   <div id="ui-container">
     <div class="panel">
-      <button class="layer-btn active" onclick="setLayer('wind')">VENTO 💨</button>
-      <button class="layer-btn" onclick="setLayer('temp')">TEMP 🌡️</button>
-      <button class="layer-btn" onclick="setLayer('rain')">PIOGGIA ☔</button>
-      <button class="layer-btn" onclick="setLayer('rh')">UMIDITÀ 💧</button>
-      <button class="layer-btn" onclick="setLayer('press')">PRESSIONE 🧭</button>
-      <button class="layer-btn" onclick="setLayer('cloud')">NUVOLE ☁️</button>
+      <!-- MULTI-SELEZIONE: sono tutti toggle -->
+      <button class="layer-btn active" data-layer="wind" onclick="toggleLayer(this)">VENTO 💨</button>
+      <button class="layer-btn" data-layer="temp" onclick="toggleLayer(this)">TEMP 🌡️</button>
+      <button class="layer-btn" data-layer="rain" onclick="toggleLayer(this)">PIOGGIA ☔</button>
+      <button class="layer-btn" data-layer="rh" onclick="toggleLayer(this)">UMIDITÀ 💧</button>
+      <button class="layer-btn" data-layer="press" onclick="toggleLayer(this)">PRESSIONE 🧭</button>
+      <button class="layer-btn" data-layer="cloud" onclick="toggleLayer(this)">NUVOLE ☁️</button>
+
       <button class="layer-btn toggle" id="btn-iso" onclick="toggleIso()">ISOBARE 〰️</button>
       <button class="layer-btn toggle" id="btn-grid" onclick="toggleGrid()">GRIGLIA #</button>
     </div>
@@ -150,12 +150,16 @@
   // --- GLOBALS ---
   let map, velocityLayer;
   let heatCanvas, isoCanvas, gridCanvas;
+
   let currentData = null, catalog = [];
-  let activeLayer = 'wind';
   let showIso = false, showGrid = false, isPlaying = false;
 
+  // Multi-layer state
+  const activeLayers = new Set(['wind']); // puoi avere più livelli attivi
+  let primaryLayer = 'wind';              // per unità + picker (ultimo cliccato)
+
   // --- PALETTES (heatmaps) ---
-  // Nuvole: bianco -> grigio scuro (come mi hai chiesto)
+  // Nuvole: bianco -> grigio scuro
   const PALETTES = {
     temp: [
       {v:-10,c:[255,255,255,0.60]},
@@ -194,6 +198,15 @@
       {v:80,  c:[120,120,120,0.60]},
       {v:100, c:[70,70,70,0.72]}
     ]
+  };
+
+  // “Importanza” visiva: serve per distribuire la trasparenza quando hai più layer accesi
+  const LAYER_WEIGHT = {
+    cloud: 0.55,   // deve stare “dietro”, altrimenti copre tutto
+    press: 0.70,
+    rh:    0.75,
+    temp:  0.85,
+    rain:  0.95
   };
 
   const WIND_COLOR_SCALE = ["#000080", "#0044ff", "#00ddff", "#00ff55", "#ffff00", "#ff6600", "#ff0000", "#ff00ff"];
@@ -236,7 +249,7 @@
     try {
       map = L.map('map', { zoomControl: false }).setView([37.5, 14.2], 8);
 
-      // Basemap STABILE (Carto Dark)
+      // Basemap stabile
       const base = L.tileLayer(
         'https://{s}.basemaps.cartocdn.com/dark_nolabels/{z}/{x}/{y}{r}.png',
         { maxZoom: 19, attribution: '©OpenStreetMap, ©CARTO' }
@@ -248,7 +261,6 @@
         { maxZoom: 19, attribution: '©CARTO' }
       ).addTo(map);
 
-      // Se tiles non caricano, avvisa (come nel tuo screenshot)
       base.on('tileerror', () => status("Tile basemap non caricate (server/URL bloccato). Prova rete diversa o DNS."));
 
       createCanvasLayers();
@@ -257,7 +269,7 @@
       map.on('mousemove', updatePickerFromEvent);
       map.on('click', updatePickerFromEvent);
 
-      document.getElementById('unit-display').innerText = unitFor(activeLayer);
+      document.getElementById('unit-display').innerText = unitFor(primaryLayer);
     } catch(e) {
       status("Errore init mappa: " + (e && e.message ? e.message : e));
     }
@@ -292,12 +304,6 @@
       const r = await fetch('data_weather/' + catalog[idx].file + '?t=' + Date.now());
       if(!r.ok) throw new Error("frame non trovato");
       currentData = await r.json();
-
-      // Compat: se NUVOLE non esistono nel JSON, metto array vuoto
-      if(!currentData.cloud && !currentData.tcc && !currentData.cld) {
-        // non faccio nulla: semplicemente il layer nuvole sarà neutro
-      }
-
       redrawAll();
     } catch(e) {
       status("Errore caricamento frame: " + (e && e.message ? e.message : e));
@@ -313,7 +319,6 @@
       map.getPanes().overlayPane.appendChild(c);
       return c;
     };
-
     heatCanvas = mkCanvas(300);
     isoCanvas  = mkCanvas(400);
     gridCanvas = mkCanvas(450);
@@ -323,14 +328,54 @@
 
   function redrawAll() {
     if(!currentData) return;
-    drawHeatmap();
+    drawHeatmapMulti();
     drawIsobars();
     drawGrid();
     updateWind();
   }
 
-  // --- HEATMAP (nessun numero dentro) ---
-  function drawHeatmap() {
+  // --- SMART OPACITY (per evitare “pasta” quando attivi più layer) ---
+  function computeAlphaMultipliers() {
+    // heat layers attivi (escluso wind)
+    const heatActives = Array.from(activeLayers).filter(l => l !== 'wind');
+    const n = heatActives.length;
+
+    // nessun heat layer
+    if(n === 0) return { multipliers: {}, heatGlobal: 1.0 };
+
+    // somma pesi
+    let sumW = 0;
+    heatActives.forEach(l => { sumW += (LAYER_WEIGHT[l] ?? 0.75); });
+
+    // se c'è anche il vento attivo, “spingo” la leggibilità delle particelle:
+    // riduco globalmente gli heat overlays e riduco ancora le nuvole.
+    const windOn = activeLayers.has('wind');
+    const heatGlobal = windOn ? 0.75 : 1.0;
+
+    const multipliers = {};
+    heatActives.forEach(l => {
+      const w = (LAYER_WEIGHT[l] ?? 0.75);
+      // quota relativa del layer
+      let m = (w / sumW);
+
+      // base boost per non rendere tutto troppo trasparente
+      m *= 1.45;
+
+      // clamp ragionato
+      m = Math.max(0.18, Math.min(0.75, m));
+
+      // nuvole: ancora più “dietro” se insieme ad altri
+      if(l === 'cloud' && n >= 2) m *= 0.70;
+      if(l === 'cloud' && windOn) m *= 0.75;
+
+      multipliers[l] = Math.max(0.12, Math.min(0.75, m));
+    });
+
+    return { multipliers, heatGlobal };
+  }
+
+  // --- MULTI-HEATMAP: disegna più layer sullo stesso canvas, con alpha intelligente ---
+  function drawHeatmapMulti() {
     const ctx = heatCanvas.getContext('2d');
     const s = map.getSize();
     heatCanvas.width = s.x;
@@ -338,10 +383,22 @@
     L.DomUtil.setPosition(heatCanvas, map.containerPointToLayerPoint([0,0]));
     ctx.clearRect(0,0,s.x,s.y);
 
-    if(activeLayer === 'wind' || !currentData) return;
+    if(!currentData) return;
 
     const m = currentData.meta;
     const b = map.getBounds();
+
+    // quali heat layers sono attivi
+    const heatActives = Array.from(activeLayers).filter(l => l !== 'wind');
+    if(heatActives.length === 0) return;
+
+    // alpha multipliers “smart”
+    const { multipliers, heatGlobal } = computeAlphaMultipliers();
+
+    // ordine di rendering: così evitiamo che una cosa “sporca” l’altra
+    // (prima background morbidi, poi più “informativi”)
+    const ORDER = ['cloud', 'press', 'rh', 'temp', 'rain'];
+    const layersToDraw = ORDER.filter(x => heatActives.includes(x));
 
     for(let y=0; y<m.ny; y++) {
       const lat = m.la1 - (y*m.dy);
@@ -353,33 +410,48 @@
 
         const idx = y*m.nx + x;
 
-        let val = 0;
-
-        if(activeLayer==='temp') val = currentData.temp?.[idx] ?? 0;
-        else if(activeLayer==='rain') val = currentData.rain?.[idx] ?? 0;
-        else if(activeLayer==='rh') val = currentData.rh?.[idx] ?? 0;
-        else if(activeLayer==='press') val = currentData.press?.[idx] ?? 1013;
-        else if(activeLayer==='cloud') {
-          // supporto per diversi nomi possibili (tu puoi esportare "cloud" nel python)
-          const arr = currentData.cloud || currentData.tcc || currentData.cld;
-          val = arr?.[idx] ?? 0;
-        }
-
-        const c = getColor(val, activeLayer);
-        if(c[3] <= 0) continue;
-
         const p1 = map.latLngToContainerPoint([lat, lon]);
         const p2 = map.latLngToContainerPoint([lat - m.dy, lon + m.dx]);
         const w = Math.ceil(p2.x - p1.x) + 1;
         const h = Math.ceil(p2.y - p1.y) + 1;
 
-        ctx.fillStyle = `rgba(${c[0]},${c[1]},${c[2]},${c[3]})`;
-        ctx.fillRect(Math.floor(p1.x), Math.floor(p1.y), w, h);
+        for(const layer of layersToDraw) {
+          let val = 0;
+
+          if(layer==='temp') val = currentData.temp?.[idx] ?? 0;
+          else if(layer==='rain') val = currentData.rain?.[idx] ?? 0;
+          else if(layer==='rh') val = currentData.rh?.[idx] ?? 0;
+          else if(layer==='press') val = currentData.press?.[idx] ?? 1013;
+          else if(layer==='cloud') {
+            const arr = currentData.cloud || currentData.tcc || currentData.cld;
+            val = arr?.[idx] ?? 0;
+          }
+
+          let c = getColor(val, layer);
+          if(c[3] <= 0) continue;
+
+          // applico la logica “smart”
+          let a = c[3] * (multipliers[layer] ?? 0.5) * heatGlobal;
+
+          // ulteriore regola anti-“pasta”:
+          // se pioggia è forte, non voglio che pressione/temp la coprano.
+          // quindi la pioggia resta leggibile, gli altri calano un filo.
+          if(layer !== 'rain' && (currentData.rain?.[idx] ?? 0) >= 2 && activeLayers.has('rain')) {
+            a *= 0.82;
+          }
+
+          // clamp finale
+          a = Math.max(0, Math.min(0.85, a));
+          if(a <= 0.01) continue;
+
+          ctx.fillStyle = `rgba(${c[0]},${c[1]},${c[2]},${a})`;
+          ctx.fillRect(Math.floor(p1.x), Math.floor(p1.y), w, h);
+        }
       }
     }
   }
 
-  // --- ISOBARE (bianche, come volevi sul dark) ---
+  // --- ISOBARE (bianche sul dark) ---
   function drawIsobars() {
     const ctx = isoCanvas.getContext('2d');
     const s = map.getSize();
@@ -426,7 +498,6 @@
 
       ctx.stroke();
 
-      // Etichette leggere (solo alcune)
       labelCandidates.forEach(pts => {
         const mid = pts[Math.floor(pts.length/2)];
         ctx.fillStyle = "rgba(0,0,0,0.55)";
@@ -467,12 +538,11 @@
   // --- WIND (parametri originali + meno particelle per FPS) ---
   function updateWind() {
     if(velocityLayer) map.removeLayer(velocityLayer);
-    if(activeLayer !== 'wind' || !currentData) return;
+    if(!activeLayers.has('wind') || !currentData) return;
 
     const isMobile = Math.min(window.innerWidth, window.innerHeight) < 900;
     const dpr = window.devicePixelRatio || 1;
 
-    // meno particelle = più FPS
     let particleMult = isMobile ? (1/160) : (1/120);
     if(dpr >= 2) particleMult = isMobile ? (1/220) : (1/180);
 
@@ -481,10 +551,9 @@
         displayValues: false,
         data: [ currentData.wind_u, currentData.wind_v ],
 
-        // PARAMETRI ORIGINALI (tuoi)
         maxVelocity: 18.0,
         velocityScale: 0.006,
-        particleMultiplier: particleMult, // solo questo adattivo
+        particleMultiplier: particleMult,
         lineWidth: 0.8,
         particleAge: 140,
         frameRate: 60,
@@ -498,8 +567,8 @@
     }
   }
 
-  // --- PICKER (mousemove + click) ---
-  function valueAtLatLng(latlng) {
+  // --- PICKER (usa primaryLayer: l’ultimo cliccato) ---
+  function valueAtLatLng(latlng, whichLayer) {
     if(!currentData || !currentData.meta) return null;
     const m = currentData.meta;
 
@@ -510,17 +579,17 @@
 
     const idx = y*m.nx + x;
 
-    if(activeLayer === 'wind') {
+    if(whichLayer === 'wind') {
       const u = currentData.wind_u?.data?.[idx];
       const v = currentData.wind_v?.data?.[idx];
       if(u === undefined || v === undefined) return null;
       return (Math.sqrt(u*u + v*v) * 3.6);
     }
-    if(activeLayer === 'temp') return currentData.temp?.[idx];
-    if(activeLayer === 'rain') return currentData.rain?.[idx];
-    if(activeLayer === 'rh') return currentData.rh?.[idx];
-    if(activeLayer === 'press') return currentData.press?.[idx];
-    if(activeLayer === 'cloud') {
+    if(whichLayer === 'temp') return currentData.temp?.[idx];
+    if(whichLayer === 'rain') return currentData.rain?.[idx];
+    if(whichLayer === 'rh') return currentData.rh?.[idx];
+    if(whichLayer === 'press') return currentData.press?.[idx];
+    if(whichLayer === 'cloud') {
       const arr = currentData.cloud || currentData.tcc || currentData.cld;
       return arr?.[idx];
     }
@@ -528,30 +597,43 @@
   }
 
   function updatePickerFromEvent(e) {
-    const val = valueAtLatLng(e.latlng);
+    // se il primaryLayer non è attivo, scelgo un layer attivo “sensato”
+    let pickLayer = primaryLayer;
+    if(!activeLayers.has(pickLayer)) {
+      pickLayer = activeLayers.has('wind') ? 'wind' : (Array.from(activeLayers)[0] || 'wind');
+    }
+
+    const val = valueAtLatLng(e.latlng, pickLayer);
     if(val === null || val === undefined || Number.isNaN(val)) return;
 
     let out = '--';
-    if(activeLayer === 'wind') out = val.toFixed(1);
-    else if(activeLayer === 'temp') out = Number(val).toFixed(1);
-    else if(activeLayer === 'rain') out = Number(val).toFixed(1);
-    else if(activeLayer === 'rh') out = Math.round(Number(val)).toString();
-    else if(activeLayer === 'press') out = Math.round(Number(val)).toString();
-    else if(activeLayer === 'cloud') out = Math.round(Number(val)).toString();
+    if(pickLayer === 'wind') out = val.toFixed(1);
+    else if(pickLayer === 'temp') out = Number(val).toFixed(1);
+    else if(pickLayer === 'rain') out = Number(val).toFixed(1);
+    else if(pickLayer === 'rh') out = Math.round(Number(val)).toString();
+    else if(pickLayer === 'press') out = Math.round(Number(val)).toString();
+    else if(pickLayer === 'cloud') out = Math.round(Number(val)).toString();
 
     document.getElementById('val-display').innerText = out;
   }
 
   // --- UI ACTIONS ---
-  window.setLayer = function(type) {
-    activeLayer = type;
+  window.toggleLayer = function(btn) {
+    const layer = btn.getAttribute('data-layer');
+    if(!layer) return;
 
-    document.querySelectorAll('.layer-btn').forEach(btn => {
-      if(btn.id !== 'btn-iso' && btn.id !== 'btn-grid') btn.classList.remove('active');
-    });
-    event.target.classList.add('active');
+    // Toggle
+    if(activeLayers.has(layer)) {
+      activeLayers.delete(layer);
+      btn.classList.remove('active');
+    } else {
+      activeLayers.add(layer);
+      btn.classList.add('active');
+    }
 
-    document.getElementById('unit-display').innerText = unitFor(type);
+    // Primary = ultimo cliccato (anche se lo spegni, resta primary finché non scegli altro)
+    primaryLayer = layer;
+    document.getElementById('unit-display').innerText = unitFor(primaryLayer);
     document.getElementById('val-display').innerText = '--';
 
     redrawAll();
