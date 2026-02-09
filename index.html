@@ -67,18 +67,16 @@
 
   <div id="ui-container">
     <div class="panel">
-      <!-- MULTI-LAYER: ogni bottone è un toggle -->
-      <button class="layer-btn active" data-layer="wind" onclick="toggleLayer('wind', this)">VENTO 💨</button>
-      <button class="layer-btn active" data-layer="temp" onclick="toggleLayer('temp', this)">TEMP 🌡️</button>
-      <button class="layer-btn" data-layer="rain" onclick="toggleLayer('rain', this)">PIOGGIA ☔</button>
-      <button class="layer-btn" data-layer="rh" onclick="toggleLayer('rh', this)">UMIDITÀ 💧</button>
-      <button class="layer-btn" data-layer="press" onclick="toggleLayer('press', this)">PRESSIONE 🧭</button>
-      <button class="layer-btn" data-layer="cloud" onclick="toggleLayer('cloud', this)">NUVOLE ☁️</button>
+      <button class="layer-btn active" onclick="toggleLayer('wind', this)">VENTO 💨</button>
+      <button class="layer-btn active" onclick="toggleLayer('temp', this)">TEMP 🌡️</button>
+      <button class="layer-btn" onclick="toggleLayer('rain', this)">PIOGGIA ☔</button>
+      <button class="layer-btn" onclick="toggleLayer('rh', this)">UMIDITÀ 💧</button>
+      <button class="layer-btn" onclick="toggleLayer('press', this)">PRESSIONE 🧭</button>
+      <button class="layer-btn" onclick="toggleLayer('cloud', this)">NUVOLE ☁️</button>
 
       <hr style="border:0; border-top:1px solid rgba(255,255,255,0.14); margin:8px 0;">
 
       <button class="layer-btn sub-btn toggle-btn" id="btn-iso" onclick="toggleIso()">ISOBARE 〰️</button>
-      <!-- GRIGLIA tolta volutamente -->
     </div>
   </div>
 
@@ -97,68 +95,86 @@
   let map;
   let velocityLayer = null;
 
-  let heatCanvas = null;   // canvas heat multi-layer
-  let isoCanvas  = null;   // canvas isobare
+  let heatCanvas = null;
+  let isoCanvas  = null;
 
   let currentData = null;
   let catalog = [];
   let isPlaying = false;
 
-  // Multi-layer attivi (toggle)
+  // Multi-layer attivi
   const active = { wind:true, temp:true, rain:false, rh:false, press:false, cloud:false };
-
   let showIso = false;
 
-  // Z-order
+  // =========================
+  // BLOCCO SICILIA (bounds)
+  // =========================
+  // bounds larghi abbastanza da includere Sicilia e dintorni immediati
+  const SICILY_BOUNDS = L.latLngBounds(
+    L.latLng(35.1, 11.6),  // SW
+    L.latLng(39.6, 16.8)   // NE
+  );
+
+  // Zoom range "sensato" per non vedere il mondo
+  const MIN_Z = 6;
+  const MAX_Z = 12;
+
+  // =========================
+  // Z-ORDER
+  // =========================
   const Z = { heat: 350, iso: 520, wind: 700, labels: 850 };
 
   // =========================
-  // PALETTE TEMP (tua richiesta)
+  // PALETTE TEMP (tua)
   // =========================
   const TEMP_STOPS = [
-    {v:-15, c:[ 60,   0, 120, 0.62]}, // viola scuro
-    {v:  0, c:[  0, 220, 255, 0.62]}, // ciano
-    {v: 15, c:[255, 245, 140, 0.62]}, // giallo chiaro
-    {v: 20, c:[255, 230,   0, 0.62]}, // giallo
-    {v: 25, c:[255, 175,  80, 0.62]}, // arancione chiaro
-    {v: 30, c:[255, 120,   0, 0.62]}, // arancione
-    {v: 35, c:[255,  30,  30, 0.62]}, // rosso
-    {v: 45, c:[120,   0,   0, 0.62]}  // rosso scuro
+    {v:-15, c:[ 60,   0, 120, 0.62]},
+    {v:  0, c:[  0, 220, 255, 0.62]},
+    {v: 15, c:[255, 245, 140, 0.62]},
+    {v: 20, c:[255, 230,   0, 0.62]},
+    {v: 25, c:[255, 175,  80, 0.62]},
+    {v: 30, c:[255, 120,   0, 0.62]},
+    {v: 35, c:[255,  30,  30, 0.62]},
+    {v: 45, c:[120,   0,   0, 0.62]}
   ];
 
+  // NUVOLE: più opache e grigi più separati (sempre graduazione)
   const PALETTES = {
     rain: [
       {v:0.0, c:[0,0,0,0.00]},
-      {v:0.1, c:[  0, 180, 255, 0.55]},
-      {v:2.0, c:[  0,  70, 255, 0.62]},
-      {v:10,  c:[160,   0, 220, 0.70]},
-      {v:30,  c:[255,   0, 140, 0.78]}
+      {v:0.1, c:[  0, 180, 255, 0.60]},
+      {v:2.0, c:[  0,  70, 255, 0.70]},
+      {v:10,  c:[160,   0, 220, 0.78]},
+      {v:30,  c:[255,   0, 140, 0.85]}
     ],
     rh: [
-      {v:20, c:[190, 160,  70, 0.52]},
-      {v:40, c:[200, 200, 200, 0.52]},
-      {v:60, c:[ 90, 255, 110, 0.56]},
-      {v:80, c:[ 60, 160, 255, 0.60]},
-      {v:95, c:[  0,  40, 200, 0.66]}
+      {v:20, c:[190, 160,  70, 0.56]},
+      {v:40, c:[220, 220, 220, 0.56]},
+      {v:60, c:[ 90, 255, 110, 0.60]},
+      {v:80, c:[ 60, 160, 255, 0.64]},
+      {v:95, c:[  0,  40, 200, 0.70]}
     ],
     press: [
-      {v:980,  c:[  0,  70, 255, 0.54]},
-      {v:995,  c:[  0, 170, 255, 0.54]},
-      {v:1005, c:[  0, 255, 200, 0.54]},
-      {v:1013, c:[255, 255, 255, 0.50]},
-      {v:1022, c:[255, 200,   0, 0.56]},
-      {v:1035, c:[255,  60,   0, 0.62]}
+      {v:980,  c:[  0,  70, 255, 0.58]},
+      {v:995,  c:[  0, 170, 255, 0.58]},
+      {v:1005, c:[  0, 255, 200, 0.58]},
+      {v:1013, c:[255, 255, 255, 0.54]},
+      {v:1022, c:[255, 200,   0, 0.62]},
+      {v:1035, c:[255,  60,   0, 0.70]}
     ],
     cloud: [
       {v:0,   c:[255,255,255,0.00]},
-      {v:20,  c:[245,245,245,0.20]},
-      {v:40,  c:[220,220,220,0.30]},
-      {v:60,  c:[180,180,180,0.40]},
-      {v:80,  c:[120,120,120,0.50]},
-      {v:100, c:[ 60, 60, 60,0.60]}
+      {v:20,  c:[240,240,240,0.35]},
+      {v:40,  c:[205,205,205,0.45]},
+      {v:60,  c:[160,160,160,0.55]},
+      {v:80,  c:[110,110,110,0.65]},
+      {v:100, c:[ 55, 55, 55,0.75]}
     ]
   };
 
+  // =========================
+  // UTIL
+  // =========================
   function lerp(a,b,t){ return a + (b-a)*t; }
   function clamp(v,a,b){ return Math.max(a, Math.min(b, v)); }
 
@@ -181,18 +197,35 @@
     return stops[stops.length-1].c;
   }
 
-  // TEMP: quantizza per grado (evita “verde ovunque” indistinguibile)
   function tempColor(valC){
     let v = Math.round(valC);
     v = clamp(v, -15, 45);
     return interpStops(v, TEMP_STOPS);
   }
 
+  // Aumenta evidenza colore mantenendo trasparenza: boost su saturazione/contrasto
+  function boostColor(r,g,b, amount){
+    // amount 0..1
+    // spinge lontano dal grigio medio (128) senza cambiare alpha
+    const k = 1 + amount; // 1..2
+    const rr = clamp(128 + (r-128)*k, 0, 255);
+    const gg = clamp(128 + (g-128)*k, 0, 255);
+    const bb = clamp(128 + (b-128)*k, 0, 255);
+    return [rr,gg,bb];
+  }
+
   // =========================
   // INIT MAP
   // =========================
   window.addEventListener('load', async () => {
-    map = L.map('map', { zoomControl:false, preferCanvas:true }).setView([37.5, 14.2], 8);
+    map = L.map('map', {
+      zoomControl:false,
+      preferCanvas:true,
+      maxBounds: SICILY_BOUNDS,
+      maxBoundsViscosity: 1.0,
+      minZoom: MIN_Z,
+      maxZoom: MAX_Z
+    }).fitBounds(SICILY_BOUNDS);
 
     map.createPane('basePane');   map.getPane('basePane').style.zIndex = 200;
     map.createPane('heatPane');   map.getPane('heatPane').style.zIndex = Z.heat;
@@ -200,13 +233,13 @@
     map.createPane('windPane');   map.getPane('windPane').style.zIndex = Z.wind; map.getPane('windPane').style.pointerEvents='none';
     map.createPane('labelsPane'); map.getPane('labelsPane').style.zIndex = Z.labels; map.getPane('labelsPane').style.pointerEvents='none';
 
-    // === MAPPA GRIGIA CON RILIEVI (come vuoi tu) ===
+    // === Mappa rilievo grigia ===
     const relief = L.tileLayer(
       'https://server.arcgisonline.com/ArcGIS/rest/services/World_Shaded_Relief/MapServer/tile/{z}/{y}/{x}',
       { maxZoom: 13, attribution: 'Tiles © Esri', pane:'basePane' }
     ).addTo(map);
 
-    // Labels trasparenti (nomi città) senza “colorare” la base
+    // Labels città
     const labels = L.tileLayer(
       'https://{s}.basemaps.cartocdn.com/light_only_labels/{z}/{x}/{y}{r}.png',
       { maxZoom: 19, pane:'labelsPane', opacity: 0.95, attribution: '©OpenStreetMap, ©Carto' }
@@ -280,7 +313,7 @@
     isoCanvas.style.pointerEvents = 'none';
     map.getPane('isoPane').appendChild(isoCanvas);
 
-    map.on('moveend resize', redrawAll);
+    map.on('moveend resize zoomend', redrawAll);
   }
 
   function resizeCanvasToMap(c){
@@ -299,13 +332,14 @@
   }
 
   // =========================
-  // HEAT MULTI-LAYER
+  // HEAT MULTI-LAYER (più evidente)
   // =========================
   function alphaForLayer(layer){
     const on = ['temp','rain','rh','press','cloud'].filter(k=>active[k]).length;
-    const base = { temp:0.80, rain:0.78, rh:0.62, press:0.60, cloud:0.55 }[layer] || 0.70;
+    // manteniamo "trasparenza percepita" simile, ma colori più vivi (si fa col boostColor)
+    const base = { temp:0.82, rain:0.80, rh:0.64, press:0.62, cloud:0.70 }[layer] || 0.70;
     if(on <= 1) return base;
-    if(on === 2) return base * 0.85;
+    if(on === 2) return base * 0.86;
     if(on === 3) return base * 0.72;
     return base * 0.60;
   }
@@ -321,8 +355,10 @@
     const m = currentData.meta;
     const b = map.getBounds();
 
-    // ordine: press -> temp -> rh -> rain -> cloud
     const order = ['press','temp','rh','rain','cloud'].filter(k=>active[k]);
+
+    // BOOST: aumenta evidenza colori senza aumentare tanto alpha
+    const boostAmount = 0.55; // 0..1 (0.55 = evidente ma non "sparato")
 
     for(const layer of order){
       const aMul = alphaForLayer(layer);
@@ -356,17 +392,23 @@
             c = interpStops(val, stops);
           }
 
+          // boost solo sulle mappe colorate (nuvole restano grigie ma più "staccate")
+          let rgb = boostColor(c[0], c[1], c[2], boostAmount);
+          if(layer==='cloud'){
+            // per nuvole: meno "boost" per evitare effetto sporco, ma più opache già di base
+            rgb = boostColor(c[0], c[1], c[2], 0.25);
+          }
+
           const alpha = clamp((c[3] || 0) * aMul, 0, 0.92);
           if(alpha <= 0) continue;
 
           const p1 = map.latLngToContainerPoint([lat, lon]);
           const p2 = map.latLngToContainerPoint([lat - m.dy, lon + m.dx]);
 
-          // rettangoli sovrapposti (riduce l'effetto “scacchiera”)
           const w = Math.ceil(p2.x - p1.x) + 2;
           const h = Math.ceil(p2.y - p1.y) + 2;
 
-          ctx.fillStyle = `rgba(${c[0]},${c[1]},${c[2]},${alpha})`;
+          ctx.fillStyle = `rgba(${rgb[0]},${rgb[1]},${rgb[2]},${alpha})`;
           ctx.fillRect(Math.floor(p1.x)-1, Math.floor(p1.y)-1, w, h);
         }
       }
@@ -374,7 +416,7 @@
   }
 
   // =========================
-  // ISOBARS (opzionali)
+  // ISOBARE con label valore
   // =========================
   function drawIsobars(){
     const ctx = isoCanvas.getContext('2d');
@@ -391,30 +433,55 @@
       .thresholds(d3.range(960, 1050, 2))(values);
 
     ctx.lineWidth = 1.3;
-    // su mappa chiara: isobare scure e leggibili
-    ctx.strokeStyle = "rgba(0,0,0,0.55)";
-    ctx.beginPath();
+    ctx.strokeStyle = "rgba(0,0,0,0.60)";
+
+    // Label style
+    ctx.font = "900 12px Arial";
+    ctx.textAlign = "center";
+    ctx.textBaseline = "middle";
 
     contours.forEach(c => {
+      ctx.beginPath();
+
+      const labelCandidates = [];
+
       c.coordinates.forEach(ring => {
         ring.forEach(pts => {
           let first = true;
+          const linePts = [];
+
           pts.forEach(coord => {
             const lat = m.la1 - (coord[1] * m.dy);
             const lon = m.lo1 + (coord[0] * m.dx);
             const p = map.latLngToContainerPoint([lat, lon]);
+            linePts.push(p);
             if(first){ ctx.moveTo(p.x, p.y); first=false; }
             else ctx.lineTo(p.x, p.y);
           });
+
+          if(linePts.length > 80) labelCandidates.push(linePts);
         });
       });
-    });
 
-    ctx.stroke();
+      ctx.stroke();
+
+      // Metti 1-2 label per isobara su segmenti lunghi
+      labelCandidates.slice(0,2).forEach(pts => {
+        const mid = pts[Math.floor(pts.length/2)];
+        const text = String(Math.round(c.value));
+
+        // sfondo chiaro per leggibilità
+        ctx.fillStyle = "rgba(255,255,255,0.75)";
+        ctx.fillRect(mid.x-18, mid.y-9, 36, 18);
+
+        ctx.fillStyle = "rgba(0,0,0,0.92)";
+        ctx.fillText(text, mid.x, mid.y);
+      });
+    });
   }
 
   // =========================
-  // WIND (più contrasto su base chiara)
+  // WIND (più contrasto)
   // =========================
   function updateWind(){
     if(velocityLayer) { map.removeLayer(velocityLayer); velocityLayer = null; }
@@ -427,7 +494,7 @@
     if(dpr >= 2) particleMult = isMobile ? (1/240) : (1/180);
 
     // scala più scura/contrastata (base chiara)
-    const windScale = ["#001033","#00308a","#006a8a","#008c36","#8a8a00","#8a3a00","#8a0000","#4a005a"];
+    const windScale = ["#000814","#001d4a","#003a8c","#005f99","#007a3d","#8a8a00","#8a3a00","#8a0000"];
 
     try{
       velocityLayer = L.velocityLayer({
