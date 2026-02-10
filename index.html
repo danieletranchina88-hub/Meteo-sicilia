@@ -386,14 +386,21 @@ function cloudColor(pct){
 
 // Wind background (km/h) – per modalità sinottica (sfondo intensità)
 function windBgColor(kmh){
+  // scala più leggibile 0..120 km/h
   const v = clamp(kmh, 0, 120);
-  if(v < 10)  return {rgb:[240,240,240], a:0.35};
-  if(v < 20)  return {rgb:[200,220,255], a:0.42};
-  if(v < 35)  return {rgb:[120,180,255], a:0.48};
-  if(v < 50)  return {rgb:[ 60,140,220], a:0.54};
-  if(v < 70)  return {rgb:[255,200,  0], a:0.60};
-  if(v < 90)  return {rgb:[255,120,  0], a:0.66};
-  return      {rgb:[200,  0,  0], a:0.72};
+
+  // palette sinottica: grigio -> azzurri -> verdi -> gialli -> arancioni -> rossi/viola
+  if(v < 5)   return {rgb:[245,245,245], a:0.30};
+  if(v < 10)  return {rgb:[210,230,255], a:0.38};
+  if(v < 20)  return {rgb:[140,190,255], a:0.48};
+  if(v < 30)  return {rgb:[ 60,150,255], a:0.56};
+  if(v < 40)  return {rgb:[  0,210,220], a:0.62};
+  if(v < 55)  return {rgb:[  0,220,120], a:0.66};
+  if(v < 70)  return {rgb:[190,230,  0], a:0.70};
+  if(v < 85)  return {rgb:[255,190,  0], a:0.74};
+  if(v < 100) return {rgb:[255,110,  0], a:0.78};
+  if(v < 115) return {rgb:[230,  0,  0], a:0.82};
+  return           {rgb:[170,  0,170], a:0.86};
 }
 
 // Particle colorScale: stessa scala, ma più scura per mappa chiara
@@ -740,14 +747,15 @@ function drawScalarFields(){
 ========================== */
 function drawWindArrows(){
   const m = currentData.meta;
-
-  // densità frecce: adattiva (zoom)
   const z = map.getZoom();
-  const step = (z >= 9.5) ? 3 : (z >= 8.5 ? 4 : 5);
 
-  // stile frecce: su relief/sat meglio più scuro
-  ctxScalar.strokeStyle = isSat ? "rgba(0,0,0,0.80)" : "rgba(0,0,0,0.72)";
-  ctxScalar.lineWidth = 1.5;
+  // PIÙ FRECCE: step più basso
+  // (zoom alto -> più fitto)
+  const step = (z >= 10.0) ? 2 : (z >= 9.0 ? 3 : (z >= 8.0 ? 4 : 5));
+
+  // stile: contorno bianco + corpo scuro (si vede su relief e su sat)
+  ctxScalar.lineCap = "round";
+  ctxScalar.lineJoin = "round";
 
   const bounds = map.getBounds();
 
@@ -761,25 +769,56 @@ function drawWindArrows(){
 
       const idx = y*m.nx + x;
 
-      const u = currentData.wind_u.data[idx];
-      const v = currentData.wind_v.data[idx];
+      const u = currentData.wind_u.data[idx]; // eastward +
+      const v = currentData.wind_v.data[idx]; // northward +
       if(!isFinite(u) || !isFinite(v)) continue;
 
-      const p = map.latLngToContainerPoint([lat, lon]);
       const sp = Math.sqrt(u*u + v*v);
-      const len = clamp(sp * 2.2, 6, 22);
-      const ang = Math.atan2(v, u);
+      if(sp < 0.5) continue; // evita micro frecce inutili
+
+      const p = map.latLngToContainerPoint([lat, lon]);
+
+      // LUNGHEZZA più evidente
+      // (sp è in m/s; scalatura più aggressiva)
+      const len = clamp(sp * 3.4, 10, 34);
+
+      // *** FIX DIREZIONE ***
+      // Canvas: y cresce verso il basso. v>0 è verso Nord (su), quindi usa -v.
+      // Così le frecce coincidono con la direzione delle particelle (flusso "verso").
+      const ang = Math.atan2(-v, u);
+
+      // Testa freccia più grande
+      const head = clamp(len * 0.33, 6, 14);
+      const wing = head * 0.65;
 
       ctxScalar.save();
       ctxScalar.translate(p.x, p.y);
       ctxScalar.rotate(ang);
 
+      // Contorno chiaro (si vede sempre)
+      ctxScalar.strokeStyle = "rgba(255,255,255,0.80)";
+      ctxScalar.lineWidth = 3.4;
+
       ctxScalar.beginPath();
       ctxScalar.moveTo(-len, 0);
       ctxScalar.lineTo(0, 0);
-      ctxScalar.lineTo(-6, -4);
       ctxScalar.moveTo(0, 0);
-      ctxScalar.lineTo(-6, 4);
+      ctxScalar.lineTo(-head, -wing);
+      ctxScalar.moveTo(0, 0);
+      ctxScalar.lineTo(-head,  wing);
+      ctxScalar.stroke();
+
+      // Corpo scuro sopra (contrasto)
+      ctxScalar.strokeStyle = isSat ? "rgba(0,0,0,0.92)" : "rgba(0,0,0,0.85)";
+      ctxScalar.lineWidth = 2.0;
+
+      ctxScalar.beginPath();
+      ctxScalar.moveTo(-len, 0);
+      ctxScalar.lineTo(0, 0);
+      ctxScalar.moveTo(0, 0);
+      ctxScalar.lineTo(-head, -wing);
+      ctxScalar.moveTo(0, 0);
+      ctxScalar.lineTo(-head,  wing);
       ctxScalar.stroke();
 
       ctxScalar.restore();
