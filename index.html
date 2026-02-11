@@ -1,7 +1,7 @@
 <!DOCTYPE html>
 <html>
 <head>
-  <title>Sicilia MeteoHub - PRO (Shaded Relief)</title>
+  <title>Sicilia MeteoHub - PRO (Shaded Relief + Dynamic Arrows)</title>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
 
@@ -258,24 +258,35 @@
       background: '#e6e6e6'
     }).fitBounds(SICILY_BOUNDS);
 
-    // 1. BASE: Esri World Shaded Relief (Quella richiesta)
+    // 1. BASE: Esri World Shaded Relief
     L.tileLayer(
       'https://server.arcgisonline.com/ArcGIS/rest/services/World_Shaded_Relief/MapServer/tile/{z}/{y}/{x}',
       { maxZoom: 13, attribution: 'Tiles © Esri' }
     ).addTo(map);
 
-    // 2. RILIEVO EXTRA: Hillshade (per dettaglio)
+    // 2. RILIEVO EXTRA
     L.tileLayer(
       'https://server.arcgisonline.com/ArcGIS/rest/services/Elevation/World_Hillshade/MapServer/tile/{z}/{y}/{x}',
       { maxZoom: 19, className: 'hillshade-tiles', opacity: 0.5 }
     ).addTo(map);
 
     // 3. LABELS
-    map.createPane('labelsPane'); map.getPane('labelsPane').style.zIndex = 600; map.getPane('labelsPane').style.pointerEvents = 'none';
+    // Creiamo un pane specifico per le labels
+    map.createPane('labelsPane');
+    map.getPane('labelsPane').style.zIndex = 600;
+    map.getPane('labelsPane').style.pointerEvents = 'none';
+    
     L.tileLayer(
       'https://server.arcgisonline.com/ArcGIS/rest/services/Reference/World_Boundaries_and_Places_Alternate/MapServer/tile/{z}/{y}/{x}',
       { pane: 'labelsPane', opacity: 0.8 }
     ).addTo(map);
+
+    // 4. PARTICLES PANE (Top Layer!)
+    // Creiamo un pane con z-index altissimo per le particelle
+    map.createPane('particlePane');
+    map.getPane('particlePane').style.zIndex = 800; // Sopra tutto, anche le labels
+    map.getPane('particlePane').style.pointerEvents = 'none';
+
 
     createCanvasLayers();
     await loadCatalog();
@@ -373,7 +384,7 @@
                 const u = currentData.wind_u.data[i], v = currentData.wind_v.data[i];
                 val = Math.sqrt(u*u+v*v);
                 col = vividWindColor(val);
-                col.a = 0.85; // Alta opacità sfondo vento
+                col.a = 0.85;
             } else {
                 val = arr[i] || 0;
                 if(layer==='rain' && val < 0.1) { data[i*4+3]=0; continue; }
@@ -408,13 +419,15 @@
     const m = currentData.meta;
     const zoom = map.getZoom();
     
-    // DENSITÀ ALTA (Passo ridotto)
+    // DENSITÀ ALTA
     const stride = zoom >= 10 ? 2 : (zoom >= 9 ? 3 : 4);
-    // FRECCE SOTTILI
-    const arrowLen = zoom >= 10 ? 15 : 12;
+    
+    // PARAMETRI BASE PER DIMENSIONI
+    const baseLen = zoom >= 10 ? 22 : 18; // Più lunghe di base
+    const baseWidth = 1.5; // Più spesse di base
 
-    ctx.lineWidth = 0.8; // MOLTO SOTTILE
     ctx.lineCap = 'round';
+    ctx.lineJoin = 'round';
 
     for(let y=0; y<m.ny; y+=stride){
         const lat = m.la1 - y*m.dy;
@@ -427,17 +440,39 @@
             const lon = m.lo1 + x*m.dx;
             const p = map.latLngToContainerPoint([lat, lon]);
             
-            // FRECCIA SCURA (NERA) PER CONTRASTO SU SFONDO COLORATO
-            ctx.strokeStyle = "rgba(20,20,20, 0.75)";
+            // FRECCIA NERA/SCURA
+            ctx.strokeStyle = "rgba(20,20,20, 0.85)";
+            ctx.fillStyle = "rgba(20,20,20, 0.85)";
+
+            // CALCOLO SCALA PROPORZIONALE ALLA VELOCITÀ
+            // speedScale sarà circa 0.8 per venti deboli, fino a 2.0+ per venti forti
+            const speedScale = clamp(sp / 15.0, 0.6, 2.2); 
+
+            // APPLICA SCALA A LUNGHEZZA E SPESSORE
+            const currentLen = baseLen * speedScale;
+            ctx.lineWidth = baseWidth * speedScale;
+            const headSize = 4.0 * speedScale;
+
             
             const angle = Math.atan2(v, u);
-            const dx = Math.cos(angle)*arrowLen, dy = Math.sin(angle)*arrowLen;
+            const dx = Math.cos(angle)*currentLen, dy = Math.sin(angle)*currentLen;
             
             ctx.beginPath();
+            // Coda
             ctx.moveTo(p.x, p.y);
-            ctx.lineTo(p.x + dx, p.y - dy); 
-            ctx.lineTo(p.x + dx - 3.5*Math.cos(angle-0.5), p.y - dy + 3.5*Math.sin(angle-0.5));
+            // Punta
+            const tipX = p.x + dx;
+            const tipY = p.y - dy;
+            ctx.lineTo(tipX, tipY); 
             ctx.stroke();
+
+            // Disegna la punta della freccia (riempita per essere più evidente)
+            ctx.beginPath();
+            ctx.moveTo(tipX, tipY);
+            ctx.lineTo(tipX - headSize*Math.cos(angle-0.5), tipY - headSize*Math.sin(angle-0.5));
+            ctx.lineTo(tipX - headSize*Math.cos(angle+0.5), tipY - headSize*Math.sin(angle+0.5));
+            ctx.closePath();
+            ctx.fill();
         }
     }
   }
@@ -450,16 +485,17 @@
     velocityLayer = L.velocityLayer({
       displayValues: false,
       data: [ currentData.wind_u, currentData.wind_v ],
-      maxVelocity: 20.0,
+      maxVelocity: 25.0,
       velocityScale: 0.008,     
-      particleMultiplier: 1/140, // Densità
-      lineWidth: 1.5,            
+      particleMultiplier: 1/120, // Densità
+      lineWidth: 2.0,            // Spessore
       particleAge: 100,
       frameRate: 40,
-      opacity: 0.85,              
-      colorScale: ["#ffffff", "#ffffff"] // BIANCO
+      opacity: 1.0,              
+      colorScale: ["#ffffff", "#ffffff"], // BIANCO
+      pane: 'particlePane' // <--- IMPORTANTE: USA IL PANE IN ALTO
     });
-    // Aggiungi classe CSS per l'ombra
+    
     velocityLayer.onAdd = function(map){
         L.VelocityLayer.prototype.onAdd.call(this, map);
         this._canvas.classList.add('velocity-canvas');
@@ -478,10 +514,10 @@
     const m = currentData.meta;
     const contours = d3.contours().size([m.nx, m.ny]).thresholds(d3.range(960, 1050, 2))(currentData.press);
     
-    ctx.lineWidth = 1.0;
-    ctx.strokeStyle = "rgba(50,50,50,0.6)"; 
-    ctx.font = "11px sans-serif";
-    ctx.fillStyle = "#333";
+    ctx.lineWidth = 1.1;
+    ctx.strokeStyle = "rgba(40,40,40,0.7)"; 
+    ctx.font = "12px sans-serif";
+    ctx.fillStyle = "#222";
 
     contours.forEach(c => {
         ctx.beginPath();
