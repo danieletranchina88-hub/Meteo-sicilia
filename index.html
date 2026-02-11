@@ -1,7 +1,7 @@
 <!DOCTYPE html>
 <html>
 <head>
-  <title>Sicilia MeteoHub - PRO (Bordered Arrows + Pop Particles)</title>
+  <title>Sicilia MeteoHub - PRO (Color Flow)</title>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
 
@@ -85,12 +85,10 @@
         opacity: 0.85; 
     }
 
-    /* PARTICELLE BIANCHE "GALLEGGIANTI" */
-    /* Usiamo un'ombra nera netta per renderle visibili sul bianco */
+    /* PARTICELLE COLORATE (Standard Blend) */
     canvas.leaflet-layer.velocity-canvas {
-        mix-blend-mode: normal;
-        opacity: 1.0;
-        filter: drop-shadow(1px 1px 1px rgba(0,0,0,0.7)); 
+        mix-blend-mode: normal; 
+        opacity: 0.95;
     }
 
   </style>
@@ -154,6 +152,7 @@
   // ========= BOUNDS SICILIA =========
   const SICILY_BOUNDS = L.latLngBounds(L.latLng(35.0, 11.0), L.latLng(39.5, 16.5));
 
+  // SCALA COLORI VENTO (Usata sia per frecce che per particelle)
   const WIND_COLOR_SCALE = ["#000080", "#0044ff", "#00ddff", "#00ff55", "#ffff00", "#ff6600", "#ff0000", "#ff00ff"];
 
   const TEMP_STOPS = [
@@ -192,7 +191,7 @@
   let map;
   let currentData = null;
   let catalog = [];
-  const selected = new Set(['wind']);
+  const selected = new Set(['wind']); // Vento attivo default
   let showIsobars = false;
   let particlesOn = true;
   let velocityLayer = null;
@@ -372,8 +371,7 @@
                 const u = currentData.wind_u.data[i], v = currentData.wind_v.data[i];
                 val = Math.sqrt(u*u+v*v);
                 col = vividWindColor(val);
-                // SFONDO TRASPARENTE (0.45) per far risaltare le frecce
-                col.a = 0.45; 
+                col.a = 0.45; // Sfondo vento trasparente
             } else {
                 val = arr[i] || 0;
                 if(layer==='rain' && val < 0.1) { data[i*4+3]=0; continue; }
@@ -408,10 +406,12 @@
     const m = currentData.meta;
     const zoom = map.getZoom();
     
-    // DENSITÀ ALTA
+    // DENSITÀ
     const stride = zoom >= 10 ? 2 : (zoom >= 9 ? 3 : 4);
-    const baseLen = zoom >= 10 ? 28 : 22; // Base grande
-    const baseWidth = 2.5; // Base spessa
+    
+    // DIMENSIONI BASE GRANDI
+    const baseLen = zoom >= 10 ? 28 : 22; 
+    const baseWidth = 2.5; 
 
     ctx.lineCap = 'round';
     ctx.lineJoin = 'round';
@@ -427,7 +427,7 @@
             const lon = m.lo1 + x*m.dx;
             const p = map.latLngToContainerPoint([lat, lon]);
             
-            // 1. COLORE FRECCIA = COLORE VENTO
+            // 1. COLORE FRECCIA
             const cRg = vividWindColor(sp);
             const fillStyle = `rgb(${cRg.r},${cRg.g},${cRg.b})`;
             
@@ -435,8 +435,6 @@
             const speedScale = clamp(sp / 9.0, 0.65, 2.5); 
             const currentLen = baseLen * speedScale;
             const currentWidth = baseWidth * speedScale;
-            
-            // Testa della freccia
             const headLen = currentLen * 0.4;
             const headWidth = headLen * 0.75;
 
@@ -452,19 +450,18 @@
             ctx.moveTo(p.x, p.y);
             ctx.lineTo(shaftEndX, shaftEndY);
             ctx.strokeStyle = "#000000"; // Bordo nero
-            ctx.lineWidth = currentWidth + 1.8; // Bordo leggermente più largo
+            ctx.lineWidth = currentWidth + 2.0; 
             ctx.stroke();
 
             // B) COLORE INTERNO ASTA
             ctx.strokeStyle = fillStyle;
-            ctx.lineWidth = currentWidth; // Interno colorato
+            ctx.lineWidth = currentWidth;
             ctx.stroke();
 
             // PUNTA (TRIANGOLO PIENO)
             const tipX = p.x + currentLen * Math.cos(angle);
             const tipY = p.y - currentLen * Math.sin(angle);
             
-            // Calcolo angoli punta
             const c1X = shaftEndX - headWidth * Math.cos(angle - Math.PI / 2);
             const c1Y = shaftEndY - headWidth * Math.sin(angle - Math.PI / 2);
             const c2X = shaftEndX - headWidth * Math.cos(angle + Math.PI / 2);
@@ -492,18 +489,18 @@
     if(velocityLayer) { map.removeLayer(velocityLayer); velocityLayer = null; }
     if(!particlesOn || !currentData) return;
 
-    // PARTICELLE BIANCHE (+ Drop Shadow nel CSS)
+    // PARTICELLE COLORATE (Scala originale)
     velocityLayer = L.velocityLayer({
       displayValues: false,
       data: [ currentData.wind_u, currentData.wind_v ],
-      maxVelocity: 25.0,
+      maxVelocity: 20.0,
       velocityScale: 0.008,     
       particleMultiplier: 1/120,
       lineWidth: 2.0,            
       particleAge: 100,
       frameRate: 40,
       opacity: 1.0,              
-      colorScale: ["#ffffff", "#ffffff"], // BIANCO
+      colorScale: WIND_COLOR_SCALE, // COLORI ATTIVI
       pane: 'particlePane' 
     });
     
