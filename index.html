@@ -1,7 +1,7 @@
 <!DOCTYPE html>
 <html>
 <head>
-  <title>Sicilia MeteoHub - FINAL COMPLETE</title>
+  <title>Sicilia MeteoHub - FINAL STABLE</title>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
 
@@ -200,62 +200,18 @@
     {v: 45,  c: [89,22,3]}
   ];
 
-  // RAIN (Custom)
+  // RAIN (Custom: Start > 0.6mm)
   const RAIN_STOPS = [
-    {v:0, c:[111,111,111]},
-    {v:1, c:[59,120,164]},
-    {v:2, c:[59,127,161]},
-    {v:3, c:[59,135,159]},
-    {v:4, c:[59,143,157]},
-    {v:5, c:[59,150,155]},
-    {v:6, c:[59,161,161]},
-    {v:7, c:[59,161,111]},
-    {v:8, c:[59,161,61]},
-    {v:9, c:[94,161,60]},
-    {v:10, c:[130,161,59]},
-    {v:11, c:[136,161,59]},
-    {v:12, c:[142,161,59]},
-    {v:13, c:[148,161,59]},
-    {v:14, c:[154,161,59]},
-    {v:15, c:[161,161,59]},
-    {v:16, c:[161,150,59]},
-    {v:17, c:[161,140,59]},
-    {v:18, c:[161,130,59]},
-    {v:19, c:[161,120,59]},
-    {v:20, c:[161,59,59]},
-    {v:21, c:[161,59,68]},
-    {v:22, c:[161,59,77]},
-    {v:23, c:[161,59,86]},
-    {v:24, c:[161,59,96]},
-    {v:25, c:[161,59,105]},
-    {v:26, c:[161,59,114]},
-    {v:27, c:[161,59,123]},
-    {v:28, c:[161,59,133]},
-    {v:29, c:[161,59,142]},
-    {v:30, c:[161,59,151]},
-    {v:31, c:[161,59,161]},
-    {v:32, c:[161,61,161]},
-    {v:33, c:[161,63,161]},
-    {v:34, c:[162,65,162]},
-    {v:35, c:[162,67,162]},
-    {v:36, c:[162,69,162]},
-    {v:37, c:[163,71,163]},
-    {v:38, c:[163,73,163]},
-    {v:39, c:[163,75,163]},
-    {v:40, c:[164,77,164]},
-    {v:41, c:[164,79,164]},
-    {v:42, c:[165,81,165]},
-    {v:43, c:[165,83,165]},
-    {v:44, c:[165,85,165]},
-    {v:45, c:[166,87,166]},
-    {v:46, c:[166,89,166]},
-    {v:47, c:[166,91,166]},
-    {v:48, c:[167,93,167]},
-    {v:49, c:[167,95,167]},
-    {v:50, c:[168,168,168]}
+    {v:0.0, c:[0,0,0], a:0.0},
+    {v:0.6, c:[100,200,255], a:0.6}, // START FROM 0.6mm
+    {v:1.0, c:[0,150,255], a:0.7},
+    {v:5.0, c:[0,0,255], a:0.8},
+    {v:10,  c:[255,255,0], a:0.8},
+    {v:30,  c:[255,150,0], a:0.85},
+    {v:50,  c:[255,0,0], a:0.9}
   ];
 
-  // RH (Custom)
+  // RH (Custom Provided)
   const RH_STOPS = [
     {v:0, c:[173,85,56]},
     {v:1, c:[173,85,56]},
@@ -314,6 +270,7 @@
   function clamp(x,a,b){ return Math.max(a, Math.min(b, x)); }
   function lerp(a,b,t){ return a+(b-a)*t; }
 
+  // Interpola colori
   function interpStops(val, stops) {
     if(!stops || stops.length < 2) return {r:0,g:0,b:0,a:0};
     if(val <= stops[0].v) { const s=stops[0]; return {r:s.c[0],g:s.c[1],b:s.c[2],a:s.a||0.8}; }
@@ -457,7 +414,10 @@
                 col = vividWindColor(val); col.a = 0.45;
             } else {
                 val = arr[i] || 0;
-                if(layer==='rain' && val < 0.1) { data[i*4+3]=0; continue; }
+                
+                // RAIN CUTOFF FIX (> 0.6mm)
+                if(layer==='rain' && val < 0.6) { data[i*4+3]=0; continue; }
+                
                 if(layer==='cloud' && val < 10) { data[i*4+3]=0; continue; }
                 col = interpStops(val, stops); 
             }
@@ -577,11 +537,12 @@
     ctx.clearRect(0,0,s.x,s.y);
     if(!showIsobars || !currentData?.press) return;
     
-    // FIX ISOBARE: Pulisci dati < 900 e riempi con 1013
+    // FIX ISOBARE: Pulisci dati (sanitizzazione per evitare linee verticali)
     const cleanPress = new Float32Array(currentData.press.length);
     for(let i=0; i<currentData.press.length; i++) {
         let v = currentData.press[i];
-        if(!v || v < 900 || v > 1100) cleanPress[i] = 1013;
+        // Se nullo o fuori scala (es. 0 o < 800), forza a 1013 (neutro)
+        if(!v || v < 850 || v > 1100) cleanPress[i] = 1013;
         else cleanPress[i] = v;
     }
 
