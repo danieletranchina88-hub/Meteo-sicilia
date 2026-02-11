@@ -1,7 +1,7 @@
 <!DOCTYPE html>
 <html>
 <head>
-  <title>Sicilia MeteoHub - PRO (Color Flow)</title>
+  <title>Sicilia MeteoHub - PRO (Isobars with Labels)</title>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
 
@@ -85,7 +85,6 @@
         opacity: 0.85; 
     }
 
-    /* PARTICELLE COLORATE (Standard Blend) */
     canvas.leaflet-layer.velocity-canvas {
         mix-blend-mode: normal; 
         opacity: 0.95;
@@ -191,7 +190,7 @@
   let map;
   let currentData = null;
   let catalog = [];
-  const selected = new Set(['wind']); // Vento attivo default
+  const selected = new Set(['wind']); 
   let showIsobars = false;
   let particlesOn = true;
   let velocityLayer = null;
@@ -251,7 +250,7 @@
     map = L.map('map', {
       zoomControl: false,
       maxBounds: SICILY_BOUNDS.pad(0.5),
-      background: '#e6e6e6'
+      background: '#e0e0e0'
     }).fitBounds(SICILY_BOUNDS);
 
     // 1. BASE: Esri World Shaded Relief
@@ -371,7 +370,7 @@
                 const u = currentData.wind_u.data[i], v = currentData.wind_v.data[i];
                 val = Math.sqrt(u*u+v*v);
                 col = vividWindColor(val);
-                col.a = 0.45; // Sfondo vento trasparente
+                col.a = 0.45; 
             } else {
                 val = arr[i] || 0;
                 if(layer==='rain' && val < 0.1) { data[i*4+3]=0; continue; }
@@ -405,11 +404,7 @@
     if(!selected.has('wind') || !currentData) return;
     const m = currentData.meta;
     const zoom = map.getZoom();
-    
-    // DENSITÀ
     const stride = zoom >= 10 ? 2 : (zoom >= 9 ? 3 : 4);
-    
-    // DIMENSIONI BASE GRANDI
     const baseLen = zoom >= 10 ? 28 : 22; 
     const baseWidth = 2.5; 
 
@@ -427,11 +422,9 @@
             const lon = m.lo1 + x*m.dx;
             const p = map.latLngToContainerPoint([lat, lon]);
             
-            // 1. COLORE FRECCIA
             const cRg = vividWindColor(sp);
             const fillStyle = `rgb(${cRg.r},${cRg.g},${cRg.b})`;
             
-            // 2. SCALATURA DINAMICA
             const speedScale = clamp(sp / 9.0, 0.65, 2.5); 
             const currentLen = baseLen * speedScale;
             const currentWidth = baseWidth * speedScale;
@@ -440,28 +433,27 @@
 
             const angle = Math.atan2(v, u);
             
-            // --- DISEGNO FRECCIA ---
-            // ASTA
+            ctx.beginPath();
+            ctx.moveTo(p.x, p.y);
             const shaftEndX = p.x + (currentLen - headLen) * Math.cos(angle);
             const shaftEndY = p.y - (currentLen - headLen) * Math.sin(angle);
 
-            // A) BORDO NERO ASTA
+            // Bordo Nero
             ctx.beginPath();
             ctx.moveTo(p.x, p.y);
             ctx.lineTo(shaftEndX, shaftEndY);
-            ctx.strokeStyle = "#000000"; // Bordo nero
+            ctx.strokeStyle = "#000000";
             ctx.lineWidth = currentWidth + 2.0; 
             ctx.stroke();
 
-            // B) COLORE INTERNO ASTA
+            // Interno Colore
             ctx.strokeStyle = fillStyle;
             ctx.lineWidth = currentWidth;
             ctx.stroke();
 
-            // PUNTA (TRIANGOLO PIENO)
+            // Punta
             const tipX = p.x + currentLen * Math.cos(angle);
             const tipY = p.y - currentLen * Math.sin(angle);
-            
             const c1X = shaftEndX - headWidth * Math.cos(angle - Math.PI / 2);
             const c1Y = shaftEndY - headWidth * Math.sin(angle - Math.PI / 2);
             const c2X = shaftEndX - headWidth * Math.cos(angle + Math.PI / 2);
@@ -473,12 +465,9 @@
             ctx.lineTo(c2X, c2Y);
             ctx.closePath();
 
-            // A) BORDO NERO PUNTA
             ctx.strokeStyle = "#000000";
             ctx.lineWidth = 1.0;
             ctx.stroke();
-
-            // B) RIEMPIMENTO COLORE PUNTA
             ctx.fillStyle = fillStyle;
             ctx.fill();
         }
@@ -489,7 +478,7 @@
     if(velocityLayer) { map.removeLayer(velocityLayer); velocityLayer = null; }
     if(!particlesOn || !currentData) return;
 
-    // PARTICELLE COLORATE (Scala originale)
+    // PARTICELLE COLORATE STANDARD
     velocityLayer = L.velocityLayer({
       displayValues: false,
       data: [ currentData.wind_u, currentData.wind_v ],
@@ -500,7 +489,7 @@
       particleAge: 100,
       frameRate: 40,
       opacity: 1.0,              
-      colorScale: WIND_COLOR_SCALE, // COLORI ATTIVI
+      colorScale: WIND_COLOR_SCALE, // Usa la scala di colori
       pane: 'particlePane' 
     });
     
@@ -522,14 +511,17 @@
     const m = currentData.meta;
     const contours = d3.contours().size([m.nx, m.ny]).thresholds(d3.range(960, 1050, 2))(currentData.press);
     
-    ctx.lineWidth = 1.0;
-    ctx.strokeStyle = "rgba(50,50,50,0.6)"; 
-    ctx.font = "11px sans-serif";
-    ctx.fillStyle = "#333";
+    // Stile Isobare: Spesse e con Etichette
+    ctx.lineWidth = 1.8;
+    ctx.strokeStyle = "rgba(40,40,40,0.8)"; 
+    ctx.font = "bold 12px Arial";
+    ctx.textAlign = "center";
+    ctx.textBaseline = "middle";
 
     contours.forEach(c => {
         ctx.beginPath();
         c.coordinates.forEach(ring => {
+            let points = [];
             ring.forEach(pts => {
                 let first=true;
                 pts.forEach(coord => {
@@ -538,10 +530,22 @@
                    const p = map.latLngToContainerPoint([lat,lon]);
                    if(first) { ctx.moveTo(p.x,p.y); first=false; }
                    else ctx.lineTo(p.x,p.y);
+                   points.push(p);
                 });
             });
+            ctx.stroke();
+
+            // Disegna Etichetta al centro della linea se abbastanza lunga
+            if (points.length > 20) {
+                let mid = points[Math.floor(points.length/2)];
+                // Sfondo bianco per l'etichetta
+                ctx.fillStyle = "rgba(255,255,255,0.7)";
+                ctx.fillRect(mid.x-14, mid.y-7, 28, 14);
+                // Testo
+                ctx.fillStyle = "#000";
+                ctx.fillText(Math.round(c.value), mid.x, mid.y);
+            }
         });
-        ctx.stroke();
     });
   }
 
