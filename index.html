@@ -1,7 +1,7 @@
 <!DOCTYPE html>
 <html>
 <head>
-  <title>Sicilia MeteoHub - FINAL DARK PRO</title>
+  <title>Sicilia MeteoHub - SCIENTIFIC PRO</title>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
 
@@ -14,7 +14,7 @@
   <script src="https://d3js.org/d3.v7.min.js"></script>
 
   <style>
-    /* SFONDO SCURO */
+    /* SFONDO SCURO (DARK RELIEF) */
     body { margin: 0; background: #1a1a1a; font-family: 'Segoe UI', sans-serif; color: #ddd; overflow: hidden; }
     #map { position: absolute; top: 0; bottom: 0; width: 100%; background: #1a1a1a; }
 
@@ -23,7 +23,7 @@
       display: flex; flex-direction: column; gap: 10px; align-items: flex-end;
     }
     .panel {
-      background: rgba(30,30,30,0.85); /* Pannelli scuri */
+      background: rgba(30,30,30,0.9);
       backdrop-filter: blur(12px);
       padding: 10px;
       border-radius: 14px;
@@ -60,7 +60,7 @@
     .mini:hover { background: rgba(255,255,255,0.1); color:#fff; }
     .mini.active { background: #eee; color:#111; border-color: #fff; }
 
-    /* INFO BOX + WIND ROSE */
+    /* INFO BOX */
     #info-box { 
         position: absolute; top: 18px; left: 18px; z-index: 2000; 
         pointer-events: none; 
@@ -70,7 +70,7 @@
     #val-display { font-size: 3.6em; font-weight: 950; line-height: 0.9; color: #fff; text-shadow: 0 2px 5px rgba(0,0,0,0.8); }
     #unit-display { font-size: 1.15em; color: #aaa; font-weight: 850; margin-top: 4px; text-shadow: 0 1px 3px rgba(0,0,0,0.9); }
 
-    /* ROSA DEI VENTI (Chiara per contrasto) */
+    /* ROSA DEI VENTI */
     #wind-rose {
         width: 50px; height: 50px;
         background: rgba(255,255,255,0.9);
@@ -97,23 +97,19 @@
     #time-label { font-size: 1.45em; font-weight: 950; margin-left: 14px; min-width: 150px; text-align: center; color: #fff; }
     input[type=range] { flex-grow: 1; height: 6px; cursor: pointer; accent-color: #0077ff; background: rgba(255,255,255,0.2); }
 
-    /* TRUCCO PER MAPPA DARK RELIEF */
-    /* Invertiamo i colori della mappa chiara per ottenerne una scura dettagliata */
+    /* MAPPA SCURA (INVERTED RELIEF) */
     .dark-relief-tiles {
         filter: invert(100%) hue-rotate(180deg) brightness(0.8) contrast(1.2) grayscale(20%);
     }
 
-    /* I layer colorati devono essere "lighten" o "screen" per vedersi sul fondo scuro */
+    /* LAYER COLORATI (Screen per risaltare su scuro) */
     canvas.leaflet-layer.scalar-layer { 
         image-rendering: auto; 
-        mix-blend-mode: screen; /* Screen illumina il fondo scuro */
+        mix-blend-mode: screen; 
         opacity: 0.85; 
     }
 
-    canvas.leaflet-layer.velocity-canvas {
-        mix-blend-mode: normal; 
-        opacity: 0.95;
-    }
+    canvas.leaflet-layer.velocity-canvas { mix-blend-mode: normal; opacity: 0.95; }
 
   </style>
 </head>
@@ -144,23 +140,18 @@
       <div class="toggle active" onclick="toggleLayer('wind')">
         <span>VENTO (frecce) 🧭</span><span>●</span>
       </div>
-
       <div class="toggle" onclick="toggleLayer('temp')">
         <span>TEMP 🌡️</span><span>●</span>
       </div>
-
       <div class="toggle" onclick="toggleLayer('rain')">
         <span>PIOGGIA ☔</span><span>●</span>
       </div>
-
       <div class="toggle" onclick="toggleLayer('rh')">
         <span>UMIDITÀ 💧</span><span>●</span>
       </div>
-
       <div class="toggle" onclick="toggleLayer('press')">
         <span>PRESSIONE ⏲️</span><span>●</span>
       </div>
-
       <div class="toggle" onclick="toggleLayer('cloud')">
         <span>NUVOLE ☁️</span><span>●</span>
       </div>
@@ -170,7 +161,6 @@
       <div class="toggle" id="btn-iso" onclick="toggleIsobars()">
         <span>ISOBARE 〰️</span><span> </span>
       </div>
-      
       <div class="toggle" id="btn-grid" onclick="toggleGrid()">
         <span>RETICOLO #</span><span> </span>
       </div>
@@ -188,30 +178,68 @@
 <script>
   const SICILY_BOUNDS = L.latLngBounds(L.latLng(35.0, 11.0), L.latLng(39.5, 16.5));
 
-  const WIND_COLOR_SCALE = ["#000080", "#0044ff", "#00ddff", "#00ff55", "#ffff00", "#ff6600", "#ff0000", "#ff00ff"];
+  // ========= PALETTE SCIENTIFICHE (Ogni 2 gradi - Netto) =========
+  
+  const WIND_COLOR_SCALE = [
+      "#a1dcd3", "#74c2ae", "#52a386", // 0-10 km/h (Calma)
+      "#8bc34a", "#cddc39", // 10-30 km/h (Brezza)
+      "#ffeb3b", "#ffc107", // 30-50 km/h (Teso)
+      "#ff9800", "#ff5722", // 50-70 km/h (Forte)
+      "#f44336", "#9c27b0"  // > 70 km/h (Tempesta)
+  ];
 
+  // TEMPERATURA: Scala "Classic" ogni 2°C
   const TEMP_STOPS = [
-    {v:-10, c:[255, 255, 255]}, {v: -5, c:[180, 0, 255]}, {v:0, c:[0, 0, 255]},     
-    {v:5, c:[0, 100, 255]}, {v: 10, c:[0, 180, 0]}, {v: 15, c:[100, 255, 0]},
-    {v: 18, c:[200, 255, 0]}, {v: 20, c:[255, 255, 0]}, {v: 25, c:[255, 160, 0]},   
-    {v: 30, c:[255, 0, 0]}, {v: 35, c:[180, 0, 0]}, {v: 40, c:[100, 0, 0]}
+    {v:-10, c:[255,255,255]}, // Gelo
+    {v:-6,  c:[200,0,255]},   
+    {v:-4,  c:[150,0,200]},
+    {v:-2,  c:[100,0,150]},
+    {v:0,   c:[0,0,255]},     // 0°C Blu
+    {v:2,   c:[0,80,255]},
+    {v:4,   c:[0,150,255]},
+    {v:6,   c:[0,200,255]},
+    {v:8,   c:[0,255,255]},
+    {v:10,  c:[0,150,100]},   // 10°C Verde Scuro
+    {v:12,  c:[0,200,50]},
+    {v:14,  c:[50,255,50]},   // 14°C Verde Prato
+    {v:16,  c:[150,255,0]},
+    {v:18,  c:[200,255,0]},
+    {v:20,  c:[255,255,0]},   // 20°C Giallo
+    {v:22,  c:[255,220,0]},
+    {v:24,  c:[255,180,0]},
+    {v:26,  c:[255,120,0]},   // 26°C Arancio
+    {v:28,  c:[255,60,0]},
+    {v:30,  c:[255,0,0]},     // 30°C Rosso
+    {v:32,  c:[200,0,0]},
+    {v:34,  c:[150,0,0]},
+    {v:36,  c:[100,0,0]},     // 36°C Granata
+    {v:40,  c:[80,0,0]}       // 40°C Nero/Marrone
   ];
 
   const RAIN_STOPS = [
-    {v:0.0, c:[0,0,0], a:0.0}, {v:0.2, c:[100, 200, 255], a:0.6},
-    {v:1.0, c:[0, 150, 255], a:0.7}, {v:5.0, c:[0, 0, 255], a:0.8},     
-    {v:10,  c:[255, 255, 0], a:0.8}, {v:30,  c:[255, 150, 0], a:0.85}, {v:50,  c:[255, 0, 0], a:0.9}      
+    {v:0.0, c:[0,0,0], a:0.0},
+    {v:0.2, c:[100,200,255], a:0.6},
+    {v:1.0, c:[0,150,255], a:0.7},
+    {v:5.0, c:[0,0,255], a:0.8},
+    {v:10,  c:[255,255,0], a:0.8}, // Giallo = Forte
+    {v:30,  c:[255,150,0], a:0.85},
+    {v:50,  c:[255,0,0], a:0.9}
   ];
 
   const RH_STOPS = [
-    {v:20, c:[255, 100, 0], a:0.6}, {v:40, c:[255, 255, 0], a:0.5},
-    {v:60, c:[255, 255, 255], a:0.4}, {v:80, c:[100, 255, 100], a:0.6}, {v:95, c:[0, 100, 255],  a:0.7}   
+    {v:20, c:[255,100,0], a:0.6}, // Secco
+    {v:40, c:[255,255,0], a:0.5},
+    {v:60, c:[255,255,255], a:0.4},
+    {v:80, c:[100,255,100], a:0.6}, // Umido
+    {v:95, c:[0,100,255],  a:0.7}
   ];
 
   const PRESS_STOPS = [
-    {v:980, c:[120, 0, 255], a:0.6}, {v:1000, c:[0, 0, 255], a:0.5},
-    {v:1013, c:[0, 255, 100], a:0.4}, {v:1025, c:[255, 255, 0], a:0.5},
-    {v:1040, c:[255, 0, 0], a:0.6}   
+    {v:980, c:[120,0,255], a:0.6},
+    {v:1000, c:[0,0,255], a:0.5},
+    {v:1013, c:[0,255,100],a:0.4},
+    {v:1025, c:[255,255,0], a:0.5},
+    {v:1040, c:[255,0,0], a:0.6}
   ];
 
   const CLOUD_STOPS = [
@@ -227,13 +255,15 @@
   function clamp(x,a,b){ return Math.max(a, Math.min(b, x)); }
   function lerp(a,b,t){ return a+(b-a)*t; }
 
+  // Interpola colori (ma mantiene step netti dove necessario)
   function interpStops(val, stops) {
     if(!stops || stops.length < 2) return {r:0,g:0,b:0,a:0};
     if(val <= stops[0].v) { const s=stops[0]; return {r:s.c[0],g:s.c[1],b:s.c[2],a:s.a||0.8}; }
     for(let i=0;i<stops.length-1;i++){
+      // SEPARAZIONE NETTA: usa v[i] se valore è nel range v[i]...v[i+1]
       if(val >= stops[i].v && val < stops[i+1].v){
-        const s = stops[i]; 
-        return { r:s.c[0], g:s.c[1], b:s.c[2], a:('a'in s)?s.a:0.8 };
+        const s = stops[i];
+        return {r:s.c[0], g:s.c[1], b:s.c[2], a:('a'in s)?s.a:0.8};
       }
     }
     const s=stops[stops.length-1]; return {r:s.c[0],g:s.c[1],b:s.c[2],a:s.a||0.8};
@@ -252,37 +282,27 @@
   window.addEventListener('load', async () => {
     map = L.map('map', { zoomControl: false, maxBounds: SICILY_BOUNDS.pad(0.5), background: '#1a1a1a' }).fitBounds(SICILY_BOUNDS);
 
-    // 1. BASE: Esri Shaded Relief INVERTITA (DARK RELIEF)
+    // 1. BASE: DARK RELIEF (Inverted)
     L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/World_Shaded_Relief/MapServer/tile/{z}/{y}/{x}', { 
-        maxZoom: 13, 
-        attribution: 'Esri',
-        className: 'dark-relief-tiles' // Applica inversione colori
+        maxZoom: 13, attribution: 'Esri', className: 'dark-relief-tiles' 
     }).addTo(map);
 
     // 2. CONFINI SICILIA
-    map.createPane('boundaryPane');
-    map.getPane('boundaryPane').style.zIndex = 250;
-    map.getPane('boundaryPane').style.pointerEvents = 'none';
+    map.createPane('boundaryPane'); map.getPane('boundaryPane').style.zIndex = 250; map.getPane('boundaryPane').style.pointerEvents = 'none';
     fetch('https://raw.githubusercontent.com/openpolis/geojson-italy/master/geojson/limits_IT_regions.geojson')
         .then(r => r.json())
         .then(data => {
             const sicily = data.features.filter(f => f.properties.reg_name === "Sicilia")[0];
-            L.geoJSON(sicily, {
-                pane: 'boundaryPane',
-                style: { color: "#555", weight: 2, fillOpacity: 0 }
-            }).addTo(map);
+            L.geoJSON(sicily, { pane: 'boundaryPane', style: { color: "#555", weight: 2, fillOpacity: 0 } }).addTo(map);
         }).catch(e=>{});
 
-    // 3. HILLSHADE (Invertita leggermente per adattarsi)
+    // 3. HILLSHADE
     L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/Elevation/World_Hillshade/MapServer/tile/{z}/{y}/{x}', { 
-        maxZoom: 19, 
-        className: 'dark-relief-tiles', // Usa lo stesso filtro
-        opacity: 0.4 
+        maxZoom: 19, className: 'dark-relief-tiles', opacity: 0.4 
     }).addTo(map);
 
     // 4. LABELS
     map.createPane('labelsPane'); map.getPane('labelsPane').style.zIndex = 600; map.getPane('labelsPane').style.pointerEvents = 'none';
-    // Usa le etichette "Light" di Carto che, su sfondo scuro, sono leggibili
     L.tileLayer('https://{s}.basemaps.cartocdn.com/light_only_labels/{z}/{x}/{y}{r}.png', { pane: 'labelsPane', opacity: 0.9 }).addTo(map);
 
     map.createPane('particlePane'); map.getPane('particlePane').style.zIndex = 800; map.getPane('particlePane').style.pointerEvents = 'none';
@@ -300,7 +320,7 @@
     function mkCanvas(z, cls){
       const c = L.DomUtil.create('canvas', 'leaflet-layer ' + (cls||''));
       c.style.pointerEvents = 'none'; c.style.zIndex = z;
-      c.style.imageRendering = 'auto'; 
+      c.style.imageRendering = 'auto'; // SMOOTH
       map.getPanes().overlayPane.appendChild(c);
       return c;
     }
@@ -435,7 +455,9 @@
 
     if(!selected.has('wind') || !currentData) return;
     const m = currentData.meta; const zoom = map.getZoom();
-    const stride = zoom >= 10 ? 2 : (zoom >= 9 ? 3 : 4);
+    
+    // MENO FRECCE (Stride aumentato)
+    const stride = zoom >= 10 ? 3 : (zoom >= 9 ? 4 : 5);
     const baseLen = zoom >= 10 ? 28 : 22; const baseWidth = 2.5; 
     ctx.lineCap = 'round'; ctx.lineJoin = 'round';
 
@@ -460,8 +482,8 @@
             const shaftEndX = p.x + (currentLen-headLen)*Math.cos(angle);
             const shaftEndY = p.y + (currentLen-headLen)*Math.sin(angle);
             ctx.beginPath(); ctx.moveTo(p.x, p.y); ctx.lineTo(shaftEndX, shaftEndY);
-            ctx.strokeStyle = "#000000"; ctx.lineWidth = currentWidth+2.5; ctx.stroke(); // Bordo
-            ctx.strokeStyle = fillStyle; ctx.lineWidth = currentWidth; ctx.stroke(); // Interno
+            ctx.strokeStyle = "#000000"; ctx.lineWidth = currentWidth+2.5; ctx.stroke(); 
+            ctx.strokeStyle = fillStyle; ctx.lineWidth = currentWidth; ctx.stroke(); 
 
             // TESTA
             const tipX = p.x + currentLen*Math.cos(angle);
@@ -472,8 +494,8 @@
             const wing2Y = shaftEndY - headWidth*Math.sin(angle + Math.PI/2);
 
             ctx.beginPath(); ctx.moveTo(tipX, tipY); ctx.lineTo(wing1X, wing1Y); ctx.lineTo(wing2X, wing2Y); ctx.closePath();
-            ctx.fillStyle = "#000000"; ctx.fill(); ctx.lineWidth=1.0; ctx.stroke(); // Bordo
-            ctx.fillStyle = fillStyle; ctx.fill(); // Interno
+            ctx.fillStyle = "#000000"; ctx.fill(); ctx.lineWidth=1.0; ctx.stroke();
+            ctx.fillStyle = fillStyle; ctx.fill();
         }
     }
   }
@@ -481,9 +503,11 @@
   function updateParticles(){
     if(velocityLayer) { map.removeLayer(velocityLayer); velocityLayer = null; }
     if(!particlesOn || !currentData) return;
+    
+    // MENO PARTICELLE (1/180)
     velocityLayer = L.velocityLayer({
       displayValues: false, data: [ currentData.wind_u, currentData.wind_v ],
-      maxVelocity: 20.0, velocityScale: 0.008, particleMultiplier: 1/120, lineWidth: 2.0,            
+      maxVelocity: 20.0, velocityScale: 0.008, particleMultiplier: 1/180, lineWidth: 2.0,            
       particleAge: 100, frameRate: 40, opacity: 1.0, colorScale: WIND_COLOR_SCALE, pane: 'particlePane' 
     });
     velocityLayer.onAdd = function(map){ L.VelocityLayer.prototype.onAdd.call(this, map); this._canvas.classList.add('velocity-canvas'); };
@@ -497,14 +521,16 @@
     L.DomUtil.setPosition(isoCanvas, map.containerPointToLayerPoint([0,0]));
     ctx.clearRect(0,0,s.x,s.y);
     if(!showIsobars || !currentData?.press) return;
+    
+    // FIX ISOBARE: Rimuovi zeri o valori bassi
+    // Copia i dati per non mutare l'originale
+    const cleanPress = currentData.press.map(v => v < 950 ? 1013 : v);
+
     const m = currentData.meta;
-    const contours = d3.contours().size([m.nx, m.ny]).thresholds(d3.range(960, 1050, 2))(currentData.press);
-    ctx.lineWidth = 1.8; ctx.strokeStyle = "rgba(255,255,255,0.7)"; // Isobare bianche su scuro
+    const contours = d3.contours().size([m.nx, m.ny]).thresholds(d3.range(960, 1050, 2))(cleanPress);
+    ctx.lineWidth = 1.8; ctx.strokeStyle = "rgba(255,255,255,0.7)"; 
     ctx.font = "bold 12px Arial"; ctx.textAlign="center"; ctx.textBaseline="middle";
     contours.forEach(c => {
-        // FIX ISOBARE: Ignora valori irrealistici (<960) che causano linee verticali
-        if(c.value < 960) return;
-
         ctx.beginPath();
         c.coordinates.forEach(ring => {
             let pts = [];
