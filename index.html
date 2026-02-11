@@ -1,7 +1,7 @@
 <!DOCTYPE html>
 <html>
 <head>
-  <title>Sicilia MeteoHub - PRO (Sinottica)</title>
+  <title>Sicilia MeteoHub - PRO (Sinottica Grey Relief)</title>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
 
@@ -30,9 +30,8 @@
       border: 1px solid rgba(255,255,255,0.18);
       box-shadow: 0 12px 30px rgba(0,0,0,0.45);
     }
-    .layer-row { display:flex; gap:8px; align-items:center; justify-content:space-between; }
     .toggle {
-      width: 160px;
+      width: 170px;
       display:flex; align-items:center; justify-content:space-between;
       padding: 10px 12px; margin: 6px 0;
       background: rgba(255,255,255,0.06);
@@ -52,8 +51,9 @@
       color: #fff;
       box-shadow: 0 0 16px rgba(0,136,255,0.35);
     }
+
     .mini {
-      width: 160px;
+      width: 170px;
       padding: 9px 12px;
       border-radius: 10px;
       border: 1px solid rgba(255,255,255,0.12);
@@ -84,10 +84,12 @@
     #time-label { font-size: 1.45em; font-weight: 950; margin-left: 14px; min-width: 150px; text-align: center; text-shadow: 0 2px 12px rgba(0,0,0,0.95); }
     input[type=range] { flex-grow: 1; height: 6px; cursor: pointer; accent-color: #0088ff; }
 
-    /* Base-map relief look */
-    .hillshade-tiles { mix-blend-mode: multiply; filter: contrast(1.85) brightness(0.95); }
+    /* Relief overlay more visible */
+    .hillshade-tiles {
+      mix-blend-mode: multiply;
+      filter: contrast(1.95) brightness(0.92);
+    }
 
-    /* Canvas */
     canvas.leaflet-layer { image-rendering: auto; }
   </style>
 </head>
@@ -107,27 +109,27 @@
       <div style="font-weight:950; opacity:0.9; margin-bottom:6px;">LIVELLI (multi)</div>
 
       <div class="toggle active" onclick="toggleLayer('wind')">
-        <span>VENTO (frecce) 🧭</span><span id="dot-wind">●</span>
+        <span>VENTO (frecce) 🧭</span><span>●</span>
       </div>
 
       <div class="toggle" onclick="toggleLayer('temp')">
-        <span>TEMP 🌡️</span><span id="dot-temp">●</span>
+        <span>TEMP 🌡️</span><span>●</span>
       </div>
 
       <div class="toggle" onclick="toggleLayer('rain')">
-        <span>PIOGGIA ☔</span><span id="dot-rain">●</span>
+        <span>PIOGGIA ☔</span><span>●</span>
       </div>
 
       <div class="toggle" onclick="toggleLayer('rh')">
-        <span>UMIDITÀ 💧</span><span id="dot-rh">●</span>
+        <span>UMIDITÀ 💧</span><span>●</span>
       </div>
 
       <div class="toggle" onclick="toggleLayer('press')">
-        <span>PRESSIONE ⏲️</span><span id="dot-press">●</span>
+        <span>PRESSIONE ⏲️</span><span>●</span>
       </div>
 
       <div class="toggle" onclick="toggleLayer('cloud')">
-        <span>NUVOLE ☁️</span><span id="dot-cloud">●</span>
+        <span>NUVOLE ☁️</span><span>●</span>
       </div>
 
       <div style="height:1px; background: rgba(255,255,255,0.16); margin:10px 0;"></div>
@@ -150,88 +152,72 @@
   // =========================
   // CONFIG
   // =========================
+  const SICILY_BOUNDS = L.latLngBounds(L.latLng(35.0, 11.0), L.latLng(39.5, 16.5));
 
-  // Bounding box Sicilia (coerente col tuo python)
-  const SICILY_BOUNDS = L.latLngBounds(
-    L.latLng(35.0, 11.0),
-    L.latLng(39.5, 16.5)
-  );
+  // Original wind colors (particles) — EXACT
+  const WIND_COLOR_SCALE = ["#000080", "#0044ff", "#00ddff", "#00ff55", "#ffff00", "#ff6600", "#ff0000", "#ff00ff"];
 
-  // Colori vento (identici ai tuoi originali)
-  const WIND_COLOR_SCALE_DARK = ["#000080", "#0044ff", "#00ddff", "#00ff55", "#ffff00", "#ff6600", "#ff0000", "#ff00ff"];
-
-  // Versione più scura/contrastata per basemap chiara (stessa logica, più “ink”)
-  const WIND_COLOR_SCALE_LIGHT = ["#00004d", "#002c99", "#007a99", "#007a2a", "#b38f00", "#b34700", "#990000", "#800080"];
-
-  // Palette temperatura richiesta: -15 viola scuro -> 0 ciano -> 15 giallo chiaro -> 20 giallo -> 25 arancione chiaro -> 30 arancione -> 35 rosso -> 45 rosso scuro
+  // Temperature palette stops (as requested)
   const TEMP_STOPS = [
-    {v:-15, c:[55, 0, 110]},   // viola scuro
-    {v:  0, c:[0, 220, 255]},  // ciano
-    {v: 15, c:[255, 255, 160]},// giallo chiaro
-    {v: 20, c:[255, 235, 0]},  // giallo
-    {v: 25, c:[255, 170, 70]}, // arancione chiaro
-    {v: 30, c:[255, 120, 0]},  // arancione
-    {v: 35, c:[235, 30, 0]},   // rosso
-    {v: 45, c:[120, 0, 0]}     // rosso scuro
+    {v:-15, c:[55, 0, 110]},
+    {v:  0, c:[0, 220, 255]},
+    {v: 15, c:[255, 255, 160]},
+    {v: 20, c:[255, 235, 0]},
+    {v: 25, c:[255, 170, 70]},
+    {v: 30, c:[255, 120, 0]},
+    {v: 35, c:[235, 30, 0]},
+    {v: 45, c:[120, 0, 0]}
   ];
 
-  // Nuvole: bianco -> grigio scuro (0 trasparente)
   const CLOUD_STOPS = [
     {v:  0, c:[0,0,0],   a:0.00},
-    {v: 20, c:[235,235,235], a:0.22},
-    {v: 50, c:[190,190,190], a:0.34},
-    {v: 80, c:[120,120,120], a:0.48},
-    {v:100, c:[60,60,60],    a:0.62}
+    {v: 20, c:[235,235,235], a:0.26},
+    {v: 50, c:[190,190,190], a:0.38},
+    {v: 80, c:[120,120,120], a:0.52},
+    {v:100, c:[60,60,60],    a:0.66}
   ];
 
-  // Pioggia, RH, Pressione (lasciate coerenti con la tua logica precedente)
   const RAIN_STOPS = [
     {v:0.0,  c:[0,0,0], a:0.00},
-    {v:0.1,  c:[0,200,255], a:0.40},
-    {v:2.0,  c:[0,0,255],   a:0.55},
-    {v:10.0, c:[150,0,200], a:0.70}
+    {v:0.1,  c:[0,200,255], a:0.42},
+    {v:2.0,  c:[0,0,255],   a:0.58},
+    {v:10.0, c:[150,0,200], a:0.74}
   ];
 
   const RH_STOPS = [
-    {v:20,c:[200,150,50], a:0.35},
-    {v:40,c:[210,210,210], a:0.33},
-    {v:60,c:[110,255,120], a:0.35},
-    {v:80,c:[60,160,255],  a:0.40},
-    {v:95,c:[0,0,200],     a:0.45}
+    {v:20,c:[200,150,50], a:0.36},
+    {v:40,c:[210,210,210], a:0.34},
+    {v:60,c:[110,255,120], a:0.36},
+    {v:80,c:[60,160,255],  a:0.42},
+    {v:95,c:[0,0,200],     a:0.48}
   ];
 
-  // Pressione: NON cambio “schema” che ti piaceva (blu->rosso senza buchi)
   const PRESS_STOPS = [
-    {v:980,  c:[0,70,255],   a:0.38},
-    {v:995,  c:[0,170,255],  a:0.38},
-    {v:1005, c:[0,255,200],  a:0.38},
-    {v:1013, c:[255,255,255],a:0.40},
-    {v:1022, c:[255,200,0],  a:0.38},
-    {v:1035, c:[255,60,0],   a:0.42}
+    {v:980,  c:[0,70,255],   a:0.40},
+    {v:995,  c:[0,170,255],  a:0.40},
+    {v:1005, c:[0,255,200],  a:0.40},
+    {v:1013, c:[255,255,255],a:0.42},
+    {v:1022, c:[255,200,0],  a:0.40},
+    {v:1035, c:[255,60,0],   a:0.44}
   ];
 
   // =========================
   // GLOBALS
   // =========================
   let map;
-  let baseGray, baseRef, baseHill;
-  let isLightBase = true; // la tua mappa grigia è "chiara" come base
+  let baseGray, baseHill, baseRef;
 
   let currentData = null;
   let catalog = [];
 
-  // Multi-layer selection
-  const selected = new Set(['wind']); // default: vento frecce ON
+  const selected = new Set(['wind']);  // default wind arrows ON
   let showIsobars = false;
 
-  // Particles overlay (sempre possibile, indipendente dai layer)
   let particlesOn = true;
   let velocityLayer = null;
 
-  // Canvas layers
   let heatCanvas, windBgCanvas, arrowCanvas, isoCanvas;
 
-  // Play
   let isPlaying = false;
   let playTimer = null;
 
@@ -270,32 +256,38 @@
     return Math.sqrt(u*u+v*v); // m/s
   }
 
-  function windColorForSpeed(speedMs){
-    // Mappa speed (0..18 m/s) -> colorScale 8 stop
-    const scale = isLightBase ? WIND_COLOR_SCALE_LIGHT : WIND_COLOR_SCALE_DARK;
+  function hexToRgb(h){
+    const x = h.replace('#','');
+    return {r:parseInt(x.slice(0,2),16), g:parseInt(x.slice(2,4),16), b:parseInt(x.slice(4,6),16)};
+  }
+
+  // More vivid wind color (same palette, boosted)
+  function vividWindColor(speedMs){
     const maxV = 18.0;
     const t = clamp(speedMs / maxV, 0, 0.999999);
-    const n = scale.length;
+    const n = WIND_COLOR_SCALE.length;
     const pos = t*(n-1);
     const i = Math.floor(pos);
     const f = pos - i;
 
-    // parse hex
-    function hexToRgb(h){
-      const x = h.replace('#','');
-      return {r:parseInt(x.slice(0,2),16), g:parseInt(x.slice(2,4),16), b:parseInt(x.slice(4,6),16)};
-    }
-    const c1 = hexToRgb(scale[i]);
-    const c2 = hexToRgb(scale[Math.min(i+1,n-1)]);
-    return {
-      r:Math.round(lerp(c1.r,c2.r,f)),
-      g:Math.round(lerp(c1.g,c2.g,f)),
-      b:Math.round(lerp(c1.b,c2.b,f))
-    };
+    const c1 = hexToRgb(WIND_COLOR_SCALE[i]);
+    const c2 = hexToRgb(WIND_COLOR_SCALE[Math.min(i+1,n-1)]);
+
+    let r = Math.round(lerp(c1.r,c2.r,f));
+    let g = Math.round(lerp(c1.g,c2.g,f));
+    let b = Math.round(lerp(c1.b,c2.b,f));
+
+    // Boost: more contrast and "punch"
+    // Push away from mid-gray, slightly increase brightness
+    const boost = 1.18;
+    r = clamp(Math.round(r * boost), 0, 255);
+    g = clamp(Math.round(g * boost), 0, 255);
+    b = clamp(Math.round(b * boost), 0, 255);
+
+    return {r,g,b};
   }
 
   function unitForPicker(){
-    // Mostra unità “sensata” rispetto a cosa stai puntando (priorità: layer più “pesante” attivo)
     if(selected.has('temp')) return '°C';
     if(selected.has('rain')) return 'mm';
     if(selected.has('press')) return 'hPa';
@@ -313,7 +305,6 @@
     if(x<0||x>=m.nx||y<0||y>=m.ny) return null;
     const idx=y*m.nx+x;
 
-    // Priorità: temp > rain > press > rh > cloud > wind
     if(selected.has('temp')) return {v: currentData.temp[idx], fmt: (z)=>z.toFixed(1)};
     if(selected.has('rain')) return {v: currentData.rain[idx], fmt: (z)=>z.toFixed(1)};
     if(selected.has('press')) return {v: currentData.press[idx], fmt: (z)=>Math.round(z).toString()};
@@ -322,7 +313,6 @@
       const arr = (currentData.cloud ?? currentData.cld ?? currentData.tcc);
       if(Array.isArray(arr)) return {v: arr[idx], fmt: (z)=>Math.round(z).toString()};
     }
-    // vento (km/h)
     const sp = speedAtIdx(idx) * 3.6;
     return {v: sp, fmt: (z)=>z.toFixed(1)};
   }
@@ -337,7 +327,7 @@
       maxBoundsViscosity: 0.9
     }).fitBounds(SICILY_BOUNDS);
 
-    // Base: ESRI Light Gray Canvas + hillshade + reference labels
+    // EXACT base map you want: Light Gray + Hillshade + Reference labels
     baseGray = L.tileLayer(
       'https://server.arcgisonline.com/ArcGIS/rest/services/Canvas/World_Light_Gray_Base/MapServer/tile/{z}/{y}/{x}',
       { maxZoom: 19, attribution: 'Tiles © Esri' }
@@ -345,7 +335,7 @@
 
     baseHill = L.tileLayer(
       'https://server.arcgisonline.com/ArcGIS/rest/services/Elevation/World_Hillshade/MapServer/tile/{z}/{y}/{x}',
-      { maxZoom: 19, opacity: 0.85, className: 'hillshade-tiles', attribution: 'Hillshade © Esri' }
+      { maxZoom: 19, opacity: 0.90, className: 'hillshade-tiles', attribution: 'Hillshade © Esri' }
     ).addTo(map);
 
     baseRef = L.tileLayer(
@@ -359,7 +349,6 @@
     map.on('mousemove', onPick);
     map.on('click', onPick);
 
-    // Redraw on move
     map.on('moveend zoomend resize', () => redrawAll());
 
     document.getElementById('unit-display').innerText = unitForPicker();
@@ -373,7 +362,6 @@
       map.getPanes().overlayPane.appendChild(c);
       return c;
     }
-    // z-order: heatmaps < wind background < arrows < isobars < particles (velocity pane is separate)
     heatCanvas   = mkCanvas(300);
     windBgCanvas = mkCanvas(340);
     arrowCanvas  = mkCanvas(380);
@@ -414,21 +402,17 @@
   }
 
   // =========================
-  // DRAW PIPELINE
+  // DRAW
   // =========================
   function redrawAll(){
     if(!currentData) return;
-
     drawHeatmapsHD();
     drawWindBackground();
-    drawWindArrows();
+    drawWindArrows();     // <<< improved arrows
     drawIsobars();
-
-    // Particelle: SEMPRE possibili e indipendenti dai layer
-    updateParticles();
+    updateParticles();    // particles independent
   }
 
-  // --- HD heatmaps (NO quadrati): render su griglia offscreen e poi scala con smoothing ---
   function drawHeatmapsHD(){
     const ctx = heatCanvas.getContext('2d');
     const s = map.getSize();
@@ -439,25 +423,21 @@
 
     if(!currentData?.meta) return;
 
-    // Se nessun layer “griglia” è selezionato, niente heat
     const gridLayers = ['temp','rain','rh','press','cloud'];
     const activeGrids = gridLayers.filter(k => selected.has(k));
     if(activeGrids.length === 0) return;
 
     const m = currentData.meta;
 
-    // Opacità intelligente: più layer => meno alpha per ciascuno, ma senza diventare invisibile
     const alphaFactor = clamp(1.0 / Math.sqrt(activeGrids.length), 0.45, 1.0);
 
-    // Offscreen a risoluzione griglia
     const off = document.createElement('canvas');
     off.width = m.nx;
     off.height = m.ny;
-    const octx = off.getContext('2d', { willReadFrequently: false });
+    const octx = off.getContext('2d');
     const img = octx.createImageData(m.nx, m.ny);
     const data = img.data;
 
-    // Helper: prendi array del layer
     function getArr(layer){
       if(layer==='temp') return currentData.temp;
       if(layer==='rain') return currentData.rain;
@@ -467,25 +447,16 @@
       return null;
     }
 
-    // Per evitare “dominanza” di un layer solo, disegniamo uno per volta
     activeGrids.forEach(layer => {
       const arr = getArr(layer);
       if(!Array.isArray(arr)) return;
 
-      // reset offscreen pixels a trasparente ogni layer
       data.fill(0);
 
       for(let y=0;y<m.ny;y++){
         for(let x=0;x<m.nx;x++){
           const idx = y*m.nx + x;
           let val = arr[idx] ?? 0;
-
-          // unità/normalizzazioni:
-          // - cloud: ci aspettiamo 0..100
-          // - rain: già mm
-          // - temp: °C
-          // - rh: %
-          // - press: hPa
 
           let col;
           if(layer==='temp') col = interpStops(val, TEMP_STOPS);
@@ -495,23 +466,21 @@
           else if(layer==='cloud') col = interpStops(val, CLOUD_STOPS);
           else col = {r:0,g:0,b:0,a:0};
 
-          // Filtri trasparenza minimi per “sporcare” meno
           if(layer==='rain' && val < 0.1) col.a = 0;
           if(layer==='cloud' && val < 5) col.a = 0;
 
-          // Applica alphaFactor e “boost” per colori più evidenti (come richiesto), mantenendo trasparenza
           let a = col.a * alphaFactor;
 
-          // Boost controllato: aumentiamo saturazione percepita via alpha (non altera la gradazione)
-          if(layer==='temp') a *= 1.20;
-          if(layer==='press') a *= 1.15;
-          if(layer==='rain') a *= 1.25;
-          if(layer==='cloud') a *= 1.15;
-          if(layer==='rh') a *= 1.10;
+          // vivid but still transparent
+          if(layer==='temp') a *= 1.25;
+          if(layer==='press') a *= 1.18;
+          if(layer==='rain') a *= 1.30;
+          if(layer==='cloud') a *= 1.20;
+          if(layer==='rh') a *= 1.12;
 
-          a = clamp(a, 0, 0.82);
+          a = clamp(a, 0, 0.84);
 
-          const p = (y*m.nx + x)*4;
+          const p = idx*4;
           data[p+0] = col.r;
           data[p+1] = col.g;
           data[p+2] = col.b;
@@ -521,10 +490,8 @@
 
       octx.putImageData(img, 0, 0);
 
-      // Proietta sull’area Sicilia in pixel (rettangolo)
       const topLeft = map.latLngToContainerPoint([m.la1, m.lo1]);
       const bottomRight = map.latLngToContainerPoint([m.la2, m.lo2]);
-
       const x0 = Math.min(topLeft.x, bottomRight.x);
       const y0 = Math.min(topLeft.y, bottomRight.y);
       const w  = Math.abs(bottomRight.x - topLeft.x);
@@ -532,13 +499,11 @@
 
       ctx.save();
       ctx.imageSmoothingEnabled = true;
-      ctx.globalCompositeOperation = 'source-over';
       ctx.drawImage(off, x0, y0, w, h);
       ctx.restore();
     });
   }
 
-  // --- Wind intensity background (solo se layer vento selezionato) ---
   function drawWindBackground(){
     const ctx = windBgCanvas.getContext('2d');
     const s = map.getSize();
@@ -551,7 +516,6 @@
 
     const m = currentData.meta;
 
-    // Offscreen a griglia
     const off = document.createElement('canvas');
     off.width = m.nx;
     off.height = m.ny;
@@ -562,10 +526,9 @@
     for(let y=0;y<m.ny;y++){
       for(let x=0;x<m.nx;x++){
         const idx = y*m.nx + x;
-        const sp = speedAtIdx(idx); // m/s
-        const c = windColorForSpeed(sp);
-        // sfondo “sinottico” leggero, così non copre gli altri layer
-        const a = 0.18; // fisso, leggero ma visibile
+        const sp = speedAtIdx(idx);
+        const c = vividWindColor(sp);
+        const a = 0.20; // visible but not covering
         const p = idx*4;
         d[p+0]=c.r; d[p+1]=c.g; d[p+2]=c.b; d[p+3]=Math.round(a*255);
       }
@@ -574,7 +537,6 @@
 
     const topLeft = map.latLngToContainerPoint([m.la1, m.lo1]);
     const bottomRight = map.latLngToContainerPoint([m.la2, m.lo2]);
-
     const x0 = Math.min(topLeft.x, bottomRight.x);
     const y0 = Math.min(topLeft.y, bottomRight.y);
     const w  = Math.abs(bottomRight.x - topLeft.x);
@@ -586,7 +548,7 @@
     ctx.restore();
   }
 
-  // --- Wind arrows (più evidenti, più numerose, direzione coerente con u/v) ---
+  // <<< MORE arrows, bigger, thicker, brighter
   function drawWindArrows(){
     const ctx = arrowCanvas.getContext('2d');
     const s = map.getSize();
@@ -600,27 +562,29 @@
     const m = currentData.meta;
     const zoom = map.getZoom();
 
-    // densità frecce: più zoom => più fitte
-    let stride = 8;
-    if(zoom >= 9) stride = 6;
-    if(zoom >= 10) stride = 5;
-    if(zoom >= 11) stride = 4;
+    // More arrows: smaller stride
+    let stride = 6;
+    if(zoom >= 9) stride = 5;
+    if(zoom >= 10) stride = 4;
+    if(zoom >= 11) stride = 3;
 
-    // grandezza frecce
-    const baseLen = (zoom >= 11) ? 14 : (zoom >= 10 ? 12 : 10);
-    const head = 4.5;
+    // Bigger arrows
+    const baseLen = (zoom >= 11) ? 20 : (zoom >= 10 ? 18 : 16);
+    const head = 7;
 
     ctx.save();
-    ctx.globalAlpha = 0.95;
-    ctx.lineWidth = 2.0;
+    ctx.globalAlpha = 0.98;
+    ctx.lineWidth = 3.2;           // thicker
     ctx.lineCap = 'round';
     ctx.lineJoin = 'round';
 
-    // Per direzione coerente: convertiamo un piccolo passo in lat/lon
-    // u = est (lon+), v = nord (lat+)
+    // Dark outline to pop on gray basemap
+    const outline = true;
+
     for(let y=0; y<m.ny; y+=stride){
       const lat = m.la1 - (y*m.dy);
       const cosLat = Math.cos(lat * Math.PI/180);
+
       for(let x=0; x<m.nx; x+=stride){
         const lon = m.lo1 + (x*m.dx);
         const idx = y*m.nx + x;
@@ -628,24 +592,20 @@
         const u = currentData.wind_u?.data?.[idx] ?? 0;
         const v = currentData.wind_v?.data?.[idx] ?? 0;
         const sp = Math.sqrt(u*u+v*v);
-        if(sp < 0.6) continue;
+        if(sp < 0.5) continue;
 
         const p0 = map.latLngToContainerPoint([lat, lon]);
 
-        // direzione: passo in gradi proporzionale al vettore (normalizzato)
         const nx = u / sp;
         const ny = v / sp;
 
-        // lunghezza proporzionale alla velocità (m/s) ma clamped
-        const len = baseLen * clamp(sp/6.0, 0.65, 2.2);
+        const len = baseLen * clamp(sp/5.0, 0.75, 2.6);
 
-        // trasforma in pixel: uso un delta lat/lon piccolo per ottenere un p1 coerente
-        const degStep = 0.06; // piccolo (non dipende dall'unità)
+        const degStep = 0.07;
         const lat2 = lat + (ny * degStep);
         const lon2 = lon + (nx * degStep / Math.max(0.25, cosLat));
         const pRef = map.latLngToContainerPoint([lat2, lon2]);
 
-        // direzione in pixel
         let dx = pRef.x - p0.x;
         let dy = pRef.y - p0.y;
         const dLen = Math.sqrt(dx*dx + dy*dy) || 1;
@@ -653,16 +613,34 @@
 
         const p1 = { x: p0.x + dx*len, y: p0.y + dy*len };
 
-        const col = windColorForSpeed(sp);
-        ctx.strokeStyle = `rgb(${col.r},${col.g},${col.b})`;
+        const col = vividWindColor(sp);
 
-        // asta
+        // Outline stroke first (black shadow)
+        if(outline){
+          ctx.strokeStyle = "rgba(0,0,0,0.55)";
+          ctx.lineWidth = 5.2;
+          ctx.beginPath();
+          ctx.moveTo(p0.x, p0.y);
+          ctx.lineTo(p1.x, p1.y);
+          ctx.stroke();
+          ctx.beginPath();
+          const ang0 = Math.atan2(dy, dx);
+          ctx.moveTo(p1.x, p1.y);
+          ctx.lineTo(p1.x - head*Math.cos(ang0 - 0.6), p1.y - head*Math.sin(ang0 - 0.6));
+          ctx.moveTo(p1.x, p1.y);
+          ctx.lineTo(p1.x - head*Math.cos(ang0 + 0.6), p1.y - head*Math.sin(ang0 + 0.6));
+          ctx.stroke();
+        }
+
+        // Main color stroke
+        ctx.strokeStyle = `rgb(${col.r},${col.g},${col.b})`;
+        ctx.lineWidth = 3.0;
+
         ctx.beginPath();
         ctx.moveTo(p0.x, p0.y);
         ctx.lineTo(p1.x, p1.y);
         ctx.stroke();
 
-        // punta
         const ang = Math.atan2(dy, dx);
         ctx.beginPath();
         ctx.moveTo(p1.x, p1.y);
@@ -676,7 +654,6 @@
     ctx.restore();
   }
 
-  // --- Isobars (sempre visibili sopra, e SU DARK bianche: qui base è chiara => scure) ---
   function drawIsobars(){
     const ctx = isoCanvas.getContext('2d');
     const s = map.getSize();
@@ -690,7 +667,6 @@
     const m = currentData.meta;
     const values = currentData.press;
 
-    // range adattivo
     let minP = Infinity, maxP = -Infinity;
     for(let i=0;i<values.length;i++){
       const v = values[i];
@@ -703,23 +679,17 @@
     const start = Math.floor(minP/2)*2;
     const end   = Math.ceil(maxP/2)*2 + 2;
 
-    const contours = d3.contours()
-      .size([m.nx, m.ny])
-      .thresholds(d3.range(start, end, 2))(values);
+    const contours = d3.contours().size([m.nx, m.ny]).thresholds(d3.range(start, end, 2))(values);
 
     ctx.save();
     ctx.lineWidth = 1.6;
-
-    // Base chiara => isobare più scure (se in futuro passi a dark base, qui puoi invertire)
-    ctx.strokeStyle = "rgba(0,0,0,0.70)";
+    ctx.strokeStyle = "rgba(0,0,0,0.72)";
     ctx.font = "900 12px Arial";
     ctx.textAlign = "center";
     ctx.textBaseline = "middle";
-    ctx.fillStyle = "rgba(255,255,255,0.85)";
 
     contours.forEach(c => {
       ctx.beginPath();
-
       const labelCandidates = [];
 
       c.coordinates.forEach(ring => {
@@ -734,19 +704,16 @@
             if(first){ ctx.moveTo(p.x,p.y); first=false; }
             else ctx.lineTo(p.x,p.y);
           });
-          if(linePts.length > 80) labelCandidates.push(linePts);
+          if(linePts.length > 90) labelCandidates.push(linePts);
         });
       });
 
       ctx.stroke();
 
-      // Etichette pressione
       labelCandidates.forEach(pts => {
         const mid = pts[Math.floor(pts.length/2)];
-        // box
-        ctx.fillStyle = "rgba(255,255,255,0.88)";
+        ctx.fillStyle = "rgba(255,255,255,0.90)";
         ctx.fillRect(mid.x-18, mid.y-9, 36, 18);
-        // testo
         ctx.fillStyle = "rgba(0,0,0,0.92)";
         ctx.fillText(Math.round(c.value), mid.x, mid.y);
       });
@@ -756,90 +723,65 @@
   }
 
   // =========================
-  // PARTICLES (velocity layer)
+  // PARTICLES (always available)
   // =========================
   function updateParticles(){
-    // sempre rimovibile col tasto
     if(velocityLayer){
       map.removeLayer(velocityLayer);
       velocityLayer = null;
     }
     if(!particlesOn || !currentData) return;
 
-    // performance: meno particelle su schermi grandi / dpr alto
     const dpr = window.devicePixelRatio || 1;
     const bigScreen = (window.innerWidth * window.innerHeight) > 1400000;
-    let particleMult = 1/140;
-    if(bigScreen) particleMult = 1/180;
-    if(dpr >= 2) particleMult = 1/220;
+
+    let particleMult = 1/150;
+    if(bigScreen) particleMult = 1/200;
+    if(dpr >= 2) particleMult = 1/240;
 
     try{
       velocityLayer = L.velocityLayer({
         displayValues: false,
         data: [ currentData.wind_u, currentData.wind_v ],
-        // parametri originali (non tocchiamo fisica “di base”)
         maxVelocity: 18.0,
         velocityScale: 0.006,
         particleMultiplier: particleMult,
-        lineWidth: 0.8,
+        lineWidth: 0.85,
         particleAge: 140,
         frameRate: 60,
         opacity: 0.90,
-        // Le particelle DEVONO essere scure: qui usiamo una scala scura (non bianco),
-        // ma coerente: più veloce => più “acceso” (nero -> grigio scuro -> quasi nero violaceo).
-        // Se vuoi ESATTAMENTE “nere” sempre, dimmelo e le fisso a #111.
-        colorScale: isLightBase
-          ? ["#111111", "#151515", "#1a1a1a", "#202020", "#262626", "#2c2c2c", "#333333", "#3a3a3a"]
-          : ["#000000", "#050505", "#0a0a0a", "#0f0f0f", "#141414", "#1a1a1a", "#202020", "#262626"]
+        // particles dark as you wanted
+        colorScale: ["#111111", "#151515", "#1a1a1a", "#202020", "#262626", "#2c2c2c", "#333333", "#3a3a3a"]
       });
       velocityLayer.addTo(map);
     } catch(e){}
   }
 
   // =========================
-  // UI ACTIONS
+  // UI
   // =========================
   window.toggleLayer = function(name){
-    const el = findToggleEl(name);
+    const el = event.currentTarget;
     if(selected.has(name)){
       selected.delete(name);
-      if(el) el.classList.remove('active');
+      el.classList.remove('active');
     } else {
       selected.add(name);
-      if(el) el.classList.add('active');
+      el.classList.add('active');
     }
 
-    // Se spengo vento, spengo anche isobare? (NO: le isobare sono un overlay separato)
-    // Picker unit
-    document.getElementById('unit-display').innerText = unitForPicker();
-
-    // Se le nuvole non esistono nel JSON, avviso e non crasha
+    // if clouds missing in json, auto-disable silently
     if(name === 'cloud' && selected.has('cloud')){
       const arr = (currentData?.cloud ?? currentData?.cld ?? currentData?.tcc);
       if(currentData && !Array.isArray(arr)){
-        // Non faccio alert per non “rompere” mobile, ma spengo subito
         selected.delete('cloud');
-        if(el) el.classList.remove('active');
-        document.getElementById('unit-display').innerText = unitForPicker();
+        el.classList.remove('active');
       }
     }
 
+    document.getElementById('unit-display').innerText = unitForPicker();
     redrawAll();
   };
-
-  function findToggleEl(name){
-    // recupero tramite testo: uso i pallini id dot-*
-    const mapId = {
-      wind: 'dot-wind',
-      temp: 'dot-temp',
-      rain: 'dot-rain',
-      rh: 'dot-rh',
-      press: 'dot-press',
-      cloud: 'dot-cloud'
-    };
-    const dot = document.getElementById(mapId[name]);
-    return dot ? dot.closest('.toggle') : null;
-  }
 
   window.toggleIsobars = function(){
     showIsobars = !showIsobars;
@@ -886,9 +828,6 @@
     }, 850);
   };
 
-  // =========================
-  // PICKER
-  // =========================
   function onPick(e){
     const out = valueForPicker(e.latlng);
     if(!out) return;
