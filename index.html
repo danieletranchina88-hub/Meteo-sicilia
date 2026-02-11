@@ -530,48 +530,75 @@
   }
 
   function drawIsobars(){
-    const ctx = isoCanvas.getContext('2d');
-    const s = map.getSize();
-    isoCanvas.width = s.x; isoCanvas.height = s.y;
-    L.DomUtil.setPosition(isoCanvas, map.containerPointToLayerPoint([0,0]));
-    ctx.clearRect(0,0,s.x,s.y);
-    if(!showIsobars || !currentData?.press) return;
-    
-    // FIX ISOBARE: Pulisci dati (sanitizzazione per evitare linee verticali)
-    const cleanPress = new Float32Array(currentData.press.length);
-    for(let i=0; i<currentData.press.length; i++) {
-        let v = currentData.press[i];
-        // Se nullo o fuori scala (es. 0 o < 800), forza a 1013 (neutro)
-        if(!v || v < 850 || v > 1100) cleanPress[i] = 1013;
-        else cleanPress[i] = v;
-    }
+  const ctx = isoCanvas.getContext('2d');
+  const s = map.getSize();
+  isoCanvas.width = s.x; 
+  isoCanvas.height = s.y;
+  L.DomUtil.setPosition(isoCanvas, map.containerPointToLayerPoint([0,0]));
+  ctx.clearRect(0,0,s.x,s.y);
 
-    const m = currentData.meta;
-    const contours = d3.contours().size([m.nx, m.ny]).thresholds(d3.range(960, 1050, 2))(cleanPress);
-    ctx.lineWidth = 1.8; ctx.strokeStyle = "rgba(255,255,255,0.7)"; 
-    ctx.font = "bold 12px Arial"; ctx.textAlign="center"; ctx.textBaseline="middle";
-    contours.forEach(c => {
-        ctx.beginPath();
-        c.coordinates.forEach(ring => {
-            let pts = [];
-            let first=true;
-            ring.forEach(arr => {
-               arr.forEach(coord => {
-                   const lat = m.la1 - coord[1]*m.dy; const lon = m.lo1 + coord[0]*m.dx;
-                   const p = map.latLngToContainerPoint([lat,lon]);
-                   if(first){ ctx.moveTo(p.x,p.y); first=false; } else ctx.lineTo(p.x,p.y);
-                   pts.push(p);
-               });
-            });
-            ctx.stroke();
-            if(pts.length>20){
-                let mid=pts[Math.floor(pts.length/2)];
-                ctx.fillStyle="rgba(0,0,0,0.6)"; ctx.fillRect(mid.x-14,mid.y-7,28,14);
-                ctx.fillStyle="#fff"; ctx.fillText(Math.round(c.value),mid.x,mid.y);
-            }
-        });
-    });
+  if(!showIsobars || !currentData?.press) return;
+
+  const m = currentData.meta;
+
+  // pulizia base: evita 0/null/outlier
+  const cleanPress = new Float32Array(currentData.press.length);
+  for(let i=0; i<currentData.press.length; i++){
+    const v = currentData.press[i];
+    cleanPress[i] = (!Number.isFinite(v) || v < 850 || v > 1100) ? 1013 : v;
   }
+
+  // Nota: d3.contours genera isobande; noi disegniamo i bordi => isobare
+  const thresholds = d3.range(960, 1050, 2);
+  const contours = d3.contours().size([m.nx, m.ny]).thresholds(thresholds)(cleanPress);
+
+  ctx.lineWidth = 1.8;
+  ctx.strokeStyle = "rgba(255,255,255,0.7)";
+  ctx.font = "bold 12px Arial";
+  ctx.textAlign = "center";
+  ctx.textBaseline = "middle";
+
+  for (const c of contours){
+    // c.coordinates: array di poligoni
+    for (const polygon of c.coordinates){
+      // polygon: array di rings
+      for (const ring of polygon){
+        if(!ring || ring.length < 2) continue;
+
+        ctx.beginPath();
+        let pts = [];
+
+        for (let i=0; i<ring.length; i++){
+          const xy = ring[i];           // <-- xy è [x,y]
+          const gx = xy[0], gy = xy[1];
+
+          const lat = m.la1 - gy * m.dy;
+          const lon = m.lo1 + gx * m.dx;
+
+          const p = map.latLngToContainerPoint([lat, lon]);
+
+          if(!Number.isFinite(p.x) || !Number.isFinite(p.y)) continue;
+
+          if (pts.length === 0) ctx.moveTo(p.x, p.y);
+          else ctx.lineTo(p.x, p.y);
+
+          pts.push(p);
+        }
+
+        ctx.stroke();
+
+        // etichetta (una per ring, se abbastanza lungo)
+        if(pts.length > 40){
+          const mid = pts[Math.floor(pts.length/2)];
+          ctx.fillStyle = "rgba(0,0,0,0.6)";
+          ctx.fillRect(mid.x - 16, mid.y - 8, 32, 16);
+          ctx.fillStyle = "#fff";
+          ctx.fillText(Math.round(c.value), mid.x, mid.y);
+        }
+      }
+    }
+  }
+}
 
   window.toggleLayer = function(name){
     if(selected.has(name)) selected.delete(name); else selected.add(name);
