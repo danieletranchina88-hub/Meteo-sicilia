@@ -1,7 +1,7 @@
 <!DOCTYPE html>
 <html>
 <head>
-  <title>Sicilia MeteoHub - PRO (Fixed Arrows)</title>
+  <title>Sicilia MeteoHub - PRO (Wind Rose Edition)</title>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
 
@@ -60,9 +60,40 @@
     .mini:hover { background: rgba(0,0,0,0.08); color:#000; }
     .mini.active { background: #333; color:#fff; border-color: #000; }
 
-    #info-box { position: absolute; top: 18px; left: 18px; z-index: 2000; pointer-events: none; text-shadow: 0 2px 5px rgba(255,255,255,0.9); }
-    #val-display { font-size: 3.6em; font-weight: 950; line-height: 1; color: #111; }
-    #unit-display { font-size: 1.15em; color: #555; font-weight: 850; margin-top: 4px; }
+    /* INFO BOX + WIND ROSE */
+    #info-box { 
+        position: absolute; top: 18px; left: 18px; z-index: 2000; 
+        pointer-events: none; 
+        display: flex; align-items: center; gap: 15px; /* Spazio tra numero e rosa */
+    }
+    #val-group { display: flex; flex-direction: column; }
+    #val-display { font-size: 3.6em; font-weight: 950; line-height: 0.9; color: #111; text-shadow: 0 2px 5px rgba(255,255,255,0.9); }
+    #unit-display { font-size: 1.15em; color: #555; font-weight: 850; margin-top: 4px; text-shadow: 0 1px 3px rgba(255,255,255,0.9); }
+
+    /* STILE ROSA DEI VENTI */
+    #wind-rose {
+        width: 50px; height: 50px;
+        background: rgba(255,255,255,0.6);
+        border: 2px solid rgba(0,0,0,0.6);
+        border-radius: 50%;
+        display: none; /* Nascosta se non è vento */
+        align-items: center; justify-content: center;
+        position: relative;
+        box-shadow: 0 4px 10px rgba(0,0,0,0.2);
+    }
+    /* Punti Cardinali */
+    .cardinal { position: absolute; font-size: 8px; font-weight: 900; color: #555; }
+    .c-n { top: 2px; left: 50%; transform: translateX(-50%); }
+    .c-s { bottom: 2px; left: 50%; transform: translateX(-50%); }
+    .c-e { right: 3px; top: 50%; transform: translateY(-50%); }
+    .c-w { left: 3px; top: 50%; transform: translateY(-50%); }
+    
+    /* Freccia Rotante */
+    #rose-arrow {
+        width: 24px; height: 24px;
+        fill: #000;
+        transition: transform 0.1s; /* Animazione fluida */
+    }
 
     #bottom-bar {
       position: absolute; bottom: 0; left: 0; right: 0; height: 92px;
@@ -95,8 +126,20 @@
 
 <body>
   <div id="info-box">
-    <div id="val-display">--</div>
-    <div id="unit-display">Caricamento...</div>
+    <div id="val-group">
+        <div id="val-display">--</div>
+        <div id="unit-display">Caricamento...</div>
+    </div>
+    
+    <div id="wind-rose">
+        <span class="cardinal c-n">N</span>
+        <span class="cardinal c-s">S</span>
+        <span class="cardinal c-e">E</span>
+        <span class="cardinal c-w">W</span>
+        <svg id="rose-arrow" viewBox="0 0 24 24">
+            <path d="M12 2L4.5 20.29L5.21 21L12 18L18.79 21L19.5 20.29L12 2Z" />
+        </svg>
+    </div>
   </div>
 
   <div id="ui-container">
@@ -433,25 +476,12 @@
             const headLen = currentLen * 0.4;
             const headWidth = headLen * 0.75;
 
-            // FIX ANGOLO (Usa atan2(-v, u) perché canvas Y cresce in basso)
-            const angle = Math.atan2(-v, u); 
+            const angle = Math.atan2(-v, u); // Fix Geometria
             
-            // --- CALCOLO VERTICI ---
-            // Punto finale asta (dove inizia la testa)
+            // --- DISEGNO FRECCIA ---
+            // ASTA
             const shaftEndX = p.x + (currentLen - headLen) * Math.cos(angle);
             const shaftEndY = p.y + (currentLen - headLen) * Math.sin(angle);
-
-            // Punta della freccia
-            const tipX = p.x + currentLen * Math.cos(angle);
-            const tipY = p.y + currentLen * Math.sin(angle);
-
-            // Angoli della testa (Ali)
-            // Ali spostate indietro di 150 gradi (2.6 rad) rispetto alla punta
-            const wingAngle = 2.6; // ~150 gradi
-            const wing1X = tipX + headLen * Math.cos(angle + Math.PI - 0.5);
-            const wing1Y = tipY + headLen * Math.sin(angle + Math.PI - 0.5);
-            const wing2X = tipX + headLen * Math.cos(angle + Math.PI + 0.5);
-            const wing2Y = tipY + headLen * Math.sin(angle + Math.PI + 0.5);
 
             // A) BORDO NERO ASTA
             ctx.beginPath();
@@ -461,7 +491,15 @@
             ctx.lineWidth = currentWidth + 2.5; 
             ctx.stroke();
 
-            // A2) BORDO NERO TESTA
+            // A2) BORDO NERO TESTA (Triangolo)
+            const tipX = p.x + currentLen * Math.cos(angle);
+            const tipY = p.y + currentLen * Math.sin(angle);
+            const wingAngle = 2.6; // ~150 deg
+            const wing1X = tipX + headLen * Math.cos(angle + Math.PI - 0.5);
+            const wing1Y = tipY + headLen * Math.sin(angle + Math.PI - 0.5);
+            const wing2X = tipX + headLen * Math.cos(angle + Math.PI + 0.5);
+            const wing2Y = tipY + headLen * Math.sin(angle + Math.PI + 0.5);
+
             ctx.beginPath();
             ctx.moveTo(tipX, tipY);
             ctx.lineTo(wing1X, wing1Y);
@@ -469,7 +507,6 @@
             ctx.closePath();
             ctx.fillStyle = "#000000";
             ctx.fill();
-            // Stroke per arrotondare gli angoli
             ctx.lineWidth = 1.0; 
             ctx.stroke();
 
@@ -481,16 +518,37 @@
             ctx.lineWidth = currentWidth;
             ctx.stroke();
 
-            // B2) INTERNO COLORE TESTA (Più piccolo per lasciare il bordo)
-            // Disegniamo un triangolo leggermente più piccolo sopra
+            // B2) INTERNO COLORE TESTA (Con piccolo offset per non coprire il bordo)
             ctx.beginPath();
+            // Disegniamo leggermente più piccolo sopra?
+            // Semplificazione: Ridisegna triangolo sopra leggermente scalato
+            // Oppure basta fillare, il bordo nero esterno è già stato fatto dal triangolo nero sotto.
+            // Poiché stroke del bordo è esterno/centrato, il triangolo nero sotto fa da bordo.
             ctx.moveTo(tipX, tipY);
-            ctx.lineTo(wing1X, wing1Y);
-            ctx.lineTo(wing2X, wing2Y);
+            // Facciamo i punti interni leggermente ritratti per vedere bordo?
+            // No, basta riempire con colore. Il triangolo nero sotto era leggermente più grande? 
+            // In realtà disegnando sopra copriamo.
+            // Trucco: Disegna triangolo Colorato ma con coordinate uguali e scale down?
+            // Più semplice: Ridisegna lo stesso triangolo con fill colorato e stroke colorato
+            // ma con lineWidth minore?
+            // Facciamo così: triangolo nero sotto è fatto. Ora triangolo colorato sopra, scalato 80%.
+            
+            const scaleInner = 0.6;
+            const iTipX = p.x + (currentLen - 1) * Math.cos(angle); 
+            const iTipY = p.y + (currentLen - 1) * Math.sin(angle);
+            
+            // Ricalcolo ali interne
+            const iWing1X = iTipX + (headLen*0.7) * Math.cos(angle + Math.PI - 0.5);
+            const iWing1Y = iTipY + (headLen*0.7) * Math.sin(angle + Math.PI - 0.5);
+            const iWing2X = iTipX + (headLen*0.7) * Math.cos(angle + Math.PI + 0.5);
+            const iWing2Y = iTipY + (headLen*0.7) * Math.sin(angle + Math.PI + 0.5);
+
+            ctx.beginPath();
+            ctx.moveTo(iTipX, iTipY);
+            ctx.lineTo(iWing1X, iWing1Y);
+            ctx.lineTo(iWing2X, iWing2Y);
             ctx.closePath();
             ctx.fillStyle = fillStyle;
-            // Scale down fill slightly to prevent anti-aliasing bleeding? 
-            // No, just fill creates good border effect due to black underline
             ctx.fill();
         }
     }
@@ -533,7 +591,6 @@
     const m = currentData.meta;
     const contours = d3.contours().size([m.nx, m.ny]).thresholds(d3.range(960, 1050, 2))(currentData.press);
     
-    // Stile Isobare
     ctx.lineWidth = 1.8;
     ctx.strokeStyle = "rgba(40,40,40,0.8)"; 
     ctx.font = "bold 12px Arial";
@@ -599,6 +656,11 @@
     });
     const btnFlow = document.getElementById('btn-flow');
     if(particlesOn) btnFlow.classList.add('active'); else btnFlow.classList.remove('active');
+    
+    // Mostra/Nascondi Rosa dei Venti se Vento è attivo
+    const rose = document.getElementById('wind-rose');
+    if(selected.has('wind')) rose.style.display = 'flex';
+    else rose.style.display = 'none';
   }
 
   function onPick(e){
@@ -610,12 +672,24 @@
     const idx = y*m.nx + x;
 
     let val = '--', unit = '';
-    if(selected.has('rain')) { val = currentData.rain[idx].toFixed(1); unit='mm'; }
-    else if(selected.has('temp')) { val = currentData.temp[idx].toFixed(1); unit='°C'; }
-    else if(selected.has('wind')) { 
+    // Logica priorità
+    if(selected.has('wind')) { 
         const u=currentData.wind_u.data[idx], v=currentData.wind_v.data[idx];
         val = (Math.sqrt(u*u+v*v)*3.6).toFixed(1); unit='km/h'; 
+        
+        // AGGIORNAMENTO ROSA DEI VENTI
+        const arrow = document.getElementById('rose-arrow');
+        // Angolo meteo: 0=N, 90=E. 
+        // Math.atan2(v, u) -> matematico.
+        // Rotazione CSS (CW): 90 - (rad * 180 / PI).
+        // Se U=0, V=1 (Nord), atan2=90deg. Rotazione=0. Corretto.
+        // Se U=1, V=0 (Est), atan2=0deg. Rotazione=90. Corretto.
+        const deg = 90 - (Math.atan2(v, u) * 180 / Math.PI);
+        // Nota: icona freccia punta in alto (Nord) di default.
+        arrow.style.transform = `rotate(${deg}deg)`;
     }
+    else if(selected.has('rain')) { val = currentData.rain[idx].toFixed(1); unit='mm'; }
+    else if(selected.has('temp')) { val = currentData.temp[idx].toFixed(1); unit='°C'; }
     else if(selected.has('rh')) { val = Math.round(currentData.rh[idx]); unit='%'; }
     else if(selected.has('press')) { val = Math.round(currentData.press[idx]); unit='hPa'; }
 
