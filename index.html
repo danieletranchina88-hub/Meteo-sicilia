@@ -1,7 +1,7 @@
 <!DOCTYPE html>
 <html>
 <head>
-  <title>Sicilia MeteoHub - PRO (Shaded Relief + Dynamic Arrows)</title>
+  <title>Sicilia MeteoHub - PRO (Colored Arrows + Dark Particles)</title>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
 
@@ -80,19 +80,18 @@
       filter: contrast(1.3) brightness(1.05);
     }
 
-    /* LAYER COLORATI (MULTIPLY per effetto "evidenziatore" su carta) */
+    /* LAYER COLORATI */
     canvas.leaflet-layer.scalar-layer { 
         image-rendering: auto; 
         mix-blend-mode: multiply; 
         opacity: 0.85; 
     }
 
-    /* PARTICELLE BIANCHE + OMBRA (Per vederle sul chiaro) */
+    /* PARTICELLE GRIGIO SCURO (Per vederle sul chiaro) */
     canvas.leaflet-layer.velocity-canvas {
         mix-blend-mode: normal;
-        /* Ombra scura sotto le particelle bianche per contrasto */
-        filter: drop-shadow(0px 1px 2px rgba(0,0,0,0.6)); 
         opacity: 0.95;
+        /* Ombra rimossa, colore scuro è sufficiente */
     }
 
   </style>
@@ -271,22 +270,16 @@
     ).addTo(map);
 
     // 3. LABELS
-    // Creiamo un pane specifico per le labels
-    map.createPane('labelsPane');
-    map.getPane('labelsPane').style.zIndex = 600;
-    map.getPane('labelsPane').style.pointerEvents = 'none';
-    
+    map.createPane('labelsPane'); map.getPane('labelsPane').style.zIndex = 600; map.getPane('labelsPane').style.pointerEvents = 'none';
     L.tileLayer(
       'https://server.arcgisonline.com/ArcGIS/rest/services/Reference/World_Boundaries_and_Places_Alternate/MapServer/tile/{z}/{y}/{x}',
       { pane: 'labelsPane', opacity: 0.8 }
     ).addTo(map);
 
-    // 4. PARTICLES PANE (Top Layer!)
-    // Creiamo un pane con z-index altissimo per le particelle
+    // 4. PARTICLES PANE (Top Layer)
     map.createPane('particlePane');
-    map.getPane('particlePane').style.zIndex = 800; // Sopra tutto, anche le labels
+    map.getPane('particlePane').style.zIndex = 800; 
     map.getPane('particlePane').style.pointerEvents = 'none';
-
 
     createCanvasLayers();
     await loadCatalog();
@@ -419,12 +412,11 @@
     const m = currentData.meta;
     const zoom = map.getZoom();
     
-    // DENSITÀ ALTA
     const stride = zoom >= 10 ? 2 : (zoom >= 9 ? 3 : 4);
     
-    // PARAMETRI BASE PER DIMENSIONI
-    const baseLen = zoom >= 10 ? 22 : 18; // Più lunghe di base
-    const baseWidth = 1.5; // Più spesse di base
+    // DIMENSIONI BASE MOLTO PIÙ GRANDI
+    const baseLen = zoom >= 10 ? 30 : 25; 
+    const baseWidth = 2.5; 
 
     ctx.lineCap = 'round';
     ctx.lineJoin = 'round';
@@ -440,39 +432,50 @@
             const lon = m.lo1 + x*m.dx;
             const p = map.latLngToContainerPoint([lat, lon]);
             
-            // FRECCIA NERA/SCURA
-            ctx.strokeStyle = "rgba(20,20,20, 0.85)";
-            ctx.fillStyle = "rgba(20,20,20, 0.85)";
+            // COLORE basato sulla velocità
+            const cRg = vividWindColor(sp);
+            const arrowColor = `rgba(${cRg.r},${cRg.g},${cRg.b}, 1.0)`;
+            ctx.strokeStyle = arrowColor;
+            ctx.fillStyle = arrowColor;
 
-            // CALCOLO SCALA PROPORZIONALE ALLA VELOCITÀ
-            // speedScale sarà circa 0.8 per venti deboli, fino a 2.0+ per venti forti
-            const speedScale = clamp(sp / 15.0, 0.6, 2.2); 
+            // SCALATURA DINAMICA PIÙ ACCENTUATA
+            // Venti forti (es. 20km/h) avranno frecce 2.5 volte più grandi
+            const speedScale = clamp(sp / 8.0, 0.7, 2.5); 
 
-            // APPLICA SCALA A LUNGHEZZA E SPESSORE
             const currentLen = baseLen * speedScale;
             ctx.lineWidth = baseWidth * speedScale;
-            const headSize = 4.0 * speedScale;
+            // Testa della freccia proporzionale alla lunghezza
+            const headLen = currentLen * 0.35; 
+            const headWidth = headLen * 0.8;
 
-            
             const angle = Math.atan2(v, u);
-            const dx = Math.cos(angle)*currentLen, dy = Math.sin(angle)*currentLen;
             
+            // DISEGNO ASTA
             ctx.beginPath();
-            // Coda
             ctx.moveTo(p.x, p.y);
-            // Punta
-            const tipX = p.x + dx;
-            const tipY = p.y - dy;
-            ctx.lineTo(tipX, tipY); 
+            // L'asta finisce dove inizia la testa
+            const shaftEndX = p.x + (currentLen - headLen) * Math.cos(angle);
+            const shaftEndY = p.y - (currentLen - headLen) * Math.sin(angle);
+            ctx.lineTo(shaftEndX, shaftEndY);
             ctx.stroke();
 
-            // Disegna la punta della freccia (riempita per essere più evidente)
+            // DISEGNO TESTA TRIANGOLARE PIENA
             ctx.beginPath();
-            ctx.moveTo(tipX, tipY);
-            ctx.lineTo(tipX - headSize*Math.cos(angle-0.5), tipY - headSize*Math.sin(angle-0.5));
-            ctx.lineTo(tipX - headSize*Math.cos(angle+0.5), tipY - headSize*Math.sin(angle+0.5));
+            const tipX = p.x + currentLen * Math.cos(angle);
+            const tipY = p.y - currentLen * Math.sin(angle);
+            ctx.moveTo(tipX, tipY); // Punta
+
+            // Angoli posteriori del triangolo
+            ctx.lineTo(
+                shaftEndX - headWidth * Math.cos(angle - Math.PI / 2),
+                shaftEndY - headWidth * Math.sin(angle - Math.PI / 2)
+            );
+            ctx.lineTo(
+                shaftEndX - headWidth * Math.cos(angle + Math.PI / 2),
+                shaftEndY - headWidth * Math.sin(angle + Math.PI / 2)
+            );
             ctx.closePath();
-            ctx.fill();
+            ctx.fill(); // Riempimento solido
         }
     }
   }
@@ -481,19 +484,19 @@
     if(velocityLayer) { map.removeLayer(velocityLayer); velocityLayer = null; }
     if(!particlesOn || !currentData) return;
 
-    // PARTICELLE BIANCHE
+    // PARTICELLE GRIGIO SCURO
     velocityLayer = L.velocityLayer({
       displayValues: false,
       data: [ currentData.wind_u, currentData.wind_v ],
       maxVelocity: 25.0,
       velocityScale: 0.008,     
-      particleMultiplier: 1/120, // Densità
-      lineWidth: 2.0,            // Spessore
+      particleMultiplier: 1/120,
+      lineWidth: 1.8,            
       particleAge: 100,
       frameRate: 40,
       opacity: 1.0,              
-      colorScale: ["#ffffff", "#ffffff"], // BIANCO
-      pane: 'particlePane' // <--- IMPORTANTE: USA IL PANE IN ALTO
+      colorScale: ["#333333", "#333333"], // GRIGIO SCURO
+      pane: 'particlePane' 
     });
     
     velocityLayer.onAdd = function(map){
@@ -514,10 +517,10 @@
     const m = currentData.meta;
     const contours = d3.contours().size([m.nx, m.ny]).thresholds(d3.range(960, 1050, 2))(currentData.press);
     
-    ctx.lineWidth = 1.1;
-    ctx.strokeStyle = "rgba(40,40,40,0.7)"; 
-    ctx.font = "12px sans-serif";
-    ctx.fillStyle = "#222";
+    ctx.lineWidth = 1.0;
+    ctx.strokeStyle = "rgba(50,50,50,0.6)"; 
+    ctx.font = "11px sans-serif";
+    ctx.fillStyle = "#333";
 
     contours.forEach(c => {
         ctx.beginPath();
