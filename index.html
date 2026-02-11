@@ -1,7 +1,7 @@
 <!DOCTYPE html>
 <html>
 <head>
-  <title>Sicilia MeteoHub - PRO (Grey Relief + Wind Arrows)</title>
+  <title>Sicilia MeteoHub - PRO (Grey Relief + Wind Arrows + White Particles)</title>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
 
@@ -30,7 +30,7 @@
       box-shadow: 0 12px 30px rgba(0,0,0,0.45);
     }
     .toggle {
-      width: 170px;
+      width: 175px;
       display:flex; align-items:center; justify-content:space-between;
       padding: 10px 12px; margin: 6px 0;
       background: rgba(255,255,255,0.06);
@@ -40,7 +40,6 @@
       cursor: pointer;
       user-select:none;
       font-weight: 800;
-      letter-spacing: 0.2px;
       transition: all 0.15s;
     }
     .toggle:hover { background: rgba(255,255,255,0.10); color:#fff; }
@@ -51,7 +50,7 @@
       box-shadow: 0 0 16px rgba(0,136,255,0.35);
     }
     .mini {
-      width: 170px;
+      width: 175px;
       padding: 9px 12px;
       border-radius: 10px;
       border: 1px solid rgba(255,255,255,0.12);
@@ -80,10 +79,12 @@
     #time-label { font-size: 1.45em; font-weight: 950; margin-left: 14px; min-width: 150px; text-align: center; text-shadow: 0 2px 12px rgba(0,0,0,0.95); }
     input[type=range] { flex-grow: 1; height: 6px; cursor: pointer; accent-color: #0088ff; }
 
+    /* RILIEVI più evidenti */
     .hillshade-tiles {
       mix-blend-mode: multiply;
-      filter: contrast(1.95) brightness(0.92);
+      filter: contrast(2.05) brightness(0.90);
     }
+
     canvas.leaflet-layer { image-rendering: auto; }
   </style>
 </head>
@@ -146,10 +147,10 @@
   // ========= BOUNDS SICILIA =========
   const SICILY_BOUNDS = L.latLngBounds(L.latLng(35.0, 11.0), L.latLng(39.5, 16.5));
 
-  // ========= WIND PALETTE (original particles palette) =========
+  // ========= WIND PALETTE (for arrows/bg) =========
   const WIND_COLOR_SCALE = ["#000080", "#0044ff", "#00ddff", "#00ff55", "#ffff00", "#ff6600", "#ff0000", "#ff00ff"];
 
-  // ========= TEMP palette stops (kept, you can refine later) =========
+  // ========= TEMP stops =========
   const TEMP_STOPS = [
     {v:-15, c:[55, 0, 110]},
     {v:  0, c:[0, 220, 255]},
@@ -163,34 +164,35 @@
 
   const CLOUD_STOPS = [
     {v:  0, c:[0,0,0],   a:0.00},
-    {v: 20, c:[235,235,235], a:0.26},
-    {v: 50, c:[190,190,190], a:0.38},
-    {v: 80, c:[120,120,120], a:0.52},
-    {v:100, c:[60,60,60],    a:0.66}
+    {v: 20, c:[235,235,235], a:0.36},
+    {v: 50, c:[190,190,190], a:0.50},
+    {v: 80, c:[120,120,120], a:0.64},
+    {v:100, c:[60,60,60],    a:0.78}
   ];
 
   const RAIN_STOPS = [
     {v:0.0,  c:[0,0,0], a:0.00},
-    {v:0.1,  c:[0,200,255], a:0.42},
-    {v:2.0,  c:[0,0,255],   a:0.58},
-    {v:10.0, c:[150,0,200], a:0.74}
+    {v:0.1,  c:[0,200,255], a:0.52},
+    {v:2.0,  c:[0,0,255],   a:0.68},
+    {v:10.0, c:[150,0,200], a:0.84}
   ];
 
   const RH_STOPS = [
-    {v:20,c:[200,150,50], a:0.36},
-    {v:40,c:[210,210,210], a:0.34},
-    {v:60,c:[110,255,120], a:0.36},
-    {v:80,c:[60,160,255],  a:0.42},
-    {v:95,c:[0,0,200],     a:0.48}
+    {v:20,c:[200,150,50], a:0.44},
+    {v:40,c:[210,210,210], a:0.42},
+    {v:60,c:[110,255,120], a:0.44},
+    {v:80,c:[60,160,255],  a:0.52},
+    {v:95,c:[0,0,200],     a:0.56}
   ];
 
+  // PRESSIONE: NON CAMBIO colori, solo opacità più alta
   const PRESS_STOPS = [
-    {v:980,  c:[0,70,255],   a:0.40},
-    {v:995,  c:[0,170,255],  a:0.40},
-    {v:1005, c:[0,255,200],  a:0.40},
-    {v:1013, c:[255,255,255],a:0.42},
-    {v:1022, c:[255,200,0],  a:0.40},
-    {v:1035, c:[255,60,0],   a:0.44}
+    {v:980,  c:[0,70,255],   a:0.48},
+    {v:995,  c:[0,170,255],  a:0.48},
+    {v:1005, c:[0,255,200],  a:0.48},
+    {v:1013, c:[255,255,255],a:0.52},
+    {v:1022, c:[255,200,0],  a:0.48},
+    {v:1035, c:[255,60,0],   a:0.52}
   ];
 
   // ========= GLOBALS =========
@@ -204,7 +206,8 @@
   let showIsobars = false;
 
   let particlesOn = true;
-  let velocityLayer = null;
+  let velocityShadow = null;
+  let velocityWhite = null;
 
   let heatCanvas, windBgCanvas, arrowCanvas, isoCanvas;
 
@@ -218,13 +221,13 @@
   function interpStops(val, stops) {
     if(!stops || stops.length < 2) return {r:0,g:0,b:0,a:0};
     if(val <= stops[0].v) {
-      const s = stops[0]; return {r:s.c[0],g:s.c[1],b:s.c[2],a:('a' in s)?s.a:0.4};
+      const s = stops[0]; return {r:s.c[0],g:s.c[1],b:s.c[2],a:('a' in s)?s.a:0.5};
     }
     for(let i=0;i<stops.length-1;i++){
       const s1=stops[i], s2=stops[i+1];
       if(val>=s1.v && val<=s2.v){
         const t=(val-s1.v)/(s2.v-s1.v);
-        const a1=('a'in s1)?s1.a:0.4, a2=('a'in s2)?s2.a:0.4;
+        const a1=('a'in s1)?s1.a:0.5, a2=('a'in s2)?s2.a:0.5;
         return {
           r:Math.round(lerp(s1.c[0],s2.c[0],t)),
           g:Math.round(lerp(s1.c[1],s2.c[1],t)),
@@ -234,7 +237,7 @@
       }
     }
     const s=stops[stops.length-1];
-    return {r:s.c[0],g:s.c[1],b:s.c[2],a:('a'in s)?s.a:0.4};
+    return {r:s.c[0],g:s.c[1],b:s.c[2],a:('a'in s)?s.a:0.5};
   }
 
   function hexToRgb(h){
@@ -249,7 +252,6 @@
     return Math.sqrt(u*u+v*v); // m/s
   }
 
-  // SAME colors, but “more vivid” for arrows/background
   function vividWindColor(speedMs){
     const maxV = 18.0;
     const t = clamp(speedMs / maxV, 0, 0.999999);
@@ -265,8 +267,8 @@
     let g = Math.round(lerp(c1.g,c2.g,f));
     let b = Math.round(lerp(c1.b,c2.b,f));
 
-    // boost saturation/brightness (stronger than before)
-    const boost = 1.28;
+    // boost (colors more "accesi")
+    const boost = 1.32;
     r = clamp(Math.round(r * boost), 0, 255);
     g = clamp(Math.round(g * boost), 0, 255);
     b = clamp(Math.round(b * boost), 0, 255);
@@ -312,7 +314,7 @@
       maxBoundsViscosity: 0.9
     }).fitBounds(SICILY_BOUNDS);
 
-    // Grey relief map EXACT
+    // === MAPPA GRIGIA CON RILIEVI (Esri Light Gray + Hillshade + Reference) ===
     baseGray = L.tileLayer(
       'https://server.arcgisonline.com/ArcGIS/rest/services/Canvas/World_Light_Gray_Base/MapServer/tile/{z}/{y}/{x}',
       { maxZoom: 19, attribution: 'Tiles © Esri' }
@@ -320,7 +322,7 @@
 
     baseHill = L.tileLayer(
       'https://server.arcgisonline.com/ArcGIS/rest/services/Elevation/World_Hillshade/MapServer/tile/{z}/{y}/{x}',
-      { maxZoom: 19, opacity: 0.90, className: 'hillshade-tiles', attribution: 'Hillshade © Esri' }
+      { maxZoom: 19, opacity: 0.92, className: 'hillshade-tiles', attribution: 'Hillshade © Esri' }
     ).addTo(map);
 
     baseRef = L.tileLayer(
@@ -388,11 +390,12 @@
     if(!currentData) return;
     drawHeatmapsHD();
     drawWindBackground();
-    drawWindArrowsThinMore();  // <<< updated as you requested
+    drawWindArrows();     // (stessa logica, colori più accesi)
     drawIsobars();
     updateParticles();
   }
 
+  // Opacità aumentata su tutti i layer (resta trasparente ma più “presente”)
   function drawHeatmapsHD(){
     const ctx = heatCanvas.getContext('2d');
     const s = map.getSize();
@@ -409,7 +412,7 @@
 
     const m = currentData.meta;
 
-    const alphaFactor = clamp(1.0 / Math.sqrt(activeGrids.length), 0.45, 1.0);
+    const alphaFactor = clamp(1.0 / Math.sqrt(activeGrids.length), 0.55, 1.0);
 
     const off = document.createElement('canvas');
     off.width = m.nx;
@@ -450,13 +453,18 @@
           if(layer==='cloud' && val < 5) col.a = 0;
 
           let a = col.a * alphaFactor;
-          if(layer==='temp') a *= 1.25;
-          if(layer==='press') a *= 1.18;
-          if(layer==='rain') a *= 1.30;
-          if(layer==='cloud') a *= 1.20;
-          if(layer==='rh') a *= 1.12;
 
-          a = clamp(a, 0, 0.84);
+          // boost generale (più visibile ma non “copre”)
+          a *= 1.18;
+
+          // micro-tuning per layer
+          if(layer==='temp')  a *= 1.22;
+          if(layer==='press') a *= 1.12;
+          if(layer==='rain')  a *= 1.18;
+          if(layer==='cloud') a *= 1.22;
+          if(layer==='rh')    a *= 1.10;
+
+          a = clamp(a, 0, 0.90);
 
           const p = idx*4;
           data[p+0] = col.r;
@@ -506,7 +514,7 @@
         const idx = y*m.nx + x;
         const sp = speedAtIdx(idx);
         const c = vividWindColor(sp);
-        const a = 0.18; // stays light
+        const a = 0.24; // più presente
         const p = idx*4;
         d[p+0]=c.r; d[p+1]=c.g; d[p+2]=c.b; d[p+3]=Math.round(a*255);
       }
@@ -526,8 +534,8 @@
     ctx.restore();
   }
 
-  // ========= WIND ARROWS: thinner + MORE + vivid =========
-  function drawWindArrowsThinMore(){
+  // Frecce come prima (più sottili e tante), colori più accesi
+  function drawWindArrows(){
     const ctx = arrowCanvas.getContext('2d');
     const s = map.getSize();
     arrowCanvas.width = s.x;
@@ -540,13 +548,11 @@
     const m = currentData.meta;
     const zoom = map.getZoom();
 
-    // MORE arrows: smaller stride (denser)
     let stride = 5;
     if(zoom >= 9)  stride = 4;
     if(zoom >= 10) stride = 3;
     if(zoom >= 11) stride = 2;
 
-    // Slightly smaller/cleaner arrows
     const baseLen = (zoom >= 11) ? 17 : (zoom >= 10 ? 16 : 15);
     const head = 6;
 
@@ -555,9 +561,8 @@
     ctx.lineCap = 'round';
     ctx.lineJoin = 'round';
 
-    // thinner, but still visible: outline then colored stroke
-    const outlineW = 3.4;
-    const mainW = 1.9;
+    const outlineW = 3.2;
+    const mainW = 1.7; // più sottile
 
     for(let y=0; y<m.ny; y+=stride){
       const lat = m.la1 - (y*m.dy);
@@ -577,9 +582,8 @@
         const nx = u / sp;
         const ny = v / sp;
 
-        const len = baseLen * clamp(sp/5.0, 0.8, 2.3);
+        const len = baseLen * clamp(sp/5.0, 0.85, 2.35);
 
-        // project to screen direction
         const degStep = 0.07;
         const lat2 = lat + (ny * degStep);
         const lon2 = lon + (nx * degStep / Math.max(0.25, cosLat));
@@ -595,7 +599,7 @@
         const col = vividWindColor(sp);
 
         // outline
-        ctx.strokeStyle = "rgba(0,0,0,0.48)";
+        ctx.strokeStyle = "rgba(0,0,0,0.46)";
         ctx.lineWidth = outlineW;
         ctx.beginPath();
         ctx.moveTo(p0.x, p0.y);
@@ -610,7 +614,7 @@
         ctx.lineTo(p1.x - head*Math.cos(ang0 + 0.65), p1.y - head*Math.sin(ang0 + 0.65));
         ctx.stroke();
 
-        // main color
+        // main
         ctx.strokeStyle = `rgb(${col.r},${col.g},${col.b})`;
         ctx.lineWidth = mainW;
 
@@ -699,36 +703,51 @@
     ctx.restore();
   }
 
-  // ========= PARTICLES =========
+  // ========= PARTICLES (white + shadow) =========
+  function clearParticles(){
+    if(velocityShadow){ map.removeLayer(velocityShadow); velocityShadow = null; }
+    if(velocityWhite){ map.removeLayer(velocityWhite); velocityWhite = null; }
+  }
+
   function updateParticles(){
-    if(velocityLayer){
-      map.removeLayer(velocityLayer);
-      velocityLayer = null;
-    }
+    clearParticles();
     if(!particlesOn || !currentData) return;
 
     const dpr = window.devicePixelRatio || 1;
     const bigScreen = (window.innerWidth * window.innerHeight) > 1400000;
 
-    let particleMult = 1/160;
-    if(bigScreen) particleMult = 1/220;
-    if(dpr >= 2) particleMult = 1/260;
+    let particleMult = 1/170;
+    if(bigScreen) particleMult = 1/240;
+    if(dpr >= 2) particleMult = 1/280;
 
     try{
-      velocityLayer = L.velocityLayer({
+      // shadow layer (sotto)
+      velocityShadow = L.velocityLayer({
         displayValues: false,
         data: [ currentData.wind_u, currentData.wind_v ],
         maxVelocity: 18.0,
         velocityScale: 0.006,
         particleMultiplier: particleMult,
-        lineWidth: 0.85,
+        lineWidth: 1.45,
         particleAge: 140,
         frameRate: 60,
-        opacity: 0.90,
-        // dark particles
-        colorScale: ["#111111", "#151515", "#1a1a1a", "#202020", "#262626", "#2c2c2c", "#333333", "#3a3a3a"]
-      });
-      velocityLayer.addTo(map);
+        opacity: 0.35,
+        colorScale: ["#000000","#000000","#000000","#000000","#000000","#000000","#000000","#000000"]
+      }).addTo(map);
+
+      // white particles (sopra)
+      velocityWhite = L.velocityLayer({
+        displayValues: false,
+        data: [ currentData.wind_u, currentData.wind_v ],
+        maxVelocity: 18.0,
+        velocityScale: 0.006,
+        particleMultiplier: particleMult,
+        lineWidth: 1.05,
+        particleAge: 140,
+        frameRate: 60,
+        opacity: 0.82,
+        colorScale: ["#ffffff","#ffffff","#ffffff","#ffffff","#ffffff","#ffffff","#ffffff","#ffffff"]
+      }).addTo(map);
     } catch(e){}
   }
 
