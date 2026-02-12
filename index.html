@@ -51,7 +51,7 @@
       color: #fff;
       box-shadow: 0 4px 12px rgba(0,136,255,0.3);
     }
-    
+
     .mini {
       width: 175px; padding: 9px 12px; border-radius: 10px;
       border: 1px solid rgba(255,255,255,0.1); background: rgba(255,255,255,0.05);
@@ -61,9 +61,9 @@
     .mini.active { background: #eee; color:#111; border-color: #fff; }
 
     /* INFO BOX */
-    #info-box { 
-        position: absolute; top: 18px; left: 18px; z-index: 2000; 
-        pointer-events: none; 
+    #info-box {
+        position: absolute; top: 18px; left: 18px; z-index: 2000;
+        pointer-events: none;
         display: flex; align-items: center; gap: 15px;
     }
     #val-group { display: flex; flex-direction: column; }
@@ -103,14 +103,13 @@
     }
 
     /* LAYER COLORATI */
-    canvas.leaflet-layer.scalar-layer { 
-        image-rendering: auto; 
-        mix-blend-mode: screen; 
-        opacity: 0.85; 
+    canvas.leaflet-layer.scalar-layer {
+        image-rendering: auto;
+        mix-blend-mode: screen;
+        opacity: 0.85;
     }
 
     canvas.leaflet-layer.velocity-canvas { mix-blend-mode: normal; opacity: 0.95; }
-
   </style>
 </head>
 
@@ -161,6 +160,10 @@
       <div class="toggle" id="btn-iso" onclick="toggleIsobars()">
         <span>ISOBARE 〰️</span><span> </span>
       </div>
+      <div class="toggle" id="btn-therm" onclick="toggleIsotherms()">
+        <span>ISOTERME 🌡️</span><span> </span>
+      </div>
+
       <div class="toggle" id="btn-grid" onclick="toggleGrid()">
         <span>RETICOLO #</span><span> </span>
       </div>
@@ -211,7 +214,7 @@
     {v:50,  c:[255,0,0], a:0.9}
   ];
 
-  // RH (Custom Provided)
+  // RH (Custom)
   const RH_STOPS = [
     {v:0, c:[173,85,56]}, {v:1, c:[173,85,56]}, {v:5, c:[173,89,56]}, {v:10, c:[173,93,56]},
     {v:15, c:[173,97,56]}, {v:20, c:[173,101,56]}, {v:25, c:[173,105,56]}, {v:30, c:[173,110,56]},
@@ -234,9 +237,9 @@
   ];
 
   let map, currentData = null, catalog = [];
-  const selected = new Set(['wind']); 
-  let showIsobars = false, showGrid = false, particlesOn = true;
-  let velocityLayer = null, scalarCanvases = {}, arrowCanvas, isoCanvas, gridCanvas;
+  const selected = new Set(['wind']);
+  let showIsobars = false, showIsotherms = false, showGrid = false, particlesOn = true;
+  let velocityLayer = null, scalarCanvases = {}, arrowCanvas, isoCanvas, thermCanvas, gridCanvas;
   let isPlaying = false;
 
   function clamp(x,a,b){ return Math.max(a, Math.min(b, x)); }
@@ -272,17 +275,87 @@
     return {r:Math.round(lerp(r1,r2,f)), g:Math.round(lerp(g1,g2,f)), b:Math.round(lerp(b1,b2,f))};
   }
 
+  // --- smoothing semplice (3x3 gaussian) per pressione, utile per A/B coerenti
+  function gaussianBlur3x3(src, nx, ny, passes=1){
+    let a = new Float32Array(src.length);
+    for(let i=0;i<src.length;i++) a[i] = src[i];
+
+    const k = [1,2,1,2,4,2,1,2,1];
+    for(let pass=0; pass<passes; pass++){
+      const out = new Float32Array(a.length);
+      for(let y=0;y<ny;y++){
+        for(let x=0;x<nx;x++){
+          let s=0,w=0;
+          for(let j=-1;j<=1;j++){
+            for(let i=-1;i<=1;i++){
+              const xx=x+i, yy=y+j;
+              if(xx<0||xx>=nx||yy<0||yy>=ny) continue;
+              const kk = k[(j+1)*3+(i+1)];
+              const v = a[yy*nx+xx];
+              if(!isFinite(v)) continue;
+              s += v*kk; w += kk;
+            }
+          }
+          out[y*nx+x] = (w>0 ? s/w : a[y*nx+x]);
+        }
+      }
+      a = out;
+    }
+    return a;
+  }
+
+  function findLocalExtrema(field, nx, ny){
+    const highs=[], lows=[];
+    for(let y=1;y<ny-1;y++){
+      for(let x=1;x<nx-1;x++){
+        const idx=y*nx+x;
+        const v=field[idx];
+        if(!isFinite(v)) continue;
+
+        let isH=true, isL=true;
+        for(let j=-1;j<=1;j++){
+          for(let i=-1;i<=1;i++){
+            if(i===0 && j===0) continue;
+            const vv = field[(y+j)*nx+(x+i)];
+            if(!isFinite(vv)) continue;
+            if(vv > v) isH=false;
+            if(vv < v) isL=false;
+            if(!isH && !isL) break;
+          }
+          if(!isH && !isL) break;
+        }
+        if(isH) highs.push({x,y,v});
+        if(isL) lows.push({x,y,v});
+      }
+    }
+    return {highs, lows};
+  }
+
+  function suppressByDistance(points, minDistCells, keepN){
+    const kept=[];
+    for(const p of points){
+      let ok=true;
+      for(const q of kept){
+        const dx=p.x-q.x, dy=p.y-q.y;
+        if(dx*dx+dy*dy < minDistCells*minDistCells){ ok=false; break; }
+      }
+      if(ok) kept.push(p);
+      if(kept.length>=keepN) break;
+    }
+    return kept;
+  }
+
   window.addEventListener('load', async () => {
     map = L.map('map', { zoomControl: false, maxBounds: SICILY_BOUNDS.pad(0.5), background: '#1a1a1a' }).fitBounds(SICILY_BOUNDS);
 
     // 1. BASE: DARK RELIEF
-    L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/World_Shaded_Relief/MapServer/tile/{z}/{y}/{x}', { 
-        maxZoom: 13, attribution: 'Esri', className: 'dark-relief-tiles' 
+    L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/World_Shaded_Relief/MapServer/tile/{z}/{y}/{x}', {
+        maxZoom: 13, attribution: 'Esri', className: 'dark-relief-tiles'
     }).addTo(map);
 
     // 3. HILLSHADE
-    L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/Elevation/World_Hillshade/MapServer/tile/{z}/{y}/{x}', { 
-        maxZoom: 19, className: 'dark-relief-tiles', opacity: 0.4 
+    L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/Elevation/World_Hillshade/MapServer/tile/{z}/{y}/{x}', {
+        maxZoom: 19, className: 'dark-relief-tiles', opacity: 0.45
     }).addTo(map);
 
     // 4. LABELS
@@ -308,15 +381,17 @@
       map.getPanes().overlayPane.appendChild(c);
       return c;
     }
-    scalarCanvases.wind = mkCanvas(290, 'scalar-layer'); 
+    scalarCanvases.wind = mkCanvas(290, 'scalar-layer');
     scalarCanvases.temp = mkCanvas(300, 'scalar-layer');
     scalarCanvases.rain = mkCanvas(310, 'scalar-layer');
     scalarCanvases.rh = mkCanvas(320, 'scalar-layer');
     scalarCanvases.press = mkCanvas(330, 'scalar-layer');
     scalarCanvases.cloud = mkCanvas(340, 'scalar-layer');
+
     arrowCanvas = mkCanvas(380);
-    isoCanvas = mkCanvas(420);
-    gridCanvas = mkCanvas(450);
+    thermCanvas = mkCanvas(405);    // <<< isoterme tra frecce e isobare
+    isoCanvas   = mkCanvas(420);
+    gridCanvas  = mkCanvas(450);
   }
 
   async function loadCatalog(){
@@ -345,7 +420,8 @@
     if(!currentData) return;
     drawScalars();
     drawWindArrows();
-    drawIsobars();
+    drawIsotherms();   // <<< nuove
+    drawIsobars();     // <<< fix + A/B coerenti
     drawLatLonGrid();
     updateParticles();
   }
@@ -368,7 +444,7 @@
         const data = img.data;
 
         let arr, stops, isWindBg=false;
-        if(layer==='wind') { isWindBg=true; stops = WIND_COLOR_SCALE; }
+        if(layer==='wind') { isWindBg=true; }
         else if(layer==='temp') { arr = currentData.temp; stops = TEMP_STOPS; }
         else if(layer==='rain') { arr = currentData.rain; stops = RAIN_STOPS; }
         else if(layer==='rh') { arr = currentData.rh; stops = RH_STOPS; }
@@ -382,15 +458,14 @@
             if(isWindBg){
                 const u = currentData.wind_u.data[i], v = currentData.wind_v.data[i];
                 val = Math.sqrt(u*u+v*v);
-                col = vividWindColor(val); col.a = 0.45;
+                col = vividWindColor(val); col.a = 0.40; // sfondo vento un po’ meno invadente
             } else {
                 val = arr[i] || 0;
-                
-                // RAIN CUTOFF (> 0.6mm)
+
                 if(layer==='rain' && val < 0.6) { data[i*4+3]=0; continue; }
-                
                 if(layer==='cloud' && val < 10) { data[i*4+3]=0; continue; }
-                col = interpStops(val, stops); 
+
+                col = interpStops(val, stops);
             }
             const p = i*4;
             data[p] = col.r; data[p+1] = col.g; data[p+2] = col.b; data[p+3] = Math.round(col.a*255);
@@ -399,7 +474,7 @@
         const tl = map.latLngToContainerPoint([m.la1, m.lo1]);
         const br = map.latLngToContainerPoint([m.la2, m.lo2]);
         ctx.save();
-        ctx.imageSmoothingEnabled = true; 
+        ctx.imageSmoothingEnabled = true;
         ctx.drawImage(off, tl.x, tl.y, br.x-tl.x, br.y-tl.y);
         ctx.restore();
     });
@@ -442,10 +517,9 @@
 
     if(!selected.has('wind') || !currentData) return;
     const m = currentData.meta; const zoom = map.getZoom();
-    
-    // MENO FRECCE
+
     const stride = zoom >= 10 ? 3 : (zoom >= 9 ? 4 : 5);
-    const baseLen = zoom >= 10 ? 28 : 22; const baseWidth = 2.5; 
+    const baseLen = zoom >= 10 ? 28 : 22; const baseWidth = 2.5;
     ctx.lineCap = 'round'; ctx.lineJoin = 'round';
 
     for(let y=0; y<m.ny; y+=stride){
@@ -454,25 +528,23 @@
             const idx = y*m.nx + x;
             const u = currentData.wind_u.data[idx], v = currentData.wind_v.data[idx];
             const sp = Math.sqrt(u*u+v*v);
-            if(sp < 1) continue; 
+            if(sp < 1) continue;
             const lon = m.lo1 + x*m.dx;
             const p = map.latLngToContainerPoint([lat, lon]);
-            
+
             const cRg = vividWindColor(sp);
             const fillStyle = `rgb(${cRg.r},${cRg.g},${cRg.b})`;
-            const speedScale = clamp(sp/9.0, 0.65, 2.5); 
+            const speedScale = clamp(sp/9.0, 0.65, 2.5);
             const currentLen = baseLen*speedScale; const currentWidth = baseWidth*speedScale;
             const headLen = currentLen*0.4; const headWidth = headLen*0.75;
             const angle = Math.atan2(-v, u);
-            
-            // ASTA
+
             const shaftEndX = p.x + (currentLen-headLen)*Math.cos(angle);
             const shaftEndY = p.y + (currentLen-headLen)*Math.sin(angle);
             ctx.beginPath(); ctx.moveTo(p.x, p.y); ctx.lineTo(shaftEndX, shaftEndY);
-            ctx.strokeStyle = "#000000"; ctx.lineWidth = currentWidth+2.5; ctx.stroke(); // Bordo
-            ctx.strokeStyle = fillStyle; ctx.lineWidth = currentWidth; ctx.stroke(); // Interno
+            ctx.strokeStyle = "#000000"; ctx.lineWidth = currentWidth+2.5; ctx.stroke();
+            ctx.strokeStyle = fillStyle; ctx.lineWidth = currentWidth; ctx.stroke();
 
-            // TESTA
             const tipX = p.x + currentLen*Math.cos(angle);
             const tipY = p.y + currentLen*Math.sin(angle);
             const wing1X = shaftEndX - headWidth*Math.cos(angle - Math.PI/2);
@@ -481,8 +553,8 @@
             const wing2Y = shaftEndY - headWidth*Math.sin(angle + Math.PI/2);
 
             ctx.beginPath(); ctx.moveTo(tipX, tipY); ctx.lineTo(wing1X, wing1Y); ctx.lineTo(wing2X, wing2Y); ctx.closePath();
-            ctx.fillStyle = "#000000"; ctx.fill(); ctx.lineWidth=1.0; ctx.stroke(); // Bordo
-            ctx.fillStyle = fillStyle; ctx.fill(); // Interno
+            ctx.fillStyle = "#000000"; ctx.fill(); ctx.lineWidth=1.0; ctx.stroke();
+            ctx.fillStyle = fillStyle; ctx.fill();
         }
     }
   }
@@ -490,113 +562,241 @@
   function updateParticles(){
     if(velocityLayer) { map.removeLayer(velocityLayer); velocityLayer = null; }
     if(!particlesOn || !currentData) return;
-    // MENO PARTICELLE (1/180)
+
     velocityLayer = L.velocityLayer({
       displayValues: false, data: [ currentData.wind_u, currentData.wind_v ],
-      maxVelocity: 20.0, velocityScale: 0.008, particleMultiplier: 1/180, lineWidth: 2.0,            
-      particleAge: 100, frameRate: 40, opacity: 1.0, colorScale: WIND_COLOR_SCALE, pane: 'particlePane' 
+      maxVelocity: 20.0, velocityScale: 0.008, particleMultiplier: 1/180, lineWidth: 2.0,
+      particleAge: 100, frameRate: 40, opacity: 1.0, colorScale: WIND_COLOR_SCALE, pane: 'particlePane'
     });
     velocityLayer.onAdd = function(map){ L.VelocityLayer.prototype.onAdd.call(this, map); this._canvas.classList.add('velocity-canvas'); };
     velocityLayer.addTo(map);
   }
 
+  // =========================
+  // ISOTERME (nuove)
+  // =========================
+  function drawIsotherms(){
+    const ctx = thermCanvas.getContext('2d');
+    const s = map.getSize();
+    thermCanvas.width = s.x; thermCanvas.height = s.y;
+    L.DomUtil.setPosition(thermCanvas, map.containerPointToLayerPoint([0,0]));
+    ctx.clearRect(0,0,s.x,s.y);
+
+    if(!showIsotherms || !currentData?.temp || !currentData?.meta) return;
+
+    const m = currentData.meta;
+    const temp = currentData.temp;
+
+    // step adattivo: più zoom => più dettaglio
+    const zoom = map.getZoom();
+    const step = (zoom >= 10) ? 2 : (zoom >= 9 ? 3 : 4);
+
+    let tMin=Infinity, tMax=-Infinity;
+    for(let i=0;i<temp.length;i++){
+      const v=temp[i];
+      if(!isFinite(v)) continue;
+      if(v<tMin) tMin=v;
+      if(v>tMax) tMax=v;
+    }
+    if(!isFinite(tMin)||!isFinite(tMax)) return;
+
+    const start = Math.floor(tMin/step)*step;
+    const end   = Math.ceil(tMax/step)*step + step;
+
+    const contours = d3.contours().size([m.nx, m.ny]).thresholds(d3.range(start, end, step))(temp);
+
+    ctx.save();
+    ctx.lineWidth = 1.2;
+    ctx.strokeStyle = "rgba(255,255,255,0.45)";
+    ctx.font = "900 12px Arial";
+    ctx.textAlign="center"; ctx.textBaseline="middle";
+
+    contours.forEach(c=>{
+      // path per ogni ring, con moveTo corretto (NO linee strane)
+      const labelPts=[];
+
+      c.coordinates.forEach(poly=>{
+        poly.forEach(ring=>{
+          ring.forEach(pts=>{
+            if(!pts || pts.length<2) return;
+
+            ctx.beginPath();
+            for(let i=0;i<pts.length;i++){
+              const coord = pts[i];
+              const lat = m.la1 - coord[1]*m.dy;
+              const lon = m.lo1 + coord[0]*m.dx;
+              const p = map.latLngToContainerPoint([lat, lon]);
+              if(i===0) ctx.moveTo(p.x,p.y);
+              else ctx.lineTo(p.x,p.y);
+            }
+            ctx.stroke();
+
+            if(pts.length > 80){
+              const mid = pts[Math.floor(pts.length/2)];
+              const lat = m.la1 - mid[1]*m.dy;
+              const lon = m.lo1 + mid[0]*m.dx;
+              const p = map.latLngToContainerPoint([lat, lon]);
+              labelPts.push(p);
+            }
+          });
+        });
+      });
+
+      // label poche (una per contour “utile”)
+      if(labelPts.length){
+        const p = labelPts[Math.floor(labelPts.length/2)];
+        ctx.fillStyle="rgba(0,0,0,0.55)";
+        ctx.fillRect(p.x-16, p.y-8, 32, 16);
+        ctx.fillStyle="#fff";
+        ctx.fillText(Math.round(c.value) + "°", p.x, p.y);
+      }
+    });
+
+    ctx.restore();
+  }
+
+  // =========================
+  // ISOBARE (fix + A/B coerenti)
+  // =========================
   function drawIsobars(){
     const ctx = isoCanvas.getContext('2d');
     const s = map.getSize();
     isoCanvas.width = s.x; isoCanvas.height = s.y;
     L.DomUtil.setPosition(isoCanvas, map.containerPointToLayerPoint([0,0]));
     ctx.clearRect(0,0,s.x,s.y);
-    if(!showIsobars || !currentData?.press) return;
-    
-    // FIX ISOBARE: Pulisci dati (sanitizzazione per evitare linee verticali)
+
+    if(!showIsobars || !currentData?.press || !currentData?.meta) return;
+
+    const m = currentData.meta;
+
+    // 1) Sanitizzazione (evita contorni impazziti)
     const cleanPress = new Float32Array(currentData.press.length);
     for(let i=0; i<currentData.press.length; i++) {
         let v = currentData.press[i];
-        // Se nullo o fuori scala (es. 0 o < 800), forza a 1013 (neutro)
-        if(!v || v < 850 || v > 1100) cleanPress[i] = 1013;
+        if(!isFinite(v) || v < 850 || v > 1100) cleanPress[i] = 1013;
         else cleanPress[i] = v;
     }
 
-    // LABEL A/B LOGIC
-    const localExtrema = [];
-    const m = currentData.meta;
-    
-    // Scan grid skipping borders
-    for(let y=5; y<m.ny-5; y+=1){
-        for(let x=5; x<m.nx-5; x+=1){
-            const idx = y*m.nx + x;
-            const val = cleanPress[idx];
-            
-            // Check only if it's potentially high or low
-            if(val < 1008 || val > 1018){ 
-                let isMax = true;
-                let isMin = true;
-                // 5x5 neighbor check
-                for(let dy=-5; dy<=5; dy++){
-                    for(let dx=-5; dx<=5; dx++){
-                        if(dx===0 && dy===0) continue;
-                        const nVal = cleanPress[(y+dy)*m.nx + (x+dx)];
-                        if(nVal >= val) isMax = false;
-                        if(nVal <= val) isMin = false;
-                    }
-                }
-                if(isMax) localExtrema.push({x, y, val, type:'A'});
-                else if(isMin) localExtrema.push({x, y, val, type:'B'});
+    // 2) Range thresholds dinamico
+    let pMin=Infinity, pMax=-Infinity;
+    for(let i=0;i<cleanPress.length;i++){
+      const v=cleanPress[i];
+      if(!isFinite(v)) continue;
+      if(v<pMin) pMin=v;
+      if(v>pMax) pMax=v;
+    }
+    if(!isFinite(pMin)||!isFinite(pMax)) return;
+
+    const start = Math.floor(pMin/2)*2;
+    const end   = Math.ceil(pMax/2)*2 + 2;
+
+    const contours = d3.contours().size([m.nx, m.ny]).thresholds(d3.range(start, end, 2))(cleanPress);
+
+    // 3) Disegno contorni CORRETTO: moveTo sul primo punto (NO raggi verticali)
+    ctx.save();
+    ctx.lineWidth = 1.8;
+    ctx.strokeStyle = "rgba(255,255,255,0.70)";
+    ctx.font = "900 12px Arial";
+    ctx.textAlign="center"; ctx.textBaseline="middle";
+
+    contours.forEach(c=>{
+      const labelPts = [];
+
+      c.coordinates.forEach(poly=>{
+        poly.forEach(ring=>{
+          ring.forEach(pts=>{
+            if(!pts || pts.length<2) return;
+
+            ctx.beginPath();
+            for(let i=0;i<pts.length;i++){
+              const coord = pts[i];
+              const lat = m.la1 - coord[1]*m.dy;
+              const lon = m.lo1 + coord[0]*m.dx;
+              const p = map.latLngToContainerPoint([lat, lon]);
+              if(i===0) ctx.moveTo(p.x,p.y);
+              else ctx.lineTo(p.x,p.y);
             }
-        }
+            ctx.stroke();
+
+            if(pts.length > 90){
+              const mid = pts[Math.floor(pts.length/2)];
+              const lat = m.la1 - mid[1]*m.dy;
+              const lon = m.lo1 + mid[0]*m.dx;
+              const p = map.latLngToContainerPoint([lat, lon]);
+              labelPts.push(p);
+            }
+          });
+        });
+      });
+
+      if(labelPts.length){
+        const p = labelPts[Math.floor(labelPts.length/2)];
+        ctx.fillStyle="rgba(0,0,0,0.60)";
+        ctx.fillRect(p.x-16, p.y-8, 32, 16);
+        ctx.fillStyle="#fff";
+        ctx.fillText(Math.round(c.value), p.x, p.y);
+      }
+    });
+
+    // 4) A/B coerenti: smoothing + extrema + soppressione distanza
+    const smooth = gaussianBlur3x3(cleanPress, m.nx, m.ny, 2);
+    const { highs, lows } = findLocalExtrema(smooth, m.nx, m.ny);
+
+    // score: quanto “spicca” (differenza dai dintorni)
+    // qui semplice: ordina per valore (alto) e inverso (basso)
+    highs.sort((a,b)=> b.v - a.v);
+    lows.sort((a,b)=> a.v - b.v);
+
+    const zoom = map.getZoom();
+    const minDistCells = (zoom >= 10) ? 10 : (zoom >= 9 ? 12 : 14);
+    const keepN = (zoom >= 10) ? 5 : 4;
+
+    const topH = suppressByDistance(highs, minDistCells, keepN);
+    const topL = suppressByDistance(lows,  minDistCells, keepN);
+
+    // A/B più grandi e più leggibili
+    function drawAB(letter, pt, fill){
+      const lat = m.la1 - pt.y*m.dy;
+      const lon = m.lo1 + pt.x*m.dx;
+      const p = map.latLngToContainerPoint([lat, lon]);
+
+      if(p.x < -50 || p.y < -50 || p.x > s.x+50 || p.y > s.y+50) return;
+
+      ctx.save();
+      ctx.font = "950 34px Arial";
+      ctx.lineWidth = 6;
+      ctx.strokeStyle = "rgba(0,0,0,0.70)";
+      ctx.strokeText(letter, p.x, p.y);
+      ctx.fillStyle = fill;
+      ctx.fillText(letter, p.x, p.y);
+
+      // valore sotto (hPa)
+      ctx.font = "900 12px Arial";
+      ctx.lineWidth = 4;
+      ctx.strokeStyle = "rgba(0,0,0,0.65)";
+      const txt = Math.round(pt.v) + " hPa";
+      ctx.strokeText(txt, p.x, p.y + 22);
+      ctx.fillStyle = "rgba(255,255,255,0.95)";
+      ctx.fillText(txt, p.x, p.y + 22);
+
+      ctx.restore();
     }
 
-    const contours = d3.contours().size([m.nx, m.ny]).thresholds(d3.range(960, 1050, 2))(cleanPress);
-    
-    ctx.lineWidth = 1.8; ctx.strokeStyle = "rgba(255,255,255,0.7)"; 
-    ctx.font = "bold 12px Arial"; ctx.textAlign="center"; ctx.textBaseline="middle";
-    
-    // Draw Contours
-    contours.forEach(c => {
-        ctx.beginPath();
-        c.coordinates.forEach(ring => {
-            let pts = [];
-            ring.forEach(arr => {
-               arr.forEach(coord => {
-                   const lat = m.la1 - coord[1]*m.dy; const lon = m.lo1 + coord[0]*m.dx;
-                   const p = map.latLngToContainerPoint([lat,lon]);
-                   ctx.lineTo(p.x,p.y);
-                   pts.push(p);
-               });
-            });
-            ctx.stroke();
-            // Labels on lines
-            if(pts.length>20){
-                let mid=pts[Math.floor(pts.length/2)];
-                ctx.fillStyle="rgba(0,0,0,0.6)"; ctx.fillRect(mid.x-14,mid.y-7,28,14);
-                ctx.fillStyle="#fff"; ctx.fillText(Math.round(c.value),mid.x,mid.y);
-            }
-        });
-    });
+    topH.forEach(pt => drawAB("A", pt, "rgba(255,0,0,0.95)"));
+    topL.forEach(pt => drawAB("B", pt, "rgba(0,68,255,0.95)"));
 
-    // Draw A/B Labels
-    ctx.font = "900 18px Arial"; 
-    localExtrema.forEach(pt => {
-        const lat = m.la1 - pt.y*m.dy;
-        const lon = m.lo1 + pt.x*m.dx;
-        const p = map.latLngToContainerPoint([lat, lon]);
-        if(p.x < 0 || p.y < 0 || p.x > s.x || p.y > s.y) return;
-
-        // Simple clutter avoidance could be added here
-        
-        ctx.fillStyle = pt.type==='A' ? "#ff0000" : "#0044ff";
-        ctx.strokeStyle = "#ffffff";
-        ctx.lineWidth = 3;
-        ctx.strokeText(pt.type, p.x, p.y);
-        ctx.fillText(pt.type, p.x, p.y);
-    });
+    ctx.restore();
   }
 
+  // =========================
+  // UI toggles
+  // =========================
   window.toggleLayer = function(name){
     if(selected.has(name)) selected.delete(name); else selected.add(name);
     updateToggleUI(); redrawAll();
   }
   window.toggleIsobars = function(){ showIsobars=!showIsobars; updateToggleUI(); redrawAll(); }
+  window.toggleIsotherms = function(){ showIsotherms=!showIsotherms; updateToggleUI(); redrawAll(); }
   window.toggleGrid = function(){ showGrid=!showGrid; updateToggleUI(); redrawAll(); }
   window.toggleParticles = function(){ particlesOn=!particlesOn; updateToggleUI(); redrawAll(); }
 
@@ -610,6 +810,7 @@
       else if(txt.includes('pressione') && selected.has('press')) el.classList.add('active');
       else if(txt.includes('nuvole') && selected.has('cloud')) el.classList.add('active');
       else if(txt.includes('isobare') && showIsobars) el.classList.add('active');
+      else if(txt.includes('isoterme') && showIsotherms) el.classList.add('active');
       else if(txt.includes('reticolo') && showGrid) el.classList.add('active');
       else el.classList.remove('active');
     });
@@ -618,6 +819,9 @@
     document.getElementById('wind-rose').style.display = selected.has('wind') ? 'flex' : 'none';
   }
 
+  // =========================
+  // Picker
+  // =========================
   function onPick(e){
     if(!currentData) return;
     const m = currentData.meta;
@@ -626,21 +830,24 @@
     if(x<0||x>=m.nx||y<0||y>=m.ny) return;
     const idx = y*m.nx + x;
     let val = '--', unit = '';
-    if(selected.has('rain')) { val = currentData.rain[idx].toFixed(1); unit='mm'; }
-    else if(selected.has('temp')) { val = currentData.temp[idx].toFixed(1); unit='°C'; }
-    else if(selected.has('wind')) { 
+    if(selected.has('rain')) { val = (currentData.rain[idx] ?? 0).toFixed(1); unit='mm'; }
+    else if(selected.has('temp')) { val = (currentData.temp[idx] ?? 0).toFixed(1); unit='°C'; }
+    else if(selected.has('wind')) {
         const u=currentData.wind_u.data[idx], v=currentData.wind_v.data[idx];
-        val = (Math.sqrt(u*u+v*v)*3.6).toFixed(1); unit='km/h'; 
+        val = (Math.sqrt(u*u+v*v)*3.6).toFixed(1); unit='km/h';
         const arrow = document.getElementById('rose-arrow');
         const deg = 90 - (Math.atan2(v, u) * 180 / Math.PI);
         arrow.style.transform = `rotate(${deg}deg)`;
     }
-    else if(selected.has('rh')) { val = Math.round(currentData.rh[idx]); unit='%'; }
-    else if(selected.has('press')) { val = Math.round(currentData.press[idx]); unit='hPa'; }
+    else if(selected.has('rh')) { val = Math.round(currentData.rh[idx] ?? 0); unit='%'; }
+    else if(selected.has('press')) { val = Math.round(currentData.press[idx] ?? 0); unit='hPa'; }
     document.getElementById('val-display').innerText = val;
     document.getElementById('unit-display').innerText = unit;
   }
 
+  // =========================
+  // Play
+  // =========================
   window.togglePlay = function(){
     if(isPlaying){ isPlaying=false; document.getElementById('play-btn').innerText='►'; return; }
     isPlaying=true; document.getElementById('play-btn').innerText='❚❚';
