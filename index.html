@@ -1,1046 +1,656 @@
 <!DOCTYPE html>
-<html lang="it">
+<html>
 <head>
-  <title>Sicilia MeteoHub - PRO (Relief + MultiLayer + A/B + Wind BG)</title>
+  <title>Sicilia MeteoHub - FINAL COMPLETE</title>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
 
   <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
   <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
 
-  <!-- Particelle (leaflet-velocity) -->
   <link rel="stylesheet" href="https://unpkg.com/leaflet-velocity@1.8.0/dist/leaflet-velocity.css" />
   <script src="https://unpkg.com/leaflet-velocity@1.8.0/dist/leaflet-velocity.js"></script>
 
-  <!-- Contours -->
   <script src="https://d3js.org/d3.v7.min.js"></script>
 
   <style>
-    body { margin:0; background:#111; font-family: "Segoe UI", system-ui, -apple-system, Arial; color:#fff; overflow:hidden; }
-    #map { position:absolute; inset:0; background:#111; }
+    /* SFONDO SCURO */
+    body { margin: 0; background: #1a1a1a; font-family: 'Segoe UI', sans-serif; color: #ddd; overflow: hidden; }
+    #map { position: absolute; top: 0; bottom: 0; width: 100%; background: #1a1a1a; }
 
-    #info-box{
-      position:absolute; top:16px; left:16px; z-index:2000;
-      pointer-events:none;
-      text-shadow: 0 2px 12px rgba(0,0,0,0.9);
+    #ui-container {
+      position: absolute; top: 10px; right: 10px; z-index: 2000;
+      display: flex; flex-direction: column; gap: 10px; align-items: flex-end;
     }
-    #val-display{ font-size: 3.0em; font-weight: 900; line-height: 1; }
-    #unit-display{ font-size: 1.1em; opacity:0.85; font-weight: 800; }
-
-    #ui-container{
-      position:absolute; top:10px; right:10px; z-index:2500;
-      display:flex; flex-direction:column; gap:10px; align-items:flex-end;
-    }
-    .panel{
-      background: rgba(0,0,0,0.78);
-      border: 1px solid rgba(255,255,255,0.14);
-      backdrop-filter: blur(8px);
-      border-radius: 14px;
+    .panel {
+      background: rgba(30,30,30,0.9);
+      backdrop-filter: blur(12px);
       padding: 10px;
-      min-width: 190px;
-      box-shadow: 0 10px 30px rgba(0,0,0,0.25);
+      border-radius: 14px;
+      border: 1px solid rgba(255,255,255,0.1);
+      box-shadow: 0 12px 30px rgba(0,0,0,0.6);
+      color: #eee;
+    }
+    .toggle {
+      width: 175px;
+      display:flex; align-items:center; justify-content:space-between;
+      padding: 10px 12px; margin: 6px 0;
+      background: rgba(255,255,255,0.05);
+      border: 1px solid rgba(255,255,255,0.1);
+      color: #ccc;
+      border-radius: 10px;
+      cursor: pointer;
+      user-select:none;
+      font-weight: 700;
+      transition: all 0.15s;
+    }
+    .toggle:hover { background: rgba(255,255,255,0.1); color:#fff; }
+    .toggle.active {
+      background: linear-gradient(90deg, #0077ff, #0044cc);
+      border-color: rgba(0,100,200,0.5);
+      color: #fff;
+      box-shadow: 0 4px 12px rgba(0,136,255,0.3);
+    }
+    
+    .mini {
+      width: 175px; padding: 9px 12px; border-radius: 10px;
+      border: 1px solid rgba(255,255,255,0.1); background: rgba(255,255,255,0.05);
+      color:#ccc; cursor:pointer; font-weight:800;
+    }
+    .mini:hover { background: rgba(255,255,255,0.1); color:#fff; }
+    .mini.active { background: #eee; color:#111; border-color: #fff; }
+
+    /* INFO BOX */
+    #info-box { 
+        position: absolute; top: 18px; left: 18px; z-index: 2000; 
+        pointer-events: none; 
+        display: flex; align-items: center; gap: 15px;
+    }
+    #val-group { display: flex; flex-direction: column; }
+    #val-display { font-size: 3.6em; font-weight: 950; line-height: 0.9; color: #fff; text-shadow: 0 2px 5px rgba(0,0,0,0.8); }
+    #unit-display { font-size: 1.15em; color: #aaa; font-weight: 850; margin-top: 4px; text-shadow: 0 1px 3px rgba(0,0,0,0.9); }
+
+    /* ROSA DEI VENTI */
+    #wind-rose {
+        width: 50px; height: 50px;
+        background: rgba(255,255,255,0.9);
+        border: 2px solid rgba(255,255,255,0.5);
+        border-radius: 50%;
+        display: none;
+        align-items: center; justify-content: center;
+        position: relative;
+        box-shadow: 0 4px 10px rgba(0,0,0,0.5);
+    }
+    .cardinal { position: absolute; font-size: 9px; font-weight: 900; color: #111; }
+    .c-n { top: 2px; left: 50%; transform: translateX(-50%); }
+    .c-s { bottom: 2px; left: 50%; transform: translateX(-50%); }
+    .c-e { right: 3px; top: 50%; transform: translateY(-50%); }
+    .c-w { left: 3px; top: 50%; transform: translateY(-50%); }
+    #rose-arrow { width: 26px; height: 26px; fill: #000; transition: transform 0.1s; }
+
+    #bottom-bar {
+      position: absolute; bottom: 0; left: 0; right: 0; height: 92px;
+      background: linear-gradient(to top, rgba(0,0,0,0.95), transparent);
+      display: flex; align-items: center; padding: 0 18px; z-index: 2000;
+    }
+    #play-btn { font-size: 2.6em; background: none; border: none; color: #fff; cursor: pointer; margin-right: 14px; }
+    #time-label { font-size: 1.45em; font-weight: 950; margin-left: 14px; min-width: 150px; text-align: center; color: #fff; }
+    input[type=range] { flex-grow: 1; height: 6px; cursor: pointer; accent-color: #0077ff; background: rgba(255,255,255,0.2); }
+
+    /* MAPPA SCURA (INVERTED RELIEF) */
+    .dark-relief-tiles {
+        filter: invert(100%) hue-rotate(180deg) brightness(0.8) contrast(1.2) grayscale(20%);
     }
 
-    .row{ display:flex; align-items:center; justify-content:space-between; gap:10px; margin:6px 0; }
-    .row label{ display:flex; align-items:center; gap:10px; font-weight: 800; font-size: 12px; color:#eaeaea; user-select:none; cursor:pointer;}
-    .row input[type="checkbox"]{ transform: scale(1.1); }
-
-    .btn{
-      width:100%;
-      padding:10px 12px;
-      border-radius:10px;
-      border: 1px solid rgba(255,255,255,0.14);
-      background: rgba(255,255,255,0.06);
-      color:#fff;
-      font-weight: 900;
-      cursor:pointer;
-      transition: 0.15s;
-    }
-    .btn:hover{ background: rgba(255,255,255,0.12); }
-    .btn.active{ background:#1d7cff; border-color:#1d7cff; }
-
-    .small{
-      font-size: 11px;
-      opacity: 0.8;
-      line-height: 1.25;
-      margin-top: 6px;
+    /* LAYER COLORATI */
+    canvas.leaflet-layer.scalar-layer { 
+        image-rendering: auto; 
+        mix-blend-mode: screen; 
+        opacity: 0.85; 
     }
 
-    #bottom-bar{
-      position:absolute; left:0; right:0; bottom:0;
-      height: 90px;
-      z-index: 2600;
-      display:flex; align-items:center; gap:14px;
-      padding: 0 16px;
-      background: linear-gradient(to top, rgba(0,0,0,0.92), rgba(0,0,0,0));
-    }
-    #play-btn{
-      width:56px; height:56px;
-      border-radius: 16px;
-      border: 1px solid rgba(255,255,255,0.14);
-      background: rgba(255,255,255,0.08);
-      color:#fff;
-      font-size: 28px;
-      cursor:pointer;
-    }
-    #time-label{
-      min-width: 150px;
-      text-align:center;
-      font-weight: 900;
-      text-shadow: 0 2px 10px rgba(0,0,0,0.8);
-    }
-    input[type="range"]{ flex:1; height: 6px; accent-color:#1d7cff; }
+    canvas.leaflet-layer.velocity-canvas { mix-blend-mode: normal; opacity: 0.95; }
 
-    .ol-canvas{
-      position:absolute;
-      left:0; top:0;
-      pointer-events:none;
-      image-rendering: auto;
-    }
-
-    #toast{
-      position:absolute; left:16px; bottom:104px; z-index:3000;
-      padding:10px 12px;
-      border-radius:12px;
-      background: rgba(120,0,0,0.55);
-      border:1px solid rgba(255,120,120,0.35);
-      display:none;
-      max-width: 85vw;
-      font-weight: 800;
-    }
   </style>
 </head>
 
 <body>
-  <div id="map"></div>
-
   <div id="info-box">
-    <div id="val-display">--</div>
-    <div id="unit-display">Caricamento...</div>
+    <div id="val-group">
+        <div id="val-display">--</div>
+        <div id="unit-display">Caricamento...</div>
+    </div>
+    <div id="wind-rose">
+        <span class="cardinal c-n">N</span>
+        <span class="cardinal c-s">S</span>
+        <span class="cardinal c-e">E</span>
+        <span class="cardinal c-w">W</span>
+        <svg id="rose-arrow" viewBox="0 0 24 24"><path d="M12 2L4.5 20.29L5.21 21L12 18L18.79 21L19.5 20.29L12 2Z" /></svg>
+    </div>
   </div>
 
   <div id="ui-container">
     <div class="panel">
-      <button class="btn active" id="btn-base-relief">ESRI RELIEF</button>
-      <div class="small">Basemap: Esri World Shaded Relief + nomi città (overlay).</div>
+      <button id="btn-flow" class="mini active" onclick="toggleParticles()">FLUSSO 🌬️ (ON)</button>
     </div>
 
-    <div class="panel" id="layers-panel">
-      <div style="font-weight:900; opacity:.9; margin-bottom:6px;">LIVELLI (multi-selezione)</div>
+    <div class="panel">
+      <div style="font-weight:950; opacity:0.8; margin-bottom:6px; color:#aaa;">LIVELLI</div>
 
-      <div class="row"><label><input type="checkbox" id="chk-temp"> TEMP 🌡️</label></div>
-      <div class="row"><label><input type="checkbox" id="chk-rain"> PIOGGIA ☔</label></div>
-      <div class="row"><label><input type="checkbox" id="chk-rh"> UMIDITÀ 💧</label></div>
-      <div class="row"><label><input type="checkbox" id="chk-press"> PRESSIONE ⏲️</label></div>
-      <div class="row"><label><input type="checkbox" id="chk-cloud"> NUVOLE ☁️</label></div>
+      <div class="toggle active" onclick="toggleLayer('wind')">
+        <span>VENTO (frecce) 🧭</span><span>●</span>
+      </div>
+      <div class="toggle" onclick="toggleLayer('temp')">
+        <span>TEMP 🌡️</span><span>●</span>
+      </div>
+      <div class="toggle" onclick="toggleLayer('rain')">
+        <span>PIOGGIA ☔</span><span>●</span>
+      </div>
+      <div class="toggle" onclick="toggleLayer('rh')">
+        <span>UMIDITÀ 💧</span><span>●</span>
+      </div>
+      <div class="toggle" onclick="toggleLayer('press')">
+        <span>PRESSIONE ⏲️</span><span>●</span>
+      </div>
+      <div class="toggle" onclick="toggleLayer('cloud')">
+        <span>NUVOLE ☁️</span><span>●</span>
+      </div>
 
-      <hr style="border:0; border-top:1px solid rgba(255,255,255,0.12); margin:10px 0;">
+      <div style="height:1px; background: rgba(255,255,255,0.1); margin:10px 0;"></div>
 
-      <button class="btn active" id="btn-wind-arrows">VENTO (FRECCE + SFONDO) 💨</button>
-      <button class="btn" id="btn-particles">PARTICELLE (flusso)</button>
-
-      <hr style="border:0; border-top:1px solid rgba(255,255,255,0.12); margin:10px 0;">
-
-      <button class="btn" id="btn-isobars">ISOBARE 〰️ (con A/B)</button>
-
-      <div class="small">Tocca/clicca la mappa per leggere il valore sotto al dito.</div>
+      <div class="toggle" id="btn-iso" onclick="toggleIsobars()">
+        <span>ISOBARE 〰️</span><span> </span>
+      </div>
+      <div class="toggle" id="btn-grid" onclick="toggleGrid()">
+        <span>RETICOLO #</span><span> </span>
+      </div>
     </div>
   </div>
 
+  <div id="map"></div>
+
   <div id="bottom-bar">
-    <button id="play-btn" title="Play/Pausa">►</button>
+    <button id="play-btn" onclick="togglePlay()">►</button>
     <input type="range" id="time-slider" min="0" max="0" value="0">
     <div id="time-label">--/-- --:--</div>
   </div>
 
-  <div id="toast"></div>
-
 <script>
-/* =============================
-   CONFIG MAP (Sicilia bounds)
-============================= */
-const SICILY_BOUNDS = L.latLngBounds(
-  L.latLng(35.0, 11.0),
-  L.latLng(39.5, 16.5)
-);
+  const SICILY_BOUNDS = L.latLngBounds(L.latLng(35.0, 11.0), L.latLng(39.5, 16.5));
 
-let map;
-let baseRelief, labelsOverlay;
+  const WIND_COLOR_SCALE = ["#000080", "#0044ff", "#00ddff", "#00ff55", "#ffff00", "#ff6600", "#ff0000", "#ff00ff"];
 
-let currentData = null, catalog = [];
-
-let isPlaying = false;
-let showIsobars = false;
-let showWindArrows = true;
-let showParticles = false;
-
-let scalarCanvas, isobarCanvas, windBGCanvas, windArrowCanvas;
-let velocityLayer = null;
-
-const selected = { temp:false, rain:false, rh:false, press:false, cloud:false };
-
-/* =============================
-   RENDER THROTTLE (FPS FIX)
-   - Ridisegna max ~30fps
-   - Evita redraw multipli durante pan/zoom
-============================= */
-let _dirty = false;
-let _raf = 0;
-let _lastDraw = 0;
-const TARGET_MS = 33; // ~30 FPS
-
-function requestRedraw(force=false){
-  if(force) _lastDraw = 0;
-  _dirty = true;
-  if(_raf) return;
-  _raf = requestAnimationFrame(drawLoop);
-}
-function drawLoop(ts){
-  _raf = 0;
-  if(!_dirty) return;
-
-  if(ts - _lastDraw < TARGET_MS){
-    _raf = requestAnimationFrame(drawLoop);
-    return;
-  }
-
-  _dirty = false;
-  _lastDraw = ts;
-  redrawAll();
-}
-
-/* =============================
-   UI helpers
-============================= */
-function toast(msg){
-  const t = document.getElementById('toast');
-  t.innerText = msg;
-  t.style.display = 'block';
-  clearTimeout(toast._tm);
-  toast._tm = setTimeout(()=> t.style.display='none', 3500);
-}
-function unitFor(key){
-  if(key==='wind') return 'km/h';
-  if(key==='temp') return '°C';
-  if(key==='rain') return 'mm';
-  if(key==='rh') return '%';
-  if(key==='press') return 'hPa';
-  if(key==='cloud') return '%';
-  return '';
-}
-
-/* =============================
-   Color helpers
-============================= */
-function lerp(a,b,t){ return a + (b-a)*t; }
-function clamp(x,a,b){ return Math.max(a, Math.min(b,x)); }
-
-function hexToRgb(hex){
-  const h = hex.replace('#','').trim();
-  const n = parseInt(h, 16);
-  return [(n>>16)&255, (n>>8)&255, n&255];
-}
-function rgbToCss(rgb, a=1){
-  return `rgba(${rgb[0]},${rgb[1]},${rgb[2]},${a})`;
-}
-function mixRgb(a,b,t){
-  return [
-    Math.round(lerp(a[0],b[0],t)),
-    Math.round(lerp(a[1],b[1],t)),
-    Math.round(lerp(a[2],b[2],t))
+  // TEMP (Custom)
+  const TEMP_STOPS = [
+    {v: -15, c: [156,218,216]}, {v: -14, c: [149,214,211]}, {v: -13, c: [141,210,206]}, {v: -12, c: [134,206,201]},
+    {v: -11, c: [127,202,196]}, {v: -10, c: [119,198,191]}, {v: -9,  c: [112,194,185]}, {v: -8,  c: [106,190,181]},
+    {v: -7,  c: [104,184,183]}, {v: -6,  c: [102,178,185]}, {v: -5,  c: [101,172,187]}, {v: -4,  c: [100,166,189]},
+    {v: -3,  c: [98,158,191]},  {v: -2,  c: [96,150,193]},  {v: -1,  c: [95,142,196]},  {v: 0,   c: [93,133,198]},
+    {v: 1,   c: [80,127,133]},  {v: 2,   c: [74,126,111]},  {v: 3,   c: [79,129,93]},   {v: 4,   c: [84,131,84]},
+    {v: 5,   c: [89,134,76]},   {v: 6,   c: [94,136,67]},   {v: 7,   c: [99,139,58]},   {v: 8,   c: [104,141,50]},
+    {v: 9,   c: [109,144,41]},  {v: 10,  c: [114,146,33]},  {v: 11,  c: [129,150,22]},  {v: 12,  c: [142,154,20]},
+    {v: 13,  c: [155,158,17]},  {v: 14,  c: [168,161,15]},  {v: 15,  c: [181,165,13]},  {v: 16,  c: [194,169,11]},
+    {v: 17,  c: [207,173,9]},   {v: 18,  c: [219,176,7]},   {v: 19,  c: [232,180,6]},   {v: 20,  c: [243,183,4]},
+    {v: 21,  c: [242,172,7]},   {v: 22,  c: [241,161,9]},   {v: 23,  c: [240,150,12]},  {v: 24,  c: [239,139,15]},
+    {v: 25,  c: [238,128,17]},  {v: 26,  c: [237,117,20]},  {v: 27,  c: [236,106,22]},  {v: 28,  c: [235,95,24]},
+    {v: 29,  c: [234,84,25]},   {v: 30,  c: [232,83,25]},   {v: 31,  c: [222,79,24]},   {v: 32,  c: [212,75,23]},
+    {v: 33,  c: [203,71,22]},   {v: 34,  c: [193,68,21]},   {v: 35,  c: [184,64,20]},   {v: 36,  c: [174,60,18]},
+    {v: 37,  c: [165,56,17]},   {v: 38,  c: [155,52,16]},   {v: 39,  c: [146,48,15]},   {v: 40,  c: [136,45,13]},
+    {v: 41,  c: [126,41,12]},   {v: 42,  c: [117,37,11]},   {v: 43,  c: [107,30,6]},    {v: 44,  c: [98,26,4]},
+    {v: 45,  c: [89,22,3]}
   ];
-}
-function brighten(rgb, factor){
-  return [
-    Math.round(clamp(rgb[0]*factor, 0, 255)),
-    Math.round(clamp(rgb[1]*factor, 0, 255)),
-    Math.round(clamp(rgb[2]*factor, 0, 255))
+
+  // RAIN (Custom: Start > 0.6mm)
+  const RAIN_STOPS = [
+    {v:0.0, c:[0,0,0], a:0.0},
+    {v:0.6, c:[100,200,255], a:0.6},
+    {v:1.0, c:[0,150,255], a:0.7},
+    {v:5.0, c:[0,0,255], a:0.8},
+    {v:10,  c:[255,255,0], a:0.8},
+    {v:30,  c:[255,150,0], a:0.85},
+    {v:50,  c:[255,0,0], a:0.9}
   ];
-}
 
-/* =============================
-   PALETTES
-============================= */
-const TEMP_STOPS = [
-  { v:-15, c:[ 70,  0, 110] },
-  { v:  0, c:[  0, 230, 255] },
-  { v: 15, c:[255, 255, 170] },
-  { v: 20, c:[255, 235,   0] },
-  { v: 25, c:[255, 170,  70] },
-  { v: 30, c:[255, 120,   0] },
-  { v: 35, c:[255,  40,  40] },
-  { v: 45, c:[140,   0,   0] }
-];
+  // RH (Custom Provided)
+  const RH_STOPS = [
+    {v:0, c:[173,85,56]}, {v:1, c:[173,85,56]}, {v:5, c:[173,89,56]}, {v:10, c:[173,93,56]},
+    {v:15, c:[173,97,56]}, {v:20, c:[173,101,56]}, {v:25, c:[173,105,56]}, {v:30, c:[173,110,56]},
+    {v:35, c:[173,128,56]}, {v:40, c:[173,146,56]}, {v:45, c:[139,159,56]}, {v:50, c:[105,173,56]},
+    {v:55, c:[80,173,88]}, {v:60, c:[56,173,121]}, {v:65, c:[56,173,173]}, {v:70, c:[56,174,173]},
+    {v:75, c:[56,160,173]}, {v:80, c:[56,157,173]}, {v:85, c:[56,139,173]}, {v:90, c:[56,132,173]},
+    {v:95, c:[56,110,165]}, {v:100, c:[56,70,114]}
+  ];
 
-const RAIN_STOPS = [
-  { v:0.0,  c:[0,0,0,0] },
-  { v:0.2,  c:[ 80, 200, 255, 0.55] },
-  { v:2.0,  c:[  0, 120, 255, 0.70] },
-  { v:10.0, c:[  0,  40, 200, 0.82] },
-  { v:30.0, c:[150,   0, 200, 0.90] }
-];
+  // PRESSIONE (Custom in hPa)
+  const PRESS_STOPS = [
+    {v: 900, c: [8,16,48]}, {v: 950, c: [0,32,96]}, {v: 976, c: [0,52,146]}, {v: 986, c: [0,90,148]},
+    {v: 995, c: [0,117,146]}, {v: 1002, c: [26,140,147]}, {v: 1007, c: [103,162,155]}, {v: 1011.25, c: [155,183,172]},
+    {v: 1013.25, c: [182,182,182]}, {v: 1015.25, c: [176,174,152]}, {v: 1019, c: [167,147,107]}, {v: 1024, c: [163,116,67]},
+    {v: 1030, c: [159,81,44]}, {v: 1038, c: [142,47,57]}, {v: 1046, c: [111,24,64]}, {v: 1080, c: [48,8,24]}
+  ];
 
-const RH_STOPS = [
-  { v:20,c:[210,160, 60, 0.55] },
-  { v:40,c:[220,220,220,0.55] },
-  { v:60,c:[ 80,255,130, 0.62] },
-  { v:80,c:[ 60,160,255, 0.70] },
-  { v:95,c:[  0, 60,220, 0.78] }
-];
+  const CLOUD_STOPS = [
+    {v:0, c:[255,255,255], a:0}, {v:50, c:[200,200,200], a:0.4}, {v:100, c:[100,100,100], a:0.7}
+  ];
 
-const PRESS_STOPS = [
-  { v:980,  c:[  0, 70, 255, 0.60] },
-  { v:995,  c:[  0,170, 255, 0.62] },
-  { v:1005, c:[  0,255, 200, 0.64] },
-  { v:1013, c:[255,255, 255, 0.64] },
-  { v:1022, c:[255,200,   0, 0.66] },
-  { v:1035, c:[255, 60,   0, 0.70] }
-];
+  let map, currentData = null, catalog = [];
+  const selected = new Set(['wind']); 
+  let showIsobars = false, showGrid = false, particlesOn = true;
+  let velocityLayer = null, scalarCanvases = {}, arrowCanvas, isoCanvas, gridCanvas;
+  let isPlaying = false;
 
-const CLOUD_STOPS = [
-  { v:0,   c:[255,255,255,0.00] },
-  { v:20,  c:[235,235,235,0.40] },
-  { v:40,  c:[210,210,210,0.55] },
-  { v:60,  c:[175,175,175,0.68] },
-  { v:80,  c:[120,120,120,0.78] },
-  { v:100, c:[ 60, 60, 60,0.86] }
-];
+  function clamp(x,a,b){ return Math.max(a, Math.min(b, x)); }
+  function lerp(a,b,t){ return a+(b-a)*t; }
 
-function colorFromStops(val, stops){
-  if(!stops || stops.length<2) return [0,0,0,0];
-  if(val <= stops[0].v){
-    const c = stops[0].c.slice(); if(c.length===3) c.push(1); return c;
-  }
-  if(val >= stops[stops.length-1].v){
-    const c = stops[stops.length-1].c.slice(); if(c.length===3) c.push(1); return c;
-  }
-  for(let i=0;i<stops.length-1;i++){
-    const a = stops[i], b = stops[i+1];
-    if(val >= a.v && val <= b.v){
-      const t = (val - a.v) / (b.v - a.v);
-      const ca=a.c, cb=b.c;
-      const out=[
-        Math.round(lerp(ca[0],cb[0],t)),
-        Math.round(lerp(ca[1],cb[1],t)),
-        Math.round(lerp(ca[2],cb[2],t))
-      ];
-      const aa=(ca.length===4?ca[3]:1), ab=(cb.length===4?cb[3]:1);
-      out.push(lerp(aa,ab,t));
-      return out;
-    }
-  }
-  return [0,0,0,0];
-}
-function tempColor(valC){
-  const v = clamp(valC, -15, 45);
-  const c = colorFromStops(v, TEMP_STOPS);
-  return [c[0],c[1],c[2], clamp((c[3]??1), 0, 1)];
-}
-
-/* Wind palette (come i tuoi originali) */
-const WIND_COLORS_HEX = ["#000080", "#0044ff", "#00ddff", "#00ff55", "#ffff00", "#ff6600", "#ff0000", "#ff00ff"];
-const WIND_COLORS_RGB = WIND_COLORS_HEX.map(hexToRgb);
-
-function windRgb(speedKmh){
-  const v = clamp(speedKmh, 0, 100);
-  const t = v / 100;
-  const f = t * (WIND_COLORS_RGB.length - 1);
-  const i = Math.floor(f);
-  const j = Math.min(i+1, WIND_COLORS_RGB.length-1);
-  const tt = f - i;
-  return mixRgb(WIND_COLORS_RGB[i], WIND_COLORS_RGB[j], tt);
-}
-
-/* =============================
-   Init
-============================= */
-window.addEventListener('load', async () => {
-  map = L.map('map', {
-    zoomControl: false,
-    minZoom: 6,
-    maxZoom: 12,
-    maxBounds: SICILY_BOUNDS.pad(0.25),
-    maxBoundsViscosity: 0.85
-  }).fitBounds(SICILY_BOUNDS);
-
-  baseRelief = L.tileLayer(
-    "https://server.arcgisonline.com/ArcGIS/rest/services/World_Shaded_Relief/MapServer/tile/{z}/{y}/{x}",
-    { maxZoom: 13, attribution: "Tiles © Esri" }
-  ).addTo(map);
-
-  labelsOverlay = L.tileLayer(
-    "https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png",
-    { maxZoom: 19, opacity: 0.45, attribution: "© OpenStreetMap" }
-  ).addTo(map);
-
-  createCanvasLayers();
-  hookUI();
-
-  await loadCatalogAndFirstFrame();
-
-  map.on('mousemove', updatePickerFromEvent);
-  map.on('click', updatePickerFromEvent);
-
-  // Ridisegno SOLO a fine movimento/zoom (non continuo)
-  map.on('moveend', ()=> requestRedraw(true));
-  map.on('zoomend', ()=> requestRedraw(true));
-  window.addEventListener('resize', ()=> requestRedraw(true));
-
-  document.getElementById('unit-display').innerText = unitFor('wind');
-});
-
-/* =============================
-   UI
-============================= */
-function hookUI(){
-  const bindChk = (id, key) => {
-    document.getElementById(id).addEventListener('change', (e)=>{
-      selected[key] = !!e.target.checked;
-      requestRedraw();
-    });
-  };
-  bindChk('chk-temp', 'temp');
-  bindChk('chk-rain', 'rain');
-  bindChk('chk-rh', 'rh');
-  bindChk('chk-press', 'press');
-  bindChk('chk-cloud', 'cloud');
-
-  const btnWind = document.getElementById('btn-wind-arrows');
-  btnWind.addEventListener('click', ()=>{
-    showWindArrows = !showWindArrows;
-    btnWind.classList.toggle('active', showWindArrows);
-    requestRedraw(true);
-  });
-
-  const btnPart = document.getElementById('btn-particles');
-  btnPart.addEventListener('click', ()=>{
-    showParticles = !showParticles;
-    btnPart.classList.toggle('active', showParticles);
-    updateParticles();
-  });
-
-  const btnIso = document.getElementById('btn-isobars');
-  btnIso.addEventListener('click', ()=>{
-    showIsobars = !showIsobars;
-    btnIso.classList.toggle('active', showIsobars);
-    requestRedraw(true);
-  });
-
-  document.getElementById('play-btn').addEventListener('click', togglePlay);
-}
-
-/* =============================
-   Data load
-============================= */
-async function loadCatalogAndFirstFrame(){
-  try{
-    const r = await fetch('data_weather/catalog.json?t=' + Date.now());
-    if(!r.ok) throw new Error('catalog not found');
-    catalog = await r.json();
-    if(!catalog?.length) throw new Error('empty catalog');
-
-    const slider = document.getElementById('time-slider');
-    slider.max = catalog.length - 1;
-    slider.value = 0;
-    slider.addEventListener('input', (e)=> loadStep(parseInt(e.target.value, 10)));
-
-    await loadStep(0);
-    document.getElementById('unit-display').innerText = "Pronto";
-  }catch(e){
-    document.getElementById('unit-display').innerText = "Errore dati";
-    toast("Catalog o dati non trovati in data_weather/. Controlla deploy.");
-  }
-}
-
-async function loadStep(idx){
-  if(!catalog[idx]) return;
-  document.getElementById('time-label').innerText = catalog[idx].label;
-
-  try{
-    const r = await fetch('data_weather/' + catalog[idx].file + '?t=' + Date.now());
-    if(!r.ok) throw new Error('frame not found');
-    currentData = await r.json();
-
-    requestRedraw(true);
-    updateParticles();
-  }catch(e){
-    toast("Frame non caricato (file mancante o JSON invalido).");
-  }
-}
-
-/* =============================
-   Canvas layers
-============================= */
-function createCanvasLayers(){
-  const mapEl = document.getElementById('map');
-
-  scalarCanvas = document.createElement('canvas');
-  scalarCanvas.className = 'ol-canvas';
-  scalarCanvas.style.zIndex = 1200;
-  mapEl.appendChild(scalarCanvas);
-
-  windBGCanvas = document.createElement('canvas');
-  windBGCanvas.className = 'ol-canvas';
-  windBGCanvas.style.zIndex = 1300;
-  mapEl.appendChild(windBGCanvas);
-
-  windArrowCanvas = document.createElement('canvas');
-  windArrowCanvas.className = 'ol-canvas';
-  windArrowCanvas.style.zIndex = 1400;
-  mapEl.appendChild(windArrowCanvas);
-
-  isobarCanvas = document.createElement('canvas');
-  isobarCanvas.className = 'ol-canvas';
-  isobarCanvas.style.zIndex = 1600;
-  mapEl.appendChild(isobarCanvas);
-}
-
-function fitCanvas(c){
-  const s = map.getSize();
-  c.width = s.x;
-  c.height = s.y;
-}
-
-/* =============================
-   Redraw
-============================= */
-function redrawAll(){
-  if(!currentData?.meta) return;
-
-  fitCanvas(scalarCanvas);
-  fitCanvas(windBGCanvas);
-  fitCanvas(windArrowCanvas);
-  fitCanvas(isobarCanvas);
-
-  drawScalarComposite();
-  drawWindBackground();  // più leggero
-  drawWindArrows();      // più evidente e scalato davvero
-  drawIsobarsAndAB();
-}
-
-/* =============================
-   Scalar composite
-============================= */
-function getFieldArray(key){
-  if(!currentData) return null;
-  if(key==='temp') return currentData.temp;
-  if(key==='rain') return currentData.rain;
-  if(key==='rh') return currentData.rh;
-  if(key==='press') return currentData.press;
-  if(key==='cloud') return currentData.cloud ?? currentData.clouds ?? currentData.tcc ?? null;
-  return null;
-}
-
-function drawScalarComposite(){
-  const ctx = scalarCanvas.getContext('2d');
-  ctx.clearRect(0,0,scalarCanvas.width, scalarCanvas.height);
-
-  const m = currentData.meta;
-  const bounds = map.getBounds();
-
-  const keys = Object.keys(selected).filter(k => selected[k]);
-  if(keys.length === 0) return;
-
-  const baseAlpha = (keys.length === 1) ? 0.78 : (keys.length === 2 ? 0.60 : 0.48);
-  const order = ['press','temp','rh','rain','cloud'].filter(k => keys.includes(k));
-
-  // Densità adattiva (scalar): evita loop enormi a zoom bassi
-  const z = map.getZoom();
-  const step = (z<=7) ? 3 : (z===8 ? 2 : 1);
-
-  for(const key of order){
-    const arr = getFieldArray(key);
-    if(!arr || !arr.length) continue;
-
-    for(let y=0; y<m.ny; y+=step){
-      const lat = m.la1 - (y*m.dy);
-      if(lat < bounds.getSouth()-0.18 || lat > bounds.getNorth()+0.18) continue;
-
-      for(let x=0; x<m.nx; x+=step){
-        const lon = m.lo1 + (x*m.dx);
-        if(lon < bounds.getWest()-0.18 || lon > bounds.getEast()+0.18) continue;
-
-        const idx = y*m.nx + x;
-        let v = arr[idx];
-
-        let col;
-        if(key==='temp') col = tempColor(v);
-        else if(key==='rain') col = colorFromStops(v, RAIN_STOPS);
-        else if(key==='rh') col = colorFromStops(v, RH_STOPS);
-        else if(key==='press') col = colorFromStops(v, PRESS_STOPS);
-        else if(key==='cloud') col = colorFromStops(v, CLOUD_STOPS);
-
-        if(!col || (col[3] ?? 0) <= 0) continue;
-
-        const a = clamp((col[3] ?? 1) * baseAlpha, 0, 1);
-
-        const p1 = map.latLngToContainerPoint([lat, lon]);
-        const p2 = map.latLngToContainerPoint([lat - m.dy*step, lon + m.dx*step]);
-
-        const w = Math.ceil(p2.x - p1.x) + 2;
-        const h = Math.ceil(p2.y - p1.y) + 2;
-
-        ctx.fillStyle = `rgba(${col[0]},${col[1]},${col[2]},${a})`;
-        ctx.fillRect(Math.floor(p1.x)-1, Math.floor(p1.y)-1, w, h);
+  function interpStops(val, stops) {
+    if(!stops || stops.length < 2) return {r:0,g:0,b:0,a:0};
+    if(val <= stops[0].v) { const s=stops[0]; return {r:s.c[0],g:s.c[1],b:s.c[2],a:s.a||0.8}; }
+    for(let i=0;i<stops.length-1;i++){
+      if(val >= stops[i].v && val < stops[i+1].v){
+        const s1=stops[i], s2=stops[i+1];
+        const t = (val-s1.v)/(s2.v-s1.v);
+        const a1 = ('a' in s1) ? s1.a : 0.8;
+        const a2 = ('a' in s2) ? s2.a : 0.8;
+        return {
+            r: Math.round(lerp(s1.c[0],s2.c[0],t)),
+            g: Math.round(lerp(s1.c[1],s2.c[1],t)),
+            b: Math.round(lerp(s1.c[2],s2.c[2],t)),
+            a: lerp(a1, a2, t)
+        };
       }
     }
+    const s=stops[stops.length-1]; return {r:s.c[0],g:s.c[1],b:s.c[2],a:s.a||0.8};
   }
-}
 
-/* =============================
-   WIND BACKGROUND (FPS FIX)
-   - step più grande (molto meno loop)
-   - alpha più bassa (meno invadente)
-============================= */
-function drawWindBackground(){
-  const ctx = windBGCanvas.getContext('2d');
-  ctx.clearRect(0,0,windBGCanvas.width, windBGCanvas.height);
+  function vividWindColor(speedMs){
+    const maxV = 20.0; const t = clamp(speedMs/maxV, 0, 0.9999);
+    const n = WIND_COLOR_SCALE.length; const pos = t*(n-1);
+    const i = Math.floor(pos); const f = pos - i;
+    const hex1=WIND_COLOR_SCALE[i], hex2=WIND_COLOR_SCALE[Math.min(i+1,n-1)];
+    const r1=parseInt(hex1.slice(1,3),16), g1=parseInt(hex1.slice(3,5),16), b1=parseInt(hex1.slice(5,7),16);
+    const r2=parseInt(hex2.slice(1,3),16), g2=parseInt(hex2.slice(3,5),16), b2=parseInt(hex2.slice(5,7),16);
+    return {r:Math.round(lerp(r1,r2,f)), g:Math.round(lerp(g1,g2,f)), b:Math.round(lerp(b1,b2,f))};
+  }
 
-  if(!showWindArrows || !currentData?.wind_u?.data || !currentData?.wind_v?.data) return;
+  window.addEventListener('load', async () => {
+    map = L.map('map', { zoomControl: false, maxBounds: SICILY_BOUNDS.pad(0.5), background: '#1a1a1a' }).fitBounds(SICILY_BOUNDS);
 
-  const m = currentData.meta;
-  const u = currentData.wind_u.data;
-  const v = currentData.wind_v.data;
-  const bounds = map.getBounds();
+    // 1. BASE: DARK RELIEF
+    L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/World_Shaded_Relief/MapServer/tile/{z}/{y}/{x}', { 
+        maxZoom: 13, attribution: 'Esri', className: 'dark-relief-tiles' 
+    }).addTo(map);
 
-  const z = map.getZoom();
+    // 3. HILLSHADE
+    L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/Elevation/World_Hillshade/MapServer/tile/{z}/{y}/{x}', { 
+        maxZoom: 19, className: 'dark-relief-tiles', opacity: 0.4 
+    }).addTo(map);
 
-  // sfondo molto più leggero:
-  const step = (z<=7) ? 9 : (z===8 ? 8 : (z===9 ? 7 : 6));
-  const bgAlphaBase = 0.20;
+    // 4. LABELS
+    map.createPane('labelsPane'); map.getPane('labelsPane').style.zIndex = 600; map.getPane('labelsPane').style.pointerEvents = 'none';
+    L.tileLayer('https://{s}.basemaps.cartocdn.com/light_only_labels/{z}/{x}/{y}{r}.png', { pane: 'labelsPane', opacity: 0.9 }).addTo(map);
 
-  for(let yy=0; yy<m.ny; yy+=step){
-    const lat = m.la1 - (yy*m.dy);
-    if(lat < bounds.getSouth()-0.25 || lat > bounds.getNorth()+0.25) continue;
+    map.createPane('particlePane'); map.getPane('particlePane').style.zIndex = 800; map.getPane('particlePane').style.pointerEvents = 'none';
 
-    for(let xx=0; xx<m.nx; xx+=step){
-      const lon = m.lo1 + (xx*m.dx);
-      if(lon < bounds.getWest()-0.25 || lon > bounds.getEast()+0.25) continue;
+    createCanvasLayers();
+    await loadCatalog();
 
-      const idx = yy*m.nx + xx;
-      const uu = u[idx], vv = v[idx];
-      if(!isFinite(uu) || !isFinite(vv)) continue;
+    map.on('mousemove', onPick);
+    map.on('click', onPick);
+    map.on('moveend zoomend resize', redrawAll);
+    document.getElementById('unit-display').innerText = '';
+  });
 
-      const spKmh = Math.sqrt(uu*uu + vv*vv) * 3.6;
-      const rgb = windRgb(spKmh);
+  function createCanvasLayers(){
+    function mkCanvas(z, cls){
+      const c = L.DomUtil.create('canvas', 'leaflet-layer ' + (cls||''));
+      c.style.pointerEvents = 'none'; c.style.zIndex = z;
+      c.style.imageRendering = 'auto';
+      map.getPanes().overlayPane.appendChild(c);
+      return c;
+    }
+    scalarCanvases.wind = mkCanvas(290, 'scalar-layer'); 
+    scalarCanvases.temp = mkCanvas(300, 'scalar-layer');
+    scalarCanvases.rain = mkCanvas(310, 'scalar-layer');
+    scalarCanvases.rh = mkCanvas(320, 'scalar-layer');
+    scalarCanvases.press = mkCanvas(330, 'scalar-layer');
+    scalarCanvases.cloud = mkCanvas(340, 'scalar-layer');
+    arrowCanvas = mkCanvas(380);
+    isoCanvas = mkCanvas(420);
+    gridCanvas = mkCanvas(450);
+  }
 
-      // alpha cresce un po' con intensità
-      const a = clamp(bgAlphaBase + (spKmh/80)*0.16, 0.12, 0.42);
+  async function loadCatalog(){
+    try{
+      const r = await fetch('data_weather/catalog.json?t=' + Date.now());
+      if(!r.ok) throw new Error();
+      catalog = await r.json();
+      const slider = document.getElementById('time-slider');
+      slider.max = catalog.length - 1;
+      slider.addEventListener('input', (e)=> loadStep(parseInt(e.target.value)));
+      await loadStep(0);
+    } catch(e){}
+  }
 
-      const p1 = map.latLngToContainerPoint([lat, lon]);
-      const p2 = map.latLngToContainerPoint([lat - m.dy*step, lon + m.dx*step]);
+  async function loadStep(i){
+    if(!catalog[i]) return;
+    document.getElementById('time-label').innerText = catalog[i].label;
+    try{
+      const r = await fetch('data_weather/' + catalog[i].file + '?t=' + Date.now());
+      currentData = await r.json();
+      redrawAll();
+    } catch(e){}
+  }
 
-      const w = Math.ceil(p2.x - p1.x) + 2;
-      const h = Math.ceil(p2.y - p1.y) + 2;
+  function redrawAll(){
+    if(!currentData) return;
+    drawScalars();
+    drawWindArrows();
+    drawIsobars();
+    drawLatLonGrid();
+    updateParticles();
+  }
 
-      ctx.fillStyle = rgbToCss(rgb, a);
-      ctx.fillRect(Math.floor(p1.x)-1, Math.floor(p1.y)-1, w, h);
+  function drawScalars(){
+    ['wind','temp','rain','rh','press','cloud'].forEach(layer => {
+        const canvas = scalarCanvases[layer];
+        const ctx = canvas.getContext('2d');
+        const s = map.getSize();
+        canvas.width = s.x; canvas.height = s.y;
+        L.DomUtil.setPosition(canvas, map.containerPointToLayerPoint([0,0]));
+        ctx.clearRect(0,0,s.x,s.y);
+
+        if(!selected.has(layer) || !currentData.meta) return;
+        const m = currentData.meta;
+        const off = document.createElement('canvas');
+        off.width = m.nx; off.height = m.ny;
+        const octx = off.getContext('2d');
+        const img = octx.createImageData(m.nx, m.ny);
+        const data = img.data;
+
+        let arr, stops, isWindBg=false;
+        if(layer==='wind') { isWindBg=true; stops = WIND_COLOR_SCALE; }
+        else if(layer==='temp') { arr = currentData.temp; stops = TEMP_STOPS; }
+        else if(layer==='rain') { arr = currentData.rain; stops = RAIN_STOPS; }
+        else if(layer==='rh') { arr = currentData.rh; stops = RH_STOPS; }
+        else if(layer==='press') { arr = currentData.press; stops = PRESS_STOPS; }
+        else if(layer==='cloud') { arr = (currentData.cloud??currentData.cld); stops = CLOUD_STOPS; }
+
+        if(!arr && !isWindBg) return;
+
+        for(let i=0; i<m.nx*m.ny; i++){
+            let val = 0, col = {r:0,g:0,b:0,a:0};
+            if(isWindBg){
+                const u = currentData.wind_u.data[i], v = currentData.wind_v.data[i];
+                val = Math.sqrt(u*u+v*v);
+                col = vividWindColor(val); col.a = 0.45;
+            } else {
+                val = arr[i] || 0;
+                
+                // RAIN CUTOFF (> 0.6mm)
+                if(layer==='rain' && val < 0.6) { data[i*4+3]=0; continue; }
+                
+                if(layer==='cloud' && val < 10) { data[i*4+3]=0; continue; }
+                col = interpStops(val, stops); 
+            }
+            const p = i*4;
+            data[p] = col.r; data[p+1] = col.g; data[p+2] = col.b; data[p+3] = Math.round(col.a*255);
+        }
+        octx.putImageData(img, 0, 0);
+        const tl = map.latLngToContainerPoint([m.la1, m.lo1]);
+        const br = map.latLngToContainerPoint([m.la2, m.lo2]);
+        ctx.save();
+        ctx.imageSmoothingEnabled = true; 
+        ctx.drawImage(off, tl.x, tl.y, br.x-tl.x, br.y-tl.y);
+        ctx.restore();
+    });
+  }
+
+  function drawLatLonGrid(){
+    const ctx = gridCanvas.getContext('2d');
+    const s = map.getSize();
+    gridCanvas.width = s.x; gridCanvas.height = s.y;
+    L.DomUtil.setPosition(gridCanvas, map.containerPointToLayerPoint([0,0]));
+    ctx.clearRect(0,0,s.x,s.y);
+    if(!showGrid) return;
+    const b = map.getBounds(); const zoom = map.getZoom();
+    let step = 1.0; if(zoom >= 9) step = 0.5; if(zoom >= 11) step = 0.2;
+    ctx.lineWidth = 1; ctx.strokeStyle = "rgba(255,255,255,0.2)";
+    ctx.setLineDash([5, 5]); ctx.font = "10px sans-serif"; ctx.fillStyle = "#aaa";
+    const startLon = Math.ceil(b.getWest() / step) * step;
+    for(let lon = startLon; lon <= b.getEast(); lon += step){
+        const x = map.latLngToContainerPoint([b.getSouth(), lon]).x;
+        if(x<0||x>s.x) continue;
+        ctx.beginPath(); ctx.moveTo(x, 0); ctx.lineTo(x, s.y); ctx.stroke();
+        ctx.fillText(lon.toFixed(1) + "°E", x + 2, s.y - 10);
+    }
+    const startLat = Math.ceil(b.getSouth() / step) * step;
+    for(let lat = startLat; lat <= b.getNorth(); lat += step){
+        const y = map.latLngToContainerPoint([lat, b.getWest()]).y;
+        if(y<0||y>s.y) continue;
+        ctx.beginPath(); ctx.moveTo(0, y); ctx.lineTo(s.x, y); ctx.stroke();
+        ctx.fillText(lat.toFixed(1) + "°N", 5, y - 2);
+    }
+    ctx.setLineDash([]);
+  }
+
+  function drawWindArrows(){
+    const ctx = arrowCanvas.getContext('2d');
+    const s = map.getSize();
+    arrowCanvas.width = s.x; arrowCanvas.height = s.y;
+    L.DomUtil.setPosition(arrowCanvas, map.containerPointToLayerPoint([0,0]));
+    ctx.clearRect(0,0,s.x,s.y);
+
+    if(!selected.has('wind') || !currentData) return;
+    const m = currentData.meta; const zoom = map.getZoom();
+    
+    // MENO FRECCE
+    const stride = zoom >= 10 ? 3 : (zoom >= 9 ? 4 : 5);
+    const baseLen = zoom >= 10 ? 28 : 22; const baseWidth = 2.5; 
+    ctx.lineCap = 'round'; ctx.lineJoin = 'round';
+
+    for(let y=0; y<m.ny; y+=stride){
+        const lat = m.la1 - y*m.dy;
+        for(let x=0; x<m.nx; x+=stride){
+            const idx = y*m.nx + x;
+            const u = currentData.wind_u.data[idx], v = currentData.wind_v.data[idx];
+            const sp = Math.sqrt(u*u+v*v);
+            if(sp < 1) continue; 
+            const lon = m.lo1 + x*m.dx;
+            const p = map.latLngToContainerPoint([lat, lon]);
+            
+            const cRg = vividWindColor(sp);
+            const fillStyle = `rgb(${cRg.r},${cRg.g},${cRg.b})`;
+            const speedScale = clamp(sp/9.0, 0.65, 2.5); 
+            const currentLen = baseLen*speedScale; const currentWidth = baseWidth*speedScale;
+            const headLen = currentLen*0.4; const headWidth = headLen*0.75;
+            const angle = Math.atan2(-v, u);
+            
+            // ASTA
+            const shaftEndX = p.x + (currentLen-headLen)*Math.cos(angle);
+            const shaftEndY = p.y + (currentLen-headLen)*Math.sin(angle);
+            ctx.beginPath(); ctx.moveTo(p.x, p.y); ctx.lineTo(shaftEndX, shaftEndY);
+            ctx.strokeStyle = "#000000"; ctx.lineWidth = currentWidth+2.5; ctx.stroke(); // Bordo
+            ctx.strokeStyle = fillStyle; ctx.lineWidth = currentWidth; ctx.stroke(); // Interno
+
+            // TESTA
+            const tipX = p.x + currentLen*Math.cos(angle);
+            const tipY = p.y + currentLen*Math.sin(angle);
+            const wing1X = shaftEndX - headWidth*Math.cos(angle - Math.PI/2);
+            const wing1Y = shaftEndY - headWidth*Math.sin(angle - Math.PI/2);
+            const wing2X = shaftEndX - headWidth*Math.cos(angle + Math.PI/2);
+            const wing2Y = shaftEndY - headWidth*Math.sin(angle + Math.PI/2);
+
+            ctx.beginPath(); ctx.moveTo(tipX, tipY); ctx.lineTo(wing1X, wing1Y); ctx.lineTo(wing2X, wing2Y); ctx.closePath();
+            ctx.fillStyle = "#000000"; ctx.fill(); ctx.lineWidth=1.0; ctx.stroke(); // Bordo
+            ctx.fillStyle = fillStyle; ctx.fill(); // Interno
+        }
     }
   }
-}
 
-/* =============================
-   WIND ARROWS (FIX: grandi + scalati davvero)
-   - densità maggiore ma controllata
-   - size ~ speedKmh con curva più aggressiva
-============================= */
-function drawWindArrows(){
-  const ctx = windArrowCanvas.getContext('2d');
-  ctx.clearRect(0,0,windArrowCanvas.width, windArrowCanvas.height);
-
-  if(!showWindArrows || !currentData?.wind_u?.data || !currentData?.wind_v?.data) return;
-
-  const m = currentData.meta;
-  const u = currentData.wind_u.data;
-  const v = currentData.wind_v.data;
-  const bounds = map.getBounds();
-  const z = map.getZoom();
-
-  // PIÙ FRECCE ma non assassine per FPS:
-  // (a zoom alto puoi andare più denso)
-  const step = (z<=7) ? 7 : (z===8 ? 6 : (z===9 ? 5 : 4));
-
-  ctx.lineCap = 'round';
-  ctx.globalAlpha = 1.0;
-
-  for(let yy=0; yy<m.ny; yy+=step){
-    const lat = m.la1 - (yy*m.dy);
-    if(lat < bounds.getSouth()-0.25 || lat > bounds.getNorth()+0.25) continue;
-
-    for(let xx=0; xx<m.nx; xx+=step){
-      const lon = m.lo1 + (xx*m.dx);
-      if(lon < bounds.getWest()-0.25 || lon > bounds.getEast()+0.25) continue;
-
-      const idx = yy*m.nx + xx;
-      const uu = u[idx], vv = v[idx];
-      if(!isFinite(uu) || !isFinite(vv)) continue;
-
-      // km/h
-      const spKmh = Math.sqrt(uu*uu + vv*vv) * 3.6;
-
-      // direzione su schermo: dx=+u, dy=-v
-      let dx = uu, dy = -vv;
-      const len = Math.sqrt(dx*dx + dy*dy) || 1;
-      dx /= len; dy /= len;
-
-      const p = map.latLngToContainerPoint([lat, lon]);
-
-      // --- SCALATURA AGGRESSIVA (così "si vede") ---
-      // L cresce parecchio già dai 10-30 km/h
-      const L    = clamp(10 + spKmh * 0.75, 12, 85);
-      const head = clamp(5  + spKmh * 0.12, 6, 18);
-      const lw   = clamp(1.1 + spKmh * 0.035, 1.2, 4.0);
-
-      const x2 = p.x + dx * L;
-      const y2 = p.y + dy * L;
-
-      // stesso colore scala vento, ma più acceso
-      const baseRgb = windRgb(spKmh);
-      const brightRgb = brighten(baseRgb, 1.25);
-
-      ctx.save();
-      ctx.shadowColor = "rgba(0,0,0,0.40)";
-      ctx.shadowBlur = 3;
-
-      // bordo nero per evidenza
-      ctx.lineWidth = lw + 2.0;
-      ctx.strokeStyle = "rgba(0,0,0,0.85)";
-      ctx.beginPath();
-      ctx.moveTo(p.x, p.y);
-      ctx.lineTo(x2, y2);
-      ctx.stroke();
-
-      // linea colorata
-      ctx.lineWidth = lw;
-      ctx.strokeStyle = rgbToCss(brightRgb, 0.98);
-      ctx.beginPath();
-      ctx.moveTo(p.x, p.y);
-      ctx.lineTo(x2, y2);
-      ctx.stroke();
-
-      // punta
-      const ang = Math.atan2(y2 - p.y, x2 - p.x);
-      const a1 = ang - Math.PI/7;
-      const a2 = ang + Math.PI/7;
-
-      // bordo punta nero
-      ctx.lineWidth = lw + 2.0;
-      ctx.strokeStyle = "rgba(0,0,0,0.85)";
-      ctx.beginPath();
-      ctx.moveTo(x2, y2);
-      ctx.lineTo(x2 - head * Math.cos(a1), y2 - head * Math.sin(a1));
-      ctx.moveTo(x2, y2);
-      ctx.lineTo(x2 - head * Math.cos(a2), y2 - head * Math.sin(a2));
-      ctx.stroke();
-
-      // punta colorata
-      ctx.lineWidth = lw;
-      ctx.strokeStyle = rgbToCss(brightRgb, 0.98);
-      ctx.beginPath();
-      ctx.moveTo(x2, y2);
-      ctx.lineTo(x2 - head * Math.cos(a1), y2 - head * Math.sin(a1));
-      ctx.moveTo(x2, y2);
-      ctx.lineTo(x2 - head * Math.cos(a2), y2 - head * Math.sin(a2));
-      ctx.stroke();
-
-      ctx.restore();
-    }
-  }
-}
-
-/* =============================
-   Particelle (flusso)
-============================= */
-function updateParticles(){
-  if(velocityLayer && !showParticles){
-    try{ map.removeLayer(velocityLayer); }catch(e){}
-    velocityLayer = null;
-    return;
-  }
-  if(!showParticles) return;
-  if(!currentData?.wind_u || !currentData?.wind_v) return;
-
-  if(velocityLayer){
-    try{ map.removeLayer(velocityLayer); }catch(e){}
-    velocityLayer = null;
-  }
-
-  const isMobile = Math.min(window.innerWidth, window.innerHeight) < 900;
-  const dpr = window.devicePixelRatio || 1;
-
-  let particleMult = isMobile ? (1/260) : (1/220);
-  if(dpr >= 2) particleMult = isMobile ? (1/340) : (1/300);
-
-  try{
+  function updateParticles(){
+    if(velocityLayer) { map.removeLayer(velocityLayer); velocityLayer = null; }
+    if(!particlesOn || !currentData) return;
+    // MENO PARTICELLE (1/180)
     velocityLayer = L.velocityLayer({
-      displayValues: false,
-      data: [ currentData.wind_u, currentData.wind_v ],
-
-      maxVelocity: 18.0,
-      velocityScale: 0.006,
-      particleMultiplier: particleMult,
-      lineWidth: 1.0,
-      particleAge: 120,
-      frameRate: 50,
-      opacity: 0.85,
-
-      colorScale: ["rgba(255,255,255,0.9)","rgba(255,255,255,0.9)"]
+      displayValues: false, data: [ currentData.wind_u, currentData.wind_v ],
+      maxVelocity: 20.0, velocityScale: 0.008, particleMultiplier: 1/180, lineWidth: 2.0,            
+      particleAge: 100, frameRate: 40, opacity: 1.0, colorScale: WIND_COLOR_SCALE, pane: 'particlePane' 
     });
+    velocityLayer.onAdd = function(map){ L.VelocityLayer.prototype.onAdd.call(this, map); this._canvas.classList.add('velocity-canvas'); };
     velocityLayer.addTo(map);
-  }catch(e){
-    toast("Particelle non avviate (errore leaflet-velocity).");
   }
-}
 
-/* =============================
-   ISOBARE + A/B (invariato)
-============================= */
-function gaussianBlur2D(arr, nx, ny) {
-  const out = new Array(arr.length).fill(0);
-  const k = [1,2,1,2,4,2,1,2,1];
-  for (let y=0;y<ny;y++){
-    for(let x=0;x<nx;x++){
-      let s=0,w=0;
-      for(let j=-1;j<=1;j++){
-        for(let i=-1;i<=1;i++){
-          const xx=x+i, yy=y+j;
-          if(xx<0||xx>=nx||yy<0||yy>=ny) continue;
-          const kk=k[(j+1)*3+(i+1)];
-          const v=arr[yy*nx+xx];
-          if(!isFinite(v)) continue;
-          s += v*kk; w += kk;
+  function drawIsobars(){
+    const ctx = isoCanvas.getContext('2d');
+    const s = map.getSize();
+    isoCanvas.width = s.x; isoCanvas.height = s.y;
+    L.DomUtil.setPosition(isoCanvas, map.containerPointToLayerPoint([0,0]));
+    ctx.clearRect(0,0,s.x,s.y);
+    if(!showIsobars || !currentData?.press) return;
+    
+    // FIX ISOBARE: Pulisci dati (sanitizzazione per evitare linee verticali)
+    const cleanPress = new Float32Array(currentData.press.length);
+    for(let i=0; i<currentData.press.length; i++) {
+        let v = currentData.press[i];
+        // Se nullo o fuori scala (es. 0 o < 800), forza a 1013 (neutro)
+        if(!v || v < 850 || v > 1100) cleanPress[i] = 1013;
+        else cleanPress[i] = v;
+    }
+
+    // LABEL A/B LOGIC
+    const localExtrema = [];
+    const m = currentData.meta;
+    
+    // Scan grid skipping borders
+    for(let y=5; y<m.ny-5; y+=1){
+        for(let x=5; x<m.nx-5; x+=1){
+            const idx = y*m.nx + x;
+            const val = cleanPress[idx];
+            
+            // Check only if it's potentially high or low
+            if(val < 1008 || val > 1018){ 
+                let isMax = true;
+                let isMin = true;
+                // 5x5 neighbor check
+                for(let dy=-5; dy<=5; dy++){
+                    for(let dx=-5; dx<=5; dx++){
+                        if(dx===0 && dy===0) continue;
+                        const nVal = cleanPress[(y+dy)*m.nx + (x+dx)];
+                        if(nVal >= val) isMax = false;
+                        if(nVal <= val) isMin = false;
+                    }
+                }
+                if(isMax) localExtrema.push({x, y, val, type:'A'});
+                else if(isMin) localExtrema.push({x, y, val, type:'B'});
+            }
         }
-      }
-      out[y*nx+x] = (w>0 ? s/w : arr[y*nx+x]);
     }
-  }
-  return out;
-}
-function findExtremaCandidates(field, nx, ny){
-  const highs=[], lows=[];
-  for(let y=1;y<ny-1;y++){
-    for(let x=1;x<nx-1;x++){
-      const idx=y*nx+x;
-      const v=field[idx];
-      if(!isFinite(v)) continue;
-      let isH=true,isL=true;
-      let nMax=-Infinity,nMin=Infinity;
 
-      for(let j=-1;j<=1;j++){
-        for(let i=-1;i<=1;i++){
-          if(i===0&&j===0) continue;
-          const vv=field[(y+j)*nx+(x+i)];
-          if(!isFinite(vv)) continue;
-          if(vv>v) isH=false;
-          if(vv<v) isL=false;
-          if(vv>nMax) nMax=vv;
-          if(vv<nMin) nMin=vv;
-        }
-      }
-      if(isH) highs.push({x,y,v,score:v-nMin});
-      if(isL) lows.push({x,y,v,score:nMax-v});
-    }
-  }
-  return {highs,lows};
-}
-function suppressNearby(points, minDistCells, keepN){
-  const kept=[];
-  for(const p of points){
-    let ok=true;
-    for(const q of kept){
-      const dx=p.x-q.x, dy=p.y-q.y;
-      if((dx*dx+dy*dy) < (minDistCells*minDistCells)){ ok=false; break; }
-    }
-    if(ok) kept.push(p);
-    if(kept.length>=keepN) break;
-  }
-  return kept;
-}
-
-function drawIsobarsAndAB(){
-  const ctx = isobarCanvas.getContext('2d');
-  ctx.clearRect(0,0,isobarCanvas.width, isobarCanvas.height);
-
-  if(!showIsobars || !currentData?.press || !currentData?.meta) return;
-
-  const m = currentData.meta;
-  const values = currentData.press;
-
-  let minP=Infinity, maxP=-Infinity;
-  for(let i=0;i<values.length;i++){
-    const v=values[i];
-    if(!isFinite(v)) continue;
-    if(v<minP) minP=v;
-    if(v>maxP) maxP=v;
-  }
-  if(!isFinite(minP)||!isFinite(maxP)) return;
-
-  const start = Math.floor(minP/2)*2;
-  const end   = Math.ceil(maxP/2)*2 + 2;
-
-  const contours = d3.contours()
-    .size([m.nx, m.ny])
-    .thresholds(d3.range(start, end, 2))(values);
-
-  ctx.save();
-  ctx.lineWidth = 1.6;
-  ctx.strokeStyle = "rgba(0,0,0,0.70)";
-  ctx.font = "900 12px Arial";
-  ctx.textAlign = "center";
-  ctx.textBaseline = "middle";
-
-  contours.forEach(c=>{
-    ctx.beginPath();
-    const labelCandidates=[];
-
-    c.coordinates.forEach(ring=>{
-      ring.forEach(pts=>{
-        let first=true;
-        const linePts=[];
-        pts.forEach(coord=>{
-          const lat = m.la1 - (coord[1]*m.dy);
-          const lon = m.lo1 + (coord[0]*m.dx);
-          const p = map.latLngToContainerPoint([lat, lon]);
-          linePts.push(p);
-          if(first){ ctx.moveTo(p.x,p.y); first=false; }
-          else ctx.lineTo(p.x,p.y);
+    const contours = d3.contours().size([m.nx, m.ny]).thresholds(d3.range(960, 1050, 2))(cleanPress);
+    
+    ctx.lineWidth = 1.8; ctx.strokeStyle = "rgba(255,255,255,0.7)"; 
+    ctx.font = "bold 12px Arial"; ctx.textAlign="center"; ctx.textBaseline="middle";
+    
+    // Draw Contours
+    contours.forEach(c => {
+        ctx.beginPath();
+        c.coordinates.forEach(ring => {
+            let pts = [];
+            ring.forEach(arr => {
+               arr.forEach(coord => {
+                   const lat = m.la1 - coord[1]*m.dy; const lon = m.lo1 + coord[0]*m.dx;
+                   const p = map.latLngToContainerPoint([lat,lon]);
+                   ctx.lineTo(p.x,p.y);
+                   pts.push(p);
+               });
+            });
+            ctx.stroke();
+            // Labels on lines
+            if(pts.length>20){
+                let mid=pts[Math.floor(pts.length/2)];
+                ctx.fillStyle="rgba(0,0,0,0.6)"; ctx.fillRect(mid.x-14,mid.y-7,28,14);
+                ctx.fillStyle="#fff"; ctx.fillText(Math.round(c.value),mid.x,mid.y);
+            }
         });
-        if(linePts.length>90) labelCandidates.push(linePts);
-      });
     });
 
-    ctx.stroke();
+    // Draw A/B Labels
+    ctx.font = "900 18px Arial"; 
+    localExtrema.forEach(pt => {
+        const lat = m.la1 - pt.y*m.dy;
+        const lon = m.lo1 + pt.x*m.dx;
+        const p = map.latLngToContainerPoint([lat, lon]);
+        if(p.x < 0 || p.y < 0 || p.x > s.x || p.y > s.y) return;
 
-    labelCandidates.forEach(pts=>{
-      const mid = pts[Math.floor(pts.length/2)];
-      ctx.fillStyle = "rgba(255,255,255,0.92)";
-      ctx.fillRect(mid.x-20, mid.y-9, 40, 18);
-      ctx.fillStyle = "rgba(0,0,0,0.92)";
-      ctx.fillText(Math.round(c.value), mid.x, mid.y);
+        // Simple clutter avoidance could be added here
+        
+        ctx.fillStyle = pt.type==='A' ? "#ff0000" : "#0044ff";
+        ctx.strokeStyle = "#ffffff";
+        ctx.lineWidth = 3;
+        ctx.strokeText(pt.type, p.x, p.y);
+        ctx.fillText(pt.type, p.x, p.y);
     });
-  });
-
-  const smooth = gaussianBlur2D(values, m.nx, m.ny);
-  const { highs, lows } = findExtremaCandidates(smooth, m.nx, m.ny);
-  highs.sort((a,b)=>b.score-a.score);
-  lows.sort((a,b)=>b.score-a.score);
-
-  const z = map.getZoom();
-  const minDistCells = (z<=7)? 14 : (z<=8? 12 : (z<=9? 10 : 8));
-  const keepN = (z<=7)? 3 : 4;
-
-  const topH = suppressNearby(highs, minDistCells, keepN);
-  const topL = suppressNearby(lows,  minDistCells, keepN);
-
-  function drawLetter(letter, p, color){
-    const lat = m.la1 - (p.y*m.dy);
-    const lon = m.lo1 + (p.x*m.dx);
-    const pt = map.latLngToContainerPoint([lat, lon]);
-
-    ctx.save();
-    ctx.font = "900 28px Arial";
-    ctx.lineWidth = 4.5;
-    ctx.strokeStyle = "rgba(0,0,0,0.75)";
-    ctx.strokeText(letter, pt.x, pt.y);
-    ctx.fillStyle = color;
-    ctx.fillText(letter, pt.x, pt.y);
-
-    ctx.font = "900 12px Arial";
-    ctx.lineWidth = 3.2;
-    ctx.strokeStyle = "rgba(0,0,0,0.65)";
-    ctx.strokeText(Math.round(p.v) + " hPa", pt.x, pt.y + 18);
-    ctx.fillStyle = "rgba(255,255,255,0.95)";
-    ctx.fillText(Math.round(p.v) + " hPa", pt.x, pt.y + 18);
-    ctx.restore();
   }
 
-  topH.forEach(p => drawLetter("A", p, "rgba(255,40,40,0.96)"));
-  topL.forEach(p => drawLetter("B", p, "rgba(60,140,255,0.96)"));
-
-  ctx.restore();
-}
-
-/* =============================
-   Picker
-============================= */
-function valueAtLatLng(latlng, key){
-  if(!currentData?.meta) return null;
-  const m = currentData.meta;
-
-  const y = Math.round((m.la1 - latlng.lat) / m.dy);
-  const x = Math.round((latlng.lng - m.lo1) / m.dx);
-  if(x<0||x>=m.nx||y<0||y>=m.ny) return null;
-
-  const idx = y*m.nx + x;
-
-  if(key==='wind'){
-    const uu = currentData.wind_u?.data?.[idx];
-    const vv = currentData.wind_v?.data?.[idx];
-    if(!isFinite(uu)||!isFinite(vv)) return null;
-    return Math.sqrt(uu*uu+vv*vv)*3.6;
+  window.toggleLayer = function(name){
+    if(selected.has(name)) selected.delete(name); else selected.add(name);
+    updateToggleUI(); redrawAll();
   }
-  const arr = getFieldArray(key);
-  if(!arr) return null;
-  const val = arr[idx];
-  if(!isFinite(val)) return null;
-  return val;
-}
+  window.toggleIsobars = function(){ showIsobars=!showIsobars; updateToggleUI(); redrawAll(); }
+  window.toggleGrid = function(){ showGrid=!showGrid; updateToggleUI(); redrawAll(); }
+  window.toggleParticles = function(){ particlesOn=!particlesOn; updateToggleUI(); redrawAll(); }
 
-function updatePickerFromEvent(e){
-  if(!currentData) return;
-
-  const keys = ['temp','rain','rh','press','cloud'].filter(k => selected[k]);
-  const key = keys.length ? keys[keys.length-1] : 'wind';
-
-  const val = valueAtLatLng(e.latlng, key);
-  if(val===null || val===undefined) return;
-
-  let out='--';
-  if(key==='temp') out = (+val).toFixed(1);
-  else if(key==='rain') out = (+val).toFixed(1);
-  else if(key==='rh') out = Math.round(val).toString();
-  else if(key==='press') out = Math.round(val).toString();
-  else if(key==='cloud') out = Math.round(val).toString();
-  else out = (+val).toFixed(1);
-
-  document.getElementById('val-display').innerText = out;
-  document.getElementById('unit-display').innerText = unitFor(key);
-}
-
-/* =============================
-   Play
-============================= */
-function togglePlay(){
-  const btn = document.getElementById('play-btn');
-  if(isPlaying){
-    isPlaying = false;
-    btn.innerText = "►";
-    return;
+  function updateToggleUI(){
+    document.querySelectorAll('.toggle').forEach(el => {
+      const txt = el.innerText.toLowerCase();
+      if(txt.includes('vento') && selected.has('wind')) el.classList.add('active');
+      else if(txt.includes('temp') && selected.has('temp')) el.classList.add('active');
+      else if(txt.includes('pioggia') && selected.has('rain')) el.classList.add('active');
+      else if(txt.includes('umidità') && selected.has('rh')) el.classList.add('active');
+      else if(txt.includes('pressione') && selected.has('press')) el.classList.add('active');
+      else if(txt.includes('nuvole') && selected.has('cloud')) el.classList.add('active');
+      else if(txt.includes('isobare') && showIsobars) el.classList.add('active');
+      else if(txt.includes('reticolo') && showGrid) el.classList.add('active');
+      else el.classList.remove('active');
+    });
+    const btnFlow = document.getElementById('btn-flow');
+    if(particlesOn) btnFlow.classList.add('active'); else btnFlow.classList.remove('active');
+    document.getElementById('wind-rose').style.display = selected.has('wind') ? 'flex' : 'none';
   }
-  isPlaying = true;
-  btn.innerText = "❚❚";
 
-  const s = document.getElementById('time-slider');
-  let i = parseInt(s.value,10);
-  const max = parseInt(s.max,10);
-
-  const interval = setInterval(()=>{
-    if(!isPlaying){
-      clearInterval(interval);
-      btn.innerText = "►";
-      return;
+  function onPick(e){
+    if(!currentData) return;
+    const m = currentData.meta;
+    const y = Math.round((m.la1 - e.latlng.lat)/m.dy);
+    const x = Math.round((e.latlng.lng - m.lo1)/m.dx);
+    if(x<0||x>=m.nx||y<0||y>=m.ny) return;
+    const idx = y*m.nx + x;
+    let val = '--', unit = '';
+    if(selected.has('rain')) { val = currentData.rain[idx].toFixed(1); unit='mm'; }
+    else if(selected.has('temp')) { val = currentData.temp[idx].toFixed(1); unit='°C'; }
+    else if(selected.has('wind')) { 
+        const u=currentData.wind_u.data[idx], v=currentData.wind_v.data[idx];
+        val = (Math.sqrt(u*u+v*v)*3.6).toFixed(1); unit='km/h'; 
+        const arrow = document.getElementById('rose-arrow');
+        const deg = 90 - (Math.atan2(v, u) * 180 / Math.PI);
+        arrow.style.transform = `rotate(${deg}deg)`;
     }
-    if(i>=max){
-      clearInterval(interval);
-      isPlaying=false;
-      btn.innerText="►";
-      return;
-    }
-    i++;
-    s.value=i;
-    loadStep(i);
-  }, 800);
-}
+    else if(selected.has('rh')) { val = Math.round(currentData.rh[idx]); unit='%'; }
+    else if(selected.has('press')) { val = Math.round(currentData.press[idx]); unit='hPa'; }
+    document.getElementById('val-display').innerText = val;
+    document.getElementById('unit-display').innerText = unit;
+  }
+
+  window.togglePlay = function(){
+    if(isPlaying){ isPlaying=false; document.getElementById('play-btn').innerText='►'; return; }
+    isPlaying=true; document.getElementById('play-btn').innerText='❚❚';
+    const s = document.getElementById('time-slider');
+    let i = parseInt(s.value);
+    const loop = setInterval(()=>{
+        if(!isPlaying || i>=s.max) { clearInterval(loop); isPlaying=false; document.getElementById('play-btn').innerText='►'; return; }
+        i++; s.value=i; loadStep(i);
+    }, 800);
+  }
 </script>
 </body>
 </html>
