@@ -1,7 +1,7 @@
 <!DOCTYPE html>
 <html lang="it">
 <head>
-  <title>Sicilia MeteoHub - PRO (Relief + MultiLayer + A/B)</title>
+  <title>Sicilia MeteoHub - PRO (Relief + MultiLayer + A/B + Wind BG)</title>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
 
@@ -130,34 +130,22 @@
     <div class="panel" id="layers-panel">
       <div style="font-weight:900; opacity:.9; margin-bottom:6px;">LIVELLI (multi-selezione)</div>
 
-      <div class="row">
-        <label><input type="checkbox" id="chk-temp"> TEMP 🌡️</label>
-      </div>
-      <div class="row">
-        <label><input type="checkbox" id="chk-rain"> PIOGGIA ☔</label>
-      </div>
-      <div class="row">
-        <label><input type="checkbox" id="chk-rh"> UMIDITÀ 💧</label>
-      </div>
-      <div class="row">
-        <label><input type="checkbox" id="chk-press"> PRESSIONE ⏲️</label>
-      </div>
-      <div class="row">
-        <label><input type="checkbox" id="chk-cloud"> NUVOLE ☁️</label>
-      </div>
+      <div class="row"><label><input type="checkbox" id="chk-temp"> TEMP 🌡️</label></div>
+      <div class="row"><label><input type="checkbox" id="chk-rain"> PIOGGIA ☔</label></div>
+      <div class="row"><label><input type="checkbox" id="chk-rh"> UMIDITÀ 💧</label></div>
+      <div class="row"><label><input type="checkbox" id="chk-press"> PRESSIONE ⏲️</label></div>
+      <div class="row"><label><input type="checkbox" id="chk-cloud"> NUVOLE ☁️</label></div>
 
       <hr style="border:0; border-top:1px solid rgba(255,255,255,0.12); margin:10px 0;">
 
-      <button class="btn active" id="btn-wind-arrows">VENTO (FRECCE) 💨</button>
+      <button class="btn active" id="btn-wind-arrows">VENTO (FRECCE + SFONDO) 💨</button>
       <button class="btn" id="btn-particles">PARTICELLE (flusso)</button>
 
       <hr style="border:0; border-top:1px solid rgba(255,255,255,0.12); margin:10px 0;">
 
       <button class="btn" id="btn-isobars">ISOBARE 〰️ (con A/B)</button>
 
-      <div class="small">
-        Tocca/clicca la mappa per leggere il valore sotto al dito.
-      </div>
+      <div class="small">Tocca/clicca la mappa per leggere il valore sotto al dito.</div>
     </div>
   </div>
 
@@ -174,8 +162,8 @@
    CONFIG MAP (Sicilia bounds)
 ============================= */
 const SICILY_BOUNDS = L.latLngBounds(
-  L.latLng(35.0, 11.0),   // SW
-  L.latLng(39.5, 16.5)    // NE
+  L.latLng(35.0, 11.0),
+  L.latLng(39.5, 16.5)
 );
 
 let map;
@@ -187,15 +175,10 @@ let showIsobars = false;
 let showWindArrows = true;
 let showParticles = false;
 
-/* canvases */
-let scalarCanvas, isobarCanvas, windArrowCanvas;
-/* leaflet-velocity layer for particles */
+let scalarCanvas, isobarCanvas, windBGCanvas, windArrowCanvas;
 let velocityLayer = null;
 
-/* selected scalar layers (multi) */
-const selected = {
-  temp:false, rain:false, rh:false, press:false, cloud:false
-};
+const selected = { temp:false, rain:false, rh:false, press:false, cloud:false };
 
 /* =============================
    UI helpers
@@ -207,7 +190,6 @@ function toast(msg){
   clearTimeout(toast._tm);
   toast._tm = setTimeout(()=> t.style.display='none', 3500);
 }
-
 function unitFor(key){
   if(key==='wind') return 'km/h';
   if(key==='temp') return '°C';
@@ -219,111 +201,127 @@ function unitFor(key){
 }
 
 /* =============================
-   PALETTES
-   - Temp: richiesto dall'utente (stop precisi)
+   Color helpers
 ============================= */
 function lerp(a,b,t){ return a + (b-a)*t; }
 function clamp(x,a,b){ return Math.max(a, Math.min(b,x)); }
 
+function hexToRgb(hex){
+  const h = hex.replace('#','').trim();
+  const n = parseInt(h, 16);
+  return [(n>>16)&255, (n>>8)&255, n&255];
+}
+function rgbToCss(rgb, a=1){
+  return `rgba(${rgb[0]},${rgb[1]},${rgb[2]},${a})`;
+}
+function mixRgb(a,b,t){
+  return [
+    Math.round(lerp(a[0],b[0],t)),
+    Math.round(lerp(a[1],b[1],t)),
+    Math.round(lerp(a[2],b[2],t))
+  ];
+}
+function brighten(rgb, factor){
+  // factor >1 più acceso, <1 più scuro
+  return [
+    Math.round(clamp(rgb[0]*factor, 0, 255)),
+    Math.round(clamp(rgb[1]*factor, 0, 255)),
+    Math.round(clamp(rgb[2]*factor, 0, 255))
+  ];
+}
+
+/* =============================
+   PALETTES
+============================= */
 const TEMP_STOPS = [
-  { v:-15, c:[ 70,  0, 110] },   // viola scuro
-  { v:  0, c:[  0, 230, 255] },  // ciano
-  { v: 15, c:[255, 255, 170] },  // giallo chiaro
-  { v: 20, c:[255, 235,   0] },  // giallo
-  { v: 25, c:[255, 170,  70] },  // arancione chiaro
-  { v: 30, c:[255, 120,   0] },  // arancione
-  { v: 35, c:[255,  40,  40] },  // rosso
-  { v: 45, c:[140,   0,   0] }   // rosso scuro
+  { v:-15, c:[ 70,  0, 110] },
+  { v:  0, c:[  0, 230, 255] },
+  { v: 15, c:[255, 255, 170] },
+  { v: 20, c:[255, 235,   0] },
+  { v: 25, c:[255, 170,  70] },
+  { v: 30, c:[255, 120,   0] },
+  { v: 35, c:[255,  40,  40] },
+  { v: 45, c:[140,   0,   0] }
 ];
 
-// Per gli altri layer: gradiente “netto” ma leggibile
 const RAIN_STOPS = [
   { v:0.0,  c:[0,0,0,0] },
-  { v:0.2,  c:[ 80, 200, 255, 0.45] },
-  { v:2.0,  c:[  0, 120, 255, 0.60] },
-  { v:10.0, c:[  0,  40, 200, 0.72] },
-  { v:30.0, c:[150,   0, 200, 0.80] }
+  { v:0.2,  c:[ 80, 200, 255, 0.50] },
+  { v:2.0,  c:[  0, 120, 255, 0.65] },
+  { v:10.0, c:[  0,  40, 200, 0.78] },
+  { v:30.0, c:[150,   0, 200, 0.86] }
 ];
 
 const RH_STOPS = [
-  { v:20, c:[210,160, 60, 0.45] },
-  { v:40, c:[220,220,220,0.45] },
-  { v:60, c:[ 80,255,130,0.55] },
-  { v:80, c:[ 60,160,255,0.62] },
-  { v:95, c:[  0, 60,220,0.70] }
+  { v:20,c:[210,160, 60, 0.50] },
+  { v:40,c:[220,220,220,0.50] },
+  { v:60,c:[ 80,255,130, 0.60] },
+  { v:80,c:[ 60,160,255, 0.68] },
+  { v:95,c:[  0, 60,220, 0.75] }
 ];
 
-// (pressione: NON la cambio — la mantengo “classica”)
 const PRESS_STOPS = [
-  { v:980,  c:[  0, 70, 255, 0.48] },
-  { v:995,  c:[  0,170, 255, 0.50] },
-  { v:1005, c:[  0,255, 200, 0.52] },
-  { v:1013, c:[255,255, 255, 0.52] },
-  { v:1022, c:[255,200,   0, 0.55] },
-  { v:1035, c:[255, 60,   0, 0.60] }
+  { v:980,  c:[  0, 70, 255, 0.55] },
+  { v:995,  c:[  0,170, 255, 0.58] },
+  { v:1005, c:[  0,255, 200, 0.60] },
+  { v:1013, c:[255,255, 255, 0.60] },
+  { v:1022, c:[255,200,   0, 0.62] },
+  { v:1035, c:[255, 60,   0, 0.66] }
 ];
 
-// nuvole: grigio con graduazione, più opache e distinguibili
 const CLOUD_STOPS = [
   { v:0,   c:[255,255,255,0.00] },
-  { v:20,  c:[235,235,235,0.28] },
-  { v:40,  c:[210,210,210,0.38] },
-  { v:60,  c:[175,175,175,0.52] },
-  { v:80,  c:[120,120,120,0.64] },
-  { v:100, c:[ 60, 60, 60,0.74] }
+  { v:20,  c:[235,235,235,0.34] },
+  { v:40,  c:[210,210,210,0.46] },
+  { v:60,  c:[175,175,175,0.60] },
+  { v:80,  c:[120,120,120,0.72] },
+  { v:100, c:[ 60, 60, 60,0.82] }
 ];
 
 function colorFromStops(val, stops){
   if(!stops || stops.length<2) return [0,0,0,0];
   if(val <= stops[0].v){
-    const c = stops[0].c.slice(); if(c.length===3) c.push(1);
-    return c;
+    const c = stops[0].c.slice(); if(c.length===3) c.push(1); return c;
   }
   if(val >= stops[stops.length-1].v){
-    const c = stops[stops.length-1].c.slice(); if(c.length===3) c.push(1);
-    return c;
+    const c = stops[stops.length-1].c.slice(); if(c.length===3) c.push(1); return c;
   }
   for(let i=0;i<stops.length-1;i++){
     const a = stops[i], b = stops[i+1];
     if(val >= a.v && val <= b.v){
       const t = (val - a.v) / (b.v - a.v);
-      const ca = a.c, cb = b.c;
-      const out = [
-        Math.round(lerp(ca[0], cb[0], t)),
-        Math.round(lerp(ca[1], cb[1], t)),
-        Math.round(lerp(ca[2], cb[2], t))
+      const ca=a.c, cb=b.c;
+      const out=[
+        Math.round(lerp(ca[0],cb[0],t)),
+        Math.round(lerp(ca[1],cb[1],t)),
+        Math.round(lerp(ca[2],cb[2],t))
       ];
-      const aa = (ca.length===4?ca[3]:1), ab = (cb.length===4?cb[3]:1);
-      out.push(lerp(aa, ab, t));
+      const aa=(ca.length===4?ca[3]:1), ab=(cb.length===4?cb[3]:1);
+      out.push(lerp(aa,ab,t));
       return out;
     }
   }
   return [0,0,0,0];
 }
-
-// temperatura: “1 grado = 1 colore” (ma continuo), con stops richiesti e clamp
 function tempColor(valC){
   const v = clamp(valC, -15, 45);
   const c = colorFromStops(v, TEMP_STOPS);
-  // opacità un filo più alta (come richiesto)
-  c[3] = clamp(c[3] ?? 1, 0, 1);
-  return c;
+  return [c[0],c[1],c[2], clamp((c[3]??1), 0, 1)];
 }
 
-/* =============================
-   Wind color scale (come particelle/frecce)
-   (colori accesi + opacità un po' più alta)
-============================= */
-const WIND_COLORS = [
-  "#001a66", "#0044ff", "#00ddff", "#00ff55", "#ffff00", "#ff6600", "#ff0000", "#ff00ff"
-];
+/* Wind palette (come i tuoi originali) */
+const WIND_COLORS_HEX = ["#000080", "#0044ff", "#00ddff", "#00ff55", "#ffff00", "#ff6600", "#ff0000", "#ff00ff"];
+const WIND_COLORS_RGB = WIND_COLORS_HEX.map(hexToRgb);
 
-function windColor(speedKmh){
-  // mappa 0..100 km/h
+function windRgb(speedKmh){
+  // 0..100 km/h
   const v = clamp(speedKmh, 0, 100);
   const t = v / 100;
-  const idx = Math.floor(t * (WIND_COLORS.length-1));
-  return WIND_COLORS[idx];
+  const f = t * (WIND_COLORS_RGB.length - 1);
+  const i = Math.floor(f);
+  const j = Math.min(i+1, WIND_COLORS_RGB.length-1);
+  const tt = f - i;
+  return mixRgb(WIND_COLORS_RGB[i], WIND_COLORS_RGB[j], tt);
 }
 
 /* =============================
@@ -338,13 +336,13 @@ window.addEventListener('load', async () => {
     maxBoundsViscosity: 0.85
   }).fitBounds(SICILY_BOUNDS);
 
-  // ESRI World Shaded Relief (quella che hai chiesto)
+  // ESRI World Shaded Relief
   baseRelief = L.tileLayer(
     "https://server.arcgisonline.com/ArcGIS/rest/services/World_Shaded_Relief/MapServer/tile/{z}/{y}/{x}",
     { maxZoom: 13, attribution: "Tiles © Esri" }
   ).addTo(map);
 
-  // overlay nomi città (stabile): OSM standard sopra
+  // nomi città overlay
   labelsOverlay = L.tileLayer(
     "https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png",
     { maxZoom: 19, opacity: 0.45, attribution: "© OpenStreetMap" }
@@ -364,7 +362,6 @@ window.addEventListener('load', async () => {
    UI
 ============================= */
 function hookUI(){
-  // scalar checkboxes
   const bindChk = (id, key) => {
     document.getElementById(id).addEventListener('change', (e)=>{
       selected[key] = !!e.target.checked;
@@ -377,7 +374,6 @@ function hookUI(){
   bindChk('chk-press', 'press');
   bindChk('chk-cloud', 'cloud');
 
-  // wind arrows toggle
   const btnWind = document.getElementById('btn-wind-arrows');
   btnWind.addEventListener('click', ()=>{
     showWindArrows = !showWindArrows;
@@ -385,15 +381,13 @@ function hookUI(){
     redrawAll();
   });
 
-  // particles toggle (sempre indipendenti dagli altri layer)
   const btnPart = document.getElementById('btn-particles');
   btnPart.addEventListener('click', ()=>{
     showParticles = !showParticles;
     btnPart.classList.toggle('active', showParticles);
-    updateParticles(); // NON dipende dai layer
+    updateParticles();
   });
 
-  // isobars toggle
   const btnIso = document.getElementById('btn-isobars');
   btnIso.addEventListener('click', ()=>{
     showIsobars = !showIsobars;
@@ -401,7 +395,6 @@ function hookUI(){
     redrawAll();
   });
 
-  // play
   document.getElementById('play-btn').addEventListener('click', togglePlay);
 }
 
@@ -438,9 +431,7 @@ async function loadStep(idx){
     currentData = await r.json();
 
     redrawAll(true);
-    // particelle: devono restare attive anche quando cambi step/layer
     updateParticles();
-
   }catch(e){
     toast("Frame non caricato (file mancante o JSON invalido).");
   }
@@ -452,17 +443,22 @@ async function loadStep(idx){
 function createCanvasLayers(){
   const mapEl = document.getElementById('map');
 
-  scalarCanvas = document.createElement('canvas');
+  scalarCanvas = document.createElement('canvas');   // altri layer
   scalarCanvas.className = 'ol-canvas';
   scalarCanvas.style.zIndex = 1200;
   mapEl.appendChild(scalarCanvas);
 
-  windArrowCanvas = document.createElement('canvas');
+  windBGCanvas = document.createElement('canvas');   // sfondo intensità vento
+  windBGCanvas.className = 'ol-canvas';
+  windBGCanvas.style.zIndex = 1300;
+  mapEl.appendChild(windBGCanvas);
+
+  windArrowCanvas = document.createElement('canvas'); // frecce
   windArrowCanvas.className = 'ol-canvas';
   windArrowCanvas.style.zIndex = 1400;
   mapEl.appendChild(windArrowCanvas);
 
-  isobarCanvas = document.createElement('canvas');
+  isobarCanvas = document.createElement('canvas');   // isobare + A/B
   isobarCanvas.className = 'ol-canvas';
   isobarCanvas.style.zIndex = 1600;
   mapEl.appendChild(isobarCanvas);
@@ -481,20 +477,18 @@ function redrawAll(fromMove=false){
   if(!currentData?.meta) return;
 
   fitCanvas(scalarCanvas);
+  fitCanvas(windBGCanvas);
   fitCanvas(windArrowCanvas);
   fitCanvas(isobarCanvas);
 
   drawScalarComposite();
+  drawWindBackground();
   drawWindArrows();
   drawIsobarsAndAB();
-
-  // NOTA: particelle sono gestite separatamente (toggle)
 }
 
 /* =============================
-   Scalar composite (multi-layer)
-   - niente "griglia", niente quadretti evidenti
-   - alpha “intelligente”: se attivi molti layer, abbassa un filo per evitare caos
+   Scalar composite
 ============================= */
 function getFieldArray(key){
   if(!currentData) return null;
@@ -516,18 +510,12 @@ function drawScalarComposite(){
   const keys = Object.keys(selected).filter(k => selected[k]);
   if(keys.length === 0) return;
 
-  // alpha base per layer: più layer => meno opacità per non “impastare”
-  const baseAlpha = (keys.length === 1) ? 0.70 : (keys.length === 2 ? 0.55 : 0.42);
-
-  // ordine consigliato (sotto->sopra): press, temp, rh, rain, cloud
+  const baseAlpha = (keys.length === 1) ? 0.72 : (keys.length === 2 ? 0.56 : 0.44);
   const order = ['press','temp','rh','rain','cloud'].filter(k => keys.includes(k));
 
-  // anti-quadretti: disegno su griglia ma con leggero overlap, e NO stroke
   for(const key of order){
     const arr = getFieldArray(key);
     if(!arr || !arr.length) continue;
-
-    ctx.globalAlpha = 1.0;
 
     for(let y=0; y<m.ny; y++){
       const lat = m.la1 - (y*m.dy);
@@ -549,13 +537,11 @@ function drawScalarComposite(){
 
         if(!col || (col[3] ?? 0) <= 0) continue;
 
-        // opacità finale: baseAlpha * alpha palette
         const a = clamp((col[3] ?? 1) * baseAlpha, 0, 1);
 
         const p1 = map.latLngToContainerPoint([lat, lon]);
         const p2 = map.latLngToContainerPoint([lat - m.dy, lon + m.dx]);
 
-        // overlap lieve per evitare "fessure"
         const w = Math.ceil(p2.x - p1.x) + 2;
         const h = Math.ceil(p2.y - p1.y) + 2;
 
@@ -564,14 +550,66 @@ function drawScalarComposite(){
       }
     }
   }
-
-  ctx.globalAlpha = 1.0;
 }
 
 /* =============================
-   Wind arrows (frecce)
-   - più sottili, più numerose, colori più accesi (stessi colori)
-   - direzione: usa u/v correttamente
+   WIND BACKGROUND (intensità vento)
+   - meno opaco (più visibile ma resta trasparente)
+============================= */
+function drawWindBackground(){
+  const ctx = windBGCanvas.getContext('2d');
+  ctx.clearRect(0,0,windBGCanvas.width, windBGCanvas.height);
+
+  if(!showWindArrows || !currentData?.wind_u?.data || !currentData?.wind_v?.data) return;
+
+  const m = currentData.meta;
+  const u = currentData.wind_u.data;
+  const v = currentData.wind_v.data;
+  const bounds = map.getBounds();
+
+  // densità sfondo: più fitta ma leggera
+  const z = map.getZoom();
+  const step = (z <= 7) ? 5 : (z === 8 ? 4 : (z === 9 ? 4 : 3));
+
+  // opacità sfondo: richiesta "meno opachi" => più evidenti
+  const bgAlphaBase = 0.34;
+
+  for(let yy=0; yy<m.ny; yy+=step){
+    const lat = m.la1 - (yy*m.dy);
+    if(lat < bounds.getSouth()-0.2 || lat > bounds.getNorth()+0.2) continue;
+
+    for(let xx=0; xx<m.nx; xx+=step){
+      const lon = m.lo1 + (xx*m.dx);
+      if(lon < bounds.getWest()-0.2 || lon > bounds.getEast()+0.2) continue;
+
+      const idx = yy*m.nx + xx;
+      const uu = u[idx], vv = v[idx];
+      if(!isFinite(uu) || !isFinite(vv)) continue;
+
+      const spKmh = Math.sqrt(uu*uu + vv*vv) * 3.6;
+      const rgb = windRgb(spKmh);
+
+      // intensità => alpha leggermente più alto
+      const a = clamp(bgAlphaBase + (spKmh/100)*0.20, 0.18, 0.58);
+
+      const p1 = map.latLngToContainerPoint([lat, lon]);
+      const p2 = map.latLngToContainerPoint([lat - m.dy*step, lon + m.dx*step]);
+
+      const w = Math.ceil(p2.x - p1.x) + 2;
+      const h = Math.ceil(p2.y - p1.y) + 2;
+
+      ctx.fillStyle = rgbToCss(rgb, a);
+      ctx.fillRect(Math.floor(p1.x)-1, Math.floor(p1.y)-1, w, h);
+    }
+  }
+}
+
+/* =============================
+   WIND ARROWS
+   - più frecce, più evidenti
+   - grandezza e lunghezza aumentano con intensità
+   - stesso colore dello sfondo, ma più acceso
+   - bordo nero (stroke) per stacco
 ============================= */
 function drawWindArrows(){
   const ctx = windArrowCanvas.getContext('2d');
@@ -585,13 +623,12 @@ function drawWindArrows(){
   const bounds = map.getBounds();
   const z = map.getZoom();
 
-  // densità: più zoom => più frecce
-  const step = (z <= 7) ? 8 : (z === 8 ? 7 : (z === 9 ? 6 : 5));
+  // PIÙ FRECCE (densità aumentata)
+  const step = (z <= 7) ? 6 : (z === 8 ? 5 : (z === 9 ? 4 : 3));
 
-  // stile frecce: sottili ma evidenti
-  ctx.lineWidth = 1.15;
+  // stile
   ctx.lineCap = 'round';
-  ctx.globalAlpha = 0.95;   // opacità un po' più alta (come richiesto)
+  ctx.globalAlpha = 1.0;
 
   for(let yy=0; yy<m.ny; yy+=step){
     const lat = m.la1 - (yy*m.dy);
@@ -602,79 +639,92 @@ function drawWindArrows(){
       if(lon < bounds.getWest()-0.2 || lon > bounds.getEast()+0.2) continue;
 
       const idx = yy*m.nx + xx;
-      const uu = u[idx];
-      const vv = v[idx];
+      const uu = u[idx], vv = v[idx];
       if(!isFinite(uu) || !isFinite(vv)) continue;
 
-      // intensità (m/s) -> km/h
       const spKmh = Math.sqrt(uu*uu + vv*vv) * 3.6;
 
-      // punto su schermo
-      const p = map.latLngToContainerPoint([lat, lon]);
-
-      // direzione: vettore (u verso est, v verso nord). Sul canvas y cresce verso il basso:
-      // quindi dy schermo = -vv, dx schermo = uu
+      // direzione su schermo: dx=+u, dy=-v
       let dx = uu, dy = -vv;
-
-      // normalizza
       const len = Math.sqrt(dx*dx + dy*dy) || 1;
       dx /= len; dy /= len;
 
-      // lunghezza freccia proporzionale alla velocità (limite)
-      const L = clamp(6 + spKmh * 0.18, 8, 26);
+      const p = map.latLngToContainerPoint([lat, lon]);
+
+      // grandezza proporzionale (più vento => freccia più grande)
+      const L  = clamp(8 + spKmh * 0.22, 10, 34);
+      const head = clamp(4.5 + spKmh * 0.04, 5.0, 9.5);
+      const lw = clamp(1.2 + spKmh * 0.012, 1.2, 2.4);
 
       const x2 = p.x + dx * L;
       const y2 = p.y + dy * L;
 
-      // colore dalla scala vento (come particelle)
-      ctx.strokeStyle = windColor(spKmh);
+      // colore: stesso della scala, ma più acceso
+      const baseRgb = windRgb(spKmh);
+      const brightRgb = brighten(baseRgb, 1.15);
 
-      // ombra per leggibilità sul relief
+      // ombra leggera per rilievo
       ctx.save();
-      ctx.shadowColor = "rgba(0,0,0,0.55)";
-      ctx.shadowBlur = 2.5;
-      ctx.shadowOffsetX = 0;
-      ctx.shadowOffsetY = 0;
+      ctx.shadowColor = "rgba(0,0,0,0.35)";
+      ctx.shadowBlur = 2.0;
 
-      // corpo
+      // bordo nero
+      ctx.lineWidth = lw + 1.6;
+      ctx.strokeStyle = "rgba(0,0,0,0.85)";
       ctx.beginPath();
       ctx.moveTo(p.x, p.y);
       ctx.lineTo(x2, y2);
       ctx.stroke();
 
-      // punta
-      const head = 4.5;
+      // riempimento colorato
+      ctx.lineWidth = lw;
+      ctx.strokeStyle = rgbToCss(brightRgb, 0.98);
+      ctx.beginPath();
+      ctx.moveTo(p.x, p.y);
+      ctx.lineTo(x2, y2);
+      ctx.stroke();
+
+      // punta (bordo nero)
       const ang = Math.atan2(y2 - p.y, x2 - p.x);
+      const a1 = ang - Math.PI/6;
+      const a2 = ang + Math.PI/6;
+
+      ctx.lineWidth = lw + 1.6;
+      ctx.strokeStyle = "rgba(0,0,0,0.85)";
       ctx.beginPath();
       ctx.moveTo(x2, y2);
-      ctx.lineTo(x2 - head * Math.cos(ang - Math.PI/6), y2 - head * Math.sin(ang - Math.PI/6));
+      ctx.lineTo(x2 - head * Math.cos(a1), y2 - head * Math.sin(a1));
       ctx.moveTo(x2, y2);
-      ctx.lineTo(x2 - head * Math.cos(ang + Math.PI/6), y2 - head * Math.sin(ang + Math.PI/6));
+      ctx.lineTo(x2 - head * Math.cos(a2), y2 - head * Math.sin(a2));
+      ctx.stroke();
+
+      // punta colorata
+      ctx.lineWidth = lw;
+      ctx.strokeStyle = rgbToCss(brightRgb, 0.98);
+      ctx.beginPath();
+      ctx.moveTo(x2, y2);
+      ctx.lineTo(x2 - head * Math.cos(a1), y2 - head * Math.sin(a1));
+      ctx.moveTo(x2, y2);
+      ctx.lineTo(x2 - head * Math.cos(a2), y2 - head * Math.sin(a2));
       ctx.stroke();
 
       ctx.restore();
     }
   }
-
-  ctx.globalAlpha = 1.0;
 }
 
 /* =============================
-   Particelle (flusso) - SEMPRE indipendenti dai layer
-   - bianche, visibili, ma non “pesanti”
+   Particelle (flusso)
 ============================= */
 function updateParticles(){
-  // se layer esiste ma toggle off -> rimuovi
   if(velocityLayer && !showParticles){
     try{ map.removeLayer(velocityLayer); }catch(e){}
     velocityLayer = null;
     return;
   }
-
   if(!showParticles) return;
   if(!currentData?.wind_u || !currentData?.wind_v) return;
 
-  // se già attive, ricrea solo quando cambia step (qui ricreiamo sempre: semplice e stabile)
   if(velocityLayer){
     try{ map.removeLayer(velocityLayer); }catch(e){}
     velocityLayer = null;
@@ -683,9 +733,8 @@ function updateParticles(){
   const isMobile = Math.min(window.innerWidth, window.innerHeight) < 900;
   const dpr = window.devicePixelRatio || 1;
 
-  // FPS: particelle ridotte (stabili)
-  let particleMult = isMobile ? (1/220) : (1/180);
-  if(dpr >= 2) particleMult = isMobile ? (1/280) : (1/240);
+  let particleMult = isMobile ? (1/240) : (1/200);
+  if(dpr >= 2) particleMult = isMobile ? (1/300) : (1/260);
 
   try{
     velocityLayer = L.velocityLayer({
@@ -700,10 +749,8 @@ function updateParticles(){
       frameRate: 50,
       opacity: 0.85,
 
-      // particelle bianche (visibili). “colore unico” per restare pulito sopra altri layer
       colorScale: ["rgba(255,255,255,0.9)","rgba(255,255,255,0.9)"]
     });
-
     velocityLayer.addTo(map);
   }catch(e){
     toast("Particelle non avviate (errore leaflet-velocity).");
@@ -711,7 +758,7 @@ function updateParticles(){
 }
 
 /* =============================
-   ISOBARE + Etichette + A/B
+   ISOBARE + A/B
 ============================= */
 function gaussianBlur2D(arr, nx, ny) {
   const out = new Array(arr.length).fill(0);
@@ -784,7 +831,6 @@ function drawIsobarsAndAB(){
   const m = currentData.meta;
   const values = currentData.press;
 
-  // min/max dinamico
   let minP=Infinity, maxP=-Infinity;
   for(let i=0;i<values.length;i++){
     const v=values[i];
@@ -801,7 +847,7 @@ function drawIsobarsAndAB(){
     .size([m.nx, m.ny])
     .thresholds(d3.range(start, end, 2))(values);
 
-  // linee + etichette valori
+  // linee + etichette
   ctx.save();
   ctx.lineWidth = 1.6;
   ctx.strokeStyle = "rgba(0,0,0,0.70)";
@@ -831,7 +877,6 @@ function drawIsobarsAndAB(){
 
     ctx.stroke();
 
-    // etichetta pressione per quella linea
     labelCandidates.forEach(pts=>{
       const mid = pts[Math.floor(pts.length/2)];
       ctx.fillStyle = "rgba(255,255,255,0.92)";
@@ -841,7 +886,6 @@ function drawIsobarsAndAB(){
     });
   });
 
-  // A/B su massimi/minimi
   const smooth = gaussianBlur2D(values, m.nx, m.ny);
   const { highs, lows } = findExtremaCandidates(smooth, m.nx, m.ny);
   highs.sort((a,b)=>b.score-a.score);
@@ -876,7 +920,6 @@ function drawIsobarsAndAB(){
     ctx.restore();
   }
 
-  // A rosso, B blu
   topH.forEach(p => drawLetter("A", p, "rgba(255,40,40,0.96)"));
   topL.forEach(p => drawLetter("B", p, "rgba(60,140,255,0.96)"));
 
@@ -884,8 +927,7 @@ function drawIsobarsAndAB(){
 }
 
 /* =============================
-   Picker valore su mappa
-   - mostra l'ultimo layer "attivo" (priorità: temp/rain/rh/press/cloud, altrimenti vento)
+   Picker
 ============================= */
 function valueAtLatLng(latlng, key){
   if(!currentData?.meta) return null;
@@ -898,10 +940,10 @@ function valueAtLatLng(latlng, key){
   const idx = y*m.nx + x;
 
   if(key==='wind'){
-    const u = currentData.wind_u?.data?.[idx];
-    const v = currentData.wind_v?.data?.[idx];
-    if(!isFinite(u)||!isFinite(v)) return null;
-    return Math.sqrt(u*u+v*v)*3.6;
+    const uu = currentData.wind_u?.data?.[idx];
+    const vv = currentData.wind_v?.data?.[idx];
+    if(!isFinite(uu)||!isFinite(vv)) return null;
+    return Math.sqrt(uu*uu+vv*vv)*3.6;
   }
   const arr = getFieldArray(key);
   if(!arr) return null;
@@ -913,9 +955,8 @@ function valueAtLatLng(latlng, key){
 function updatePickerFromEvent(e){
   if(!currentData) return;
 
-  // priorità: se hai selezionato più layer, prendi l'ultimo nell'ordine “visuale”
   const keys = ['temp','rain','rh','press','cloud'].filter(k => selected[k]);
-  let key = keys.length ? keys[keys.length-1] : 'wind';
+  const key = keys.length ? keys[keys.length-1] : 'wind';
 
   const val = valueAtLatLng(e.latlng, key);
   if(val===null || val===undefined) return;
