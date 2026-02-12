@@ -37,7 +37,7 @@
       backdrop-filter: blur(8px);
       border-radius: 14px;
       padding: 10px;
-      min-width: 180px;
+      min-width: 190px;
       box-shadow: 0 10px 30px rgba(0,0,0,0.25);
     }
 
@@ -91,7 +91,6 @@
     }
     input[type="range"]{ flex:1; height: 6px; accent-color:#1d7cff; }
 
-    /* canvases overlay */
     .ol-canvas{
       position:absolute;
       left:0; top:0;
@@ -99,7 +98,6 @@
       image-rendering: auto;
     }
 
-    /* toast error */
     #toast{
       position:absolute; left:16px; bottom:104px; z-index:3000;
       padding:10px 12px;
@@ -168,6 +166,7 @@ const SICILY_BOUNDS = L.latLngBounds(
 
 let map;
 let baseRelief, labelsOverlay;
+
 let currentData = null, catalog = [];
 
 let isPlaying = false;
@@ -179,6 +178,36 @@ let scalarCanvas, isobarCanvas, windBGCanvas, windArrowCanvas;
 let velocityLayer = null;
 
 const selected = { temp:false, rain:false, rh:false, press:false, cloud:false };
+
+/* =============================
+   RENDER THROTTLE (FPS FIX)
+   - Ridisegna max ~30fps
+   - Evita redraw multipli durante pan/zoom
+============================= */
+let _dirty = false;
+let _raf = 0;
+let _lastDraw = 0;
+const TARGET_MS = 33; // ~30 FPS
+
+function requestRedraw(force=false){
+  if(force) _lastDraw = 0;
+  _dirty = true;
+  if(_raf) return;
+  _raf = requestAnimationFrame(drawLoop);
+}
+function drawLoop(ts){
+  _raf = 0;
+  if(!_dirty) return;
+
+  if(ts - _lastDraw < TARGET_MS){
+    _raf = requestAnimationFrame(drawLoop);
+    return;
+  }
+
+  _dirty = false;
+  _lastDraw = ts;
+  redrawAll();
+}
 
 /* =============================
    UI helpers
@@ -222,7 +251,6 @@ function mixRgb(a,b,t){
   ];
 }
 function brighten(rgb, factor){
-  // factor >1 più acceso, <1 più scuro
   return [
     Math.round(clamp(rgb[0]*factor, 0, 255)),
     Math.round(clamp(rgb[1]*factor, 0, 255)),
@@ -246,36 +274,36 @@ const TEMP_STOPS = [
 
 const RAIN_STOPS = [
   { v:0.0,  c:[0,0,0,0] },
-  { v:0.2,  c:[ 80, 200, 255, 0.50] },
-  { v:2.0,  c:[  0, 120, 255, 0.65] },
-  { v:10.0, c:[  0,  40, 200, 0.78] },
-  { v:30.0, c:[150,   0, 200, 0.86] }
+  { v:0.2,  c:[ 80, 200, 255, 0.55] },
+  { v:2.0,  c:[  0, 120, 255, 0.70] },
+  { v:10.0, c:[  0,  40, 200, 0.82] },
+  { v:30.0, c:[150,   0, 200, 0.90] }
 ];
 
 const RH_STOPS = [
-  { v:20,c:[210,160, 60, 0.50] },
-  { v:40,c:[220,220,220,0.50] },
-  { v:60,c:[ 80,255,130, 0.60] },
-  { v:80,c:[ 60,160,255, 0.68] },
-  { v:95,c:[  0, 60,220, 0.75] }
+  { v:20,c:[210,160, 60, 0.55] },
+  { v:40,c:[220,220,220,0.55] },
+  { v:60,c:[ 80,255,130, 0.62] },
+  { v:80,c:[ 60,160,255, 0.70] },
+  { v:95,c:[  0, 60,220, 0.78] }
 ];
 
 const PRESS_STOPS = [
-  { v:980,  c:[  0, 70, 255, 0.55] },
-  { v:995,  c:[  0,170, 255, 0.58] },
-  { v:1005, c:[  0,255, 200, 0.60] },
-  { v:1013, c:[255,255, 255, 0.60] },
-  { v:1022, c:[255,200,   0, 0.62] },
-  { v:1035, c:[255, 60,   0, 0.66] }
+  { v:980,  c:[  0, 70, 255, 0.60] },
+  { v:995,  c:[  0,170, 255, 0.62] },
+  { v:1005, c:[  0,255, 200, 0.64] },
+  { v:1013, c:[255,255, 255, 0.64] },
+  { v:1022, c:[255,200,   0, 0.66] },
+  { v:1035, c:[255, 60,   0, 0.70] }
 ];
 
 const CLOUD_STOPS = [
   { v:0,   c:[255,255,255,0.00] },
-  { v:20,  c:[235,235,235,0.34] },
-  { v:40,  c:[210,210,210,0.46] },
-  { v:60,  c:[175,175,175,0.60] },
-  { v:80,  c:[120,120,120,0.72] },
-  { v:100, c:[ 60, 60, 60,0.82] }
+  { v:20,  c:[235,235,235,0.40] },
+  { v:40,  c:[210,210,210,0.55] },
+  { v:60,  c:[175,175,175,0.68] },
+  { v:80,  c:[120,120,120,0.78] },
+  { v:100, c:[ 60, 60, 60,0.86] }
 ];
 
 function colorFromStops(val, stops){
@@ -314,7 +342,6 @@ const WIND_COLORS_HEX = ["#000080", "#0044ff", "#00ddff", "#00ff55", "#ffff00", 
 const WIND_COLORS_RGB = WIND_COLORS_HEX.map(hexToRgb);
 
 function windRgb(speedKmh){
-  // 0..100 km/h
   const v = clamp(speedKmh, 0, 100);
   const t = v / 100;
   const f = t * (WIND_COLORS_RGB.length - 1);
@@ -336,13 +363,11 @@ window.addEventListener('load', async () => {
     maxBoundsViscosity: 0.85
   }).fitBounds(SICILY_BOUNDS);
 
-  // ESRI World Shaded Relief
   baseRelief = L.tileLayer(
     "https://server.arcgisonline.com/ArcGIS/rest/services/World_Shaded_Relief/MapServer/tile/{z}/{y}/{x}",
     { maxZoom: 13, attribution: "Tiles © Esri" }
   ).addTo(map);
 
-  // nomi città overlay
   labelsOverlay = L.tileLayer(
     "https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png",
     { maxZoom: 19, opacity: 0.45, attribution: "© OpenStreetMap" }
@@ -355,7 +380,13 @@ window.addEventListener('load', async () => {
 
   map.on('mousemove', updatePickerFromEvent);
   map.on('click', updatePickerFromEvent);
-  map.on('moveend resize zoomend', () => redrawAll(true));
+
+  // Ridisegno SOLO a fine movimento/zoom (non continuo)
+  map.on('moveend', ()=> requestRedraw(true));
+  map.on('zoomend', ()=> requestRedraw(true));
+  window.addEventListener('resize', ()=> requestRedraw(true));
+
+  document.getElementById('unit-display').innerText = unitFor('wind');
 });
 
 /* =============================
@@ -365,7 +396,7 @@ function hookUI(){
   const bindChk = (id, key) => {
     document.getElementById(id).addEventListener('change', (e)=>{
       selected[key] = !!e.target.checked;
-      redrawAll();
+      requestRedraw();
     });
   };
   bindChk('chk-temp', 'temp');
@@ -378,7 +409,7 @@ function hookUI(){
   btnWind.addEventListener('click', ()=>{
     showWindArrows = !showWindArrows;
     btnWind.classList.toggle('active', showWindArrows);
-    redrawAll();
+    requestRedraw(true);
   });
 
   const btnPart = document.getElementById('btn-particles');
@@ -392,7 +423,7 @@ function hookUI(){
   btnIso.addEventListener('click', ()=>{
     showIsobars = !showIsobars;
     btnIso.classList.toggle('active', showIsobars);
-    redrawAll();
+    requestRedraw(true);
   });
 
   document.getElementById('play-btn').addEventListener('click', togglePlay);
@@ -430,7 +461,7 @@ async function loadStep(idx){
     if(!r.ok) throw new Error('frame not found');
     currentData = await r.json();
 
-    redrawAll(true);
+    requestRedraw(true);
     updateParticles();
   }catch(e){
     toast("Frame non caricato (file mancante o JSON invalido).");
@@ -443,22 +474,22 @@ async function loadStep(idx){
 function createCanvasLayers(){
   const mapEl = document.getElementById('map');
 
-  scalarCanvas = document.createElement('canvas');   // altri layer
+  scalarCanvas = document.createElement('canvas');
   scalarCanvas.className = 'ol-canvas';
   scalarCanvas.style.zIndex = 1200;
   mapEl.appendChild(scalarCanvas);
 
-  windBGCanvas = document.createElement('canvas');   // sfondo intensità vento
+  windBGCanvas = document.createElement('canvas');
   windBGCanvas.className = 'ol-canvas';
   windBGCanvas.style.zIndex = 1300;
   mapEl.appendChild(windBGCanvas);
 
-  windArrowCanvas = document.createElement('canvas'); // frecce
+  windArrowCanvas = document.createElement('canvas');
   windArrowCanvas.className = 'ol-canvas';
   windArrowCanvas.style.zIndex = 1400;
   mapEl.appendChild(windArrowCanvas);
 
-  isobarCanvas = document.createElement('canvas');   // isobare + A/B
+  isobarCanvas = document.createElement('canvas');
   isobarCanvas.className = 'ol-canvas';
   isobarCanvas.style.zIndex = 1600;
   mapEl.appendChild(isobarCanvas);
@@ -473,7 +504,7 @@ function fitCanvas(c){
 /* =============================
    Redraw
 ============================= */
-function redrawAll(fromMove=false){
+function redrawAll(){
   if(!currentData?.meta) return;
 
   fitCanvas(scalarCanvas);
@@ -482,8 +513,8 @@ function redrawAll(fromMove=false){
   fitCanvas(isobarCanvas);
 
   drawScalarComposite();
-  drawWindBackground();
-  drawWindArrows();
+  drawWindBackground();  // più leggero
+  drawWindArrows();      // più evidente e scalato davvero
   drawIsobarsAndAB();
 }
 
@@ -510,20 +541,24 @@ function drawScalarComposite(){
   const keys = Object.keys(selected).filter(k => selected[k]);
   if(keys.length === 0) return;
 
-  const baseAlpha = (keys.length === 1) ? 0.72 : (keys.length === 2 ? 0.56 : 0.44);
+  const baseAlpha = (keys.length === 1) ? 0.78 : (keys.length === 2 ? 0.60 : 0.48);
   const order = ['press','temp','rh','rain','cloud'].filter(k => keys.includes(k));
+
+  // Densità adattiva (scalar): evita loop enormi a zoom bassi
+  const z = map.getZoom();
+  const step = (z<=7) ? 3 : (z===8 ? 2 : 1);
 
   for(const key of order){
     const arr = getFieldArray(key);
     if(!arr || !arr.length) continue;
 
-    for(let y=0; y<m.ny; y++){
+    for(let y=0; y<m.ny; y+=step){
       const lat = m.la1 - (y*m.dy);
-      if(lat < bounds.getSouth()-0.15 || lat > bounds.getNorth()+0.15) continue;
+      if(lat < bounds.getSouth()-0.18 || lat > bounds.getNorth()+0.18) continue;
 
-      for(let x=0; x<m.nx; x++){
+      for(let x=0; x<m.nx; x+=step){
         const lon = m.lo1 + (x*m.dx);
-        if(lon < bounds.getWest()-0.15 || lon > bounds.getEast()+0.15) continue;
+        if(lon < bounds.getWest()-0.18 || lon > bounds.getEast()+0.18) continue;
 
         const idx = y*m.nx + x;
         let v = arr[idx];
@@ -540,7 +575,7 @@ function drawScalarComposite(){
         const a = clamp((col[3] ?? 1) * baseAlpha, 0, 1);
 
         const p1 = map.latLngToContainerPoint([lat, lon]);
-        const p2 = map.latLngToContainerPoint([lat - m.dy, lon + m.dx]);
+        const p2 = map.latLngToContainerPoint([lat - m.dy*step, lon + m.dx*step]);
 
         const w = Math.ceil(p2.x - p1.x) + 2;
         const h = Math.ceil(p2.y - p1.y) + 2;
@@ -553,8 +588,9 @@ function drawScalarComposite(){
 }
 
 /* =============================
-   WIND BACKGROUND (intensità vento)
-   - meno opaco (più visibile ma resta trasparente)
+   WIND BACKGROUND (FPS FIX)
+   - step più grande (molto meno loop)
+   - alpha più bassa (meno invadente)
 ============================= */
 function drawWindBackground(){
   const ctx = windBGCanvas.getContext('2d');
@@ -567,20 +603,19 @@ function drawWindBackground(){
   const v = currentData.wind_v.data;
   const bounds = map.getBounds();
 
-  // densità sfondo: più fitta ma leggera
   const z = map.getZoom();
-  const step = (z <= 7) ? 5 : (z === 8 ? 4 : (z === 9 ? 4 : 3));
 
-  // opacità sfondo: richiesta "meno opachi" => più evidenti
-  const bgAlphaBase = 0.34;
+  // sfondo molto più leggero:
+  const step = (z<=7) ? 9 : (z===8 ? 8 : (z===9 ? 7 : 6));
+  const bgAlphaBase = 0.20;
 
   for(let yy=0; yy<m.ny; yy+=step){
     const lat = m.la1 - (yy*m.dy);
-    if(lat < bounds.getSouth()-0.2 || lat > bounds.getNorth()+0.2) continue;
+    if(lat < bounds.getSouth()-0.25 || lat > bounds.getNorth()+0.25) continue;
 
     for(let xx=0; xx<m.nx; xx+=step){
       const lon = m.lo1 + (xx*m.dx);
-      if(lon < bounds.getWest()-0.2 || lon > bounds.getEast()+0.2) continue;
+      if(lon < bounds.getWest()-0.25 || lon > bounds.getEast()+0.25) continue;
 
       const idx = yy*m.nx + xx;
       const uu = u[idx], vv = v[idx];
@@ -589,8 +624,8 @@ function drawWindBackground(){
       const spKmh = Math.sqrt(uu*uu + vv*vv) * 3.6;
       const rgb = windRgb(spKmh);
 
-      // intensità => alpha leggermente più alto
-      const a = clamp(bgAlphaBase + (spKmh/100)*0.20, 0.18, 0.58);
+      // alpha cresce un po' con intensità
+      const a = clamp(bgAlphaBase + (spKmh/80)*0.16, 0.12, 0.42);
 
       const p1 = map.latLngToContainerPoint([lat, lon]);
       const p2 = map.latLngToContainerPoint([lat - m.dy*step, lon + m.dx*step]);
@@ -605,11 +640,9 @@ function drawWindBackground(){
 }
 
 /* =============================
-   WIND ARROWS
-   - più frecce, più evidenti
-   - grandezza e lunghezza aumentano con intensità
-   - stesso colore dello sfondo, ma più acceso
-   - bordo nero (stroke) per stacco
+   WIND ARROWS (FIX: grandi + scalati davvero)
+   - densità maggiore ma controllata
+   - size ~ speedKmh con curva più aggressiva
 ============================= */
 function drawWindArrows(){
   const ctx = windArrowCanvas.getContext('2d');
@@ -623,25 +656,26 @@ function drawWindArrows(){
   const bounds = map.getBounds();
   const z = map.getZoom();
 
-  // PIÙ FRECCE (densità aumentata)
-  const step = (z <= 7) ? 6 : (z === 8 ? 5 : (z === 9 ? 4 : 3));
+  // PIÙ FRECCE ma non assassine per FPS:
+  // (a zoom alto puoi andare più denso)
+  const step = (z<=7) ? 7 : (z===8 ? 6 : (z===9 ? 5 : 4));
 
-  // stile
   ctx.lineCap = 'round';
   ctx.globalAlpha = 1.0;
 
   for(let yy=0; yy<m.ny; yy+=step){
     const lat = m.la1 - (yy*m.dy);
-    if(lat < bounds.getSouth()-0.2 || lat > bounds.getNorth()+0.2) continue;
+    if(lat < bounds.getSouth()-0.25 || lat > bounds.getNorth()+0.25) continue;
 
     for(let xx=0; xx<m.nx; xx+=step){
       const lon = m.lo1 + (xx*m.dx);
-      if(lon < bounds.getWest()-0.2 || lon > bounds.getEast()+0.2) continue;
+      if(lon < bounds.getWest()-0.25 || lon > bounds.getEast()+0.25) continue;
 
       const idx = yy*m.nx + xx;
       const uu = u[idx], vv = v[idx];
       if(!isFinite(uu) || !isFinite(vv)) continue;
 
+      // km/h
       const spKmh = Math.sqrt(uu*uu + vv*vv) * 3.6;
 
       // direzione su schermo: dx=+u, dy=-v
@@ -651,32 +685,32 @@ function drawWindArrows(){
 
       const p = map.latLngToContainerPoint([lat, lon]);
 
-      // grandezza proporzionale (più vento => freccia più grande)
-      const L  = clamp(8 + spKmh * 0.22, 10, 34);
-      const head = clamp(4.5 + spKmh * 0.04, 5.0, 9.5);
-      const lw = clamp(1.2 + spKmh * 0.012, 1.2, 2.4);
+      // --- SCALATURA AGGRESSIVA (così "si vede") ---
+      // L cresce parecchio già dai 10-30 km/h
+      const L    = clamp(10 + spKmh * 0.75, 12, 85);
+      const head = clamp(5  + spKmh * 0.12, 6, 18);
+      const lw   = clamp(1.1 + spKmh * 0.035, 1.2, 4.0);
 
       const x2 = p.x + dx * L;
       const y2 = p.y + dy * L;
 
-      // colore: stesso della scala, ma più acceso
+      // stesso colore scala vento, ma più acceso
       const baseRgb = windRgb(spKmh);
-      const brightRgb = brighten(baseRgb, 1.15);
+      const brightRgb = brighten(baseRgb, 1.25);
 
-      // ombra leggera per rilievo
       ctx.save();
-      ctx.shadowColor = "rgba(0,0,0,0.35)";
-      ctx.shadowBlur = 2.0;
+      ctx.shadowColor = "rgba(0,0,0,0.40)";
+      ctx.shadowBlur = 3;
 
-      // bordo nero
-      ctx.lineWidth = lw + 1.6;
+      // bordo nero per evidenza
+      ctx.lineWidth = lw + 2.0;
       ctx.strokeStyle = "rgba(0,0,0,0.85)";
       ctx.beginPath();
       ctx.moveTo(p.x, p.y);
       ctx.lineTo(x2, y2);
       ctx.stroke();
 
-      // riempimento colorato
+      // linea colorata
       ctx.lineWidth = lw;
       ctx.strokeStyle = rgbToCss(brightRgb, 0.98);
       ctx.beginPath();
@@ -684,12 +718,13 @@ function drawWindArrows(){
       ctx.lineTo(x2, y2);
       ctx.stroke();
 
-      // punta (bordo nero)
+      // punta
       const ang = Math.atan2(y2 - p.y, x2 - p.x);
-      const a1 = ang - Math.PI/6;
-      const a2 = ang + Math.PI/6;
+      const a1 = ang - Math.PI/7;
+      const a2 = ang + Math.PI/7;
 
-      ctx.lineWidth = lw + 1.6;
+      // bordo punta nero
+      ctx.lineWidth = lw + 2.0;
       ctx.strokeStyle = "rgba(0,0,0,0.85)";
       ctx.beginPath();
       ctx.moveTo(x2, y2);
@@ -733,8 +768,8 @@ function updateParticles(){
   const isMobile = Math.min(window.innerWidth, window.innerHeight) < 900;
   const dpr = window.devicePixelRatio || 1;
 
-  let particleMult = isMobile ? (1/240) : (1/200);
-  if(dpr >= 2) particleMult = isMobile ? (1/300) : (1/260);
+  let particleMult = isMobile ? (1/260) : (1/220);
+  if(dpr >= 2) particleMult = isMobile ? (1/340) : (1/300);
 
   try{
     velocityLayer = L.velocityLayer({
@@ -758,7 +793,7 @@ function updateParticles(){
 }
 
 /* =============================
-   ISOBARE + A/B
+   ISOBARE + A/B (invariato)
 ============================= */
 function gaussianBlur2D(arr, nx, ny) {
   const out = new Array(arr.length).fill(0);
@@ -847,7 +882,6 @@ function drawIsobarsAndAB(){
     .size([m.nx, m.ny])
     .thresholds(d3.range(start, end, 2))(values);
 
-  // linee + etichette
   ctx.save();
   ctx.lineWidth = 1.6;
   ctx.strokeStyle = "rgba(0,0,0,0.70)";
@@ -1010,4 +1044,3 @@ function togglePlay(){
 </script>
 </body>
 </html>
-```0
