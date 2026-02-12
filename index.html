@@ -14,7 +14,6 @@
   <script src="https://d3js.org/d3.v7.min.js"></script>
 
   <style>
-    /* SFONDO SCURO */
     body { margin: 0; background: #1a1a1a; font-family: 'Segoe UI', sans-serif; color: #ddd; overflow: hidden; }
     #map { position: absolute; top: 0; bottom: 0; width: 100%; background: #1a1a1a; }
 
@@ -60,7 +59,6 @@
     .mini:hover { background: rgba(255,255,255,0.1); color:#fff; }
     .mini.active { background: #eee; color:#111; border-color: #fff; }
 
-    /* INFO BOX */
     #info-box {
         position: absolute; top: 18px; left: 18px; z-index: 2000;
         pointer-events: none;
@@ -70,7 +68,6 @@
     #val-display { font-size: 3.6em; font-weight: 950; line-height: 0.9; color: #fff; text-shadow: 0 2px 5px rgba(0,0,0,0.8); }
     #unit-display { font-size: 1.15em; color: #aaa; font-weight: 850; margin-top: 4px; text-shadow: 0 1px 3px rgba(0,0,0,0.9); }
 
-    /* ROSA DEI VENTI */
     #wind-rose {
         width: 50px; height: 50px;
         background: rgba(255,255,255,0.9);
@@ -97,12 +94,10 @@
     #time-label { font-size: 1.45em; font-weight: 950; margin-left: 14px; min-width: 150px; text-align: center; color: #fff; }
     input[type=range] { flex-grow: 1; height: 6px; cursor: pointer; accent-color: #0077ff; background: rgba(255,255,255,0.2); }
 
-    /* MAPPA SCURA (INVERTED RELIEF) */
     .dark-relief-tiles {
         filter: invert(100%) hue-rotate(180deg) brightness(0.8) contrast(1.2) grayscale(20%);
     }
 
-    /* LAYER COLORATI */
     canvas.leaflet-layer.scalar-layer {
         image-rendering: auto;
         mix-blend-mode: screen;
@@ -163,7 +158,6 @@
       <div class="toggle" id="btn-therm" onclick="toggleIsotherms()">
         <span>ISOTERME 🌡️</span><span> </span>
       </div>
-
       <div class="toggle" id="btn-grid" onclick="toggleGrid()">
         <span>RETICOLO #</span><span> </span>
       </div>
@@ -183,7 +177,7 @@
 
   const WIND_COLOR_SCALE = ["#000080", "#0044ff", "#00ddff", "#00ff55", "#ffff00", "#ff6600", "#ff0000", "#ff00ff"];
 
-  // TEMP (Custom)
+  // TEMP STOPS etc... (identici ai tuoi)
   const TEMP_STOPS = [
     {v: -15, c: [156,218,216]}, {v: -14, c: [149,214,211]}, {v: -13, c: [141,210,206]}, {v: -12, c: [134,206,201]},
     {v: -11, c: [127,202,196]}, {v: -10, c: [119,198,191]}, {v: -9,  c: [112,194,185]}, {v: -8,  c: [106,190,181]},
@@ -203,7 +197,6 @@
     {v: 45,  c: [89,22,3]}
   ];
 
-  // RAIN (Custom: Start > 0.6mm)
   const RAIN_STOPS = [
     {v:0.0, c:[0,0,0], a:0.0},
     {v:0.6, c:[100,200,255], a:0.6},
@@ -214,7 +207,6 @@
     {v:50,  c:[255,0,0], a:0.9}
   ];
 
-  // RH (Custom)
   const RH_STOPS = [
     {v:0, c:[173,85,56]}, {v:1, c:[173,85,56]}, {v:5, c:[173,89,56]}, {v:10, c:[173,93,56]},
     {v:15, c:[173,97,56]}, {v:20, c:[173,101,56]}, {v:25, c:[173,105,56]}, {v:30, c:[173,110,56]},
@@ -224,7 +216,6 @@
     {v:95, c:[56,110,165]}, {v:100, c:[56,70,114]}
   ];
 
-  // PRESSIONE (Custom in hPa)
   const PRESS_STOPS = [
     {v: 900, c: [8,16,48]}, {v: 950, c: [0,32,96]}, {v: 976, c: [0,52,146]}, {v: 986, c: [0,90,148]},
     {v: 995, c: [0,117,146]}, {v: 1002, c: [26,140,147]}, {v: 1007, c: [103,162,155]}, {v: 1011.25, c: [155,183,172]},
@@ -275,11 +266,9 @@
     return {r:Math.round(lerp(r1,r2,f)), g:Math.round(lerp(g1,g2,f)), b:Math.round(lerp(b1,b2,f))};
   }
 
-  // --- smoothing semplice (3x3 gaussian) per pressione, utile per A/B coerenti
   function gaussianBlur3x3(src, nx, ny, passes=1){
     let a = new Float32Array(src.length);
     for(let i=0;i<src.length;i++) a[i] = src[i];
-
     const k = [1,2,1,2,4,2,1,2,1];
     for(let pass=0; pass<passes; pass++){
       const out = new Float32Array(a.length);
@@ -348,17 +337,14 @@
   window.addEventListener('load', async () => {
     map = L.map('map', { zoomControl: false, maxBounds: SICILY_BOUNDS.pad(0.5), background: '#1a1a1a' }).fitBounds(SICILY_BOUNDS);
 
-    // 1. BASE: DARK RELIEF
     L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/World_Shaded_Relief/MapServer/tile/{z}/{y}/{x}', {
         maxZoom: 13, attribution: 'Esri', className: 'dark-relief-tiles'
     }).addTo(map);
 
-    // 3. HILLSHADE
     L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/Elevation/World_Hillshade/MapServer/tile/{z}/{y}/{x}', {
         maxZoom: 19, className: 'dark-relief-tiles', opacity: 0.45
     }).addTo(map);
 
-    // 4. LABELS
     map.createPane('labelsPane'); map.getPane('labelsPane').style.zIndex = 600; map.getPane('labelsPane').style.pointerEvents = 'none';
     L.tileLayer('https://{s}.basemaps.cartocdn.com/light_only_labels/{z}/{x}/{y}{r}.png', { pane: 'labelsPane', opacity: 0.9 }).addTo(map);
 
@@ -381,15 +367,15 @@
       map.getPanes().overlayPane.appendChild(c);
       return c;
     }
-    scalarCanvases.wind = mkCanvas(290, 'scalar-layer');
-    scalarCanvases.temp = mkCanvas(300, 'scalar-layer');
-    scalarCanvases.rain = mkCanvas(310, 'scalar-layer');
-    scalarCanvases.rh = mkCanvas(320, 'scalar-layer');
+    scalarCanvases.wind  = mkCanvas(290, 'scalar-layer');
+    scalarCanvases.temp  = mkCanvas(300, 'scalar-layer');
+    scalarCanvases.rain  = mkCanvas(310, 'scalar-layer');
+    scalarCanvases.rh    = mkCanvas(320, 'scalar-layer');
     scalarCanvases.press = mkCanvas(330, 'scalar-layer');
     scalarCanvases.cloud = mkCanvas(340, 'scalar-layer');
 
     arrowCanvas = mkCanvas(380);
-    thermCanvas = mkCanvas(405);    // <<< isoterme tra frecce e isobare
+    thermCanvas = mkCanvas(405);
     isoCanvas   = mkCanvas(420);
     gridCanvas  = mkCanvas(450);
   }
@@ -420,8 +406,8 @@
     if(!currentData) return;
     drawScalars();
     drawWindArrows();
-    drawIsotherms();   // <<< nuove
-    drawIsobars();     // <<< fix + A/B coerenti
+    drawIsotherms();   // <<< ora funziona
+    drawIsobars();     // <<< ora funziona
     drawLatLonGrid();
     updateParticles();
   }
@@ -458,19 +444,18 @@
             if(isWindBg){
                 const u = currentData.wind_u.data[i], v = currentData.wind_v.data[i];
                 val = Math.sqrt(u*u+v*v);
-                col = vividWindColor(val); col.a = 0.40; // sfondo vento un po’ meno invadente
+                col = vividWindColor(val); col.a = 0.40;
             } else {
                 val = arr[i] || 0;
-
                 if(layer==='rain' && val < 0.6) { data[i*4+3]=0; continue; }
                 if(layer==='cloud' && val < 10) { data[i*4+3]=0; continue; }
-
                 col = interpStops(val, stops);
             }
             const p = i*4;
             data[p] = col.r; data[p+1] = col.g; data[p+2] = col.b; data[p+3] = Math.round(col.a*255);
         }
         octx.putImageData(img, 0, 0);
+
         const tl = map.latLngToContainerPoint([m.la1, m.lo1]);
         const br = map.latLngToContainerPoint([m.la2, m.lo2]);
         ctx.save();
@@ -572,9 +557,7 @@
     velocityLayer.addTo(map);
   }
 
-  // =========================
-  // ISOTERME (nuove)
-  // =========================
+  // ✅✅✅ ISOTERME CORRETTE
   function drawIsotherms(){
     const ctx = thermCanvas.getContext('2d');
     const s = map.getSize();
@@ -587,7 +570,6 @@
     const m = currentData.meta;
     const temp = currentData.temp;
 
-    // step adattivo: più zoom => più dettaglio
     const zoom = map.getZoom();
     const step = (zoom >= 10) ? 2 : (zoom >= 9 ? 3 : 4);
 
@@ -612,52 +594,44 @@
     ctx.textAlign="center"; ctx.textBaseline="middle";
 
     contours.forEach(c=>{
-      // path per ogni ring, con moveTo corretto (NO linee strane)
-      const labelPts=[];
+      let pickedLabel = null;
 
       c.coordinates.forEach(poly=>{
         poly.forEach(ring=>{
-          ring.forEach(pts=>{
-            if(!pts || pts.length<2) return;
+          if(!ring || ring.length < 2) return;
 
-            ctx.beginPath();
-            for(let i=0;i<pts.length;i++){
-              const coord = pts[i];
-              const lat = m.la1 - coord[1]*m.dy;
-              const lon = m.lo1 + coord[0]*m.dx;
-              const p = map.latLngToContainerPoint([lat, lon]);
-              if(i===0) ctx.moveTo(p.x,p.y);
-              else ctx.lineTo(p.x,p.y);
-            }
-            ctx.stroke();
+          ctx.beginPath();
+          for(let i=0;i<ring.length;i++){
+            const coord = ring[i]; // [x,y]
+            const lat = m.la1 - coord[1]*m.dy;
+            const lon = m.lo1 + coord[0]*m.dx;
+            const p = map.latLngToContainerPoint([lat, lon]);
+            if(i===0) ctx.moveTo(p.x,p.y);
+            else ctx.lineTo(p.x,p.y);
+          }
+          ctx.stroke();
 
-            if(pts.length > 80){
-              const mid = pts[Math.floor(pts.length/2)];
-              const lat = m.la1 - mid[1]*m.dy;
-              const lon = m.lo1 + mid[0]*m.dx;
-              const p = map.latLngToContainerPoint([lat, lon]);
-              labelPts.push(p);
-            }
-          });
+          if(!pickedLabel && ring.length > 80){
+            const mid = ring[Math.floor(ring.length/2)];
+            const lat = m.la1 - mid[1]*m.dy;
+            const lon = m.lo1 + mid[0]*m.dx;
+            pickedLabel = map.latLngToContainerPoint([lat, lon]);
+          }
         });
       });
 
-      // label poche (una per contour “utile”)
-      if(labelPts.length){
-        const p = labelPts[Math.floor(labelPts.length/2)];
+      if(pickedLabel){
         ctx.fillStyle="rgba(0,0,0,0.55)";
-        ctx.fillRect(p.x-16, p.y-8, 32, 16);
+        ctx.fillRect(pickedLabel.x-16, pickedLabel.y-8, 32, 16);
         ctx.fillStyle="#fff";
-        ctx.fillText(Math.round(c.value) + "°", p.x, p.y);
+        ctx.fillText(Math.round(c.value) + "°", pickedLabel.x, pickedLabel.y);
       }
     });
 
     ctx.restore();
   }
 
-  // =========================
-  // ISOBARE (fix + A/B coerenti)
-  // =========================
+  // ✅✅✅ ISOBARE CORRETTE + A/B COERENTI
   function drawIsobars(){
     const ctx = isoCanvas.getContext('2d');
     const s = map.getSize();
@@ -669,7 +643,6 @@
 
     const m = currentData.meta;
 
-    // 1) Sanitizzazione (evita contorni impazziti)
     const cleanPress = new Float32Array(currentData.press.length);
     for(let i=0; i<currentData.press.length; i++) {
         let v = currentData.press[i];
@@ -677,7 +650,6 @@
         else cleanPress[i] = v;
     }
 
-    // 2) Range thresholds dinamico
     let pMin=Infinity, pMax=-Infinity;
     for(let i=0;i<cleanPress.length;i++){
       const v=cleanPress[i];
@@ -692,7 +664,6 @@
 
     const contours = d3.contours().size([m.nx, m.ny]).thresholds(d3.range(start, end, 2))(cleanPress);
 
-    // 3) Disegno contorni CORRETTO: moveTo sul primo punto (NO raggi verticali)
     ctx.save();
     ctx.lineWidth = 1.8;
     ctx.strokeStyle = "rgba(255,255,255,0.70)";
@@ -700,50 +671,42 @@
     ctx.textAlign="center"; ctx.textBaseline="middle";
 
     contours.forEach(c=>{
-      const labelPts = [];
+      let pickedLabel = null;
 
       c.coordinates.forEach(poly=>{
         poly.forEach(ring=>{
-          ring.forEach(pts=>{
-            if(!pts || pts.length<2) return;
+          if(!ring || ring.length < 2) return;
 
-            ctx.beginPath();
-            for(let i=0;i<pts.length;i++){
-              const coord = pts[i];
-              const lat = m.la1 - coord[1]*m.dy;
-              const lon = m.lo1 + coord[0]*m.dx;
-              const p = map.latLngToContainerPoint([lat, lon]);
-              if(i===0) ctx.moveTo(p.x,p.y);
-              else ctx.lineTo(p.x,p.y);
-            }
-            ctx.stroke();
+          ctx.beginPath();
+          for(let i=0;i<ring.length;i++){
+            const coord = ring[i]; // [x,y]
+            const lat = m.la1 - coord[1]*m.dy;
+            const lon = m.lo1 + coord[0]*m.dx;
+            const p = map.latLngToContainerPoint([lat, lon]);
+            if(i===0) ctx.moveTo(p.x,p.y);
+            else ctx.lineTo(p.x,p.y);
+          }
+          ctx.stroke();
 
-            if(pts.length > 90){
-              const mid = pts[Math.floor(pts.length/2)];
-              const lat = m.la1 - mid[1]*m.dy;
-              const lon = m.lo1 + mid[0]*m.dx;
-              const p = map.latLngToContainerPoint([lat, lon]);
-              labelPts.push(p);
-            }
-          });
+          if(!pickedLabel && ring.length > 90){
+            const mid = ring[Math.floor(ring.length/2)];
+            const lat = m.la1 - mid[1]*m.dy;
+            const lon = m.lo1 + mid[0]*m.dx;
+            pickedLabel = map.latLngToContainerPoint([lat, lon]);
+          }
         });
       });
 
-      if(labelPts.length){
-        const p = labelPts[Math.floor(labelPts.length/2)];
+      if(pickedLabel){
         ctx.fillStyle="rgba(0,0,0,0.60)";
-        ctx.fillRect(p.x-16, p.y-8, 32, 16);
+        ctx.fillRect(pickedLabel.x-18, pickedLabel.y-8, 36, 16);
         ctx.fillStyle="#fff";
-        ctx.fillText(Math.round(c.value), p.x, p.y);
+        ctx.fillText(Math.round(c.value), pickedLabel.x, pickedLabel.y);
       }
     });
 
-    // 4) A/B coerenti: smoothing + extrema + soppressione distanza
     const smooth = gaussianBlur3x3(cleanPress, m.nx, m.ny, 2);
     const { highs, lows } = findLocalExtrema(smooth, m.nx, m.ny);
-
-    // score: quanto “spicca” (differenza dai dintorni)
-    // qui semplice: ordina per valore (alto) e inverso (basso)
     highs.sort((a,b)=> b.v - a.v);
     lows.sort((a,b)=> a.v - b.v);
 
@@ -754,7 +717,6 @@
     const topH = suppressByDistance(highs, minDistCells, keepN);
     const topL = suppressByDistance(lows,  minDistCells, keepN);
 
-    // A/B più grandi e più leggibili
     function drawAB(letter, pt, fill){
       const lat = m.la1 - pt.y*m.dy;
       const lon = m.lo1 + pt.x*m.dx;
@@ -763,22 +725,20 @@
       if(p.x < -50 || p.y < -50 || p.x > s.x+50 || p.y > s.y+50) return;
 
       ctx.save();
-      ctx.font = "950 34px Arial";
-      ctx.lineWidth = 6;
+      ctx.font = "950 36px Arial";
+      ctx.lineWidth = 7;
       ctx.strokeStyle = "rgba(0,0,0,0.70)";
       ctx.strokeText(letter, p.x, p.y);
       ctx.fillStyle = fill;
       ctx.fillText(letter, p.x, p.y);
 
-      // valore sotto (hPa)
-      ctx.font = "900 12px Arial";
+      ctx.font = "900 13px Arial";
       ctx.lineWidth = 4;
       ctx.strokeStyle = "rgba(0,0,0,0.65)";
       const txt = Math.round(pt.v) + " hPa";
-      ctx.strokeText(txt, p.x, p.y + 22);
+      ctx.strokeText(txt, p.x, p.y + 24);
       ctx.fillStyle = "rgba(255,255,255,0.95)";
-      ctx.fillText(txt, p.x, p.y + 22);
-
+      ctx.fillText(txt, p.x, p.y + 24);
       ctx.restore();
     }
 
@@ -788,9 +748,6 @@
     ctx.restore();
   }
 
-  // =========================
-  // UI toggles
-  // =========================
   window.toggleLayer = function(name){
     if(selected.has(name)) selected.delete(name); else selected.add(name);
     updateToggleUI(); redrawAll();
@@ -819,9 +776,6 @@
     document.getElementById('wind-rose').style.display = selected.has('wind') ? 'flex' : 'none';
   }
 
-  // =========================
-  // Picker
-  // =========================
   function onPick(e){
     if(!currentData) return;
     const m = currentData.meta;
@@ -845,9 +799,6 @@
     document.getElementById('unit-display').innerText = unit;
   }
 
-  // =========================
-  // Play
-  // =========================
   window.togglePlay = function(){
     if(isPlaying){ isPlaying=false; document.getElementById('play-btn').innerText='►'; return; }
     isPlaying=true; document.getElementById('play-btn').innerText='❚❚';
