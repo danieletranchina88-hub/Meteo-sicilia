@@ -1,7 +1,7 @@
 <!DOCTYPE html>
 <html>
 <head>
-  <title>Sicilia MeteoHub - FINAL COMPLETE (DISCRETE TEMP + ISOTERME 1°C)</title>
+  <title>Sicilia MeteoHub - FINAL COMPLETE</title>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
 
@@ -98,7 +98,11 @@
         filter: invert(100%) hue-rotate(180deg) brightness(0.8) contrast(1.2) grayscale(20%);
     }
 
-    canvas.leaflet-layer.scalar-layer { image-rendering: auto; mix-blend-mode: screen; opacity: 0.92; }
+    canvas.leaflet-layer.scalar-layer {
+        image-rendering: auto;
+        mix-blend-mode: screen;
+        opacity: 0.90;
+    }
     canvas.leaflet-layer.velocity-canvas { mix-blend-mode: normal; opacity: 1.0; }
   </style>
 </head>
@@ -153,59 +157,21 @@
   const SICILY_BOUNDS = L.latLngBounds(L.latLng(35.0, 11.0), L.latLng(39.5, 16.5));
   const WIND_COLOR_SCALE = ["#000080", "#0044ff", "#00ddff", "#00ff55", "#ffff00", "#ff6600", "#ff0000", "#ff00ff"];
 
-  // ======== DISCRETE TEMPERATURE: 1 grado = 1 colore (NETTO) ========
-  const T_MIN = -15;
-  const T_MAX = 45;
+  // ===== TEMPERATURA: TORNA COME PRIMA (i tuoi punti chiave) =====
+  // -15 viola scuro, 0 ciano, 15 giallo chiaro, 20 giallo, 25 arancione chiaro,
+  // 30 arancione, 35 rosso, 45 rosso scuro
+  const TEMP_ANCHORS = [
+    {v:-15, c:[80, 0, 120]},     // viola scuro
+    {v:  0, c:[0, 220, 255]},    // ciano
+    {v: 15, c:[255, 255, 170]},  // giallo chiaro
+    {v: 20, c:[255, 230, 0]},    // giallo
+    {v: 25, c:[255, 170, 80]},   // arancione chiaro
+    {v: 30, c:[255, 120, 0]},    // arancione
+    {v: 35, c:[255, 40, 0]},     // rosso
+    {v: 45, c:[120, 0, 0]}       // rosso scuro
+  ];
 
-  function clamp(x,a,b){ return Math.max(a, Math.min(b, x)); }
-  function lerp(a,b,t){ return a+(b-a)*t; }
-
-  // HSL -> RGB
-  function hslToRgb(h, s, l) {
-    h = ((h % 360) + 360) % 360;
-    s = clamp(s, 0, 1);
-    l = clamp(l, 0, 1);
-    const c = (1 - Math.abs(2*l - 1)) * s;
-    const hp = h / 60;
-    const x = c * (1 - Math.abs((hp % 2) - 1));
-    let r1=0,g1=0,b1=0;
-    if(hp>=0 && hp<1){ r1=c; g1=x; b1=0; }
-    else if(hp<2){ r1=x; g1=c; b1=0; }
-    else if(hp<3){ r1=0; g1=c; b1=x; }
-    else if(hp<4){ r1=0; g1=x; b1=c; }
-    else if(hp<5){ r1=x; g1=0; b1=c; }
-    else { r1=c; g1=0; b1=x; }
-    const m = l - c/2;
-    return {
-      r: Math.round((r1+m)*255),
-      g: Math.round((g1+m)*255),
-      b: Math.round((b1+m)*255)
-    };
-  }
-
-  // Palette “meteorologica” discreta:
-  // - Hue da viola (freddo) -> rosso (caldo)
-  // - Saturazione alta
-  // - Luminosità alternata (pari/dispari) per distinguere bene gradi vicini
-  function tempColorInt(T) {
-    const t = clamp((T - T_MIN) / (T_MAX - T_MIN), 0, 1);
-
-    // Hue: 270° (viola) -> 0° (rosso)
-    const hue = lerp(270, 0, t);
-
-    // Saturazione alta
-    const sat = 0.95;
-
-    // Luminosità alternata per differenziare ogni grado
-    // (mantiene la scala coerente, ma rende i gradi vicini più “leggibili”)
-    const baseL = lerp(0.48, 0.52, t);        // leggera variazione
-    const alt = (Math.round(T) % 2 === 0) ? 0.06 : -0.06;
-    const lum = clamp(baseL + alt, 0.30, 0.70);
-
-    return hslToRgb(hue, sat, lum);
-  }
-
-  // ======== ALTRI LAYER ========
+  // ===== altri layer =====
   const RAIN_STOPS = [
     {v:0.0, c:[0,0,0], a:0.0},
     {v:0.6, c:[100,200,255], a:0.65},
@@ -233,6 +199,9 @@
     {v:100, c:[90,90,90],    a:0.80}
   ];
 
+  function clamp(x,a,b){ return Math.max(a, Math.min(b, x)); }
+  function lerp(a,b,t){ return a+(b-a)*t; }
+
   function interpStops(val, stops){
     if(!stops || stops.length<2) return {r:0,g:0,b:0,a:0};
     if(val <= stops[0].v){
@@ -255,6 +224,11 @@
     }
     const s=stops[stops.length-1];
     return {r:s.c[0],g:s.c[1],b:s.c[2],a:('a' in s)?s.a:0.85};
+  }
+
+  function tempColor(val){
+    val = clamp(val, -15, 45);
+    return interpStops(val, TEMP_ANCHORS);
   }
 
   function vividWindColor(speedMs){
@@ -405,9 +379,8 @@
         else if(layer==='temp'){
           const val=currentData.temp[i];
           if(!isFinite(val)){ d[i*4+3]=0; continue; }
-          const T = Math.round(clamp(val, T_MIN, T_MAX));
-          const rgb = tempColorInt(T);
-          col = {r:rgb.r, g:rgb.g, b:rgb.b, a:0.96};   // NETTO + più evidente
+          col = tempColor(val);
+          col.a = 0.92; // un filo più evidente (prima era più “spenta”)
         }
         else if(layer==='rain'){
           const val=currentData.rain[i] ?? 0;
@@ -416,11 +389,11 @@
         }
         else if(layer==='rh'){
           const val=currentData.rh[i] ?? 0;
-          col=interpStops(val, RH_STOPS); col.a=0.90;
+          col=interpStops(val, RH_STOPS); col.a=0.88;
         }
         else if(layer==='press'){
           const val=currentData.press[i] ?? 1013;
-          col=interpStops(val, PRESS_STOPS); col.a=0.90;
+          col=interpStops(val, PRESS_STOPS); col.a=0.88;
         }
         else if(layer==='cloud'){
           const arr=getCloudArray();
@@ -552,6 +525,7 @@
     velocityLayer.addTo(map);
   }
 
+  // ===== ISOTERME (1°C) - FIX: niente linee strane (moveTo / path separati) =====
   function drawIsotherms(){
     const ctx=thermCanvas.getContext('2d');
     const sz=map.getSize();
@@ -560,13 +534,13 @@
     ctx.clearRect(0,0,sz.x,sz.y);
 
     if(!showIsotherms || !currentData?.temp || !currentData?.meta) return;
+
     const m=currentData.meta;
     const temp=currentData.temp;
 
-    // Isoterme 1°C, senza smoothing (coerenti con colori netti)
-    const contours=d3.contours()
-      .size([m.nx,m.ny])
-      .thresholds(d3.range(T_MIN, T_MAX+1, 1))(temp);
+    const contours = d3.contours()
+      .size([m.nx, m.ny])
+      .thresholds(d3.range(-15, 46, 1))(temp);
 
     ctx.save();
     ctx.lineJoin="round";
@@ -577,14 +551,15 @@
     contours.forEach(c=>{
       const T = Math.round(c.value);
       const major = (T % 5 === 0);
-      const rgb = tempColorInt(T);
-      const colored = `rgba(${rgb.r},${rgb.g},${rgb.b},${major?0.98:0.85})`;
+
+      const tc = tempColor(T);
+      const lineCol = `rgba(${tc.r},${tc.g},${tc.b},${major?0.95:0.75})`;
 
       c.coordinates.forEach(poly=>{
         poly.forEach(ring=>{
           if(!ring || ring.length<2) return;
 
-          // stroke bordo scuro
+          // bordo scuro
           ctx.beginPath();
           for(let i=0;i<ring.length;i++){
             const coord=ring[i];
@@ -594,22 +569,23 @@
             if(i===0) ctx.moveTo(p.x,p.y);
             else ctx.lineTo(p.x,p.y);
           }
-          ctx.strokeStyle="rgba(0,0,0,0.65)";
-          ctx.lineWidth=major?3.6:2.6;
+          ctx.strokeStyle="rgba(0,0,0,0.55)";
+          ctx.lineWidth=major?3.2:2.2;
           ctx.stroke();
 
-          // stroke colorato netto
-          ctx.strokeStyle=colored;
-          ctx.lineWidth=major?2.2:1.3;
+          // linea colorata
+          ctx.strokeStyle=lineCol;
+          ctx.lineWidth=major?1.9:1.1;
           ctx.stroke();
 
-          // label solo sulle major (ogni 5°C)
-          if(major && ring.length>140){
+          // label solo major
+          if(major && ring.length>160){
             const mid=ring[Math.floor(ring.length/2)];
             const lat=m.la1 - mid[1]*m.dy;
             const lon=m.lo1 + mid[0]*m.dx;
             const p=map.latLngToContainerPoint([lat,lon]);
-            const txt=T+"°";
+
+            const txt = T + "°";
             ctx.font="950 14px Arial";
             ctx.lineWidth=6;
             ctx.strokeStyle="rgba(0,0,0,0.80)";
@@ -649,11 +625,9 @@
     ctx.textAlign="center";
     ctx.textBaseline="middle";
 
-    const labelEvery=4;
-
     contours.forEach(c=>{
       const P=Math.round(c.value);
-      const major = (P % labelEvery === 0);
+      const major = (P % 4 === 0);
 
       ctx.strokeStyle = major ? "rgba(255,255,255,0.80)" : "rgba(255,255,255,0.55)";
       ctx.lineWidth = major ? 2.0 : 1.2;
@@ -719,7 +693,6 @@
       if(y<0||y>sz.y) continue;
       ctx.beginPath(); ctx.moveTo(0,y); ctx.lineTo(sz.x,y); ctx.stroke();
     }
-
     ctx.setLineDash([]);
   }
 
