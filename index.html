@@ -1,428 +1,1031 @@
 <!DOCTYPE html>
 <html>
 <head>
-    <title>Sicilia MeteoHub - PRO EDITION</title>
-    <meta charset="utf-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    
-    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
-    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
-    <link rel="stylesheet" href="https://unpkg.com/leaflet-velocity@1.8.0/dist/leaflet-velocity.css" />
-    <script src="https://unpkg.com/leaflet-velocity@1.8.0/dist/leaflet-velocity.js"></script>
-    
-    <script src="https://d3js.org/d3.v7.min.js"></script>
-    
-    <style>
-        body { margin: 0; background: #050505; font-family: 'Segoe UI', Roboto, sans-serif; color: white; overflow: hidden; }
-        #map { position: absolute; top: 0; bottom: 0; width: 100%; background: #050505; }
-        
-        /* --- SELETTORE MAPPA (SATELLITE / DARK) --- */
-        #basemap-selector {
-            position: absolute; top: 20px; left: 20px; z-index: 1000;
-            background: rgba(10, 10, 10, 0.85); backdrop-filter: blur(8px);
-            border-radius: 12px; padding: 6px; border: 1px solid rgba(255,255,255,0.15);
-            display: flex; gap: 6px;
-        }
-        .base-btn {
-            background: rgba(255,255,255,0.05); color: #aaa; border: none; 
-            padding: 8px 16px; border-radius: 8px; cursor: pointer; 
-            font-size: 13px; font-weight: 700; transition: all 0.2s;
-        }
-        .base-btn:hover { background: rgba(255,255,255,0.2); color: white; }
-        .base-btn.active { 
-            background: #0088ff; color: white; 
-            box-shadow: 0 2px 10px rgba(0,136,255,0.4);
-        }
+  <title>Sicilia MeteoHub - FINAL COMPLETE</title>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
 
-        /* --- MENU LIVELLI --- */
-        #layer-menu {
-            position: absolute; top: 20px; right: 20px; z-index: 1000;
-            background: rgba(15, 15, 15, 0.85);
-            backdrop-filter: blur(12px); -webkit-backdrop-filter: blur(12px);
-            padding: 12px; border-radius: 16px;
-            display: flex; flex-direction: column; gap: 8px;
-            border: 1px solid rgba(255, 255, 255, 0.15);
-            box-shadow: 0 10px 30px rgba(0,0,0,0.5);
-        }
-        
-        .layer-btn {
-            background: transparent; border: none; color: #ccc; padding: 12px 24px;
-            font-size: 15px; font-weight: 600; cursor: pointer; text-align: right; 
-            border-radius: 10px; transition: all 0.2s;
-        }
-        .layer-btn:hover { background: rgba(255, 255, 255, 0.1); color: #fff; }
-        .layer-btn.active {
-            background: linear-gradient(90deg, #0055ff, #0022aa); color: white;
-            box-shadow: 0 0 15px rgba(0, 80, 255, 0.4); border: 1px solid rgba(100, 180, 255, 0.5);
-        }
-        /* Stile speciale per il tasto Isobare */
-        .layer-btn.toggle-btn { border-top: 1px solid rgba(255,255,255,0.1); margin-top: 5px; color: #aaa; }
-        .layer-btn.toggle-btn.active { background: rgba(255,255,255,0.2); color: #fff; box-shadow: none; border: 1px solid rgba(255,255,255,0.3); }
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
 
-        /* --- BARRA DEL TEMPO --- */
-        #bottom-bar {
-            position: absolute; bottom: 0; left: 0; right: 0; height: 110px;
-            background: linear-gradient(to top, #000 0%, rgba(0,0,0,0.9) 60%, transparent 100%);
-            display: flex; align-items: center; padding: 0 30px 20px 30px; z-index: 2000;
-        }
-        #play-btn { 
-            font-size: 3em; cursor: pointer; margin-right: 25px; color: #fff; 
-            filter: drop-shadow(0 0 5px rgba(255,255,255,0.5)); transition: transform 0.1s;
-        }
-        #play-btn:active { transform: scale(0.9); }
-        
-        input[type=range] { 
-            flex-grow: 1; height: 6px; cursor: pointer; background: #333; border-radius: 3px;
-            -webkit-appearance: none; appearance: none;
-        }
-        input[type=range]::-webkit-slider-thumb {
-            -webkit-appearance: none; width: 20px; height: 20px; border-radius: 50%;
-            background: #0088ff; border: 2px solid white; margin-top: -7px;
-        }
+  <link rel="stylesheet" href="https://unpkg.com/leaflet-velocity@1.8.0/dist/leaflet-velocity.css" />
+  <script src="https://unpkg.com/leaflet-velocity@1.8.0/dist/leaflet-velocity.js"></script>
 
-        #time-label { 
-            min-width: 180px; text-align: center; font-weight: 800; font-size: 1.6em; color: #fff; margin-left: 20px; 
-            text-shadow: 0 2px 10px black; font-variant-numeric: tabular-nums;
-        }
-        
-        /* UI VARI */
-        #loader {
-            position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%);
-            background: rgba(0,0,0,0.9); padding: 20px 40px; border-radius: 30px; 
-            z-index: 5000; display: block; font-weight: bold; font-size: 1.2em; 
-            border: 1px solid #444; color: #0088ff;
-        }
-        #picker-box { position: absolute; top: 80px; left: 20px; z-index: 1000; pointer-events: none; }
-        #pk-val { font-size: 4em; font-weight: 900; text-shadow: 2px 2px 0px #000; line-height: 0.9; }
-        #pk-unit { color: #aaa; font-size: 1.5em; font-weight: 700; margin-left: 8px; text-shadow: 1px 1px 0 #000; }
-        
-        #status-box {
-            position: absolute; bottom: 120px; left: 35px; color: #ff5555; font-size: 13px; font-family: monospace;
-            background: rgba(20,0,0,0.9); padding: 10px; border-radius: 5px; pointer-events: none; z-index: 5000; display: none;
-        }
-        
-        /* TRUCCO INTERPOLAZIONE: Sfumatura morbida per Canvas */
-        canvas.leaflet-layer {
-            image-rendering: auto; 
-            image-rendering: -webkit-optimize-contrast;
-        }
-    </style>
+  <script src="https://d3js.org/d3.v7.min.js"></script>
+
+  <style>
+    body { margin: 0; background: #1a1a1a; font-family: 'Segoe UI', sans-serif; color: #ddd; overflow: hidden; }
+    #map { position: absolute; top: 0; bottom: 0; width: 100%; background: #1a1a1a; }
+
+    #ui-container {
+      position: absolute; top: 10px; right: 10px; z-index: 2000;
+      display: flex; flex-direction: column; gap: 10px; align-items: flex-end;
+    }
+    .panel {
+      background: rgba(30,30,30,0.9);
+      backdrop-filter: blur(12px);
+      padding: 10px;
+      border-radius: 14px;
+      border: 1px solid rgba(255,255,255,0.1);
+      box-shadow: 0 12px 30px rgba(0,0,0,0.6);
+      color: #eee;
+    }
+    .toggle {
+      width: 175px;
+      display:flex; align-items:center; justify-content:space-between;
+      padding: 10px 12px; margin: 6px 0;
+      background: rgba(255,255,255,0.05);
+      border: 1px solid rgba(255,255,255,0.1);
+      color: #ccc;
+      border-radius: 10px;
+      cursor: pointer;
+      user-select:none;
+      font-weight: 700;
+      transition: all 0.15s;
+    }
+    .toggle:hover { background: rgba(255,255,255,0.1); color:#fff; }
+    .toggle.active {
+      background: linear-gradient(90deg, #0077ff, #0044cc);
+      border-color: rgba(0,100,200,0.5);
+      color: #fff;
+      box-shadow: 0 4px 12px rgba(0,136,255,0.3);
+    }
+
+    .mini {
+      width: 175px; padding: 9px 12px; border-radius: 10px;
+      border: 1px solid rgba(255,255,255,0.1); background: rgba(255,255,255,0.05);
+      color:#ccc; cursor:pointer; font-weight:800;
+    }
+    .mini:hover { background: rgba(255,255,255,0.1); color:#fff; }
+    .mini.active { background: #eee; color:#111; border-color: #fff; }
+
+    #info-box {
+      position: absolute; top: 18px; left: 18px; z-index: 2000;
+      pointer-events: none;
+      display: flex; align-items: center; gap: 15px;
+    }
+    #val-group { display: flex; flex-direction: column; }
+    #val-display { font-size: 3.6em; font-weight: 950; line-height: 0.9; color: #fff; text-shadow: 0 2px 5px rgba(0,0,0,0.8); }
+    #unit-display { font-size: 1.15em; color: #aaa; font-weight: 850; margin-top: 4px; text-shadow: 0 1px 3px rgba(0,0,0,0.9); }
+
+    #wind-rose {
+      width: 50px; height: 50px;
+      background: rgba(255,255,255,0.9);
+      border: 2px solid rgba(255,255,255,0.5);
+      border-radius: 50%;
+      display: none;
+      align-items: center; justify-content: center;
+      position: relative;
+      box-shadow: 0 4px 10px rgba(0,0,0,0.5);
+    }
+    .cardinal { position: absolute; font-size: 9px; font-weight: 900; color: #111; }
+    .c-n { top: 2px; left: 50%; transform: translateX(-50%); }
+    .c-s { bottom: 2px; left: 50%; transform: translateX(-50%); }
+    .c-e { right: 3px; top: 50%; transform: translateY(-50%); }
+    .c-w { left: 3px; top: 50%; transform: translateY(-50%); }
+    #rose-arrow { width: 26px; height: 26px; fill: #000; transition: transform 0.1s; }
+
+    #bottom-bar {
+      position: absolute; bottom: 0; left: 0; right: 0; height: 92px;
+      background: linear-gradient(to top, rgba(0,0,0,0.95), transparent);
+      display: flex; align-items: center; padding: 0 18px; z-index: 2000;
+    }
+    #play-btn { font-size: 2.6em; background: none; border: none; color: #fff; cursor: pointer; margin-right: 14px; }
+    #time-label { font-size: 1.45em; font-weight: 950; margin-left: 14px; min-width: 150px; text-align: center; color: #fff; }
+    input[type=range] { flex-grow: 1; height: 6px; cursor: pointer; accent-color: #0077ff; background: rgba(255,255,255,0.2); }
+
+    /* Base tiles: inverted relief look (grigio con rilievi “sinottico”) */
+    .dark-relief-tiles {
+      filter: invert(100%) hue-rotate(180deg) brightness(0.82) contrast(1.20) grayscale(25%);
+    }
+
+    canvas.leaflet-layer.scalar-layer {
+      image-rendering: auto;
+      mix-blend-mode: screen;
+      opacity: 0.88;
+    }
+
+    canvas.leaflet-layer.velocity-canvas { mix-blend-mode: normal; opacity: 0.98; }
+
+  </style>
 </head>
+
 <body>
+  <div id="info-box">
+    <div id="val-group">
+      <div id="val-display">--</div>
+      <div id="unit-display">Caricamento...</div>
+    </div>
+    <div id="wind-rose">
+      <span class="cardinal c-n">N</span>
+      <span class="cardinal c-s">S</span>
+      <span class="cardinal c-e">E</span>
+      <span class="cardinal c-w">W</span>
+      <svg id="rose-arrow" viewBox="0 0 24 24"><path d="M12 2L4.5 20.29L5.21 21L12 18L18.79 21L19.5 20.29L12 2Z" /></svg>
+    </div>
+  </div>
 
-<div id="loader">Caricamento PRO...</div>
-<div id="status-box"></div>
+  <div id="ui-container">
+    <div class="panel">
+      <button id="btn-flow" class="mini active" onclick="toggleParticles()">FLUSSO 🌬️ (ON)</button>
+    </div>
 
-<div id="basemap-selector">
-    <button class="base-btn active" onclick="setBaseMap('dark')">DARK</button>
-    <button class="base-btn" onclick="setBaseMap('sat')">SATELLITE</button>
-</div>
+    <div class="panel">
+      <div style="font-weight:950; opacity:0.8; margin-bottom:6px; color:#aaa;">LIVELLI</div>
 
-<div id="layer-menu">
-    <button class="layer-btn active" onclick="setLayer('wind')">VENTO 💨</button>
-    <button class="layer-btn" onclick="setLayer('temp')">TEMP 🌡️</button>
-    <button class="layer-btn" onclick="setLayer('rain')">PIOGGIA ☔</button>
-    <button id="iso-btn" class="layer-btn toggle-btn" onclick="toggleIsobars()">ISOBARE 〰️</button>
-</div>
+      <div class="toggle active" onclick="toggleLayer('wind')">
+        <span>VENTO (frecce) 🧭</span><span>●</span>
+      </div>
+      <div class="toggle" onclick="toggleLayer('temp')">
+        <span>TEMP 🌡️</span><span>●</span>
+      </div>
+      <div class="toggle" onclick="toggleLayer('rain')">
+        <span>PIOGGIA ☔</span><span>●</span>
+      </div>
+      <div class="toggle" onclick="toggleLayer('rh')">
+        <span>UMIDITÀ 💧</span><span>●</span>
+      </div>
+      <div class="toggle" onclick="toggleLayer('press')">
+        <span>PRESSIONE ⏲️</span><span>●</span>
+      </div>
+      <div class="toggle" onclick="toggleLayer('cloud')">
+        <span>NUVOLE ☁️</span><span>●</span>
+      </div>
 
-<div id="picker-box">
-    <span id="pk-val">--</span><span id="pk-unit">km/h</span>
-</div>
+      <div style="height:1px; background: rgba(255,255,255,0.1); margin:10px 0;"></div>
 
-<div id="map"></div>
+      <div class="toggle" id="btn-iso" onclick="toggleIsobars()">
+        <span>ISOBARE 〰️</span><span> </span>
+      </div>
+      <div class="toggle" id="btn-isoT" onclick="toggleIsotherms()">
+        <span>ISOTERME 🌡️〰️</span><span> </span>
+      </div>
+      <div class="toggle" id="btn-grid" onclick="toggleGrid()">
+        <span>RETICOLO #</span><span> </span>
+      </div>
+    </div>
+  </div>
 
-<div id="bottom-bar">
-    <div id="play-btn" onclick="togglePlay()">►</div>
-    <input type="range" id="time-slider" min="0" max="0" value="0" step="1">
+  <div id="map"></div>
+
+  <div id="bottom-bar">
+    <button id="play-btn" onclick="togglePlay()">►</button>
+    <input type="range" id="time-slider" min="0" max="0" value="0">
     <div id="time-label">--/-- --:--</div>
-</div>
+  </div>
 
 <script>
-    function status(msg) { let el = document.getElementById('status-box'); el.innerText = msg; el.style.display = 'block'; }
-    
-    var map, velocityLayer, heatCanvas, isobarCanvas;
-    var currentData = null;
-    var catalog = [];
-    var activeLayer = 'wind';
-    var showIsobars = false;
-    var isPlaying = false;
-    
-    // Mappe Base
-    var darkLayer, satLayer;
+  const SICILY_BOUNDS = L.latLngBounds(L.latLng(35.0, 11.0), L.latLng(39.5, 16.5));
 
-    // PALETTE
-    const PALETTES = {
-        temp: [ {val:-10, c:[255,255,255,0.6]}, {val:0, c:[200,200,255,0.6]}, {val:10, c:[0,200,100,0.6]}, {val:20, c:[255,255,0,0.6]}, {val:30, c:[255,140,0,0.6]}, {val:40, c:[200,0,0,0.6]} ],
-        rain: [ {val:0, c:[0,0,0,0]}, {val:0.05, c:[0,200,255,0.6]}, {val:2, c:[0,0,255,0.7]}, {val:10, c:[150,0,200,0.8]} ]
+  const WIND_COLOR_SCALE = ["#000080", "#0044ff", "#00ddff", "#00ff55", "#ffff00", "#ff6600", "#ff0000", "#ff00ff"];
+
+  // TEMP (Custom) - come tuo
+  const TEMP_STOPS = [
+    {v: -15, c: [156,218,216]}, {v: -14, c: [149,214,211]}, {v: -13, c: [141,210,206]}, {v: -12, c: [134,206,201]},
+    {v: -11, c: [127,202,196]}, {v: -10, c: [119,198,191]}, {v: -9,  c: [112,194,185]}, {v: -8,  c: [106,190,181]},
+    {v: -7,  c: [104,184,183]}, {v: -6,  c: [102,178,185]}, {v: -5,  c: [101,172,187]}, {v: -4,  c: [100,166,189]},
+    {v: -3,  c: [98,158,191]},  {v: -2,  c: [96,150,193]},  {v: -1,  c: [95,142,196]},  {v: 0,   c: [93,133,198]},
+    {v: 1,   c: [80,127,133]},  {v: 2,   c: [74,126,111]},  {v: 3,   c: [79,129,93]},   {v: 4,   c: [84,131,84]},
+    {v: 5,   c: [89,134,76]},   {v: 6,   c: [94,136,67]},   {v: 7,   c: [99,139,58]},   {v: 8,   c: [104,141,50]},
+    {v: 9,   c: [109,144,41]},  {v: 10,  c: [114,146,33]},  {v: 11,  c: [129,150,22]},  {v: 12,  c: [142,154,20]},
+    {v: 13,  c: [155,158,17]},  {v: 14,  c: [168,161,15]},  {v: 15,  c: [181,165,13]},  {v: 16,  c: [194,169,11]},
+    {v: 17,  c: [207,173,9]},   {v: 18,  c: [219,176,7]},   {v: 19,  c: [232,180,6]},   {v: 20,  c: [243,183,4]},
+    {v: 21,  c: [242,172,7]},   {v: 22,  c: [241,161,9]},   {v: 23,  c: [240,150,12]},  {v: 24,  c: [239,139,15]},
+    {v: 25,  c: [238,128,17]},  {v: 26,  c: [237,117,20]},  {v: 27,  c: [236,106,22]},  {v: 28,  c: [235,95,24]},
+    {v: 29,  c: [234,84,25]},   {v: 30,  c: [232,83,25]},   {v: 31,  c: [222,79,24]},   {v: 32,  c: [212,75,23]},
+    {v: 33,  c: [203,71,22]},   {v: 34,  c: [193,68,21]},   {v: 35,  c: [184,64,20]},   {v: 36,  c: [174,60,18]},
+    {v: 37,  c: [165,56,17]},   {v: 38,  c: [155,52,16]},   {v: 39,  c: [146,48,15]},   {v: 40,  c: [136,45,13]},
+    {v: 41,  c: [126,41,12]},   {v: 42,  c: [117,37,11]},   {v: 43,  c: [107,30,6]},    {v: 44,  c: [98,26,4]},
+    {v: 45,  c: [89,22,3]}
+  ];
+
+  // RAIN
+  const RAIN_STOPS = [
+    {v:0.0, c:[0,0,0], a:0.0},
+    {v:0.6, c:[100,200,255], a:0.65},
+    {v:1.0, c:[0,150,255], a:0.75},
+    {v:5.0, c:[0,0,255], a:0.82},
+    {v:10,  c:[255,255,0], a:0.85},
+    {v:30,  c:[255,150,0], a:0.88},
+    {v:50,  c:[255,0,0], a:0.92}
+  ];
+
+  // RH
+  const RH_STOPS = [
+    {v:0, c:[173,85,56]}, {v:1, c:[173,85,56]}, {v:5, c:[173,89,56]}, {v:10, c:[173,93,56]},
+    {v:15, c:[173,97,56]}, {v:20, c:[173,101,56]}, {v:25, c:[173,105,56]}, {v:30, c:[173,110,56]},
+    {v:35, c:[173,128,56]}, {v:40, c:[173,146,56]}, {v:45, c:[139,159,56]}, {v:50, c:[105,173,56]},
+    {v:55, c:[80,173,88]}, {v:60, c:[56,173,121]}, {v:65, c:[56,173,173]}, {v:70, c:[56,174,173]},
+    {v:75, c:[56,160,173]}, {v:80, c:[56,157,173]}, {v:85, c:[56,139,173]}, {v:90, c:[56,132,173]},
+    {v:95, c:[56,110,165]}, {v:100, c:[56,70,114]}
+  ];
+
+  // PRESSIONE (hPa)
+  const PRESS_STOPS = [
+    {v: 900, c: [8,16,48]}, {v: 950, c: [0,32,96]}, {v: 976, c: [0,52,146]}, {v: 986, c: [0,90,148]},
+    {v: 995, c: [0,117,146]}, {v: 1002, c: [26,140,147]}, {v: 1007, c: [103,162,155]}, {v: 1011.25, c: [155,183,172]},
+    {v: 1013.25, c: [182,182,182]}, {v: 1015.25, c: [176,174,152]}, {v: 1019, c: [167,147,107]}, {v: 1024, c: [163,116,67]},
+    {v: 1030, c: [159,81,44]}, {v: 1038, c: [142,47,57]}, {v: 1046, c: [111,24,64]}, {v: 1080, c: [48,8,24]}
+  ];
+
+  // NUVOLE (grigi) - NOTA: se nel tuo JSON non c’è "cloud", il toggle segnala e non disegna.
+  const CLOUD_STOPS = [
+    {v:0, c:[255,255,255], a:0.0}, {v:50, c:[200,200,200], a:0.50}, {v:100, c:[90,90,90], a:0.80}
+  ];
+
+  let map, currentData = null, catalog = [];
+  const selected = new Set(['wind']);
+  let showIsobars = false, showIsotherms = false, showGrid = false, particlesOn = true;
+
+  let velocityLayer = null;
+  let scalarCanvases = {}, arrowCanvas, isoCanvas, isoTCanvas, gridCanvas;
+
+  let isPlaying = false;
+
+  function clamp(x,a,b){ return Math.max(a, Math.min(b, x)); }
+  function lerp(a,b,t){ return a+(b-a)*t; }
+
+  function interpStops(val, stops) {
+    if(!stops || stops.length < 2) return {r:0,g:0,b:0,a:0};
+    if(val <= stops[0].v) { const s=stops[0]; return {r:s.c[0],g:s.c[1],b:s.c[2],a:('a' in s)?s.a:0.85}; }
+    for(let i=0;i<stops.length-1;i++){
+      if(val >= stops[i].v && val < stops[i+1].v){
+        const s1=stops[i], s2=stops[i+1];
+        const t = (val-s1.v)/(s2.v-s1.v);
+        const a1 = ('a' in s1) ? s1.a : 0.85;
+        const a2 = ('a' in s2) ? s2.a : 0.85;
+        return {
+          r: Math.round(lerp(s1.c[0],s2.c[0],t)),
+          g: Math.round(lerp(s1.c[1],s2.c[1],t)),
+          b: Math.round(lerp(s1.c[2],s2.c[2],t)),
+          a: lerp(a1, a2, t)
+        };
+      }
+    }
+    const s=stops[stops.length-1];
+    return {r:s.c[0],g:s.c[1],b:s.c[2],a:('a' in s)?s.a:0.85};
+  }
+
+  function vividWindColor(speedMs){
+    const maxV = 20.0; const t = clamp(speedMs/maxV, 0, 0.9999);
+    const n = WIND_COLOR_SCALE.length; const pos = t*(n-1);
+    const i = Math.floor(pos); const f = pos - i;
+    const hex1=WIND_COLOR_SCALE[i], hex2=WIND_COLOR_SCALE[Math.min(i+1,n-1)];
+    const r1=parseInt(hex1.slice(1,3),16), g1=parseInt(hex1.slice(3,5),16), b1=parseInt(hex1.slice(5,7),16);
+    const r2=parseInt(hex2.slice(1,3),16), g2=parseInt(hex2.slice(3,5),16), b2=parseInt(hex2.slice(5,7),16);
+    return {r:Math.round(lerp(r1,r2,f)), g:Math.round(lerp(g1,g2,f)), b:Math.round(lerp(b1,b2,f))};
+  }
+
+  function toast(msg){
+    const u = document.getElementById('unit-display');
+    u.innerText = msg;
+    clearTimeout(toast._t);
+    toast._t = setTimeout(()=>{ if(u.innerText===msg) u.innerText=''; }, 2500);
+  }
+
+  window.addEventListener('load', async () => {
+    map = L.map('map', {
+      zoomControl: false,
+      maxBounds: SICILY_BOUNDS.pad(0.35),
+      maxBoundsViscosity: 1.0,
+      background: '#1a1a1a'
+    }).fitBounds(SICILY_BOUNDS);
+
+    // BASE: Esri World Shaded Relief (grigio rilievi)
+    L.tileLayer(
+      'https://server.arcgisonline.com/ArcGIS/rest/services/World_Shaded_Relief/MapServer/tile/{z}/{y}/{x}',
+      { maxZoom: 13, attribution: 'Esri', className: 'dark-relief-tiles' }
+    ).addTo(map);
+
+    // Hillshade extra
+    L.tileLayer(
+      'https://server.arcgisonline.com/ArcGIS/rest/services/Elevation/World_Hillshade/MapServer/tile/{z}/{y}/{x}',
+      { maxZoom: 19, className: 'dark-relief-tiles', opacity: 0.45 }
+    ).addTo(map);
+
+    // Labels
+    map.createPane('labelsPane');
+    map.getPane('labelsPane').style.zIndex = 600;
+    map.getPane('labelsPane').style.pointerEvents = 'none';
+    L.tileLayer('https://{s}.basemaps.cartocdn.com/light_only_labels/{z}/{x}/{y}{r}.png', {
+      pane: 'labelsPane',
+      opacity: 0.90
+    }).addTo(map);
+
+    map.createPane('particlePane');
+    map.getPane('particlePane').style.zIndex = 820;
+    map.getPane('particlePane').style.pointerEvents = 'none';
+
+    createCanvasLayers();
+    await loadCatalog();
+
+    map.on('mousemove', onPick);
+    map.on('click', onPick);
+    map.on('moveend zoomend resize', redrawAll);
+
+    document.getElementById('unit-display').innerText = '';
+  });
+
+  function createCanvasLayers(){
+    function mkCanvas(z, cls){
+      const c = L.DomUtil.create('canvas', 'leaflet-layer ' + (cls||''));
+      c.style.pointerEvents = 'none';
+      c.style.zIndex = z;
+      c.style.imageRendering = 'auto';
+      map.getPanes().overlayPane.appendChild(c);
+      return c;
+    }
+    scalarCanvases.wind = mkCanvas(290, 'scalar-layer');
+    scalarCanvases.temp = mkCanvas(300, 'scalar-layer');
+    scalarCanvases.rain = mkCanvas(310, 'scalar-layer');
+    scalarCanvases.rh   = mkCanvas(320, 'scalar-layer');
+    scalarCanvases.press= mkCanvas(330, 'scalar-layer');
+    scalarCanvases.cloud= mkCanvas(340, 'scalar-layer');
+
+    arrowCanvas = mkCanvas(380);
+    isoTCanvas  = mkCanvas(410);   // isoterme sopra i campi
+    isoCanvas   = mkCanvas(420);   // isobare
+    gridCanvas  = mkCanvas(450);
+  }
+
+  async function loadCatalog(){
+    try{
+      const r = await fetch('data_weather/catalog.json?t=' + Date.now());
+      if(!r.ok) throw new Error();
+      catalog = await r.json();
+      const slider = document.getElementById('time-slider');
+      slider.max = catalog.length - 1;
+      slider.addEventListener('input', (e)=> loadStep(parseInt(e.target.value)));
+      await loadStep(0);
+    } catch(e){
+      toast("Catalog non caricato");
+    }
+  }
+
+  async function loadStep(i){
+    if(!catalog[i]) return;
+    document.getElementById('time-label').innerText = catalog[i].label;
+    try{
+      const r = await fetch('data_weather/' + catalog[i].file + '?t=' + Date.now());
+      if(!r.ok) throw new Error();
+      currentData = await r.json();
+      redrawAll();
+    } catch(e){
+      toast("Step non caricato");
+    }
+  }
+
+  function redrawAll(){
+    if(!currentData) return;
+    drawScalars();
+    drawWindArrows();
+    drawIsotherms();
+    drawIsobars();
+    drawLatLonGrid();
+    updateParticles();
+  }
+
+  function drawScalars(){
+    ['wind','temp','rain','rh','press','cloud'].forEach(layer => {
+      const canvas = scalarCanvases[layer];
+      const ctx = canvas.getContext('2d');
+      const s = map.getSize();
+      canvas.width = s.x; canvas.height = s.y;
+      L.DomUtil.setPosition(canvas, map.containerPointToLayerPoint([0,0]));
+      ctx.clearRect(0,0,s.x,s.y);
+
+      if(!selected.has(layer) || !currentData.meta) return;
+
+      const m = currentData.meta;
+      const off = document.createElement('canvas');
+      off.width = m.nx; off.height = m.ny;
+      const octx = off.getContext('2d', { willReadFrequently: false });
+      const img = octx.createImageData(m.nx, m.ny);
+      const data = img.data;
+
+      let arr = null, stops = null, isWindBg = false;
+
+      if(layer === 'wind') { isWindBg = true; }
+      else if(layer==='temp') { arr = currentData.temp; stops = TEMP_STOPS; }
+      else if(layer==='rain') { arr = currentData.rain; stops = RAIN_STOPS; }
+      else if(layer==='rh')   { arr = currentData.rh;   stops = RH_STOPS; }
+      else if(layer==='press'){ arr = currentData.press;stops = PRESS_STOPS; }
+      else if(layer==='cloud'){
+        // Il tuo Python attuale NON esporta la nuvolosità.
+        // Se non esiste, non disegniamo e ti avvisiamo quando lo attivi.
+        arr = (currentData.cloud ?? currentData.cld ?? null);
+        stops = CLOUD_STOPS;
+        if(!arr) return;
+      }
+
+      if(!isWindBg && !arr) return;
+
+      for(let i=0; i<m.nx*m.ny; i++){
+        let col = {r:0,g:0,b:0,a:0};
+
+        if(isWindBg){
+          const u = currentData.wind_u.data[i], v = currentData.wind_v.data[i];
+          const sp = Math.sqrt(u*u + v*v);
+          const rgb = vividWindColor(sp);
+          col = {r:rgb.r,g:rgb.g,b:rgb.b,a:0.33}; // sfondo vento meno opaco
+        } else {
+          const val = arr[i] ?? 0;
+
+          if(layer==='rain' && val < 0.6){ data[i*4+3] = 0; continue; }
+          if(layer==='cloud' && val < 10){ data[i*4+3] = 0; continue; }
+
+          col = interpStops(val, stops);
+
+          // un filo più “presente” (tua richiesta: più opacità generale)
+          col.a = clamp(col.a + 0.08, 0, 0.98);
+        }
+
+        const p = i*4;
+        data[p]   = col.r;
+        data[p+1] = col.g;
+        data[p+2] = col.b;
+        data[p+3] = Math.round(col.a*255);
+      }
+
+      octx.putImageData(img, 0, 0);
+
+      const tl = map.latLngToContainerPoint([m.la1, m.lo1]);
+      const br = map.latLngToContainerPoint([m.la2, m.lo2]);
+
+      ctx.save();
+      ctx.imageSmoothingEnabled = true;
+      ctx.drawImage(off, tl.x, tl.y, br.x - tl.x, br.y - tl.y);
+      ctx.restore();
+    });
+  }
+
+  function drawLatLonGrid(){
+    const ctx = gridCanvas.getContext('2d');
+    const s = map.getSize();
+    gridCanvas.width = s.x; gridCanvas.height = s.y;
+    L.DomUtil.setPosition(gridCanvas, map.containerPointToLayerPoint([0,0]));
+    ctx.clearRect(0,0,s.x,s.y);
+    if(!showGrid) return;
+
+    ctx.setTransform(1,0,0,1,0,0);
+    ctx.globalAlpha = 1;
+    ctx.globalCompositeOperation = "source-over";
+
+    const b = map.getBounds(); const zoom = map.getZoom();
+    let step = 1.0; if(zoom >= 9) step = 0.5; if(zoom >= 11) step = 0.2;
+
+    ctx.lineWidth = 1;
+    ctx.strokeStyle = "rgba(255,255,255,0.2)";
+    ctx.setLineDash([5,5]);
+    ctx.font = "10px sans-serif";
+    ctx.fillStyle = "#aaa";
+
+    const startLon = Math.ceil(b.getWest() / step) * step;
+    for(let lon = startLon; lon <= b.getEast(); lon += step){
+      const x = map.latLngToContainerPoint([b.getSouth(), lon]).x;
+      if(x<0||x>s.x) continue;
+      ctx.beginPath(); ctx.moveTo(x,0); ctx.lineTo(x,s.y); ctx.stroke();
+      ctx.fillText(lon.toFixed(1) + "°E", x + 2, s.y - 10);
+    }
+
+    const startLat = Math.ceil(b.getSouth() / step) * step;
+    for(let lat = startLat; lat <= b.getNorth(); lat += step){
+      const y = map.latLngToContainerPoint([lat, b.getWest()]).y;
+      if(y<0||y>s.y) continue;
+      ctx.beginPath(); ctx.moveTo(0,y); ctx.lineTo(s.x,y); ctx.stroke();
+      ctx.fillText(lat.toFixed(1) + "°N", 5, y - 2);
+    }
+
+    ctx.setLineDash([]);
+  }
+
+  function drawWindArrows(){
+    const ctx = arrowCanvas.getContext('2d');
+    const s = map.getSize();
+    arrowCanvas.width = s.x; arrowCanvas.height = s.y;
+    L.DomUtil.setPosition(arrowCanvas, map.containerPointToLayerPoint([0,0]));
+    ctx.clearRect(0,0,s.x,s.y);
+
+    if(!selected.has('wind') || !currentData) return;
+
+    // reset totale per evitare “nero” ereditato da altri canvas
+    ctx.setTransform(1,0,0,1,0,0);
+    ctx.globalAlpha = 1;
+    ctx.globalCompositeOperation = "source-over";
+    ctx.filter = "none";
+    ctx.shadowColor = "transparent";
+    ctx.shadowBlur = 0;
+
+    const m = currentData.meta;
+    const zoom = map.getZoom();
+
+    // più frecce + sottili (come hai chiesto)
+    const stride = zoom >= 10 ? 2 : (zoom >= 9 ? 3 : 4);
+    const baseLen = zoom >= 10 ? 26 : 20;
+    const baseWidth = 2.0;
+
+    ctx.lineCap = 'round';
+    ctx.lineJoin = 'round';
+
+    for(let y=0; y<m.ny; y+=stride){
+      const lat = m.la1 - y*m.dy;
+      for(let x=0; x<m.nx; x+=stride){
+        const idx = y*m.nx + x;
+        const u = currentData.wind_u.data[idx], v = currentData.wind_v.data[idx];
+        const sp = Math.sqrt(u*u + v*v);
+        if(sp < 1) continue;
+
+        const lon = m.lo1 + x*m.dx;
+        const p = map.latLngToContainerPoint([lat, lon]);
+
+        const cRg = vividWindColor(sp);
+        const fillStyle = `rgb(${cRg.r},${cRg.g},${cRg.b})`;
+
+        const speedScale = clamp(sp/9.0, 0.65, 2.6);
+        const currentLen = baseLen*speedScale;
+        const currentWidth = baseWidth*speedScale*0.9;
+
+        const headLen = currentLen*0.42;
+        const headWidth = headLen*0.70;
+
+        const angle = Math.atan2(-v, u);
+
+        const shaftEndX = p.x + (currentLen-headLen)*Math.cos(angle);
+        const shaftEndY = p.y + (currentLen-headLen)*Math.sin(angle);
+
+        // asta (bordo nero)
+        ctx.beginPath();
+        ctx.moveTo(p.x, p.y);
+        ctx.lineTo(shaftEndX, shaftEndY);
+        ctx.strokeStyle = "rgba(0,0,0,0.85)";
+        ctx.lineWidth = currentWidth + 2.2;
+        ctx.stroke();
+
+        ctx.strokeStyle = fillStyle;
+        ctx.lineWidth = currentWidth;
+        ctx.stroke();
+
+        // testa
+        const tipX = p.x + currentLen*Math.cos(angle);
+        const tipY = p.y + currentLen*Math.sin(angle);
+
+        const wing1X = shaftEndX - headWidth*Math.cos(angle - Math.PI/2);
+        const wing1Y = shaftEndY - headWidth*Math.sin(angle - Math.PI/2);
+        const wing2X = shaftEndX - headWidth*Math.cos(angle + Math.PI/2);
+        const wing2Y = shaftEndY - headWidth*Math.sin(angle + Math.PI/2);
+
+        ctx.beginPath();
+        ctx.moveTo(tipX, tipY);
+        ctx.lineTo(wing1X, wing1Y);
+        ctx.lineTo(wing2X, wing2Y);
+        ctx.closePath();
+
+        ctx.fillStyle = "rgba(0,0,0,0.85)";
+        ctx.fill();
+        ctx.lineWidth = 1.0;
+        ctx.strokeStyle = "rgba(0,0,0,0.85)";
+        ctx.stroke();
+
+        ctx.fillStyle = fillStyle;
+        ctx.fill();
+      }
+    }
+  }
+
+  function updateParticles(){
+    if(velocityLayer) { map.removeLayer(velocityLayer); velocityLayer = null; }
+    if(!particlesOn || !currentData) return;
+
+    velocityLayer = L.velocityLayer({
+      displayValues: false,
+      data: [ currentData.wind_u, currentData.wind_v ],
+      maxVelocity: 20.0,
+      velocityScale: 0.008,
+      particleMultiplier: 1/190,   // teniamo leggero per FPS
+      lineWidth: 2.0,
+      particleAge: 95,
+      frameRate: 40,
+      opacity: 1.0,
+      colorScale: WIND_COLOR_SCALE,
+      pane: 'particlePane'
+    });
+
+    velocityLayer.onAdd = function(map){
+      L.VelocityLayer.prototype.onAdd.call(this, map);
+      this._canvas.classList.add('velocity-canvas');
+      // particelle “chiare” ma visibili: un filo di glow
+      this._canvas.style.filter = "drop-shadow(0 0 1px rgba(0,0,0,0.7))";
     };
 
-    function getColor(val, type) {
-        if (!PALETTES[type]) return [0,0,0,0];
-        let stops = PALETTES[type];
-        if(type==='rain' && val < 0.05) return [0,0,0,0];
-        if(type==='wind' && val < 1) return [0,0,0,0];
+    velocityLayer.addTo(map);
+  }
 
-        for(let i=0; i<stops.length-1; i++) {
-            if(val>=stops[i].val && val<=stops[i+1].val) {
-                let t = (val - stops[i].val) / (stops[i+1].val - stops[i].val);
-                let c1=stops[i].c, c2=stops[i+1].c;
-                return [ Math.round(c1[0]+(c2[0]-c1[0])*t), Math.round(c1[1]+(c2[1]-c1[1])*t), Math.round(c1[2]+(c2[2]-c1[2])*t), c1[3]+(c2[3]-c1[3])*t ];
+  // --- Utils per isolinee: smoothing leggero (riduce anelli strani) ---
+  function smoothGrid(src, nx, ny, passes=1){
+    let a = Float32Array.from(src, v => (Number.isFinite(v) ? v : NaN));
+    let b = new Float32Array(a.length);
+
+    const get = (x,y)=> a[y*nx+x];
+    for(let p=0;p<passes;p++){
+      for(let y=0;y<ny;y++){
+        for(let x=0;x<nx;x++){
+          let sum=0, w=0;
+          for(let dy=-1;dy<=1;dy++){
+            for(let dx=-1;dx<=1;dx++){
+              const xx=x+dx, yy=y+dy;
+              if(xx<0||yy<0||xx>=nx||yy>=ny) continue;
+              const v = get(xx,yy);
+              if(!Number.isFinite(v)) continue;
+              const ww = (dx===0&&dy===0)?4:1;
+              sum += v*ww; w += ww;
             }
-        } 
-        let last = stops[stops.length-1];
-        return [last.c[0], last.c[1], last.c[2], last.c[3]];
+          }
+          b[y*nx+x] = (w>0)? (sum/w) : a[y*nx+x];
+        }
+      }
+      const tmp=a; a=b; b=tmp;
+    }
+    return a;
+  }
+
+  function drawIsobars(){
+    const ctx = isoCanvas.getContext('2d');
+    const s = map.getSize();
+    isoCanvas.width = s.x; isoCanvas.height = s.y;
+    L.DomUtil.setPosition(isoCanvas, map.containerPointToLayerPoint([0,0]));
+    ctx.clearRect(0,0,s.x,s.y);
+
+    if(!showIsobars || !currentData?.press) return;
+
+    const m = currentData.meta;
+
+    // reset totale (evita stroke nero “ereditato”)
+    ctx.setTransform(1,0,0,1,0,0);
+    ctx.globalAlpha = 1;
+    ctx.globalCompositeOperation = "source-over";
+    ctx.filter = "none";
+    ctx.shadowColor = "transparent";
+    ctx.shadowBlur = 0;
+
+    // Sanitizzazione “soft”: evita valori 0/assurdi senza appiattire tutto
+    const raw = currentData.press;
+    const clean = new Float32Array(raw.length);
+    for(let i=0;i<raw.length;i++){
+      const v = raw[i];
+      clean[i] = (Number.isFinite(v) && v>850 && v<1100) ? v : NaN;
     }
 
-    window.addEventListener('load', function() {
-        document.getElementById('loader').innerText = "Inizializzazione...";
-        map = L.map('map', { zoomControl: false }).setView([37.5, 14.2], 8);
-        
-        // Setup Mappe Base
-        darkLayer = L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_nolabels/{z}/{x}/{y}{r}.png', { maxZoom: 19, attribution: '©OpenStreetMap', opacity: 1.0 }).addTo(map);
-        satLayer = L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}', { maxZoom: 19, attribution: 'Tiles © Esri' });
+    // smoothing leggero per ridurre loop “a dente”
+    const field = smoothGrid(clean, m.nx, m.ny, 1);
 
-        // Creazione Panes (Livelli sovrapposti)
-        map.createPane('gridPane'); map.getPane('gridPane').style.zIndex = 300; 
-        map.createPane('isobarPane'); map.getPane('isobarPane').style.zIndex = 400; map.getPane('isobarPane').style.pointerEvents = 'none';
-        map.createPane('labelsPane'); map.getPane('labelsPane').style.zIndex = 500; map.getPane('labelsPane').style.pointerEvents = 'none';
-        
-        // Etichette sempre sopra
-        L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_only_labels/{z}/{x}/{y}{r}.png', { pane: 'labelsPane' }).addTo(map);
-        
-        map.createPane('velocityPane'); map.getPane('velocityPane').style.zIndex = 600; map.getPane('velocityPane').style.pointerEvents = 'none';
+    // contorni ogni 2 hPa (sinottico) – range auto coerente
+    let minP=1e9, maxP=-1e9;
+    for(let i=0;i<field.length;i++){
+      const v=field[i];
+      if(!Number.isFinite(v)) continue;
+      if(v<minP) minP=v;
+      if(v>maxP) maxP=v;
+    }
+    if(!Number.isFinite(minP) || !Number.isFinite(maxP)) return;
 
-        initRawGridLayer(); // Inizializza Sfondo Colorato (Temp/Rain)
-        initIsobarLayer();  // Inizializza Livello Isobare
-        loadCatalog();
+    const start = Math.floor(minP/2)*2;
+    const end   = Math.ceil(maxP/2)*2 + 0.001;
+    const thresholds = d3.range(start, end, 2);
+
+    const contours = d3.contours().size([m.nx, m.ny]).thresholds(thresholds)(field);
+
+    // disegno ring corretto: beginPath + moveTo ad ogni ring (elimina linee “che partono dal basso”)
+    ctx.lineWidth = 1.8;
+    ctx.strokeStyle = "rgba(255,255,255,0.70)";
+    ctx.lineCap = "round";
+    ctx.lineJoin = "round";
+
+    function drawRing(ring){
+      if(!ring || ring.length < 2) return;
+
+      ctx.beginPath();
+      const c0 = ring[0];
+      const lat0 = m.la1 - c0[1]*m.dy;
+      const lon0 = m.lo1 + c0[0]*m.dx;
+      const p0 = map.latLngToContainerPoint([lat0, lon0]);
+      ctx.moveTo(p0.x, p0.y);
+
+      for(let i=1;i<ring.length;i++){
+        const cxy = ring[i];
+        const lat = m.la1 - cxy[1]*m.dy;
+        const lon = m.lo1 + cxy[0]*m.dx;
+        const p = map.latLngToContainerPoint([lat, lon]);
+        ctx.lineTo(p.x, p.y);
+      }
+      ctx.stroke();
+    }
+
+    // Labels sulle linee (valore hPa)
+    ctx.font = "bold 12px Arial";
+    ctx.textAlign = "center";
+    ctx.textBaseline = "middle";
+
+    contours.forEach(c => {
+      for(const polygon of c.coordinates){
+        for(const ring of polygon){
+          drawRing(ring);
+
+          // label: una sola per ring lungo
+          if(ring && ring.length > 250){
+            const mid = ring[Math.floor(ring.length/2)];
+            const lat = m.la1 - mid[1]*m.dy;
+            const lon = m.lo1 + mid[0]*m.dx;
+            const pm = map.latLngToContainerPoint([lat, lon]);
+
+            const txt = String(Math.round(c.value));
+            ctx.save();
+            ctx.lineWidth = 5;
+            ctx.strokeStyle = "rgba(0,0,0,0.75)";
+            ctx.strokeText(txt, pm.x, pm.y);
+            ctx.fillStyle = "rgba(255,255,255,0.95)";
+            ctx.fillText(txt, pm.x, pm.y);
+            ctx.restore();
+          }
+        }
+      }
     });
 
-    // --- GESTIONE CAMBIO SFONDO ---
-    window.setBaseMap = function(type) {
-        document.querySelectorAll('.base-btn').forEach(b => b.classList.remove('active'));
-        event.target.classList.add('active');
-        if(type === 'dark') {
-            map.removeLayer(satLayer); darkLayer.addTo(map);
-        } else {
-            map.removeLayer(darkLayer); satLayer.addTo(map);
+    // --- A/B coerenti: estremi locali su campo “smooth”, poi clustering per evitare “a caso” ---
+    // passo più largo = più “sinottico”, meno simboli
+    const step = 3;
+    const rad = 4;
+
+    const cand = [];
+    for(let y=rad; y<m.ny-rad; y+=step){
+      for(let x=rad; x<m.nx-rad; x+=step){
+        const idx = y*m.nx + x;
+        const v0 = field[idx];
+        if(!Number.isFinite(v0)) continue;
+
+        // filtra: solo se davvero high/low
+        if(v0 < 1006 || v0 > 1019){
+          let isMax=true, isMin=true;
+          for(let dy=-rad; dy<=rad; dy++){
+            for(let dx=-rad; dx<=rad; dx++){
+              if(dx===0 && dy===0) continue;
+              const vv = field[(y+dy)*m.nx + (x+dx)];
+              if(!Number.isFinite(vv)) continue;
+              if(vv >= v0) isMax=false;
+              if(vv <= v0) isMin=false;
+              if(!isMax && !isMin) break;
+            }
+            if(!isMax && !isMin) break;
+          }
+          if(isMax) cand.push({x,y,val:v0,type:'A'});
+          else if(isMin) cand.push({x,y,val:v0,type:'B'});
         }
+      }
     }
 
-    // --- 2. GESTIONE SFONDO "SMOOTH" (Interpolazione) ---
-    function initRawGridLayer() {
-        L.FullHeatmap = L.Layer.extend({
-            onAdd: function(m) {
-                this._c = L.DomUtil.create('canvas', 'leaflet-layer');
-                this._c.style.pointerEvents = 'none';
-                this._c.style.imageRendering = 'auto'; // Attiva interpolazione browser (Smooth)
-                m.getPane('gridPane').appendChild(this._c);
-                m.on('moveend resize', this._reset, this);
-                this._reset();
-            },
-            onRemove: function(m) { m.getPane('gridPane').removeChild(this._c); m.off('moveend resize', this._reset, this); },
-            _reset: function() {
-                var s = this._map.getSize(); 
-                this._c.width = s.x; this._c.height = s.y;
-                L.DomUtil.setPosition(this._c, this._map.containerPointToLayerPoint([0,0])); 
-                this._draw();
-            },
-            _draw: function() {
-                if (!currentData || !this._c) return;
-                var ctx = this._c.getContext('2d'); ctx.clearRect(0,0,this._c.width,this._c.height);
-                if(activeLayer === 'wind') return;
-
-                var m = currentData.meta;
-                // Disegna rettangoli leggermente sovrapposti per evitare linee vuote
-                for(var y=0; y<m.ny; y++) {
-                    var lat = m.la1 - (y * m.dy);
-                    for(var x=0; x<m.nx; x++) {
-                        var lon = m.lo1 + (x * m.dx);
-                        var pStart = this._map.latLngToContainerPoint([lat, lon]);
-                        if (pStart.x < -50 || pStart.x > this._c.width + 50 || pStart.y < -50 || pStart.y > this._c.height + 50) continue;
-                        var pEnd = this._map.latLngToContainerPoint([lat - m.dy, lon + m.dx]);
-                        var w = Math.ceil(pEnd.x - pStart.x) + 1; // Sovrapposizione per blending
-                        var h = Math.ceil(pEnd.y - pStart.y) + 1;
-
-                        var idx = y * m.nx + x, val = 0;
-                        if(activeLayer==='temp') val = currentData.temp[idx]; 
-                        else if(activeLayer==='rain') val = currentData.rain[idx];
-                        
-                        var c = getColor(val, activeLayer); if(c[3]===0) continue; 
-                        ctx.fillStyle = `rgba(${c[0]},${c[1]},${c[2]},${c[3]})`; 
-                        ctx.fillRect(Math.floor(pStart.x), Math.floor(pStart.y), w, h);
-                    }
-                }
-            },
-            update: function() { this._draw(); }
-        });
-        heatCanvas = new L.FullHeatmap();
-        map.addLayer(heatCanvas);
-    }
-
-    // --- 3. SISTEMA ISOBARE (D3 Contours) ---
-    function initIsobarLayer() {
-        L.IsobarLayer = L.Layer.extend({
-            onAdd: function(m) {
-                this._c = L.DomUtil.create('canvas', 'leaflet-layer');
-                this._c.style.pointerEvents = 'none';
-                m.getPane('isobarPane').appendChild(this._c);
-                m.on('moveend resize', this._reset, this);
-                this._reset();
-            },
-            onRemove: function(m) { m.getPane('isobarPane').removeChild(this._c); m.off('moveend resize', this._reset, this); },
-            _reset: function() {
-                var s = this._map.getSize(); this._c.width = s.x; this._c.height = s.y;
-                L.DomUtil.setPosition(this._c, this._map.containerPointToLayerPoint([0,0])); 
-                this._draw();
-            },
-            _draw: function() {
-                if (!currentData || !this._c || !showIsobars) {
-                     if(this._c) this._c.getContext('2d').clearRect(0,0,this._c.width,this._c.height);
-                     return;
-                }
-                var ctx = this._c.getContext('2d'); ctx.clearRect(0,0,this._c.width,this._c.height);
-                
-                // CALCOLO ISOBARE CON D3
-                if(!currentData.press) return;
-                var m = currentData.meta;
-                var values = currentData.press;
-                
-                // Genera Contorni (Step 2 hPa)
-                var contours = d3.contours().size([m.nx, m.ny]).thresholds(d3.range(950, 1050, 2))(values);
-                
-                ctx.strokeStyle = "rgba(255, 255, 255, 0.4)";
-                ctx.lineWidth = 1.0;
-                ctx.beginPath();
-                
-                // Disegna le linee proiettandole sulla mappa
-                contours.forEach(function(contour) {
-                    contour.coordinates.forEach(function(ring) {
-                        ring.forEach(function(points) {
-                            var first = true;
-                            points.forEach(function(coord) {
-                                // coord[0] è x (lon idx), coord[1] è y (lat idx)
-                                // Converti indice griglia -> Lat/Lon -> Pixel Schermo
-                                var lon = m.lo1 + (coord[0] * m.dx);
-                                var lat = m.la1 - (coord[1] * m.dy); // la1 è top, quindi sottraiamo
-                                var p = map.latLngToContainerPoint([lat, lon]);
-                                
-                                if (first) { ctx.moveTo(p.x, p.y); first = false; }
-                                else { ctx.lineTo(p.x, p.y); }
-                            });
-                        });
-                    });
-                });
-                ctx.stroke();
-            },
-            update: function() { this._draw(); }
-        });
-        isobarCanvas = new L.IsobarLayer();
-        map.addLayer(isobarCanvas);
-    }
-    
-    window.toggleIsobars = function() {
-        showIsobars = !showIsobars;
-        document.getElementById('iso-btn').classList.toggle('active');
-        if(isobarCanvas) isobarCanvas.update();
-    }
-
-    async function loadCatalog() {
-        try {
-            let r = await fetch('data_weather/catalog.json?t=' + Date.now());
-            if(!r.ok) throw new Error("404");
-            catalog = await r.json();
-            document.getElementById('time-slider').max = catalog.length - 1;
-            document.getElementById('time-slider').addEventListener('input', (e) => loadStep(parseInt(e.target.value)));
-            loadStep(0);
-        } catch(e) { status("ATTESA DATI..."); document.getElementById('loader').style.display = 'none'; }
-    }
-
-    async function loadStep(index) {
-        if (!catalog[index]) return;
-        document.getElementById('time-label').innerText = catalog[index].label;
-        document.getElementById('loader').style.display = 'block';
-        try {
-            let r = await fetch('data_weather/' + catalog[index].file + '?nocache=' + Date.now());
-            currentData = await r.json();
-            updateMap();
-        } catch(e) { status("Errore frame " + index); }
-        document.getElementById('loader').style.display = 'none';
-    }
-
-    function updateMap() {
-        if (!currentData) return;
-        if (heatCanvas) heatCanvas.update();
-        if (isobarCanvas) isobarCanvas.update(); // Aggiorna isobare
-        if (velocityLayer) map.removeLayer(velocityLayer);
-
-        if (activeLayer === 'wind') {
-            try {
-                velocityLayer = L.velocityLayer({
-                    pane: 'velocityPane',
-                    displayValues: false,
-                    data: [ currentData.wind_u, currentData.wind_v ], 
-                    
-                    // CONFIGURAZIONE FISICA TOP (Calibrata)
-                    maxVelocity: 18.0, 
-                    velocityScale: 0.006, 
-                    particleMultiplier: 1/35, 
-                    lineWidth: 0.8,
-                    particleAge: 140,
-                    frameRate: 60,
-                    opacity: 0.95, 
-                    colorScale: ["#000080", "#0044ff", "#00ddff", "#00ff55", "#ffff00", "#ff6600", "#ff0000", "#ff00ff"]
-                });
-                velocityLayer.addTo(map);
-            } catch(e) { console.log(e); }
+    // clustering semplice (distanza in pixel sullo schermo) per evitare simboli casuali
+    function pickBest(list, type){
+      const pts = list.filter(p=>p.type===type).sort((a,b)=> type==='A' ? (b.val-a.val) : (a.val-b.val));
+      const chosen = [];
+      for(const p of pts){
+        const lat = m.la1 - p.y*m.dy;
+        const lon = m.lo1 + p.x*m.dx;
+        const pp = map.latLngToContainerPoint([lat,lon]);
+        let ok=true;
+        for(const c of chosen){
+          const d = Math.hypot(pp.x-c._px.x, pp.y-c._px.y);
+          if(d < 70) { ok=false; break; }
         }
+        if(ok){
+          p._px = pp;
+          chosen.push(p);
+        }
+        if(chosen.length >= 4) break; // pochi simboli, più “sinottico”
+      }
+      return chosen;
     }
 
-    window.setLayer = function(n) {
-        activeLayer = n;
-        document.querySelectorAll('.layer-btn').forEach(b => {
-             if(!b.classList.contains('toggle-btn')) b.classList.remove('active');
-        });
-        if(n !== 'iso') event.target.classList.add('active');
-        
-        let u = document.getElementById('pk-unit');
-        u.innerText = (n==='wind')?'km/h':(n==='temp')?'°C':(n==='rain')?'mm':'';
-        document.getElementById('pk-val').innerText = "--";
-        updateMap();
+    const highs = pickBest(cand,'A');
+    const lows  = pickBest(cand,'B');
+
+    // Disegno A/B grandi e leggibili
+    ctx.save();
+    ctx.font = "900 30px Arial";
+    ctx.textAlign = "center";
+    ctx.textBaseline = "middle";
+
+    function drawAB(p){
+      const x=p._px.x, y=p._px.y;
+      const isA = p.type==='A';
+      const letter = isA ? "A" : "B";
+      const col = isA ? "#ff2b2b" : "#2b6bff";
+
+      // contorno bianco + ombra
+      ctx.lineWidth = 6;
+      ctx.strokeStyle = "rgba(255,255,255,0.95)";
+      ctx.strokeText(letter, x, y);
+
+      ctx.lineWidth = 2.5;
+      ctx.strokeStyle = "rgba(0,0,0,0.85)";
+      ctx.strokeText(letter, x, y);
+
+      ctx.fillStyle = col;
+      ctx.fillText(letter, x, y);
+
+      // valore sotto
+      ctx.font = "900 16px Arial";
+      const vtxt = String(Math.round(p.val));
+      ctx.lineWidth = 5;
+      ctx.strokeStyle = "rgba(0,0,0,0.75)";
+      ctx.strokeText(vtxt, x, y+26);
+      ctx.fillStyle = "rgba(255,255,255,0.95)";
+      ctx.fillText(vtxt, x, y+26);
+      ctx.font = "900 30px Arial";
     }
 
-    window.togglePlay = function() {
-        if (isPlaying) return; isPlaying = true;
-        let s = document.getElementById('time-slider');
-        let i = parseInt(s.value), max = parseInt(s.max);
-        let btn = document.getElementById('play-btn');
-        btn.innerHTML = "❚❚";
-        
-        let interval = setInterval(() => {
-            if (i >= max || !isPlaying) { clearInterval(interval); isPlaying = false; btn.innerHTML = "►"; }
-            else { i++; s.value = i; loadStep(i); }
-        }, 800);
+    highs.forEach(drawAB);
+    lows.forEach(drawAB);
+    ctx.restore();
+  }
+
+  function drawIsotherms(){
+    const ctx = isoTCanvas.getContext('2d');
+    const s = map.getSize();
+    isoTCanvas.width = s.x; isoTCanvas.height = s.y;
+    L.DomUtil.setPosition(isoTCanvas, map.containerPointToLayerPoint([0,0]));
+    ctx.clearRect(0,0,s.x,s.y);
+
+    if(!showIsotherms || !currentData?.temp) return;
+
+    const m = currentData.meta;
+
+    // reset totale (evita linee nere casuali)
+    ctx.setTransform(1,0,0,1,0,0);
+    ctx.globalAlpha = 1;
+    ctx.globalCompositeOperation = "source-over";
+    ctx.filter = "none";
+    ctx.shadowColor = "transparent";
+    ctx.shadowBlur = 0;
+
+    const raw = currentData.temp;
+    const clean = new Float32Array(raw.length);
+    for(let i=0;i<raw.length;i++){
+      const v = raw[i];
+      clean[i] = (Number.isFinite(v) ? v : NaN);
     }
 
-    window.addEventListener('load', function(){
-        if(!map) return;
-        map.on('mousemove', function(e) {
-            try {
-                if (!currentData) return;
-                let m = currentData.meta;
-                let y = Math.round((m.la1 - e.latlng.lat) / m.dy);
-                let x = Math.round((e.latlng.lng - m.lo1) / m.dx);
-                if (x >= 0 && x < m.nx && y >= 0 && y < m.ny) {
-                    let idx = y * m.nx + x;
-                    let val = "--";
-                    if (activeLayer === 'wind') {
-                        let u = currentData.wind_u.data[idx], v = currentData.wind_v.data[idx];
-                        val = (Math.sqrt(u*u+v*v)*3.6).toFixed(1);
-                    } else if (activeLayer === 'temp') val = currentData.temp[idx].toFixed(1);
-                    else if (activeLayer === 'rain') val = currentData.rain[idx].toFixed(1);
-                    document.getElementById('pk-val').innerText = val;
-                }
-            } catch(e) {}
-        });
+    const field = smoothGrid(clean, m.nx, m.ny, 1);
+
+    // Range auto e step 1°C (più “sensibile”)
+    let minT=1e9, maxT=-1e9;
+    for(let i=0;i<field.length;i++){
+      const v=field[i];
+      if(!Number.isFinite(v)) continue;
+      if(v<minT) minT=v;
+      if(v>maxT) maxT=v;
+    }
+    if(!Number.isFinite(minT) || !Number.isFinite(maxT)) return;
+
+    const start = Math.floor(minT);
+    const end   = Math.ceil(maxT) + 0.001;
+    const thresholds = d3.range(start, end, 1);
+
+    const contours = d3.contours().size([m.nx, m.ny]).thresholds(thresholds)(field);
+
+    ctx.lineCap = "round";
+    ctx.lineJoin = "round";
+    ctx.lineWidth = 1.1;
+    ctx.strokeStyle = "rgba(255,255,255,0.40)";
+
+    function drawRing(ring){
+      if(!ring || ring.length < 2) return;
+      ctx.beginPath();
+      const c0 = ring[0];
+      const lat0 = m.la1 - c0[1]*m.dy;
+      const lon0 = m.lo1 + c0[0]*m.dx;
+      const p0 = map.latLngToContainerPoint([lat0, lon0]);
+      ctx.moveTo(p0.x, p0.y);
+
+      for(let i=1;i<ring.length;i++){
+        const cxy = ring[i];
+        const lat = m.la1 - cxy[1]*m.dy;
+        const lon = m.lo1 + cxy[0]*m.dx;
+        const p = map.latLngToContainerPoint([lat, lon]);
+        ctx.lineTo(p.x, p.y);
+      }
+      ctx.stroke();
+    }
+
+    // label leggero sulle isoterme ogni 5°C (più pulito)
+    ctx.font = "bold 11px Arial";
+    ctx.textAlign = "center";
+    ctx.textBaseline = "middle";
+
+    contours.forEach(c => {
+      const is5 = (Math.round(c.value) % 5 === 0);
+      for(const polygon of c.coordinates){
+        for(const ring of polygon){
+          drawRing(ring);
+
+          if(is5 && ring && ring.length > 260){
+            const mid = ring[Math.floor(ring.length/2)];
+            const lat = m.la1 - mid[1]*m.dy;
+            const lon = m.lo1 + mid[0]*m.dx;
+            const pm = map.latLngToContainerPoint([lat, lon]);
+
+            const txt = String(Math.round(c.value)) + "°";
+            ctx.save();
+            ctx.lineWidth = 4;
+            ctx.strokeStyle = "rgba(0,0,0,0.70)";
+            ctx.strokeText(txt, pm.x, pm.y);
+            ctx.fillStyle = "rgba(255,255,255,0.92)";
+            ctx.fillText(txt, pm.x, pm.y);
+            ctx.restore();
+          }
+        }
+      }
     });
+  }
+
+  window.toggleLayer = function(name){
+    if(name==='cloud'){
+      const has = !!(currentData && (currentData.cloud ?? currentData.cld));
+      if(selected.has('cloud')){
+        selected.delete('cloud');
+      } else {
+        if(!has){
+          toast("Nuvole: dati non presenti nel JSON");
+          return;
+        }
+        selected.add('cloud');
+      }
+    } else {
+      if(selected.has(name)) selected.delete(name); else selected.add(name);
+    }
+    updateToggleUI(); redrawAll();
+  };
+
+  window.toggleIsobars = function(){ showIsobars=!showIsobars; updateToggleUI(); redrawAll(); };
+  window.toggleIsotherms = function(){ showIsotherms=!showIsotherms; updateToggleUI(); redrawAll(); };
+  window.toggleGrid = function(){ showGrid=!showGrid; updateToggleUI(); redrawAll(); };
+  window.toggleParticles = function(){ particlesOn=!particlesOn; updateToggleUI(); redrawAll(); };
+
+  function updateToggleUI(){
+    document.querySelectorAll('.toggle').forEach(el => {
+      const txt = el.innerText.toLowerCase();
+      if(txt.includes('vento') && selected.has('wind')) el.classList.add('active');
+      else if(txt.includes('temp') && selected.has('temp')) el.classList.add('active');
+      else if(txt.includes('pioggia') && selected.has('rain')) el.classList.add('active');
+      else if(txt.includes('umidità') && selected.has('rh')) el.classList.add('active');
+      else if(txt.includes('pressione') && selected.has('press')) el.classList.add('active');
+      else if(txt.includes('nuvole') && selected.has('cloud')) el.classList.add('active');
+      else if(txt.includes('isobare') && showIsobars) el.classList.add('active');
+      else if(txt.includes('isoterme') && showIsotherms) el.classList.add('active');
+      else if(txt.includes('reticolo') && showGrid) el.classList.add('active');
+      else el.classList.remove('active');
+    });
+
+    const btnFlow = document.getElementById('btn-flow');
+    if(particlesOn) btnFlow.classList.add('active'); else btnFlow.classList.remove('active');
+    document.getElementById('wind-rose').style.display = selected.has('wind') ? 'flex' : 'none';
+  }
+
+  function onPick(e){
+    if(!currentData) return;
+    const m = currentData.meta;
+    const y = Math.round((m.la1 - e.latlng.lat)/m.dy);
+    const x = Math.round((e.latlng.lng - m.lo1)/m.dx);
+    if(x<0||x>=m.nx||y<0||y>=m.ny) return;
+    const idx = y*m.nx + x;
+
+    let val = '--', unit = '';
+
+    if(selected.has('rain')) { val = (currentData.rain[idx] ?? 0).toFixed(1); unit='mm'; }
+    else if(selected.has('temp')) { val = (currentData.temp[idx] ?? 0).toFixed(1); unit='°C'; }
+    else if(selected.has('wind')) {
+      const u=currentData.wind_u.data[idx], v=currentData.wind_v.data[idx];
+      val = (Math.sqrt(u*u+v*v)*3.6).toFixed(1); unit='km/h';
+      const arrow = document.getElementById('rose-arrow');
+      const deg = 90 - (Math.atan2(v, u) * 180 / Math.PI);
+      arrow.style.transform = `rotate(${deg}deg)`;
+    }
+    else if(selected.has('rh')) { val = Math.round(currentData.rh[idx] ?? 0); unit='%'; }
+    else if(selected.has('press')) { val = Math.round(currentData.press[idx] ?? 0); unit='hPa'; }
+
+    document.getElementById('val-display').innerText = val;
+    document.getElementById('unit-display').innerText = unit;
+  }
+
+  window.togglePlay = function(){
+    if(isPlaying){ isPlaying=false; document.getElementById('play-btn').innerText='►'; return; }
+    isPlaying=true; document.getElementById('play-btn').innerText='❚❚';
+    const s = document.getElementById('time-slider');
+    let i = parseInt(s.value);
+    const loop = setInterval(()=>{
+      if(!isPlaying || i>=s.max) { clearInterval(loop); isPlaying=false; document.getElementById('play-btn').innerText='►'; return; }
+      i++; s.value=i; loadStep(i);
+    }, 800);
+  };
 </script>
 </body>
 </html>
+```0
