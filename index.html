@@ -157,21 +157,17 @@
   const SICILY_BOUNDS = L.latLngBounds(L.latLng(35.0, 11.0), L.latLng(39.5, 16.5));
   const WIND_COLOR_SCALE = ["#000080", "#0044ff", "#00ddff", "#00ff55", "#ffff00", "#ff6600", "#ff0000", "#ff00ff"];
 
-  // ===== TEMPERATURA: TORNA COME PRIMA (i tuoi punti chiave) =====
-  // -15 viola scuro, 0 ciano, 15 giallo chiaro, 20 giallo, 25 arancione chiaro,
-  // 30 arancione, 35 rosso, 45 rosso scuro
   const TEMP_ANCHORS = [
-    {v:-15, c:[80, 0, 120]},     // viola scuro
-    {v:  0, c:[0, 220, 255]},    // ciano
-    {v: 15, c:[255, 255, 170]},  // giallo chiaro
-    {v: 20, c:[255, 230, 0]},    // giallo
-    {v: 25, c:[255, 170, 80]},   // arancione chiaro
-    {v: 30, c:[255, 120, 0]},    // arancione
-    {v: 35, c:[255, 40, 0]},     // rosso
-    {v: 45, c:[120, 0, 0]}       // rosso scuro
+    {v:-15, c:[80, 0, 120]},
+    {v:  0, c:[0, 220, 255]},
+    {v: 15, c:[255, 255, 170]},
+    {v: 20, c:[255, 230, 0]},
+    {v: 25, c:[255, 170, 80]},
+    {v: 30, c:[255, 120, 0]},
+    {v: 35, c:[255, 40, 0]},
+    {v: 45, c:[120, 0, 0]}
   ];
 
-  // ===== altri layer =====
   const RAIN_STOPS = [
     {v:0.0, c:[0,0,0], a:0.0},
     {v:0.6, c:[100,200,255], a:0.65},
@@ -380,7 +376,7 @@
           const val=currentData.temp[i];
           if(!isFinite(val)){ d[i*4+3]=0; continue; }
           col = tempColor(val);
-          col.a = 0.92; // un filo più evidente (prima era più “spenta”)
+          col.a = 0.92;
         }
         else if(layer==='rain'){
           const val=currentData.rain[i] ?? 0;
@@ -525,7 +521,6 @@
     velocityLayer.addTo(map);
   }
 
-  // ===== ISOTERME (1°C) - FIX: niente linee strane (moveTo / path separati) =====
   function drawIsotherms(){
     const ctx=thermCanvas.getContext('2d');
     const sz=map.getSize();
@@ -559,7 +554,6 @@
         poly.forEach(ring=>{
           if(!ring || ring.length<2) return;
 
-          // bordo scuro
           ctx.beginPath();
           for(let i=0;i<ring.length;i++){
             const coord=ring[i];
@@ -573,12 +567,10 @@
           ctx.lineWidth=major?3.2:2.2;
           ctx.stroke();
 
-          // linea colorata
           ctx.strokeStyle=lineCol;
           ctx.lineWidth=major?1.9:1.1;
           ctx.stroke();
 
-          // label solo major
           if(major && ring.length>160){
             const mid=ring[Math.floor(ring.length/2)];
             const lat=m.la1 - mid[1]*m.dy;
@@ -600,6 +592,7 @@
     ctx.restore();
   }
 
+  // ===== ISOBARE + A/B sui veri massimi/minimi =====
   function drawIsobars(){
     const ctx=isoCanvas.getContext('2d');
     const sz=map.getSize();
@@ -610,12 +603,18 @@
     if(!showIsobars || !currentData?.press || !currentData?.meta) return;
     const m=currentData.meta;
 
+    // 1) sanitizzazione pressione
     const clean = new Float32Array(currentData.press.length);
+    let pMin=1e9, pMax=-1e9;
     for(let i=0;i<clean.length;i++){
       const v=currentData.press[i];
-      clean[i] = (!isFinite(v) || v<850 || v>1100) ? 1013 : v;
+      const vv = (!isFinite(v) || v<850 || v>1100) ? 1013 : v;
+      clean[i]=vv;
+      if(vv<pMin) pMin=vv;
+      if(vv>pMax) pMax=vv;
     }
 
+    // 2) isobare (disegno corretto, niente linee “dal basso”)
     const contours=d3.contours().size([m.nx,m.ny]).thresholds(d3.range(960,1050,2))(clean);
 
     ctx.save();
@@ -647,11 +646,13 @@
           }
           ctx.stroke();
 
+          // label valore pressione su isobare major
           if(major && ring.length>180){
             const mid=ring[Math.floor(ring.length/2)];
             const lat=m.la1 - mid[1]*m.dy;
             const lon=m.lo1 + mid[0]*m.dx;
             const p=map.latLngToContainerPoint([lat,lon]);
+
             ctx.fillStyle="rgba(0,0,0,0.62)";
             ctx.fillRect(p.x-16,p.y-8,32,16);
             ctx.fillStyle="rgba(255,255,255,0.95)";
@@ -660,6 +661,103 @@
         });
       });
     });
+
+    // 3) trova massimi/minimi locali per A/B (veri “picchi”)
+    // finestra 11x11, passo 2 per non ammazzare FPS
+    const r = 5;                // raggio in celle
+    const step = 2;             // stride scanning
+    const minProm = 1.2;        // richiede che sia “ben” max/min rispetto ai vicini (hPa)
+    const candidates = [];
+
+    for(let y=r; y<m.ny-r; y+=step){
+      for(let x=r; x<m.nx-r; x+=step){
+        const idx = y*m.nx + x;
+        const v0 = clean[idx];
+
+        // scarta se troppo neutro (riduce etichette inutili)
+        if(v0 > 1009 && v0 < 1017) continue;
+
+        let localMax=true, localMin=true;
+        let maxNeighbor=-1e9, minNeighbor=1e9;
+
+        for(let dy=-r; dy<=r; dy++){
+          const yy = y+dy;
+          for(let dx=-r; dx<=r; dx++){
+            if(dx===0 && dy===0) continue;
+            const xx = x+dx;
+            const vn = clean[yy*m.nx + xx];
+            if(vn > maxNeighbor) maxNeighbor = vn;
+            if(vn < minNeighbor) minNeighbor = vn;
+            if(vn >= v0) localMax=false;
+            if(vn <= v0) localMin=false;
+            if(!localMax && !localMin) break;
+          }
+          if(!localMax && !localMin) break;
+        }
+
+        if(localMax && (v0 - maxNeighbor) >= minProm){
+          candidates.push({type:'A', x, y, v:v0});
+        } else if(localMin && (minNeighbor - v0) >= minProm){
+          candidates.push({type:'B', x, y, v:v0});
+        }
+      }
+    }
+
+    // ordina: A decrescente, B crescente
+    const highs = candidates.filter(c=>c.type==='A').sort((a,b)=>b.v-a.v);
+    const lows  = candidates.filter(c=>c.type==='B').sort((a,b)=>a.v-b.v);
+
+    // 4) anti-clutter: massimo 3 A e 3 B, distanziati in pixel
+    function placeLabels(list, maxN){
+      const placed = [];
+      const minDist = 90; // px
+      for(const c of list){
+        if(placed.length>=maxN) break;
+        const lat = m.la1 - c.y*m.dy;
+        const lon = m.lo1 + c.x*m.dx;
+        const p = map.latLngToContainerPoint([lat,lon]);
+        if(p.x<10 || p.y<10 || p.x>sz.x-10 || p.y>sz.y-10) continue;
+
+        let ok=true;
+        for(const q of placed){
+          const dx=p.x-q.p.x, dy=p.y-q.p.y;
+          if(Math.sqrt(dx*dx+dy*dy) < minDist){ ok=false; break; }
+        }
+        if(!ok) continue;
+
+        placed.push({c, p});
+      }
+      return placed;
+    }
+
+    const placedA = placeLabels(highs, 3);
+    const placedB = placeLabels(lows, 3);
+
+    // 5) disegna A/B grandi + valore sotto (più coerente e leggibile)
+    function drawAB(item){
+      const {c, p} = item;
+      const letter = c.type;
+      const color = (letter==='A') ? "#ff2b2b" : "#2b6bff";
+
+      ctx.font = "950 36px Arial";
+      ctx.lineWidth = 6;
+      ctx.strokeStyle = "rgba(255,255,255,0.95)";
+      ctx.strokeText(letter, p.x, p.y);
+      ctx.fillStyle = color;
+      ctx.fillText(letter, p.x, p.y);
+
+      // valore sotto
+      const valTxt = Math.round(c.v).toString();
+      ctx.font = "900 14px Arial";
+      ctx.lineWidth = 5;
+      ctx.strokeStyle = "rgba(0,0,0,0.85)";
+      ctx.strokeText(valTxt, p.x, p.y + 26);
+      ctx.fillStyle = "rgba(255,255,255,0.95)";
+      ctx.fillText(valTxt, p.x, p.y + 26);
+    }
+
+    placedA.forEach(drawAB);
+    placedB.forEach(drawAB);
 
     ctx.restore();
   }
