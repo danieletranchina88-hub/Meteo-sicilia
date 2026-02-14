@@ -14,7 +14,6 @@
   <script src="https://d3js.org/d3.v7.min.js"></script>
 
   <style>
-    /* SFONDO SCURO */
     body { margin: 0; background: #1a1a1a; font-family: 'Segoe UI', sans-serif; color: #ddd; overflow: hidden; }
     #map { position: absolute; top: 0; bottom: 0; width: 100%; background: #1a1a1a; }
 
@@ -60,7 +59,6 @@
     .mini:hover { background: rgba(255,255,255,0.1); color:#fff; }
     .mini.active { background: #eee; color:#111; border-color: #fff; }
 
-    /* INFO BOX */
     #info-box {
       position: absolute; top: 18px; left: 18px; z-index: 2000;
       pointer-events: none;
@@ -70,7 +68,6 @@
     #val-display { font-size: 3.6em; font-weight: 950; line-height: 0.9; color: #fff; text-shadow: 0 2px 5px rgba(0,0,0,0.8); }
     #unit-display { font-size: 1.15em; color: #aaa; font-weight: 850; margin-top: 4px; text-shadow: 0 1px 3px rgba(0,0,0,0.9); }
 
-    /* ROSA DEI VENTI */
     #wind-rose {
       width: 50px; height: 50px;
       background: rgba(255,255,255,0.9);
@@ -97,18 +94,15 @@
     #time-label { font-size: 1.45em; font-weight: 950; margin-left: 14px; min-width: 150px; text-align: center; color: #fff; }
     input[type=range] { flex-grow: 1; height: 6px; cursor: pointer; accent-color: #0077ff; background: rgba(255,255,255,0.2); }
 
-    /* MAPPA SCURA (INVERTED RELIEF) */
     .dark-relief-tiles {
       filter: invert(100%) hue-rotate(180deg) brightness(0.8) contrast(1.2) grayscale(20%);
     }
 
-    /* LAYER COLORATI */
     canvas.leaflet-layer.scalar-layer {
       image-rendering: auto;
       mix-blend-mode: screen;
       opacity: 0.85;
     }
-
     canvas.leaflet-layer.velocity-canvas { mix-blend-mode: normal; opacity: 0.95; }
   </style>
 </head>
@@ -160,6 +154,9 @@
       <div class="toggle" id="btn-iso" onclick="toggleIsobars()">
         <span>ISOBARE 〰️</span><span> </span>
       </div>
+      <div class="toggle" id="btn-therm" onclick="toggleIsotherms()">
+        <span>ISOTERME 🌡️〰️</span><span> </span>
+      </div>
       <div class="toggle" id="btn-grid" onclick="toggleGrid()">
         <span>RETICOLO #</span><span> </span>
       </div>
@@ -179,7 +176,6 @@
 
   const WIND_COLOR_SCALE = ["#000080", "#0044ff", "#00ddff", "#00ff55", "#ffff00", "#ff6600", "#ff0000", "#ff00ff"];
 
-  // TEMP (Custom)
   const TEMP_STOPS = [
     {v: -15, c: [156,218,216]}, {v: -14, c: [149,214,211]}, {v: -13, c: [141,210,206]}, {v: -12, c: [134,206,201]},
     {v: -11, c: [127,202,196]}, {v: -10, c: [119,198,191]}, {v: -9,  c: [112,194,185]}, {v: -8,  c: [106,190,181]},
@@ -199,7 +195,6 @@
     {v: 45,  c: [89,22,3]}
   ];
 
-  // RAIN (Custom: Start > 0.6mm)
   const RAIN_STOPS = [
     {v:0.0, c:[0,0,0], a:0.0},
     {v:0.6, c:[100,200,255], a:0.6},
@@ -210,7 +205,6 @@
     {v:50,  c:[255,0,0], a:0.9}
   ];
 
-  // RH (Custom Provided)
   const RH_STOPS = [
     {v:0, c:[173,85,56]}, {v:1, c:[173,85,56]}, {v:5, c:[173,89,56]}, {v:10, c:[173,93,56]},
     {v:15, c:[173,97,56]}, {v:20, c:[173,101,56]}, {v:25, c:[173,105,56]}, {v:30, c:[173,110,56]},
@@ -220,7 +214,6 @@
     {v:95, c:[56,110,165]}, {v:100, c:[56,70,114]}
   ];
 
-  // PRESSIONE (Custom in hPa)
   const PRESS_STOPS = [
     {v: 900, c: [8,16,48]}, {v: 950, c: [0,32,96]}, {v: 976, c: [0,52,146]}, {v: 986, c: [0,90,148]},
     {v: 995, c: [0,117,146]}, {v: 1002, c: [26,140,147]}, {v: 1007, c: [103,162,155]}, {v: 1011.25, c: [155,183,172]},
@@ -234,8 +227,9 @@
 
   let map, currentData = null, catalog = [];
   const selected = new Set(['wind']);
-  let showIsobars = false, showGrid = false, particlesOn = true;
-  let velocityLayer = null, scalarCanvases = {}, arrowCanvas, isoCanvas, gridCanvas;
+  let showIsobars = false, showIsotherms = false, showGrid = false, particlesOn = true;
+
+  let velocityLayer = null, scalarCanvases = {}, arrowCanvas, isoCanvas, thermoCanvas, gridCanvas;
   let isPlaying = false;
 
   function clamp(x,a,b){ return Math.max(a, Math.min(b, x)); }
@@ -272,25 +266,19 @@
   }
 
   window.addEventListener('load', async () => {
-    map = L.map('map', {
-      zoomControl: false,
-      maxBounds: SICILY_BOUNDS.pad(0.5),
-      background: '#1a1a1a'
-    }).fitBounds(SICILY_BOUNDS);
+    map = L.map('map', { zoomControl: false, maxBounds: SICILY_BOUNDS.pad(0.5), background: '#1a1a1a' })
+      .fitBounds(SICILY_BOUNDS);
 
-    // BASE: DARK RELIEF (inverted)
     L.tileLayer(
       'https://server.arcgisonline.com/ArcGIS/rest/services/World_Shaded_Relief/MapServer/tile/{z}/{y}/{x}',
       { maxZoom: 13, attribution: 'Esri', className: 'dark-relief-tiles' }
     ).addTo(map);
 
-    // HILLSHADE overlay
     L.tileLayer(
       'https://server.arcgisonline.com/ArcGIS/rest/services/Elevation/World_Hillshade/MapServer/tile/{z}/{y}/{x}',
       { maxZoom: 19, className: 'dark-relief-tiles', opacity: 0.4 }
     ).addTo(map);
 
-    // LABELS
     map.createPane('labelsPane');
     map.getPane('labelsPane').style.zIndex = 600;
     map.getPane('labelsPane').style.pointerEvents = 'none';
@@ -299,7 +287,6 @@
       { pane: 'labelsPane', opacity: 0.9 }
     ).addTo(map);
 
-    // Pane particelle
     map.createPane('particlePane');
     map.getPane('particlePane').style.zIndex = 800;
     map.getPane('particlePane').style.pointerEvents = 'none';
@@ -323,6 +310,7 @@
       map.getPanes().overlayPane.appendChild(c);
       return c;
     }
+
     scalarCanvases.wind  = mkCanvas(290, 'scalar-layer');
     scalarCanvases.temp  = mkCanvas(300, 'scalar-layer');
     scalarCanvases.rain  = mkCanvas(310, 'scalar-layer');
@@ -330,9 +318,10 @@
     scalarCanvases.press = mkCanvas(330, 'scalar-layer');
     scalarCanvases.cloud = mkCanvas(340, 'scalar-layer');
 
-    arrowCanvas = mkCanvas(380);
-    isoCanvas   = mkCanvas(520); // <<< sopra tutto (A/B visibili)
-    gridCanvas  = mkCanvas(450);
+    arrowCanvas  = mkCanvas(380);
+    thermoCanvas = mkCanvas(505); // isoterme sopra quasi tutto
+    isoCanvas    = mkCanvas(520); // isobare + A/B sopra tutto
+    gridCanvas   = mkCanvas(450);
   }
 
   async function loadCatalog(){
@@ -342,11 +331,9 @@
       catalog = await r.json();
       const slider = document.getElementById('time-slider');
       slider.max = catalog.length - 1;
-      slider.addEventListener('input', (e)=> loadStep(parseInt(e.target.value)));
+      slider.addEventListener('input', (e)=> loadStep(parseInt(e.target.value,10)));
       await loadStep(0);
-    } catch(e){
-      // silenzioso
-    }
+    } catch(e){}
   }
 
   async function loadStep(i){
@@ -363,7 +350,8 @@
     if(!currentData) return;
     drawScalars();
     drawWindArrows();
-    drawIsobars();      // FIXED
+    drawIsotherms();
+    drawIsobars();
     drawLatLonGrid();
     updateParticles();
   }
@@ -510,12 +498,10 @@
         const shaftEndX = p.x + (currentLen-headLen)*Math.cos(angle);
         const shaftEndY = p.y + (currentLen-headLen)*Math.sin(angle);
 
-        // ASTA bordo nero + colore
         ctx.beginPath(); ctx.moveTo(p.x, p.y); ctx.lineTo(shaftEndX, shaftEndY);
         ctx.strokeStyle = "#000000"; ctx.lineWidth = currentWidth+2.5; ctx.stroke();
         ctx.strokeStyle = fillStyle; ctx.lineWidth = currentWidth; ctx.stroke();
 
-        // TESTA
         const tipX = p.x + currentLen*Math.cos(angle);
         const tipY = p.y + currentLen*Math.sin(angle);
         const wing1X = shaftEndX - headWidth*Math.cos(angle - Math.PI/2);
@@ -531,7 +517,6 @@
 
         ctx.fillStyle = "#000000"; ctx.fill();
         ctx.strokeStyle = "#000000"; ctx.lineWidth = 1.0; ctx.stroke();
-
         ctx.fillStyle = fillStyle; ctx.fill();
       }
     }
@@ -563,14 +548,7 @@
     velocityLayer.addTo(map);
   }
 
-  // ===== FIX ISOBARE + A/B più coerenti e sempre visibili =====
-  function drawIsobars(){
-    const ctx = isoCanvas.getContext('2d');
-    const sz = map.getSize();
-    isoCanvas.width = sz.x; isoCanvas.height = sz.y;
-    L.DomUtil.setPosition(isoCanvas, map.containerPointToLayerPoint([0,0]));
-
-    // RESET HARD (evita “linee nere” da stato canvas sporco)
+  function resetCanvasState(ctx){
     ctx.setTransform(1,0,0,1,0,0);
     ctx.globalAlpha = 1;
     ctx.globalCompositeOperation = 'source-over';
@@ -579,40 +557,113 @@
     ctx.shadowBlur = 0;
     ctx.shadowOffsetX = 0;
     ctx.shadowOffsetY = 0;
+    ctx.lineCap = 'round';
+    ctx.lineJoin = 'round';
+  }
 
+  // ISOTERME (linee temperatura) — disegno “pulito” senza connessioni strane
+  function drawIsotherms(){
+    const ctx = thermoCanvas.getContext('2d');
+    const sz = map.getSize();
+    thermoCanvas.width = sz.x; thermoCanvas.height = sz.y;
+    L.DomUtil.setPosition(thermoCanvas, map.containerPointToLayerPoint([0,0]));
+    resetCanvasState(ctx);
+    ctx.clearRect(0,0,sz.x,sz.y);
+
+    if(!showIsotherms || !currentData?.temp || !currentData?.meta) return;
+    const m = currentData.meta;
+
+    // dati puliti
+    const temp = new Float32Array(currentData.temp.length);
+    for(let i=0;i<temp.length;i++){
+      const v = currentData.temp[i];
+      temp[i] = (isFinite(v) ? v : 0);
+    }
+
+    // 1°C step; range ragionevole
+    const tMin = -15, tMax = 45;
+    const thresholds = d3.range(tMin, tMax + 1, 1);
+
+    const contours = d3.contours().size([m.nx, m.ny]).thresholds(thresholds)(temp);
+
+    ctx.strokeStyle = "rgba(255,255,255,0.40)";
+    ctx.lineWidth = 1.0;
+    ctx.font = "900 11px Arial";
+    ctx.textAlign = "center";
+    ctx.textBaseline = "middle";
+
+    for(const c of contours){
+      const Tv = Math.round(c.value);
+      const major = (Tv % 5 === 0);
+      ctx.strokeStyle = major ? "rgba(255,255,255,0.75)" : "rgba(255,255,255,0.35)";
+      ctx.lineWidth   = major ? 1.6 : 1.0;
+
+      // ogni anello: path separato + moveTo (NO linee strane)
+      for(const poly of c.coordinates){
+        for(const ring of poly){
+          if(!ring || ring.length < 2) continue;
+          ctx.beginPath();
+          for(let i=0;i<ring.length;i++){
+            const coord = ring[i];
+            const lat = m.la1 - coord[1]*m.dy;
+            const lon = m.lo1 + coord[0]*m.dx;
+            const p = map.latLngToContainerPoint([lat, lon]);
+            if(i===0) ctx.moveTo(p.x,p.y);
+            else ctx.lineTo(p.x,p.y);
+          }
+          ctx.stroke();
+
+          if(major && ring.length > 260){
+            const mid = ring[Math.floor(ring.length/2)];
+            const lat = m.la1 - mid[1]*m.dy;
+            const lon = m.lo1 + mid[0]*m.dx;
+            const p = map.latLngToContainerPoint([lat, lon]);
+
+            const txt = Tv + "°";
+            ctx.lineWidth = 6;
+            ctx.strokeStyle = "rgba(0,0,0,0.85)";
+            ctx.strokeText(txt, p.x, p.y);
+            ctx.fillStyle = "rgba(255,255,255,0.95)";
+            ctx.fillText(txt, p.x, p.y);
+          }
+        }
+      }
+    }
+  }
+
+  // ISOBARE + A/B (nessuna “riga che parte dal basso”: path separati + moveTo)
+  function drawIsobars(){
+    const ctx = isoCanvas.getContext('2d');
+    const sz = map.getSize();
+    isoCanvas.width = sz.x; isoCanvas.height = sz.y;
+    L.DomUtil.setPosition(isoCanvas, map.containerPointToLayerPoint([0,0]));
+    resetCanvasState(ctx);
     ctx.clearRect(0,0,sz.x,sz.y);
 
     if(!showIsobars || !currentData?.press || !currentData?.meta) return;
     const m = currentData.meta;
 
-    // Sanitizzazione pressione
     const clean = new Float32Array(currentData.press.length);
     for(let i=0;i<clean.length;i++){
       const v = currentData.press[i];
       clean[i] = (!isFinite(v) || v < 850 || v > 1100) ? 1013 : v;
     }
 
-    // ISOBARE
-    const contours = d3.contours()
-      .size([m.nx, m.ny])
-      .thresholds(d3.range(960, 1050, 2))(clean);
+    const contours = d3.contours().size([m.nx, m.ny]).thresholds(d3.range(960, 1050, 2))(clean);
 
-    ctx.save();
-    ctx.lineJoin = 'round';
-    ctx.lineCap  = 'round';
-    ctx.textAlign = 'center';
-    ctx.textBaseline = 'middle';
+    ctx.textAlign = "center";
+    ctx.textBaseline = "middle";
 
-    contours.forEach(c=>{
+    for(const c of contours){
       const P = Math.round(c.value);
       const major = (P % 4 === 0);
 
       ctx.strokeStyle = major ? "rgba(255,255,255,0.90)" : "rgba(255,255,255,0.60)";
       ctx.lineWidth   = major ? 2.6 : 1.3;
 
-      c.coordinates.forEach(poly=>{
-        poly.forEach(ring=>{
-          if(!ring || ring.length < 2) return;
+      for(const poly of c.coordinates){
+        for(const ring of poly){
+          if(!ring || ring.length < 2) continue;
 
           ctx.beginPath();
           for(let i=0;i<ring.length;i++){
@@ -625,7 +676,7 @@
           }
           ctx.stroke();
 
-          if(major && ring.length > 240){
+          if(major && ring.length > 260){
             const mid = ring[Math.floor(ring.length/2)];
             const lat = m.la1 - mid[1]*m.dy;
             const lon = m.lo1 + mid[0]*m.dx;
@@ -639,65 +690,45 @@
             ctx.fillStyle = "rgba(255,255,255,0.98)";
             ctx.fillText(txt, p.x, p.y);
           }
-        });
-      });
-    });
+        }
+      }
+    }
 
-    // A/B su estremi reali (con fallback)
+    // A/B più coerenti (estremi locali + fallback)
     const HIGH_TH = 1016;
     const LOW_TH  = 1008;
-
-    const r = 5;          // finestra 11x11
-    const step = 2;       // stride
-    const minProm = 0.8;  // permissivo (Sicilia spesso non ha estremi forti)
+    const r = 5;
+    const step = 2;
+    const minProm = 0.8;
 
     const candA = [];
     const candB = [];
-
-    function localNeighborhoodMaxMin(x,y){
-      let maxN = -1e9, minN = 1e9;
-      for(let dy=-r; dy<=r; dy++){
-        for(let dx=-r; dx<=r; dx++){
-          if(dx===0 && dy===0) continue;
-          const v = clean[(y+dy)*m.nx + (x+dx)];
-          if(v > maxN) maxN = v;
-          if(v < minN) minN = v;
-        }
-      }
-      return {maxN, minN};
-    }
 
     for(let y=r; y<m.ny-r; y+=step){
       for(let x=r; x<m.nx-r; x+=step){
         const idx = y*m.nx + x;
         const v0 = clean[idx];
-        const {maxN, minN} = localNeighborhoodMaxMin(x,y);
 
-        if(v0 >= HIGH_TH){
-          let isMax = true;
-          for(let dy=-r; dy<=r && isMax; dy++){
-            for(let dx=-r; dx<=r; dx++){
-              if(dx===0 && dy===0) continue;
-              if(clean[(y+dy)*m.nx + (x+dx)] >= v0){ isMax=false; break; }
-            }
+        let isMax = (v0 >= HIGH_TH);
+        let isMin = (v0 <= LOW_TH);
+        if(!isMax && !isMin) continue;
+
+        for(let dy=-r; dy<=r && (isMax || isMin); dy++){
+          for(let dx=-r; dx<=r; dx++){
+            if(dx===0 && dy===0) continue;
+            const vn = clean[(y+dy)*m.nx + (x+dx)];
+            if(isMax && vn >= v0) isMax = false;
+            if(isMin && vn <= v0) isMin = false;
+            if(!isMax && !isMin) break;
           }
-          if(isMax && (v0 - maxN) >= minProm) candA.push({x,y,v:v0});
         }
 
-        if(v0 <= LOW_TH){
-          let isMin = true;
-          for(let dy=-r; dy<=r && isMin; dy++){
-            for(let dx=-r; dx<=r; dx++){
-              if(dx===0 && dy===0) continue;
-              if(clean[(y+dy)*m.nx + (x+dx)] <= v0){ isMin=false; break; }
-            }
-          }
-          if(isMin && (minN - v0) >= minProm) candB.push({x,y,v:v0});
-        }
+        if(isMax) candA.push({x,y,v:v0});
+        if(isMin) candB.push({x,y,v:v0});
       }
     }
 
-    // fallback: garantisce almeno 1 A e 1 B se ragionevole
+    // fallback minima
     function fallbackExtrema(){
       let maxV=-1e9, minV=1e9, maxI=0, minI=0;
       for(let i=0;i<clean.length;i++){
@@ -763,8 +794,6 @@
 
     placedA.forEach(it=>drawAB('A', it));
     placedB.forEach(it=>drawAB('B', it));
-
-    ctx.restore();
   }
 
   window.toggleLayer = function(name){
@@ -772,6 +801,7 @@
     updateToggleUI(); redrawAll();
   }
   window.toggleIsobars = function(){ showIsobars=!showIsobars; updateToggleUI(); redrawAll(); }
+  window.toggleIsotherms = function(){ showIsotherms=!showIsotherms; updateToggleUI(); redrawAll(); }
   window.toggleGrid = function(){ showGrid=!showGrid; updateToggleUI(); redrawAll(); }
   window.toggleParticles = function(){ particlesOn=!particlesOn; updateToggleUI(); redrawAll(); }
 
@@ -785,9 +815,11 @@
       else if(txt.includes('pressione') && selected.has('press')) el.classList.add('active');
       else if(txt.includes('nuvole') && selected.has('cloud')) el.classList.add('active');
       else if(txt.includes('isobare') && showIsobars) el.classList.add('active');
+      else if(txt.includes('isoterme') && showIsotherms) el.classList.add('active');
       else if(txt.includes('reticolo') && showGrid) el.classList.add('active');
       else el.classList.remove('active');
     });
+
     const btnFlow = document.getElementById('btn-flow');
     if(particlesOn) btnFlow.classList.add('active'); else btnFlow.classList.remove('active');
     document.getElementById('wind-rose').style.display = selected.has('wind') ? 'flex' : 'none';
@@ -841,4 +873,3 @@
 </script>
 </body>
 </html>
-```0
