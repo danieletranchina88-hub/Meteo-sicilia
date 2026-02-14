@@ -1,7 +1,7 @@
 <!DOCTYPE html>
 <html>
 <head>
-  <title>Sicilia MeteoHub - FINAL COMPLETE</title>
+  <title>Sicilia MeteoHub - FINAL COMPLETE (FIX ISO + ISOTERME)</title>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
 
@@ -59,6 +59,7 @@
     .mini:hover { background: rgba(255,255,255,0.1); color:#fff; }
     .mini.active { background: #eee; color:#111; border-color: #fff; }
 
+    /* INFO BOX */
     #info-box {
         position: absolute; top: 18px; left: 18px; z-index: 2000;
         pointer-events: none;
@@ -68,6 +69,7 @@
     #val-display { font-size: 3.6em; font-weight: 950; line-height: 0.9; color: #fff; text-shadow: 0 2px 5px rgba(0,0,0,0.8); }
     #unit-display { font-size: 1.15em; color: #aaa; font-weight: 850; margin-top: 4px; text-shadow: 0 1px 3px rgba(0,0,0,0.9); }
 
+    /* ROSA DEI VENTI */
     #wind-rose {
         width: 50px; height: 50px;
         background: rgba(255,255,255,0.9);
@@ -94,17 +96,25 @@
     #time-label { font-size: 1.45em; font-weight: 950; margin-left: 14px; min-width: 150px; text-align: center; color: #fff; }
     input[type=range] { flex-grow: 1; height: 6px; cursor: pointer; accent-color: #0077ff; background: rgba(255,255,255,0.2); }
 
+    /* MAPPA SCURA (INVERTED RELIEF) */
     .dark-relief-tiles {
         filter: invert(100%) hue-rotate(180deg) brightness(0.8) contrast(1.2) grayscale(20%);
     }
 
+    /* LAYER COLORATI */
     canvas.leaflet-layer.scalar-layer {
         image-rendering: auto;
         mix-blend-mode: screen;
-        opacity: 0.85;
+        opacity: 0.90;
+    }
+    canvas.leaflet-layer.iso-layer,
+    canvas.leaflet-layer.therm-layer,
+    canvas.leaflet-layer.arrow-layer {
+        image-rendering: auto;
     }
 
-    canvas.leaflet-layer.velocity-canvas { mix-blend-mode: normal; opacity: 0.95; }
+    /* Particelle */
+    canvas.leaflet-layer.velocity-canvas { mix-blend-mode: normal; opacity: 1.0; }
   </style>
 </head>
 
@@ -156,7 +166,7 @@
         <span>ISOBARE 〰️</span><span> </span>
       </div>
       <div class="toggle" id="btn-therm" onclick="toggleIsotherms()">
-        <span>ISOTERME 🌡️</span><span> </span>
+        <span>ISOTERME 🌡️〰️</span><span> </span>
       </div>
       <div class="toggle" id="btn-grid" onclick="toggleGrid()">
         <span>RETICOLO #</span><span> </span>
@@ -177,7 +187,7 @@
 
   const WIND_COLOR_SCALE = ["#000080", "#0044ff", "#00ddff", "#00ff55", "#ffff00", "#ff6600", "#ff0000", "#ff00ff"];
 
-  // TEMP STOPS etc... (identici ai tuoi)
+  // TEMP (per-grado, -15..45) -> colori NETTI (non interpolati per riempimento)
   const TEMP_STOPS = [
     {v: -15, c: [156,218,216]}, {v: -14, c: [149,214,211]}, {v: -13, c: [141,210,206]}, {v: -12, c: [134,206,201]},
     {v: -11, c: [127,202,196]}, {v: -10, c: [119,198,191]}, {v: -9,  c: [112,194,185]}, {v: -8,  c: [106,190,181]},
@@ -199,12 +209,12 @@
 
   const RAIN_STOPS = [
     {v:0.0, c:[0,0,0], a:0.0},
-    {v:0.6, c:[100,200,255], a:0.6},
-    {v:1.0, c:[0,150,255], a:0.7},
-    {v:5.0, c:[0,0,255], a:0.8},
-    {v:10,  c:[255,255,0], a:0.8},
-    {v:30,  c:[255,150,0], a:0.85},
-    {v:50,  c:[255,0,0], a:0.9}
+    {v:0.6, c:[100,200,255], a:0.65},
+    {v:1.0, c:[0,150,255], a:0.75},
+    {v:5.0, c:[0,0,255], a:0.85},
+    {v:10,  c:[255,255,0], a:0.85},
+    {v:30,  c:[255,150,0], a:0.88},
+    {v:50,  c:[255,0,0], a:0.92}
   ];
 
   const RH_STOPS = [
@@ -224,13 +234,17 @@
   ];
 
   const CLOUD_STOPS = [
-    {v:0, c:[255,255,255], a:0}, {v:50, c:[200,200,200], a:0.4}, {v:100, c:[100,100,100], a:0.7}
+    {v:0,   c:[255,255,255], a:0.0},
+    {v:50,  c:[200,200,200], a:0.55},
+    {v:100, c:[90,90,90],    a:0.80}
   ];
 
   let map, currentData = null, catalog = [];
   const selected = new Set(['wind']);
   let showIsobars = false, showIsotherms = false, showGrid = false, particlesOn = true;
-  let velocityLayer = null, scalarCanvases = {}, arrowCanvas, isoCanvas, thermCanvas, gridCanvas;
+
+  let velocityLayer = null;
+  let scalarCanvases = {}, arrowCanvas, isoCanvas, thermCanvas, gridCanvas;
   let isPlaying = false;
 
   function clamp(x,a,b){ return Math.max(a, Math.min(b, x)); }
@@ -238,117 +252,91 @@
 
   function interpStops(val, stops) {
     if(!stops || stops.length < 2) return {r:0,g:0,b:0,a:0};
-    if(val <= stops[0].v) { const s=stops[0]; return {r:s.c[0],g:s.c[1],b:s.c[2],a:s.a||0.8}; }
+    if(val <= stops[0].v) { const s=stops[0]; return {r:s.c[0],g:s.c[1],b:s.c[2],a:('a' in s)?s.a:0.85}; }
     for(let i=0;i<stops.length-1;i++){
       if(val >= stops[i].v && val < stops[i+1].v){
         const s1=stops[i], s2=stops[i+1];
         const t = (val-s1.v)/(s2.v-s1.v);
-        const a1 = ('a' in s1) ? s1.a : 0.8;
-        const a2 = ('a' in s2) ? s2.a : 0.8;
+        const a1 = ('a' in s1) ? s1.a : 0.85;
+        const a2 = ('a' in s2) ? s2.a : 0.85;
         return {
-            r: Math.round(lerp(s1.c[0],s2.c[0],t)),
-            g: Math.round(lerp(s1.c[1],s2.c[1],t)),
-            b: Math.round(lerp(s1.c[2],s2.c[2],t)),
-            a: lerp(a1, a2, t)
+          r: Math.round(lerp(s1.c[0],s2.c[0],t)),
+          g: Math.round(lerp(s1.c[1],s2.c[1],t)),
+          b: Math.round(lerp(s1.c[2],s2.c[2],t)),
+          a: lerp(a1, a2, t)
         };
       }
     }
-    const s=stops[stops.length-1]; return {r:s.c[0],g:s.c[1],b:s.c[2],a:s.a||0.8};
+    const s=stops[stops.length-1];
+    return {r:s.c[0],g:s.c[1],b:s.c[2],a:('a' in s)?s.a:0.85};
+  }
+
+  function stopColorNearestInt(val, stops, alphaOverride=null){
+    const v = Math.round(val);
+    const vmin = stops[0].v;
+    const vmax = stops[stops.length-1].v;
+    const vv = Math.max(vmin, Math.min(vmax, v));
+    for(let i=0;i<stops.length;i++){
+      if(stops[i].v === vv){
+        const a = (alphaOverride!==null) ? alphaOverride : (('a' in stops[i]) ? stops[i].a : 0.92);
+        return {r:stops[i].c[0], g:stops[i].c[1], b:stops[i].c[2], a};
+      }
+    }
+    const s = stops[0];
+    return {r:s.c[0], g:s.c[1], b:s.c[2], a:(alphaOverride!==null?alphaOverride:0.92)};
   }
 
   function vividWindColor(speedMs){
-    const maxV = 20.0; const t = clamp(speedMs/maxV, 0, 0.9999);
-    const n = WIND_COLOR_SCALE.length; const pos = t*(n-1);
-    const i = Math.floor(pos); const f = pos - i;
+    const maxV = 20.0;
+    const t = clamp(speedMs/maxV, 0, 0.9999);
+    const n = WIND_COLOR_SCALE.length;
+    const pos = t*(n-1);
+    const i = Math.floor(pos);
+    const f = pos - i;
     const hex1=WIND_COLOR_SCALE[i], hex2=WIND_COLOR_SCALE[Math.min(i+1,n-1)];
     const r1=parseInt(hex1.slice(1,3),16), g1=parseInt(hex1.slice(3,5),16), b1=parseInt(hex1.slice(5,7),16);
     const r2=parseInt(hex2.slice(1,3),16), g2=parseInt(hex2.slice(3,5),16), b2=parseInt(hex2.slice(5,7),16);
     return {r:Math.round(lerp(r1,r2,f)), g:Math.round(lerp(g1,g2,f)), b:Math.round(lerp(b1,b2,f))};
   }
 
-  function gaussianBlur3x3(src, nx, ny, passes=1){
-    let a = new Float32Array(src.length);
-    for(let i=0;i<src.length;i++) a[i] = src[i];
-    const k = [1,2,1,2,4,2,1,2,1];
-    for(let pass=0; pass<passes; pass++){
-      const out = new Float32Array(a.length);
-      for(let y=0;y<ny;y++){
-        for(let x=0;x<nx;x++){
-          let s=0,w=0;
-          for(let j=-1;j<=1;j++){
-            for(let i=-1;i<=1;i++){
-              const xx=x+i, yy=y+j;
-              if(xx<0||xx>=nx||yy<0||yy>=ny) continue;
-              const kk = k[(j+1)*3+(i+1)];
-              const v = a[yy*nx+xx];
-              if(!isFinite(v)) continue;
-              s += v*kk; w += kk;
-            }
-          }
-          out[y*nx+x] = (w>0 ? s/w : a[y*nx+x]);
-        }
-      }
-      a = out;
-    }
-    return a;
-  }
-
-  function findLocalExtrema(field, nx, ny){
-    const highs=[], lows=[];
-    for(let y=1;y<ny-1;y++){
-      for(let x=1;x<nx-1;x++){
-        const idx=y*nx+x;
-        const v=field[idx];
-        if(!isFinite(v)) continue;
-
-        let isH=true, isL=true;
-        for(let j=-1;j<=1;j++){
-          for(let i=-1;i<=1;i++){
-            if(i===0 && j===0) continue;
-            const vv = field[(y+j)*nx+(x+i)];
-            if(!isFinite(vv)) continue;
-            if(vv > v) isH=false;
-            if(vv < v) isL=false;
-            if(!isH && !isL) break;
-          }
-          if(!isH && !isL) break;
-        }
-        if(isH) highs.push({x,y,v});
-        if(isL) lows.push({x,y,v});
-      }
-    }
-    return {highs, lows};
-  }
-
-  function suppressByDistance(points, minDistCells, keepN){
-    const kept=[];
-    for(const p of points){
-      let ok=true;
-      for(const q of kept){
-        const dx=p.x-q.x, dy=p.y-q.y;
-        if(dx*dx+dy*dy < minDistCells*minDistCells){ ok=false; break; }
-      }
-      if(ok) kept.push(p);
-      if(kept.length>=keepN) break;
-    }
-    return kept;
+  function getArrayForCloud(){
+    // compat: cloud / cld / tcc / cloudcover
+    return currentData?.cloud ?? currentData?.cld ?? currentData?.tcc ?? currentData?.cloudcover ?? null;
   }
 
   window.addEventListener('load', async () => {
-    map = L.map('map', { zoomControl: false, maxBounds: SICILY_BOUNDS.pad(0.5), background: '#1a1a1a' }).fitBounds(SICILY_BOUNDS);
+    map = L.map('map', {
+      zoomControl: false,
+      maxBounds: SICILY_BOUNDS.pad(0.5),
+      maxBoundsViscosity: 0.8,
+      background: '#1a1a1a'
+    }).fitBounds(SICILY_BOUNDS);
 
-    L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/World_Shaded_Relief/MapServer/tile/{z}/{y}/{x}', {
-        maxZoom: 13, attribution: 'Esri', className: 'dark-relief-tiles'
+    // BASE: Dark Relief (inverted)
+    L.tileLayer(
+      'https://server.arcgisonline.com/ArcGIS/rest/services/World_Shaded_Relief/MapServer/tile/{z}/{y}/{x}',
+      { maxZoom: 13, attribution: 'Esri', className: 'dark-relief-tiles' }
+    ).addTo(map);
+
+    // Hillshade overlay
+    L.tileLayer(
+      'https://server.arcgisonline.com/ArcGIS/rest/services/Elevation/World_Hillshade/MapServer/tile/{z}/{y}/{x}',
+      { maxZoom: 19, className: 'dark-relief-tiles', opacity: 0.40 }
+    ).addTo(map);
+
+    // Labels
+    map.createPane('labelsPane');
+    map.getPane('labelsPane').style.zIndex = 600;
+    map.getPane('labelsPane').style.pointerEvents = 'none';
+    L.tileLayer('https://{s}.basemaps.cartocdn.com/light_only_labels/{z}/{x}/{y}{r}.png', {
+      pane: 'labelsPane',
+      opacity: 0.90
     }).addTo(map);
 
-    L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/Elevation/World_Hillshade/MapServer/tile/{z}/{y}/{x}', {
-        maxZoom: 19, className: 'dark-relief-tiles', opacity: 0.45
-    }).addTo(map);
-
-    map.createPane('labelsPane'); map.getPane('labelsPane').style.zIndex = 600; map.getPane('labelsPane').style.pointerEvents = 'none';
-    L.tileLayer('https://{s}.basemaps.cartocdn.com/light_only_labels/{z}/{x}/{y}{r}.png', { pane: 'labelsPane', opacity: 0.9 }).addTo(map);
-
-    map.createPane('particlePane'); map.getPane('particlePane').style.zIndex = 800; map.getPane('particlePane').style.pointerEvents = 'none';
+    // Particles pane
+    map.createPane('particlePane');
+    map.getPane('particlePane').style.zIndex = 800;
+    map.getPane('particlePane').style.pointerEvents = 'none';
 
     createCanvasLayers();
     await loadCatalog();
@@ -356,17 +344,21 @@
     map.on('mousemove', onPick);
     map.on('click', onPick);
     map.on('moveend zoomend resize', redrawAll);
+
+    updateToggleUI();
     document.getElementById('unit-display').innerText = '';
   });
 
   function createCanvasLayers(){
     function mkCanvas(z, cls){
       const c = L.DomUtil.create('canvas', 'leaflet-layer ' + (cls||''));
-      c.style.pointerEvents = 'none'; c.style.zIndex = z;
+      c.style.pointerEvents = 'none';
+      c.style.zIndex = z;
       c.style.imageRendering = 'auto';
       map.getPanes().overlayPane.appendChild(c);
       return c;
     }
+    // scalar backgrounds
     scalarCanvases.wind  = mkCanvas(290, 'scalar-layer');
     scalarCanvases.temp  = mkCanvas(300, 'scalar-layer');
     scalarCanvases.rain  = mkCanvas(310, 'scalar-layer');
@@ -374,9 +366,10 @@
     scalarCanvases.press = mkCanvas(330, 'scalar-layer');
     scalarCanvases.cloud = mkCanvas(340, 'scalar-layer');
 
-    arrowCanvas = mkCanvas(380);
-    thermCanvas = mkCanvas(405);
-    isoCanvas   = mkCanvas(420);
+    // arrows + isolines
+    arrowCanvas = mkCanvas(380, 'arrow-layer');
+    thermCanvas = mkCanvas(405, 'therm-layer');  // isoterme sopra ai campi
+    isoCanvas   = mkCanvas(420, 'iso-layer');    // isobare sopra alle isoterme
     gridCanvas  = mkCanvas(450);
   }
 
@@ -387,7 +380,7 @@
       catalog = await r.json();
       const slider = document.getElementById('time-slider');
       slider.max = catalog.length - 1;
-      slider.addEventListener('input', (e)=> loadStep(parseInt(e.target.value)));
+      slider.addEventListener('input', (e)=> loadStep(parseInt(e.target.value,10)));
       await loadStep(0);
     } catch(e){}
   }
@@ -397,6 +390,7 @@
     document.getElementById('time-label').innerText = catalog[i].label;
     try{
       const r = await fetch('data_weather/' + catalog[i].file + '?t=' + Date.now());
+      if(!r.ok) return;
       currentData = await r.json();
       redrawAll();
     } catch(e){}
@@ -406,62 +400,79 @@
     if(!currentData) return;
     drawScalars();
     drawWindArrows();
-    drawIsotherms();   // <<< ora funziona
-    drawIsobars();     // <<< ora funziona
+    drawIsotherms();
+    drawIsobars();
     drawLatLonGrid();
     updateParticles();
   }
 
   function drawScalars(){
     ['wind','temp','rain','rh','press','cloud'].forEach(layer => {
-        const canvas = scalarCanvases[layer];
-        const ctx = canvas.getContext('2d');
-        const s = map.getSize();
-        canvas.width = s.x; canvas.height = s.y;
-        L.DomUtil.setPosition(canvas, map.containerPointToLayerPoint([0,0]));
-        ctx.clearRect(0,0,s.x,s.y);
+      const canvas = scalarCanvases[layer];
+      const ctx = canvas.getContext('2d');
+      const s = map.getSize();
+      canvas.width = s.x; canvas.height = s.y;
+      L.DomUtil.setPosition(canvas, map.containerPointToLayerPoint([0,0]));
+      ctx.clearRect(0,0,s.x,s.y);
 
-        if(!selected.has(layer) || !currentData.meta) return;
-        const m = currentData.meta;
-        const off = document.createElement('canvas');
-        off.width = m.nx; off.height = m.ny;
-        const octx = off.getContext('2d');
-        const img = octx.createImageData(m.nx, m.ny);
-        const data = img.data;
+      if(!selected.has(layer) || !currentData?.meta) return;
+      const m = currentData.meta;
 
-        let arr, stops, isWindBg=false;
-        if(layer==='wind') { isWindBg=true; }
-        else if(layer==='temp') { arr = currentData.temp; stops = TEMP_STOPS; }
-        else if(layer==='rain') { arr = currentData.rain; stops = RAIN_STOPS; }
-        else if(layer==='rh') { arr = currentData.rh; stops = RH_STOPS; }
-        else if(layer==='press') { arr = currentData.press; stops = PRESS_STOPS; }
-        else if(layer==='cloud') { arr = (currentData.cloud??currentData.cld); stops = CLOUD_STOPS; }
+      const off = document.createElement('canvas');
+      off.width = m.nx; off.height = m.ny;
+      const octx = off.getContext('2d');
+      const img = octx.createImageData(m.nx, m.ny);
+      const data = img.data;
 
-        if(!arr && !isWindBg) return;
+      let arr = null, stops = null, isWindBg = false;
 
-        for(let i=0; i<m.nx*m.ny; i++){
-            let val = 0, col = {r:0,g:0,b:0,a:0};
-            if(isWindBg){
-                const u = currentData.wind_u.data[i], v = currentData.wind_v.data[i];
-                val = Math.sqrt(u*u+v*v);
-                col = vividWindColor(val); col.a = 0.40;
-            } else {
-                val = arr[i] || 0;
-                if(layer==='rain' && val < 0.6) { data[i*4+3]=0; continue; }
-                if(layer==='cloud' && val < 10) { data[i*4+3]=0; continue; }
-                col = interpStops(val, stops);
-            }
-            const p = i*4;
-            data[p] = col.r; data[p+1] = col.g; data[p+2] = col.b; data[p+3] = Math.round(col.a*255);
+      if(layer==='wind') { isWindBg=true; }
+      else if(layer==='temp') { arr = currentData.temp; stops = TEMP_STOPS; }
+      else if(layer==='rain') { arr = currentData.rain; stops = RAIN_STOPS; }
+      else if(layer==='rh')   { arr = currentData.rh;   stops = RH_STOPS; }
+      else if(layer==='press'){ arr = currentData.press;stops = PRESS_STOPS; }
+      else if(layer==='cloud'){ arr = getArrayForCloud(); stops = CLOUD_STOPS; }
+
+      if(!isWindBg && !arr) return;
+
+      const n = m.nx*m.ny;
+      for(let i=0;i<n;i++){
+        let col = {r:0,g:0,b:0,a:0};
+
+        if(isWindBg){
+          const u = currentData.wind_u.data[i], v = currentData.wind_v.data[i];
+          const sp = Math.sqrt(u*u+v*v);
+          if(sp < 0.8){ data[i*4+3]=0; continue; }
+          col = vividWindColor(sp);
+          col.a = 0.35; // sfondo vento meno invadente
+        } else {
+          const val = arr[i] ?? 0;
+
+          // cutoffs
+          if(layer==='rain' && val < 0.6) { data[i*4+3]=0; continue; }
+          if(layer==='cloud' && val < 10) { data[i*4+3]=0; continue; }
+
+          if(layer==='temp'){
+            // === NETTO: 1 grado -> 1 colore (coerente con isolinee) ===
+            col = stopColorNearestInt(val, TEMP_STOPS, 0.95);
+          } else {
+            col = interpStops(val, stops);
+          }
         }
-        octx.putImageData(img, 0, 0);
 
-        const tl = map.latLngToContainerPoint([m.la1, m.lo1]);
-        const br = map.latLngToContainerPoint([m.la2, m.lo2]);
-        ctx.save();
-        ctx.imageSmoothingEnabled = true;
-        ctx.drawImage(off, tl.x, tl.y, br.x-tl.x, br.y-tl.y);
-        ctx.restore();
+        const p=i*4;
+        data[p]=col.r; data[p+1]=col.g; data[p+2]=col.b; data[p+3]=Math.round(clamp(col.a,0,1)*255);
+      }
+
+      octx.putImageData(img,0,0);
+
+      const tl = map.latLngToContainerPoint([m.la1, m.lo1]);
+      const br = map.latLngToContainerPoint([m.la2, m.lo2]);
+
+      ctx.save();
+      ctx.imageSmoothingEnabled = true;
+      ctx.drawImage(off, tl.x, tl.y, br.x-tl.x, br.y-tl.y);
+      ctx.restore();
     });
   }
 
@@ -471,25 +482,31 @@
     gridCanvas.width = s.x; gridCanvas.height = s.y;
     L.DomUtil.setPosition(gridCanvas, map.containerPointToLayerPoint([0,0]));
     ctx.clearRect(0,0,s.x,s.y);
+
     if(!showGrid) return;
-    const b = map.getBounds(); const zoom = map.getZoom();
+
+    const b = map.getBounds();
+    const zoom = map.getZoom();
     let step = 1.0; if(zoom >= 9) step = 0.5; if(zoom >= 11) step = 0.2;
-    ctx.lineWidth = 1; ctx.strokeStyle = "rgba(255,255,255,0.2)";
-    ctx.setLineDash([5, 5]); ctx.font = "10px sans-serif"; ctx.fillStyle = "#aaa";
-    const startLon = Math.ceil(b.getWest() / step) * step;
-    for(let lon = startLon; lon <= b.getEast(); lon += step){
-        const x = map.latLngToContainerPoint([b.getSouth(), lon]).x;
-        if(x<0||x>s.x) continue;
-        ctx.beginPath(); ctx.moveTo(x, 0); ctx.lineTo(x, s.y); ctx.stroke();
-        ctx.fillText(lon.toFixed(1) + "°E", x + 2, s.y - 10);
+
+    ctx.lineWidth = 1;
+    ctx.strokeStyle = "rgba(255,255,255,0.18)";
+    ctx.setLineDash([5, 5]);
+
+    const startLon = Math.ceil(b.getWest()/step)*step;
+    for(let lon=startLon; lon<=b.getEast(); lon+=step){
+      const x = map.latLngToContainerPoint([b.getSouth(), lon]).x;
+      if(x<0||x>s.x) continue;
+      ctx.beginPath(); ctx.moveTo(x,0); ctx.lineTo(x,s.y); ctx.stroke();
     }
-    const startLat = Math.ceil(b.getSouth() / step) * step;
-    for(let lat = startLat; lat <= b.getNorth(); lat += step){
-        const y = map.latLngToContainerPoint([lat, b.getWest()]).y;
-        if(y<0||y>s.y) continue;
-        ctx.beginPath(); ctx.moveTo(0, y); ctx.lineTo(s.x, y); ctx.stroke();
-        ctx.fillText(lat.toFixed(1) + "°N", 5, y - 2);
+
+    const startLat = Math.ceil(b.getSouth()/step)*step;
+    for(let lat=startLat; lat<=b.getNorth(); lat+=step){
+      const y = map.latLngToContainerPoint([lat, b.getWest()]).y;
+      if(y<0||y>s.y) continue;
+      ctx.beginPath(); ctx.moveTo(0,y); ctx.lineTo(s.x,y); ctx.stroke();
     }
+
     ctx.setLineDash([]);
   }
 
@@ -500,47 +517,87 @@
     L.DomUtil.setPosition(arrowCanvas, map.containerPointToLayerPoint([0,0]));
     ctx.clearRect(0,0,s.x,s.y);
 
-    if(!selected.has('wind') || !currentData) return;
-    const m = currentData.meta; const zoom = map.getZoom();
+    if(!selected.has('wind') if(!currentData) return;
+
+    if(!currentData?.meta) return;
+    const m = currentData.meta;
+    const zoom = map.getZoom();
 
     const stride = zoom >= 10 ? 3 : (zoom >= 9 ? 4 : 5);
-    const baseLen = zoom >= 10 ? 28 : 22; const baseWidth = 2.5;
-    ctx.lineCap = 'round'; ctx.lineJoin = 'round';
+    const baseLen = zoom >= 10 ? 28 : 22;
+    const baseWidth = 2.5;
+
+    ctx.lineCap='round';
+    ctx.lineJoin='round';
 
     for(let y=0; y<m.ny; y+=stride){
-        const lat = m.la1 - y*m.dy;
-        for(let x=0; x<m.nx; x+=stride){
-            const idx = y*m.nx + x;
-            const u = currentData.wind_u.data[idx], v = currentData.wind_v.data[idx];
-            const sp = Math.sqrt(u*u+v*v);
-            if(sp < 1) continue;
-            const lon = m.lo1 + x*m.dx;
-            const p = map.latLngToContainerPoint([lat, lon]);
+      const lat = m.la1 - y*m.dy;
+      for(let x=0; x<m.nx; x+=stride){
+        const idx = y*m.nx + x;
+        const u = currentData.wind_u.data[idx], v = currentData.wind_v.data[idx];
+        const sp = Math.sqrt(u*u+v*v);
+        if(sp < 1) continue;
 
-            const cRg = vividWindColor(sp);
-            const fillStyle = `rgb(${cRg.r},${cRg.g},${cRg.b})`;
-            const speedScale = clamp(sp/9.0, 0.65, 2.5);
-            const currentLen = baseLen*speedScale; const currentWidth = baseWidth*speedScale;
-            const headLen = currentLen*0.4; const headWidth = headLen*0.75;
-            const angle = Math.atan2(-v, u);
+        const lon = m.lo1 + x*m.dx;
+        const p = map.latLngToContainerPoint([lat, lon]);
 
-            const shaftEndX = p.x + (currentLen-headLen)*Math.cos(angle);
-            const shaftEndY = p.y + (currentLen-headLen)*Math.sin(angle);
-            ctx.beginPath(); ctx.moveTo(p.x, p.y); ctx.lineTo(shaftEndX, shaftEndY);
-            ctx.strokeStyle = "#000000"; ctx.lineWidth = currentWidth+2.5; ctx.stroke();
-            ctx.strokeStyle = fillStyle; ctx.lineWidth = currentWidth; ctx.stroke();
+        const cRg = vividWindColor(sp);
+        const fillStyle = `rgb(${cRg.r},${cRg.g},${cRg.b})`;
 
-            const tipX = p.x + currentLen*Math.cos(angle);
-            const tipY = p.y + currentLen*Math.sin(angle);
-            const wing1X = shaftEndX - headWidth*Math.cos(angle - Math.PI/2);
-            const wing1Y = shaftEndY - headWidth*Math.sin(angle - Math.PI/2);
-            const wing2X = shaftEndX - headWidth*Math.cos(angle + Math.PI/2);
-            const wing2Y = shaftEndY - headWidth*Math.sin(angle + Math.PI/2);
+        const speedScale = clamp(sp/9.0, 0.65, 2.5);
+        const currentLen = baseLen*speedScale;
+        const currentWidth = baseWidth*speedScale;
 
-            ctx.beginPath(); ctx.moveTo(tipX, tipY); ctx.lineTo(wing1X, wing1Y); ctx.lineTo(wing2X, wing2Y); ctx.closePath();
-            ctx.fillStyle = "#000000"; ctx.fill(); ctx.lineWidth=1.0; ctx.stroke();
-            ctx.fillStyle = fillStyle; ctx.fill();
-        }
+        const headLen = currentLen*0.4;
+        const headWidth = headLen*0.75;
+
+        // Direzione: usa stessa convenzione delle particelle
+        // u=est, v=nord; su schermo Y cresce verso il basso => inverti v
+        const angle = Math.atan2(-v, u);
+
+        const shaftEndX = p.x + (currentLen-headLen)*Math.cos(angle);
+        const shaftEndY = p.y + (currentLen-headLen)*Math.sin(angle);
+
+        // asta bordo nero
+        ctx.beginPath();
+        ctx.moveTo(p.x,p.y);
+        ctx.lineTo(shaftEndX, shaftEndY);
+        ctx.strokeStyle = "#000";
+        ctx.lineWidth = currentWidth+2.5;
+        ctx.stroke();
+
+        // asta colore
+        ctx.strokeStyle = fillStyle;
+        ctx.lineWidth = currentWidth;
+        ctx.stroke();
+
+        // testa
+        const tipX = p.x + currentLen*Math.cos(angle);
+        const tipY = p.y + currentLen*Math.sin(angle);
+
+        const wing1X = shaftEndX - headWidth*Math.cos(angle - Math.PI/2);
+        const wing1Y = shaftEndY - headWidth*Math.sin(angle - Math.PI/2);
+        const wing2X = shaftEndX - headWidth*Math.cos(angle + Math.PI/2);
+        const wing2Y = shaftEndY - headWidth*Math.sin(angle + Math.PI/2);
+
+        // bordo nero
+        ctx.beginPath();
+        ctx.moveTo(tipX, tipY);
+        ctx.lineTo(wing1X, wing1Y);
+        ctx.lineTo(wing2X, wing2Y);
+        ctx.closePath();
+        ctx.fillStyle = "#000";
+        ctx.fill();
+
+        // riempimento colore
+        ctx.beginPath();
+        ctx.moveTo(tipX, tipY);
+        ctx.lineTo(wing1X, wing1Y);
+        ctx.lineTo(wing2X, wing2Y);
+        ctx.closePath();
+        ctx.fillStyle = fillStyle;
+        ctx.fill();
+      }
     }
   }
 
@@ -549,15 +606,27 @@
     if(!particlesOn || !currentData) return;
 
     velocityLayer = L.velocityLayer({
-      displayValues: false, data: [ currentData.wind_u, currentData.wind_v ],
-      maxVelocity: 20.0, velocityScale: 0.008, particleMultiplier: 1/180, lineWidth: 2.0,
-      particleAge: 100, frameRate: 40, opacity: 1.0, colorScale: WIND_COLOR_SCALE, pane: 'particlePane'
+      pane: 'particlePane',
+      displayValues: false,
+      data: [ currentData.wind_u, currentData.wind_v ],
+      maxVelocity: 20.0,
+      velocityScale: 0.008,
+      particleMultiplier: 1/180,
+      lineWidth: 2.0,
+      particleAge: 100,
+      frameRate: 40,
+      opacity: 1.0,
+      colorScale: WIND_COLOR_SCALE
     });
-    velocityLayer.onAdd = function(map){ L.VelocityLayer.prototype.onAdd.call(this, map); this._canvas.classList.add('velocity-canvas'); };
+
+    velocityLayer.onAdd = function(map){
+      L.VelocityLayer.prototype.onAdd.call(this, map);
+      this._canvas.classList.add('velocity-canvas');
+    };
     velocityLayer.addTo(map);
   }
 
-  // ✅✅✅ ISOTERME CORRETTE
+  // === ISOTERME: più sensibili (1°C) e colore coerente col riempimento ===
   function drawIsotherms(){
     const ctx = thermCanvas.getContext('2d');
     const s = map.getSize();
@@ -570,68 +639,82 @@
     const m = currentData.meta;
     const temp = currentData.temp;
 
-    const zoom = map.getZoom();
-    const step = (zoom >= 10) ? 2 : (zoom >= 9 ? 3 : 4);
-
     let tMin=Infinity, tMax=-Infinity;
     for(let i=0;i<temp.length;i++){
-      const v=temp[i];
+      const v = temp[i];
       if(!isFinite(v)) continue;
       if(v<tMin) tMin=v;
       if(v>tMax) tMax=v;
     }
-    if(!isFinite(tMin)||!isFinite(tMax)) return;
+    if(!isFinite(tMin) || !isFinite(tMax)) return;
 
+    const step = 1; // 1°C
     const start = Math.floor(tMin/step)*step;
     const end   = Math.ceil(tMax/step)*step + step;
 
     const contours = d3.contours().size([m.nx, m.ny]).thresholds(d3.range(start, end, step))(temp);
 
     ctx.save();
-    ctx.lineWidth = 1.2;
-    ctx.strokeStyle = "rgba(255,255,255,0.45)";
-    ctx.font = "900 12px Arial";
-    ctx.textAlign="center"; ctx.textBaseline="middle";
+    ctx.lineJoin="round";
+    ctx.lineCap="round";
+    ctx.textAlign="center";
+    ctx.textBaseline="middle";
 
     contours.forEach(c=>{
-      let pickedLabel = null;
+      const T = Math.round(c.value);
+      const isMajor = (T % 5 === 0);
+      const col = stopColorNearestInt(T, TEMP_STOPS, 1.0);
+
+      const colored = `rgba(${col.r},${col.g},${col.b},${isMajor ? 0.95 : 0.70})`;
 
       c.coordinates.forEach(poly=>{
         poly.forEach(ring=>{
           if(!ring || ring.length < 2) return;
 
+          // Path ben formato (NO linee spurie)
           ctx.beginPath();
           for(let i=0;i<ring.length;i++){
-            const coord = ring[i]; // [x,y]
+            const coord = ring[i];
             const lat = m.la1 - coord[1]*m.dy;
             const lon = m.lo1 + coord[0]*m.dx;
             const p = map.latLngToContainerPoint([lat, lon]);
             if(i===0) ctx.moveTo(p.x,p.y);
             else ctx.lineTo(p.x,p.y);
           }
+
+          // bordo nero
+          ctx.strokeStyle = "rgba(0,0,0,0.60)";
+          ctx.lineWidth = isMajor ? 3.2 : 2.2;
           ctx.stroke();
 
-          if(!pickedLabel && ring.length > 80){
+          // linea colorata
+          ctx.strokeStyle = colored;
+          ctx.lineWidth = isMajor ? 2.0 : 1.1;
+          ctx.stroke();
+
+          // label solo major (evita caos)
+          if(isMajor && ring.length > 140){
             const mid = ring[Math.floor(ring.length/2)];
             const lat = m.la1 - mid[1]*m.dy;
             const lon = m.lo1 + mid[0]*m.dx;
-            pickedLabel = map.latLngToContainerPoint([lat, lon]);
+            const p = map.latLngToContainerPoint([lat, lon]);
+
+            const txt = T + "°";
+            ctx.font = "950 14px Arial";
+            ctx.lineWidth = 5;
+            ctx.strokeStyle = "rgba(0,0,0,0.75)";
+            ctx.strokeText(txt, p.x, p.y);
+            ctx.fillStyle = "rgba(255,255,255,0.96)";
+            ctx.fillText(txt, p.x, p.y);
           }
         });
       });
-
-      if(pickedLabel){
-        ctx.fillStyle="rgba(0,0,0,0.55)";
-        ctx.fillRect(pickedLabel.x-16, pickedLabel.y-8, 32, 16);
-        ctx.fillStyle="#fff";
-        ctx.fillText(Math.round(c.value) + "°", pickedLabel.x, pickedLabel.y);
-      }
     });
 
     ctx.restore();
   }
 
-  // ✅✅✅ ISOBARE CORRETTE + A/B COERENTI
+  // === ISOBARE: fix linee strane + labels + A/B coerenti (non a caso) ===
   function drawIsobars(){
     const ctx = isoCanvas.getContext('2d');
     const s = map.getSize();
@@ -643,43 +726,44 @@
 
     const m = currentData.meta;
 
-    const cleanPress = new Float32Array(currentData.press.length);
-    for(let i=0; i<currentData.press.length; i++) {
-        let v = currentData.press[i];
-        if(!isFinite(v) || v < 850 || v > 1100) cleanPress[i] = 1013;
-        else cleanPress[i] = v;
+    // Sanitizza pressione
+    const clean = new Float32Array(currentData.press.length);
+    for(let i=0;i<clean.length;i++){
+      const v = currentData.press[i];
+      if(!isFinite(v) || v < 850 || v > 1100) clean[i] = 1013;
+      else clean[i] = v;
     }
 
-    let pMin=Infinity, pMax=-Infinity;
-    for(let i=0;i<cleanPress.length;i++){
-      const v=cleanPress[i];
-      if(!isFinite(v)) continue;
-      if(v<pMin) pMin=v;
-      if(v>pMax) pMax=v;
-    }
-    if(!isFinite(pMin)||!isFinite(pMax)) return;
-
-    const start = Math.floor(pMin/2)*2;
-    const end   = Math.ceil(pMax/2)*2 + 2;
-
-    const contours = d3.contours().size([m.nx, m.ny]).thresholds(d3.range(start, end, 2))(cleanPress);
+    // Contours ogni 2 hPa (classico sinottico)
+    const contours = d3.contours().size([m.nx, m.ny]).thresholds(d3.range(960, 1050, 2))(clean);
 
     ctx.save();
-    ctx.lineWidth = 1.8;
-    ctx.strokeStyle = "rgba(255,255,255,0.70)";
+    ctx.lineJoin="round";
+    ctx.lineCap="round";
+
+    // Disegna linee + labels su linee
     ctx.font = "900 12px Arial";
-    ctx.textAlign="center"; ctx.textBaseline="middle";
+    ctx.textAlign="center";
+    ctx.textBaseline="middle";
+
+    const labelEvery = 4; // label solo ogni 4 hPa per pulizia
 
     contours.forEach(c=>{
-      let pickedLabel = null;
+      const P = Math.round(c.value);
+      const major = (P % labelEvery === 0);
+
+      // linee bianche coerenti
+      ctx.strokeStyle = major ? "rgba(255,255,255,0.80)" : "rgba(255,255,255,0.55)";
+      ctx.lineWidth = major ? 2.0 : 1.2;
 
       c.coordinates.forEach(poly=>{
         poly.forEach(ring=>{
           if(!ring || ring.length < 2) return;
 
+          // Path corretto: moveTo + lineTo (NO linee spurie dal basso)
           ctx.beginPath();
           for(let i=0;i<ring.length;i++){
-            const coord = ring[i]; // [x,y]
+            const coord = ring[i];
             const lat = m.la1 - coord[1]*m.dy;
             const lon = m.lo1 + coord[0]*m.dx;
             const p = map.latLngToContainerPoint([lat, lon]);
@@ -688,62 +772,115 @@
           }
           ctx.stroke();
 
-          if(!pickedLabel && ring.length > 90){
+          // Label su major: scegli punto centrale
+          if(major && ring.length > 180){
             const mid = ring[Math.floor(ring.length/2)];
             const lat = m.la1 - mid[1]*m.dy;
             const lon = m.lo1 + mid[0]*m.dx;
-            pickedLabel = map.latLngToContainerPoint([lat, lon]);
+            const p = map.latLngToContainerPoint([lat, lon]);
+
+            // mascherina
+            ctx.fillStyle = "rgba(0,0,0,0.62)";
+            ctx.fillRect(p.x-16, p.y-8, 32, 16);
+
+            ctx.fillStyle = "rgba(255,255,255,0.95)";
+            ctx.fillText(P, p.x, p.y);
           }
         });
       });
-
-      if(pickedLabel){
-        ctx.fillStyle="rgba(0,0,0,0.60)";
-        ctx.fillRect(pickedLabel.x-18, pickedLabel.y-8, 36, 16);
-        ctx.fillStyle="#fff";
-        ctx.fillText(Math.round(c.value), pickedLabel.x, pickedLabel.y);
-      }
     });
 
-    const smooth = gaussianBlur3x3(cleanPress, m.nx, m.ny, 2);
-    const { highs, lows } = findLocalExtrema(smooth, m.nx, m.ny);
-    highs.sort((a,b)=> b.v - a.v);
-    lows.sort((a,b)=> a.v - b.v);
-
+    // === A/B: cerca estremi locali con pruning (coerente, non “a caso”) ===
     const zoom = map.getZoom();
-    const minDistCells = (zoom >= 10) ? 10 : (zoom >= 9 ? 12 : 14);
-    const keepN = (zoom >= 10) ? 5 : 4;
+    const step = zoom >= 10 ? 2 : (zoom >= 9 ? 3 : 4);   // meno punti = meno carico
+    const rad  = zoom >= 10 ? 3 : 4;                     // raggio vicinato
+    const candidates = [];
 
-    const topH = suppressByDistance(highs, minDistCells, keepN);
-    const topL = suppressByDistance(lows,  minDistCells, keepN);
+    for(let y=rad; y<m.ny-rad; y+=step){
+      for(let x=rad; x<m.nx-rad; x+=step){
+        const idx = y*m.nx + x;
+        const v = clean[idx];
 
-    function drawAB(letter, pt, fill){
-      const lat = m.la1 - pt.y*m.dy;
-      const lon = m.lo1 + pt.x*m.dx;
-      const p = map.latLngToContainerPoint([lat, lon]);
+        // filtra: solo lontano da 1013 per evitare rumore
+        if(v > 1010 && v < 1016) continue;
 
-      if(p.x < -50 || p.y < -50 || p.x > s.x+50 || p.y > s.y+50) return;
+        let isMax = true, isMin = true;
+        for(let dy=-rad; dy<=rad; dy++){
+          for(let dx=-rad; dx<=rad; dx++){
+            if(dx===0 && dy===0) continue;
+            const n = clean[(y+dy)*m.nx + (x+dx)];
+            if(n >= v) isMax = false;
+            if(n <= v) isMin = false;
+            if(!isMax && !isMin) break;
+          }
+          if(!isMax && !isMin) break;
+        }
 
-      ctx.save();
-      ctx.font = "950 36px Arial";
-      ctx.lineWidth = 7;
-      ctx.strokeStyle = "rgba(0,0,0,0.70)";
-      ctx.strokeText(letter, p.x, p.y);
-      ctx.fillStyle = fill;
-      ctx.fillText(letter, p.x, p.y);
-
-      ctx.font = "900 13px Arial";
-      ctx.lineWidth = 4;
-      ctx.strokeStyle = "rgba(0,0,0,0.65)";
-      const txt = Math.round(pt.v) + " hPa";
-      ctx.strokeText(txt, p.x, p.y + 24);
-      ctx.fillStyle = "rgba(255,255,255,0.95)";
-      ctx.fillText(txt, p.x, p.y + 24);
-      ctx.restore();
+        if(isMax || isMin){
+          // converti in pixel per pruning
+          const lat = m.la1 - y*m.dy;
+          const lon = m.lo1 + x*m.dx;
+          const p = map.latLngToContainerPoint([lat, lon]);
+          candidates.push({x,y,v, type: isMax ? 'A' : 'B', px:p.x, py:p.y});
+        }
+      }
     }
 
-    topH.forEach(pt => drawAB("A", pt, "rgba(255,0,0,0.95)"));
-    topL.forEach(pt => drawAB("B", pt, "rgba(0,68,255,0.95)"));
+    // Pruning: tieni solo estremi ben distanziati e “più forti”
+    candidates.sort((a,b)=>{
+      if(a.type !== b.type) return a.type.localeCompare(b.type);
+      // massimi: più alto prima; minimi: più basso prima
+      return (a.type==='A') ? (b.v - a.v) : (a.v - b.v);
+    });
+
+    const kept = [];
+    const minDist = zoom >= 10 ? 70 : 90; // px
+
+    for(const c of candidates){
+      // fuori viewport? scarta
+      if(c.px < -20 || c.py < -20 || c.px > s.x+20 || c.py > s.y+20) continue;
+
+      let ok = true;
+      for(const k of kept){
+        const dx = c.px - k.px, dy = c.py - k.py;
+        if(Math.sqrt(dx*dx + dy*dy) < minDist){ ok = false; break; }
+      }
+      if(ok) kept.push(c);
+      if(kept.length > 10) break; // evita eccesso
+    }
+
+    // Disegna A/B grandi e leggibili
+    ctx.font = "950 34px Arial";
+    ctx.textAlign="center";
+    ctx.textBaseline="middle";
+
+    kept.forEach(pt=>{
+      const letter = pt.type;
+      const fill = (letter==='A') ? "#ff2a2a" : "#2a6bff";
+
+      // contorno nero spesso + contorno bianco sottile = leggibilità top su qualsiasi sfondo
+      ctx.lineWidth = 8;
+      ctx.strokeStyle = "rgba(0,0,0,0.85)";
+      ctx.strokeText(letter, pt.px, pt.py);
+
+      ctx.lineWidth = 4;
+      ctx.strokeStyle = "rgba(255,255,255,0.90)";
+      ctx.strokeText(letter, pt.px, pt.py);
+
+      ctx.fillStyle = fill;
+      ctx.fillText(letter, pt.px, pt.py);
+
+      // pressione sotto, più piccola
+      const txt = Math.round(pt.v) + " hPa";
+      ctx.font = "900 13px Arial";
+      ctx.lineWidth = 4;
+      ctx.strokeStyle = "rgba(0,0,0,0.75)";
+      ctx.strokeText(txt, pt.px, pt.py + 26);
+      ctx.fillStyle = "rgba(255,255,255,0.92)";
+      ctx.fillText(txt, pt.px, pt.py + 26);
+
+      ctx.font = "950 34px Arial";
+    });
 
     ctx.restore();
   }
@@ -752,49 +889,74 @@
     if(selected.has(name)) selected.delete(name); else selected.add(name);
     updateToggleUI(); redrawAll();
   }
-  window.toggleIsobars = function(){ showIsobars=!showIsobars; updateToggleUI(); redrawAll(); }
-  window.toggleIsotherms = function(){ showIsotherms=!showIsotherms; updateToggleUI(); redrawAll(); }
-  window.toggleGrid = function(){ showGrid=!showGrid; updateToggleUI(); redrawAll(); }
-  window.toggleParticles = function(){ particlesOn=!particlesOn; updateToggleUI(); redrawAll(); }
+  window.toggleIsobars = function(){
+    showIsobars = !showIsobars;
+    updateToggleUI(); redrawAll();
+  }
+  window.toggleIsotherms = function(){
+    showIsotherms = !showIsotherms;
+    updateToggleUI(); redrawAll();
+  }
+  window.toggleGrid = function(){
+    showGrid = !showGrid;
+    updateToggleUI(); redrawAll();
+  }
+  window.toggleParticles = function(){
+    particlesOn = !particlesOn;
+    updateToggleUI(); redrawAll();
+  }
 
   function updateToggleUI(){
     document.querySelectorAll('.toggle').forEach(el => {
       const txt = el.innerText.toLowerCase();
-      if(txt.includes('vento') && selected.has('wind')) el.classList.add('active');
-      else if(txt.includes('temp') && selected.has('temp')) el.classList.add('active');
-      else if(txt.includes('pioggia') && selected.has('rain')) el.classList.add('active');
-      else if(txt.includes('umidità') && selected.has('rh')) el.classList.add('active');
-      else if(txt.includes('pressione') && selected.has('press')) el.classList.add('active');
-      else if(txt.includes('nuvole') && selected.has('cloud')) el.classList.add('active');
-      else if(txt.includes('isobare') && showIsobars) el.classList.add('active');
-      else if(txt.includes('isoterme') && showIsotherms) el.classList.add('active');
-      else if(txt.includes('reticolo') && showGrid) el.classList.add('active');
+
+      const on =
+        (txt.includes('vento') && selected.has('wind')) ||
+        (txt.includes('temp') && selected.has('temp')) ||
+        (txt.includes('pioggia') && selected.has('rain')) ||
+        (txt.includes('umidità') && selected.has('rh')) ||
+        (txt.includes('pressione') && selected.has('press')) ||
+        (txt.includes('nuvole') && selected.has('cloud')) ||
+        (txt.includes('isobare') && showIsobars) ||
+        (txt.includes('isoterme') && showIsotherms) ||
+        (txt.includes('reticolo') && showGrid);
+
+      if(on) el.classList.add('active');
       else el.classList.remove('active');
     });
+
     const btnFlow = document.getElementById('btn-flow');
     if(particlesOn) btnFlow.classList.add('active'); else btnFlow.classList.remove('active');
+
     document.getElementById('wind-rose').style.display = selected.has('wind') ? 'flex' : 'none';
   }
 
   function onPick(e){
-    if(!currentData) return;
+    if(!currentData?.meta) return;
+
     const m = currentData.meta;
     const y = Math.round((m.la1 - e.latlng.lat)/m.dy);
     const x = Math.round((e.latlng.lng - m.lo1)/m.dx);
     if(x<0||x>=m.nx||y<0||y>=m.ny) return;
+
     const idx = y*m.nx + x;
-    let val = '--', unit = '';
+
+    let val='--', unit='';
+
+    // priorità: se più layer attivi, mostra il primo “importante”
     if(selected.has('rain')) { val = (currentData.rain[idx] ?? 0).toFixed(1); unit='mm'; }
     else if(selected.has('temp')) { val = (currentData.temp[idx] ?? 0).toFixed(1); unit='°C'; }
     else if(selected.has('wind')) {
-        const u=currentData.wind_u.data[idx], v=currentData.wind_v.data[idx];
-        val = (Math.sqrt(u*u+v*v)*3.6).toFixed(1); unit='km/h';
-        const arrow = document.getElementById('rose-arrow');
-        const deg = 90 - (Math.atan2(v, u) * 180 / Math.PI);
-        arrow.style.transform = `rotate(${deg}deg)`;
+      const u=currentData.wind_u.data[idx], v=currentData.wind_v.data[idx];
+      val = (Math.sqrt(u*u+v*v)*3.6).toFixed(1); unit='km/h';
+      const arrow = document.getElementById('rose-arrow');
+      const deg = 90 - (Math.atan2(v, u) * 180 / Math.PI);
+      arrow.style.transform = `rotate(${deg}deg)`;
     }
     else if(selected.has('rh')) { val = Math.round(currentData.rh[idx] ?? 0); unit='%'; }
     else if(selected.has('press')) { val = Math.round(currentData.press[idx] ?? 0); unit='hPa'; }
+    else if(selected.has('cloud')) { val = Math.round((getArrayForCloud()?.[idx] ?? 0)); unit='%'; }
+
     document.getElementById('val-display').innerText = val;
     document.getElementById('unit-display').innerText = unit;
   }
@@ -803,12 +965,21 @@
     if(isPlaying){ isPlaying=false; document.getElementById('play-btn').innerText='►'; return; }
     isPlaying=true; document.getElementById('play-btn').innerText='❚❚';
     const s = document.getElementById('time-slider');
-    let i = parseInt(s.value);
+    let i = parseInt(s.value,10);
     const loop = setInterval(()=>{
-        if(!isPlaying || i>=s.max) { clearInterval(loop); isPlaying=false; document.getElementById('play-btn').innerText='►'; return; }
-        i++; s.value=i; loadStep(i);
+      const max = parseInt(s.max,10);
+      if(!isPlaying || i>=max) {
+        clearInterval(loop);
+        isPlaying=false;
+        document.getElementById('play-btn').innerText='►';
+        return;
+      }
+      i++;
+      s.value=i;
+      loadStep(i);
     }, 800);
   }
 </script>
 </body>
 </html>
+```0
