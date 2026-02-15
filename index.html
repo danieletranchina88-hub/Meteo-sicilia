@@ -94,7 +94,6 @@
     #time-label { font-size: 1.45em; font-weight: 950; margin-left: 14px; min-width: 150px; text-align: center; color: #fff; }
     input[type=range] { flex-grow: 1; height: 6px; cursor: pointer; accent-color: #0077ff; background: rgba(255,255,255,0.2); }
 
-    /* Base tiles: inverted relief look (grigio con rilievi “sinottico”) */
     .dark-relief-tiles {
       filter: invert(100%) hue-rotate(180deg) brightness(0.82) contrast(1.20) grayscale(25%);
     }
@@ -106,7 +105,6 @@
     }
 
     canvas.leaflet-layer.velocity-canvas { mix-blend-mode: normal; opacity: 0.98; }
-
   </style>
 </head>
 
@@ -179,25 +177,44 @@
 
   const WIND_COLOR_SCALE = ["#000080", "#0044ff", "#00ddff", "#00ff55", "#ffff00", "#ff6600", "#ff0000", "#ff00ff"];
 
-  // TEMP (Custom) - come tuo
-  const TEMP_STOPS = [
-    {v: -15, c: [156,218,216]}, {v: -14, c: [149,214,211]}, {v: -13, c: [141,210,206]}, {v: -12, c: [134,206,201]},
-    {v: -11, c: [127,202,196]}, {v: -10, c: [119,198,191]}, {v: -9,  c: [112,194,185]}, {v: -8,  c: [106,190,181]},
-    {v: -7,  c: [104,184,183]}, {v: -6,  c: [102,178,185]}, {v: -5,  c: [101,172,187]}, {v: -4,  c: [100,166,189]},
-    {v: -3,  c: [98,158,191]},  {v: -2,  c: [96,150,193]},  {v: -1,  c: [95,142,196]},  {v: 0,   c: [93,133,198]},
-    {v: 1,   c: [80,127,133]},  {v: 2,   c: [74,126,111]},  {v: 3,   c: [79,129,93]},   {v: 4,   c: [84,131,84]},
-    {v: 5,   c: [89,134,76]},   {v: 6,   c: [94,136,67]},   {v: 7,   c: [99,139,58]},   {v: 8,   c: [104,141,50]},
-    {v: 9,   c: [109,144,41]},  {v: 10,  c: [114,146,33]},  {v: 11,  c: [129,150,22]},  {v: 12,  c: [142,154,20]},
-    {v: 13,  c: [155,158,17]},  {v: 14,  c: [168,161,15]},  {v: 15,  c: [181,165,13]},  {v: 16,  c: [194,169,11]},
-    {v: 17,  c: [207,173,9]},   {v: 18,  c: [219,176,7]},   {v: 19,  c: [232,180,6]},   {v: 20,  c: [243,183,4]},
-    {v: 21,  c: [242,172,7]},   {v: 22,  c: [241,161,9]},   {v: 23,  c: [240,150,12]},  {v: 24,  c: [239,139,15]},
-    {v: 25,  c: [238,128,17]},  {v: 26,  c: [237,117,20]},  {v: 27,  c: [236,106,22]},  {v: 28,  c: [235,95,24]},
-    {v: 29,  c: [234,84,25]},   {v: 30,  c: [232,83,25]},   {v: 31,  c: [222,79,24]},   {v: 32,  c: [212,75,23]},
-    {v: 33,  c: [203,71,22]},   {v: 34,  c: [193,68,21]},   {v: 35,  c: [184,64,20]},   {v: 36,  c: [174,60,18]},
-    {v: 37,  c: [165,56,17]},   {v: 38,  c: [155,52,16]},   {v: 39,  c: [146,48,15]},   {v: 40,  c: [136,45,13]},
-    {v: 41,  c: [126,41,12]},   {v: 42,  c: [117,37,11]},   {v: 43,  c: [107,30,6]},    {v: 44,  c: [98,26,4]},
-    {v: 45,  c: [89,22,3]}
+  // ====== TEMPERATURA: SCALA COME LA TUA IMMAGINE (bande nette) ======
+  // Step ~4°C (come barra). Colori ricostruiti per replicare la gradazione.
+  // Se vuoi “pixel-perfect” al 100%, mi servirebbe il codice colore esatto o una seconda foto ravvicinata della barra completa.
+  const TEMP_BANDS = [
+    { t:-28, c:"#4b1b6e" },
+    { t:-24, c:"#6b1f9a" },
+    { t:-20, c:"#ff3bd5" },
+    { t:-16, c:"#0b2a5e" },
+    { t:-12, c:"#0f3a73" },
+    { t:-8,  c:"#165a8c" },
+    { t:-4,  c:"#1e88d8" },
+    { t:0,   c:"#76c8ff" },
+    { t:4,   c:"#9fe7c5" },
+    { t:8,   c:"#5aa88b" },
+    { t:12,  c:"#0f9a3d" },
+    { t:16,  c:"#56c400" },
+    { t:20,  c:"#d9f000" },
+    { t:24,  c:"#ffe14a" },
+    { t:28,  c:"#ff9a1a" },
+    { t:32,  c:"#ff5a00" },
+    { t:36,  c:"#cc0a00" },
+    { t:40,  c:"#7a2b2b" },
+    { t:44,  c:"#ffd2c8" }
   ];
+  function hexToRgb(hex){
+    const h = hex.replace('#','');
+    return { r: parseInt(h.slice(0,2),16), g: parseInt(h.slice(2,4),16), b: parseInt(h.slice(4,6),16) };
+  }
+  function tempBandColor(val){
+    // trova la banda più alta con t <= val
+    let band = TEMP_BANDS[0];
+    for(const b of TEMP_BANDS){
+      if(val >= b.t) band = b;
+      else break;
+    }
+    const rgb = hexToRgb(band.c);
+    return { r: rgb.r, g: rgb.g, b: rgb.b, a: 0.92 };
+  }
 
   // RAIN
   const RAIN_STOPS = [
@@ -228,7 +245,6 @@
     {v: 1030, c: [159,81,44]}, {v: 1038, c: [142,47,57]}, {v: 1046, c: [111,24,64]}, {v: 1080, c: [48,8,24]}
   ];
 
-  // NUVOLE (grigi) - NOTA: se nel tuo JSON non c’è "cloud", il toggle segnala e non disegna.
   const CLOUD_STOPS = [
     {v:0, c:[255,255,255], a:0.0}, {v:50, c:[200,200,200], a:0.50}, {v:100, c:[90,90,90], a:0.80}
   ];
@@ -291,19 +307,16 @@
       background: '#1a1a1a'
     }).fitBounds(SICILY_BOUNDS);
 
-    // BASE: Esri World Shaded Relief (grigio rilievi)
     L.tileLayer(
       'https://server.arcgisonline.com/ArcGIS/rest/services/World_Shaded_Relief/MapServer/tile/{z}/{y}/{x}',
       { maxZoom: 13, attribution: 'Esri', className: 'dark-relief-tiles' }
     ).addTo(map);
 
-    // Hillshade extra
     L.tileLayer(
       'https://server.arcgisonline.com/ArcGIS/rest/services/Elevation/World_Hillshade/MapServer/tile/{z}/{y}/{x}',
       { maxZoom: 19, className: 'dark-relief-tiles', opacity: 0.45 }
     ).addTo(map);
 
-    // Labels
     map.createPane('labelsPane');
     map.getPane('labelsPane').style.zIndex = 600;
     map.getPane('labelsPane').style.pointerEvents = 'none';
@@ -343,8 +356,8 @@
     scalarCanvases.cloud= mkCanvas(340, 'scalar-layer');
 
     arrowCanvas = mkCanvas(380);
-    isoTCanvas  = mkCanvas(410);   // isoterme sopra i campi
-    isoCanvas   = mkCanvas(420);   // isobare
+    isoTCanvas  = mkCanvas(410);
+    isoCanvas   = mkCanvas(420);
     gridCanvas  = mkCanvas(450);
   }
 
@@ -399,20 +412,18 @@
       const m = currentData.meta;
       const off = document.createElement('canvas');
       off.width = m.nx; off.height = m.ny;
-      const octx = off.getContext('2d', { willReadFrequently: false });
+      const octx = off.getContext('2d');
       const img = octx.createImageData(m.nx, m.ny);
       const data = img.data;
 
       let arr = null, stops = null, isWindBg = false;
 
       if(layer === 'wind') { isWindBg = true; }
-      else if(layer==='temp') { arr = currentData.temp; stops = TEMP_STOPS; }
+      else if(layer==='temp') { arr = currentData.temp; }
       else if(layer==='rain') { arr = currentData.rain; stops = RAIN_STOPS; }
       else if(layer==='rh')   { arr = currentData.rh;   stops = RH_STOPS; }
       else if(layer==='press'){ arr = currentData.press;stops = PRESS_STOPS; }
       else if(layer==='cloud'){
-        // Il tuo Python attuale NON esporta la nuvolosità.
-        // Se non esiste, non disegniamo e ti avvisiamo quando lo attivi.
         arr = (currentData.cloud ?? currentData.cld ?? null);
         stops = CLOUD_STOPS;
         if(!arr) return;
@@ -427,17 +438,20 @@
           const u = currentData.wind_u.data[i], v = currentData.wind_v.data[i];
           const sp = Math.sqrt(u*u + v*v);
           const rgb = vividWindColor(sp);
-          col = {r:rgb.r,g:rgb.g,b:rgb.b,a:0.33}; // sfondo vento meno opaco
+          col = {r:rgb.r,g:rgb.g,b:rgb.b,a:0.33};
         } else {
           const val = arr[i] ?? 0;
 
           if(layer==='rain' && val < 0.6){ data[i*4+3] = 0; continue; }
           if(layer==='cloud' && val < 10){ data[i*4+3] = 0; continue; }
 
-          col = interpStops(val, stops);
-
-          // un filo più “presente” (tua richiesta: più opacità generale)
-          col.a = clamp(col.a + 0.08, 0, 0.98);
+          if(layer==='temp'){
+            // TEMPERATURA: bande nette (come tua barra)
+            col = tempBandColor(val);
+          } else {
+            col = interpStops(val, stops);
+            col.a = clamp(col.a + 0.08, 0, 0.98);
+          }
         }
 
         const p = i*4;
@@ -508,7 +522,6 @@
 
     if(!selected.has('wind') || !currentData) return;
 
-    // reset totale per evitare “nero” ereditato da altri canvas
     ctx.setTransform(1,0,0,1,0,0);
     ctx.globalAlpha = 1;
     ctx.globalCompositeOperation = "source-over";
@@ -519,7 +532,6 @@
     const m = currentData.meta;
     const zoom = map.getZoom();
 
-    // più frecce + sottili (come hai chiesto)
     const stride = zoom >= 10 ? 2 : (zoom >= 9 ? 3 : 4);
     const baseLen = zoom >= 10 ? 26 : 20;
     const baseWidth = 2.0;
@@ -553,7 +565,6 @@
         const shaftEndX = p.x + (currentLen-headLen)*Math.cos(angle);
         const shaftEndY = p.y + (currentLen-headLen)*Math.sin(angle);
 
-        // asta (bordo nero)
         ctx.beginPath();
         ctx.moveTo(p.x, p.y);
         ctx.lineTo(shaftEndX, shaftEndY);
@@ -565,7 +576,6 @@
         ctx.lineWidth = currentWidth;
         ctx.stroke();
 
-        // testa
         const tipX = p.x + currentLen*Math.cos(angle);
         const tipY = p.y + currentLen*Math.sin(angle);
 
@@ -601,7 +611,7 @@
       data: [ currentData.wind_u, currentData.wind_v ],
       maxVelocity: 20.0,
       velocityScale: 0.008,
-      particleMultiplier: 1/190,   // teniamo leggero per FPS
+      particleMultiplier: 1/190,
       lineWidth: 2.0,
       particleAge: 95,
       frameRate: 40,
@@ -613,14 +623,13 @@
     velocityLayer.onAdd = function(map){
       L.VelocityLayer.prototype.onAdd.call(this, map);
       this._canvas.classList.add('velocity-canvas');
-      // particelle “chiare” ma visibili: un filo di glow
       this._canvas.style.filter = "drop-shadow(0 0 1px rgba(0,0,0,0.7))";
     };
 
     velocityLayer.addTo(map);
   }
 
-  // --- Utils per isolinee: smoothing leggero (riduce anelli strani) ---
+  // ====== smoothing leggero per campi (riduce “anelli neri” e cose strane) ======
   function smoothGrid(src, nx, ny, passes=1){
     let a = Float32Array.from(src, v => (Number.isFinite(v) ? v : NaN));
     let b = new Float32Array(a.length);
@@ -648,6 +657,68 @@
     return a;
   }
 
+  // ====== A/B SUI PICCHI REALI: massimi/minimi locali + clustering ======
+  function findExtrema(field, nx, ny, wantType){
+    // wantType: 'A' massimi, 'B' minimi
+    const rad = 5;
+    const step = 2;
+    const out = [];
+
+    for(let y=rad; y<ny-rad; y+=step){
+      for(let x=rad; x<nx-rad; x+=step){
+        const idx = y*nx + x;
+        const v0 = field[idx];
+        if(!Number.isFinite(v0)) continue;
+
+        // taglio “sinottico”: evita mettere A/B su rumore debole
+        if(wantType==='A' && v0 < 1016) continue;
+        if(wantType==='B' && v0 > 1010) continue;
+
+        let ok = true;
+        for(let dy=-rad; dy<=rad && ok; dy++){
+          for(let dx=-rad; dx<=rad; dx++){
+            if(dx===0 && dy===0) continue;
+            const vv = field[(y+dy)*nx + (x+dx)];
+            if(!Number.isFinite(vv)) continue;
+            if(wantType==='A'){
+              if(vv >= v0) { ok=false; break; }
+            } else {
+              if(vv <= v0) { ok=false; break; }
+            }
+          }
+        }
+        if(ok) out.push({x,y,val:v0,type:wantType});
+      }
+    }
+
+    // ordina: migliori prima
+    out.sort((a,b)=> wantType==='A' ? (b.val-a.val) : (a.val-b.val));
+
+    return out;
+  }
+
+  function clusterPick(points, m, maxN){
+    const chosen = [];
+    for(const p of points){
+      const lat = m.la1 - p.y*m.dy;
+      const lon = m.lo1 + p.x*m.dx;
+      const px = map.latLngToContainerPoint([lat, lon]);
+      if(px.x<0||px.y<0||px.x>map.getSize().x||px.y>map.getSize().y) continue;
+
+      let ok=true;
+      for(const c of chosen){
+        const d = Math.hypot(px.x-c._px.x, px.y-c._px.y);
+        if(d < 85) { ok=false; break; }
+      }
+      if(ok){
+        p._px = px;
+        chosen.push(p);
+      }
+      if(chosen.length >= maxN) break;
+    }
+    return chosen;
+  }
+
   function drawIsobars(){
     const ctx = isoCanvas.getContext('2d');
     const s = map.getSize();
@@ -659,7 +730,6 @@
 
     const m = currentData.meta;
 
-    // reset totale (evita stroke nero “ereditato”)
     ctx.setTransform(1,0,0,1,0,0);
     ctx.globalAlpha = 1;
     ctx.globalCompositeOperation = "source-over";
@@ -667,18 +737,16 @@
     ctx.shadowColor = "transparent";
     ctx.shadowBlur = 0;
 
-    // Sanitizzazione “soft”: evita valori 0/assurdi senza appiattire tutto
+    // pulizia + smoothing
     const raw = currentData.press;
     const clean = new Float32Array(raw.length);
     for(let i=0;i<raw.length;i++){
       const v = raw[i];
       clean[i] = (Number.isFinite(v) && v>850 && v<1100) ? v : NaN;
     }
-
-    // smoothing leggero per ridurre loop “a dente”
     const field = smoothGrid(clean, m.nx, m.ny, 1);
 
-    // contorni ogni 2 hPa (sinottico) – range auto coerente
+    // range
     let minP=1e9, maxP=-1e9;
     for(let i=0;i<field.length;i++){
       const v=field[i];
@@ -688,26 +756,26 @@
     }
     if(!Number.isFinite(minP) || !Number.isFinite(maxP)) return;
 
+    // isobare ogni 2 hPa
     const start = Math.floor(minP/2)*2;
     const end   = Math.ceil(maxP/2)*2 + 0.001;
     const thresholds = d3.range(start, end, 2);
 
     const contours = d3.contours().size([m.nx, m.ny]).thresholds(thresholds)(field);
 
-    // disegno ring corretto: beginPath + moveTo ad ogni ring (elimina linee “che partono dal basso”)
     ctx.lineWidth = 1.8;
     ctx.strokeStyle = "rgba(255,255,255,0.70)";
     ctx.lineCap = "round";
     ctx.lineJoin = "round";
 
-    function drawRing(ring){
-      if(!ring || ring.length < 2) return;
-
-      ctx.beginPath();
+    function ringMoveLine(ring){
+      if(!ring || ring.length<2) return null;
       const c0 = ring[0];
       const lat0 = m.la1 - c0[1]*m.dy;
       const lon0 = m.lo1 + c0[0]*m.dx;
       const p0 = map.latLngToContainerPoint([lat0, lon0]);
+
+      ctx.beginPath();
       ctx.moveTo(p0.x, p0.y);
 
       for(let i=1;i<ring.length;i++){
@@ -718,9 +786,10 @@
         ctx.lineTo(p.x, p.y);
       }
       ctx.stroke();
+      return ring;
     }
 
-    // Labels sulle linee (valore hPa)
+    // labels sulle linee
     ctx.font = "bold 12px Arial";
     ctx.textAlign = "center";
     ctx.textBaseline = "middle";
@@ -728,16 +797,15 @@
     contours.forEach(c => {
       for(const polygon of c.coordinates){
         for(const ring of polygon){
-          drawRing(ring);
+          ringMoveLine(ring);
 
-          // label: una sola per ring lungo
-          if(ring && ring.length > 250){
+          if(ring && ring.length > 260){
             const mid = ring[Math.floor(ring.length/2)];
             const lat = m.la1 - mid[1]*m.dy;
             const lon = m.lo1 + mid[0]*m.dx;
             const pm = map.latLngToContainerPoint([lat, lon]);
-
             const txt = String(Math.round(c.value));
+
             ctx.save();
             ctx.lineWidth = 5;
             ctx.strokeStyle = "rgba(0,0,0,0.75)";
@@ -750,66 +818,14 @@
       }
     });
 
-    // --- A/B coerenti: estremi locali su campo “smooth”, poi clustering per evitare “a caso” ---
-    // passo più largo = più “sinottico”, meno simboli
-    const step = 3;
-    const rad = 4;
+    // ===== A/B = picchi veri =====
+    const candidatesA = findExtrema(field, m.nx, m.ny, 'A');
+    const candidatesB = findExtrema(field, m.nx, m.ny, 'B');
 
-    const cand = [];
-    for(let y=rad; y<m.ny-rad; y+=step){
-      for(let x=rad; x<m.nx-rad; x+=step){
-        const idx = y*m.nx + x;
-        const v0 = field[idx];
-        if(!Number.isFinite(v0)) continue;
+    const highs = clusterPick(candidatesA, m, 4);
+    const lows  = clusterPick(candidatesB, m, 4);
 
-        // filtra: solo se davvero high/low
-        if(v0 < 1006 || v0 > 1019){
-          let isMax=true, isMin=true;
-          for(let dy=-rad; dy<=rad; dy++){
-            for(let dx=-rad; dx<=rad; dx++){
-              if(dx===0 && dy===0) continue;
-              const vv = field[(y+dy)*m.nx + (x+dx)];
-              if(!Number.isFinite(vv)) continue;
-              if(vv >= v0) isMax=false;
-              if(vv <= v0) isMin=false;
-              if(!isMax && !isMin) break;
-            }
-            if(!isMax && !isMin) break;
-          }
-          if(isMax) cand.push({x,y,val:v0,type:'A'});
-          else if(isMin) cand.push({x,y,val:v0,type:'B'});
-        }
-      }
-    }
-
-    // clustering semplice (distanza in pixel sullo schermo) per evitare simboli casuali
-    function pickBest(list, type){
-      const pts = list.filter(p=>p.type===type).sort((a,b)=> type==='A' ? (b.val-a.val) : (a.val-b.val));
-      const chosen = [];
-      for(const p of pts){
-        const lat = m.la1 - p.y*m.dy;
-        const lon = m.lo1 + p.x*m.dx;
-        const pp = map.latLngToContainerPoint([lat,lon]);
-        let ok=true;
-        for(const c of chosen){
-          const d = Math.hypot(pp.x-c._px.x, pp.y-c._px.y);
-          if(d < 70) { ok=false; break; }
-        }
-        if(ok){
-          p._px = pp;
-          chosen.push(p);
-        }
-        if(chosen.length >= 4) break; // pochi simboli, più “sinottico”
-      }
-      return chosen;
-    }
-
-    const highs = pickBest(cand,'A');
-    const lows  = pickBest(cand,'B');
-
-    // Disegno A/B grandi e leggibili
     ctx.save();
-    ctx.font = "900 30px Arial";
     ctx.textAlign = "center";
     ctx.textBaseline = "middle";
 
@@ -819,12 +835,13 @@
       const letter = isA ? "A" : "B";
       const col = isA ? "#ff2b2b" : "#2b6bff";
 
-      // contorno bianco + ombra
-      ctx.lineWidth = 6;
+      // più grande e visibile
+      ctx.font = "900 34px Arial";
+      ctx.lineWidth = 7;
       ctx.strokeStyle = "rgba(255,255,255,0.95)";
       ctx.strokeText(letter, x, y);
 
-      ctx.lineWidth = 2.5;
+      ctx.lineWidth = 3;
       ctx.strokeStyle = "rgba(0,0,0,0.85)";
       ctx.strokeText(letter, x, y);
 
@@ -836,10 +853,9 @@
       const vtxt = String(Math.round(p.val));
       ctx.lineWidth = 5;
       ctx.strokeStyle = "rgba(0,0,0,0.75)";
-      ctx.strokeText(vtxt, x, y+26);
+      ctx.strokeText(vtxt, x, y+28);
       ctx.fillStyle = "rgba(255,255,255,0.95)";
-      ctx.fillText(vtxt, x, y+26);
-      ctx.font = "900 30px Arial";
+      ctx.fillText(vtxt, x, y+28);
     }
 
     highs.forEach(drawAB);
@@ -847,6 +863,7 @@
     ctx.restore();
   }
 
+  // ===== ISOTERME: step 1°C, ma colore come banda (come tua scala) =====
   function drawIsotherms(){
     const ctx = isoTCanvas.getContext('2d');
     const s = map.getSize();
@@ -858,7 +875,6 @@
 
     const m = currentData.meta;
 
-    // reset totale (evita linee nere casuali)
     ctx.setTransform(1,0,0,1,0,0);
     ctx.globalAlpha = 1;
     ctx.globalCompositeOperation = "source-over";
@@ -870,12 +886,10 @@
     const clean = new Float32Array(raw.length);
     for(let i=0;i<raw.length;i++){
       const v = raw[i];
-      clean[i] = (Number.isFinite(v) ? v : NaN);
+      clean[i] = Number.isFinite(v) ? v : NaN;
     }
-
     const field = smoothGrid(clean, m.nx, m.ny, 1);
 
-    // Range auto e step 1°C (più “sensibile”)
     let minT=1e9, maxT=-1e9;
     for(let i=0;i<field.length;i++){
       const v=field[i];
@@ -887,17 +901,17 @@
 
     const start = Math.floor(minT);
     const end   = Math.ceil(maxT) + 0.001;
-    const thresholds = d3.range(start, end, 1);
 
+    // Sensibilità: 1°C
+    const thresholds = d3.range(start, end, 1);
     const contours = d3.contours().size([m.nx, m.ny]).thresholds(thresholds)(field);
 
     ctx.lineCap = "round";
     ctx.lineJoin = "round";
     ctx.lineWidth = 1.1;
-    ctx.strokeStyle = "rgba(255,255,255,0.40)";
 
-    function drawRing(ring){
-      if(!ring || ring.length < 2) return;
+    function drawRingWithColor(ring, rgb){
+      if(!ring || ring.length<2) return;
       ctx.beginPath();
       const c0 = ring[0];
       const lat0 = m.la1 - c0[1]*m.dy;
@@ -912,27 +926,36 @@
         const p = map.latLngToContainerPoint([lat, lon]);
         ctx.lineTo(p.x, p.y);
       }
+
+      // bordo scuro leggero + linea colorata
+      ctx.strokeStyle = "rgba(0,0,0,0.35)";
+      ctx.lineWidth = 2.2;
+      ctx.stroke();
+
+      ctx.strokeStyle = `rgba(${rgb.r},${rgb.g},${rgb.b},0.70)`;
+      ctx.lineWidth = 1.2;
       ctx.stroke();
     }
 
-    // label leggero sulle isoterme ogni 5°C (più pulito)
+    // Label ogni 4°C come la scala (pulito)
     ctx.font = "bold 11px Arial";
     ctx.textAlign = "center";
     ctx.textBaseline = "middle";
 
     contours.forEach(c => {
-      const is5 = (Math.round(c.value) % 5 === 0);
+      const v = Math.round(c.value);
+      const rgb = tempBandColor(v); // stesso colore delle bande
       for(const polygon of c.coordinates){
         for(const ring of polygon){
-          drawRing(ring);
+          drawRingWithColor(ring, rgb);
 
-          if(is5 && ring && ring.length > 260){
+          if(v % 4 === 0 && ring && ring.length > 280){
             const mid = ring[Math.floor(ring.length/2)];
             const lat = m.la1 - mid[1]*m.dy;
             const lon = m.lo1 + mid[0]*m.dx;
             const pm = map.latLngToContainerPoint([lat, lon]);
+            const txt = v + "°";
 
-            const txt = String(Math.round(c.value)) + "°";
             ctx.save();
             ctx.lineWidth = 4;
             ctx.strokeStyle = "rgba(0,0,0,0.70)";
@@ -1028,4 +1051,3 @@
 </script>
 </body>
 </html>
-```0
