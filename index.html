@@ -94,16 +94,14 @@
     #time-label { font-size: 1.45em; font-weight: 950; margin-left: 14px; min-width: 150px; text-align: center; color: #fff; }
     input[type=range] { flex-grow: 1; height: 6px; cursor: pointer; accent-color: #0077ff; background: rgba(255,255,255,0.2); }
 
-    /* Dark relief tiles */
     .dark-relief-tiles {
       filter: invert(100%) hue-rotate(180deg) brightness(0.8) contrast(1.2) grayscale(20%);
     }
 
-    /* Scalar layers */
     canvas.leaflet-layer.scalar-layer {
       image-rendering: auto;
       mix-blend-mode: screen;
-      opacity: 0.90; /* un filo più opaco */
+      opacity: 0.90;
     }
 
     canvas.leaflet-layer.velocity-canvas { mix-blend-mode: normal; opacity: 0.98; }
@@ -157,6 +155,9 @@
       <div class="toggle" id="btn-iso" onclick="toggleIsobars()">
         <span>ISOBARE 〰️</span><span> </span>
       </div>
+      <div class="toggle" id="btn-isot" onclick="toggleIsotherms()">
+        <span>ISOTERME 🌡️〰️</span><span> </span>
+      </div>
       <div class="toggle" id="btn-grid" onclick="toggleGrid()">
         <span>RETICOLO #</span><span> </span>
       </div>
@@ -176,8 +177,7 @@
 
   const WIND_COLOR_SCALE = ["#000080", "#0044ff", "#00ddff", "#00ff55", "#ffff00", "#ff6600", "#ff0000", "#ff00ff"];
 
-  // TEMPERATURA: bande nette, più contrastate (meno "palude verde")
-  // (richiamo visivo molto simile alla scala che mi hai mostrato)
+  // ✅ COLORE TEMPERATURA: LASCIO ESATTAMENTE COME PRIMA (perfetti)
   const TEMP_BANDS = [
     { t:-28, c:"#3b0f70" },
     { t:-24, c:"#5a189a" },
@@ -200,7 +200,6 @@
     { t:44,  c:"#ffd2c8" }
   ];
 
-  // RAIN (Custom: Start > 0.6mm)
   const RAIN_STOPS = [
     {v:0.0, c:[0,0,0], a:0.0},
     {v:0.6, c:[100,200,255], a:0.65},
@@ -211,7 +210,6 @@
     {v:50,  c:[255,0,0], a:0.95}
   ];
 
-  // RH
   const RH_STOPS = [
     {v:0, c:[173,85,56]}, {v:1, c:[173,85,56]}, {v:5, c:[173,89,56]}, {v:10, c:[173,93,56]},
     {v:15, c:[173,97,56]}, {v:20, c:[173,101,56]}, {v:25, c:[173,105,56]}, {v:30, c:[173,110,56]},
@@ -221,7 +219,7 @@
     {v:95, c:[56,110,165]}, {v:100, c:[56,70,114]}
   ];
 
-  // PRESSIONE (Custom in hPa) - NON modificata
+  // PRESSIONE: invariata
   const PRESS_STOPS = [
     {v: 900, c: [8,16,48]}, {v: 950, c: [0,32,96]}, {v: 976, c: [0,52,146]}, {v: 986, c: [0,90,148]},
     {v: 995, c: [0,117,146]}, {v: 1002, c: [26,140,147]}, {v: 1007, c: [103,162,155]}, {v: 1011.25, c: [155,183,172]},
@@ -229,7 +227,6 @@
     {v: 1030, c: [159,81,44]}, {v: 1038, c: [142,47,57]}, {v: 1046, c: [111,24,64]}, {v: 1080, c: [48,8,24]}
   ];
 
-  // CLOUD (se nel tuo JSON non c'è, non si vede: qui resta pronto)
   const CLOUD_STOPS = [
     {v:0, c:[255,255,255], a:0.0},
     {v:50, c:[200,200,200], a:0.45},
@@ -238,9 +235,9 @@
 
   let map, currentData = null, catalog = [];
   const selected = new Set(['wind']);
-  let showIsobars = false, showGrid = false, particlesOn = true;
+  let showIsobars = false, showIsotherms = false, showGrid = false, particlesOn = true;
 
-  let velocityLayer = null, scalarCanvases = {}, arrowCanvas, isoCanvas, gridCanvas;
+  let velocityLayer = null, scalarCanvases = {}, arrowCanvas, isoCanvas, isoThermCanvas, gridCanvas;
   let isPlaying = false;
 
   function clamp(x,a,b){ return Math.max(a, Math.min(b, x)); }
@@ -248,33 +245,19 @@
 
   function hexToRgb(hex){
     const h = hex.replace('#','');
-    return {
-      r: parseInt(h.substring(0,2),16),
-      g: parseInt(h.substring(2,4),16),
-      b: parseInt(h.substring(4,6),16)
-    };
+    return { r: parseInt(h.substring(0,2),16), g: parseInt(h.substring(2,4),16), b: parseInt(h.substring(4,6),16) };
   }
 
-  // Interpolazione tra keypoints
   function tempBandColor(valC){
-    // clamp ragionevole per evitare colori “fuori scala”
     const v = clamp(valC, TEMP_BANDS[0].t, TEMP_BANDS[TEMP_BANDS.length-1].t);
-
-    // bande “nette” per grado
     const vq = Math.round(v);
-
-    // trova segmento
     if(vq <= TEMP_BANDS[0].t) return hexToRgb(TEMP_BANDS[0].c);
     for(let i=0;i<TEMP_BANDS.length-1;i++){
       const a = TEMP_BANDS[i], b = TEMP_BANDS[i+1];
       if(vq >= a.t && vq <= b.t){
         const t = (vq - a.t)/(b.t - a.t);
         const ca = hexToRgb(a.c), cb = hexToRgb(b.c);
-        return {
-          r: Math.round(lerp(ca.r, cb.r, t)),
-          g: Math.round(lerp(ca.g, cb.g, t)),
-          b: Math.round(lerp(ca.b, cb.b, t))
-        };
+        return { r: Math.round(lerp(ca.r, cb.r, t)), g: Math.round(lerp(ca.g, cb.g, t)), b: Math.round(lerp(ca.b, cb.b, t)) };
       }
     }
     return hexToRgb(TEMP_BANDS[TEMP_BANDS.length-1].c);
@@ -310,6 +293,42 @@
     return {r:Math.round(lerp(r1,r2,f)), g:Math.round(lerp(g1,g2,f)), b:Math.round(lerp(b1,b2,f))};
   }
 
+  function smoothGrid(src, nx, ny){
+    const out = new Float32Array(src.length);
+    // 3x3 box blur economico
+    for(let y=1;y<ny-1;y++){
+      for(let x=1;x<nx-1;x++){
+        const i=y*nx+x;
+        let sum=0;
+        sum += src[i];
+        sum += src[i-1]+src[i+1]+src[i-nx]+src[i+nx];
+        sum += src[i-nx-1]+src[i-nx+1]+src[i+nx-1]+src[i+nx+1];
+        out[i]=sum/9;
+      }
+    }
+    // bordi copia
+    for(let x=0;x<nx;x++){ out[x]=src[x]; out[(ny-1)*nx+x]=src[(ny-1)*nx+x]; }
+    for(let y=0;y<ny;y++){ out[y*nx]=src[y*nx]; out[y*nx+(nx-1)]=src[y*nx+(nx-1)]; }
+    return out;
+  }
+
+  function ringToPath(ctx, ring, m){
+    if(!ring || ring.length < 2) return null;
+    const first = ring[0];
+    const lat0 = m.la1 - first[1]*m.dy;
+    const lon0 = m.lo1 + first[0]*m.dx;
+    const p0 = map.latLngToContainerPoint([lat0, lon0]);
+    ctx.moveTo(p0.x, p0.y);
+    for(let i=1;i<ring.length;i++){
+      const xy = ring[i];
+      const lat = m.la1 - xy[1]*m.dy;
+      const lon = m.lo1 + xy[0]*m.dx;
+      const pt = map.latLngToContainerPoint([lat, lon]);
+      ctx.lineTo(pt.x, pt.y);
+    }
+    return p0;
+  }
+
   window.addEventListener('load', async () => {
     map = L.map('map', {
       zoomControl: false,
@@ -317,19 +336,16 @@
       maxBoundsViscosity: 1.0
     }).fitBounds(SICILY_BOUNDS);
 
-    // BASE: Esri shaded relief (dark invert)
     L.tileLayer(
       'https://server.arcgisonline.com/ArcGIS/rest/services/World_Shaded_Relief/MapServer/tile/{z}/{y}/{x}',
       { maxZoom: 13, attribution: 'Esri', className: 'dark-relief-tiles' }
     ).addTo(map);
 
-    // Extra hillshade (dark invert)
     L.tileLayer(
       'https://server.arcgisonline.com/ArcGIS/rest/services/Elevation/World_Hillshade/MapServer/tile/{z}/{y}/{x}',
       { maxZoom: 19, className: 'dark-relief-tiles', opacity: 0.40 }
     ).addTo(map);
 
-    // Labels
     map.createPane('labelsPane');
     map.getPane('labelsPane').style.zIndex = 600;
     map.getPane('labelsPane').style.pointerEvents = 'none';
@@ -337,13 +353,11 @@
       pane: 'labelsPane', opacity: 0.90
     }).addTo(map);
 
-    // Particles pane (sopra ai layer)
     map.createPane('particlePane');
     map.getPane('particlePane').style.zIndex = 800;
     map.getPane('particlePane').style.pointerEvents = 'none';
 
     createCanvasLayers();
-    addSicilyOutline();  // ✅ contorno Sicilia sempre visibile
     await loadCatalog();
 
     map.on('mousemove', onPick);
@@ -368,43 +382,10 @@
     scalarCanvases.press = mkCanvas(330, 'scalar-layer');
     scalarCanvases.cloud = mkCanvas(340, 'scalar-layer');
 
-    arrowCanvas = mkCanvas(380);
-    isoCanvas   = mkCanvas(420);
-    gridCanvas  = mkCanvas(450);
-  }
-
-  function addSicilyOutline(){
-    map.createPane('sicilyOutlinePane');
-    const pane = map.getPane('sicilyOutlinePane');
-    pane.style.zIndex = 900;
-    pane.style.pointerEvents = 'none';
-
-    const sicilyCoords = [
-      [38.227, 12.567],[38.191, 12.747],[38.121, 12.874],[38.044, 13.013],[37.969, 13.186],
-      [37.961, 13.360],[37.996, 13.524],[38.035, 13.694],[38.056, 13.894],[38.050, 14.081],
-      [38.039, 14.266],[38.023, 14.405],[37.983, 14.545],[37.956, 14.703],[37.911, 14.846],
-      [37.852, 14.972],[37.769, 15.106],[37.686, 15.244],[37.579, 15.408],[37.469, 15.521],
-      [37.350, 15.557],[37.227, 15.520],[37.102, 15.419],[36.999, 15.273],[36.909, 15.083],
-      [36.851, 14.887],[36.827, 14.674],[36.829, 14.471],[36.866, 14.274],[36.944, 14.097],
-      [37.013, 13.913],[37.049, 13.719],[37.058, 13.515],[37.036, 13.309],[36.986, 13.086],
-      [36.928, 12.884],[36.878, 12.711],[36.848, 12.575],[36.836, 12.459],[36.862, 12.369],
-      [36.958, 12.304],[37.093, 12.292],[37.240, 12.301],[37.409, 12.321],[37.582, 12.325],
-      [37.743, 12.339],[37.891, 12.363],[38.020, 12.420],[38.138, 12.478],[38.227, 12.567]
-    ];
-
-    L.polyline(sicilyCoords, {
-      pane: 'sicilyOutlinePane',
-      color: 'rgba(0,0,0,0.80)',
-      weight: 4,
-      opacity: 1
-    }).addTo(map);
-
-    L.polyline(sicilyCoords, {
-      pane: 'sicilyOutlinePane',
-      color: 'rgba(255,255,255,0.90)',
-      weight: 2,
-      opacity: 1
-    }).addTo(map);
+    arrowCanvas    = mkCanvas(380);
+    isoCanvas      = mkCanvas(420);
+    isoThermCanvas = mkCanvas(430);
+    gridCanvas     = mkCanvas(450);
   }
 
   async function loadCatalog(){
@@ -437,7 +418,8 @@
     if(!currentData) return;
     drawScalars();
     drawWindArrows();
-    drawIsobars();
+    drawIsobars();     // ✅ include A/B intelligenti
+    drawIsotherms();   // ✅ isoterme
     drawLatLonGrid();
     updateParticles();
   }
@@ -477,17 +459,16 @@
           const u = currentData.wind_u.data[i], v = currentData.wind_v.data[i];
           const sp = Math.sqrt(u*u+v*v);
           const c = vividWindColor(sp);
-          col = {r:c.r,g:c.g,b:c.b,a:0.38}; // sfondo vento meno opaco
+          col = {r:c.r,g:c.g,b:c.b,a:0.38};
         } else if(layer==='temp'){
           const v = arr[i];
           if(v === null || v === undefined || Number.isNaN(v)) { data[i*4+3]=0; continue; }
           const c = tempBandColor(v);
-          col = {r:c.r,g:c.g,b:c.b,a:0.55}; // trasparenza “giusta” per vedere sotto
+          col = {r:c.r,g:c.g,b:c.b,a:0.55};
         } else {
           const v = arr[i];
           if(v === null || v === undefined || Number.isNaN(v)) { data[i*4+3]=0; continue; }
 
-          // tagli visuali
           if(layer==='rain' && v < 0.6) { data[i*4+3]=0; continue; }
           if(layer==='cloud' && v < 10) { data[i*4+3]=0; continue; }
 
@@ -559,7 +540,6 @@
     const m = currentData.meta;
     const zoom = map.getZoom();
 
-    // più frecce, sottili (senza far collassare fps)
     const stride = zoom >= 11 ? 2 : (zoom >= 10 ? 3 : (zoom >= 9 ? 4 : 5));
     const baseLen = zoom >= 11 ? 30 : (zoom >= 10 ? 26 : 22);
     const baseWidth = 2.0;
@@ -581,7 +561,7 @@
         const c = vividWindColor(sp);
         const fillStyle = `rgb(${c.r},${c.g},${c.b})`;
 
-        const speedScale = clamp(sp/8.0, 0.7, 3.0);  // ✅ grandezza reagisce al vento
+        const speedScale = clamp(sp/8.0, 0.7, 3.0);
         const currentLen = baseLen*speedScale;
         const currentWidth = baseWidth*speedScale;
 
@@ -593,7 +573,6 @@
         const shaftEndX = p.x + (currentLen-headLen)*Math.cos(angle);
         const shaftEndY = p.y + (currentLen-headLen)*Math.sin(angle);
 
-        // asta con bordo nero
         ctx.beginPath();
         ctx.moveTo(p.x, p.y);
         ctx.lineTo(shaftEndX, shaftEndY);
@@ -604,7 +583,6 @@
         ctx.lineWidth = currentWidth;
         ctx.stroke();
 
-        // testa
         const tipX = p.x + currentLen*Math.cos(angle);
         const tipY = p.y + currentLen*Math.sin(angle);
         const wing1X = shaftEndX - headWidth*Math.cos(angle - Math.PI/2);
@@ -630,7 +608,6 @@
     if(velocityLayer) { map.removeLayer(velocityLayer); velocityLayer = null; }
     if(!particlesOn || !currentData) return;
 
-    // particelle bianche visibili (non nere) + poco pesanti
     velocityLayer = L.velocityLayer({
       displayValues: false,
       data: [ currentData.wind_u, currentData.wind_v ],
@@ -648,14 +625,12 @@
     velocityLayer.onAdd = function(map){
       L.VelocityLayer.prototype.onAdd.call(this, map);
       this._canvas.classList.add('velocity-canvas');
-      // “ombra” per staccare sul fondo (trucco: shadow via ctx ogni frame non è banale,
-      // ma già con bianco + opacità variabile resta leggibile)
     };
 
     velocityLayer.addTo(map);
   }
 
-  // --- ISOBARE: più leggibili + A/B su veri picchi (con filtro anti-casini) ---
+  // ✅ ISOBARE PIÙ LEGGIBILI + A/B "INTELLIGENTI" sui picchi (massimi/minimi reali)
   function drawIsobars(){
     const ctx = isoCanvas.getContext('2d');
     const s = map.getSize();
@@ -667,95 +642,58 @@
 
     const m = currentData.meta;
 
-    // 1) Pulizia pressioni
+    // 1) pulizia dati
     const raw = currentData.press;
     const p = new Float32Array(raw.length);
     for(let i=0;i<raw.length;i++){
       const v = raw[i];
-      // fuori scala -> neutro (evita contorni "impazziti")
       p[i] = (!v || Number.isNaN(v) || v < 850 || v > 1100) ? 1013.25 : v;
     }
 
-    // 2) Smussatura leggera (riduce "anelli neri" e spezzate)
-    //    3x3 box blur economico
-    const ps = new Float32Array(p.length);
-    for(let y=1;y<m.ny-1;y++){
-      for(let x=1;x<m.nx-1;x++){
-        const i = y*m.nx + x;
-        let sum = 0;
-        sum += p[i];
-        sum += p[i-1] + p[i+1] + p[i-m.nx] + p[i+m.nx];
-        sum += p[i-m.nx-1] + p[i-m.nx+1] + p[i+m.nx-1] + p[i+m.nx+1];
-        ps[i] = sum/9.0;
-      }
-    }
-    // bordi: copia
-    for(let x=0;x<m.nx;x++){ ps[x]=p[x]; ps[(m.ny-1)*m.nx+x]=p[(m.ny-1)*m.nx+x]; }
-    for(let y=0;y<m.ny;y++){ ps[y*m.nx]=p[y*m.nx]; ps[y*m.nx+(m.nx-1)]=p[y*m.nx+(m.nx-1)]; }
+    // 2) smoothing leggero (riduce anelli strani)
+    const ps = smoothGrid(p, m.nx, m.ny);
 
-    // 3) Contours (ogni 2 hPa) e "maggiori" ogni 8 hPa
+    // 3) contours ogni 2 hPa, maggiori ogni 8 hPa (più leggibili)
     const thresholds = d3.range(960, 1050, 2);
     const contours = d3.contours().size([m.nx, m.ny]).thresholds(thresholds)(ps);
 
-    function drawRing(ring){
-      if(!ring || ring.length < 2) return null;
-      ctx.beginPath();
+    ctx.save();
+    ctx.lineCap = "round"; ctx.lineJoin = "round";
 
-      const c0 = ring[0];
-      let lat0 = m.la1 - c0[1]*m.dy;
-      let lon0 = m.lo1 + c0[0]*m.dx;
-      let p0 = map.latLngToContainerPoint([lat0, lon0]);
-      ctx.moveTo(p0.x, p0.y);
-
-      for(let i=1;i<ring.length;i++){
-        const xy = ring[i];
-        const lat = m.la1 - xy[1]*m.dy;
-        const lon = m.lo1 + xy[0]*m.dx;
-        const pt = map.latLngToContainerPoint([lat, lon]);
-        ctx.lineTo(pt.x, pt.y);
-      }
-      return p0;
-    }
-
-    // Disegno linee: bordo scuro leggero + linea chiara
     contours.forEach(c => {
       const v = Math.round(c.value);
       const isMajor = (v % 8 === 0);
 
       for(const poly of c.coordinates){
         for(const ring of poly){
-          // anelli principali
-          const anchor = drawRing(ring);
-          if(!anchor) continue;
+          if(!ring || ring.length < 2) continue;
 
-          // bordo (anti-sparizione sui layer)
-          ctx.save();
-          ctx.strokeStyle = "rgba(0,0,0,0.35)";
-          ctx.lineWidth = (isMajor ? 2.8 : 1.5) + 1.6;
-          ctx.lineCap = "round"; ctx.lineJoin = "round";
+          // bordo scuro leggero (per non “sparire” sotto i layer)
+          ctx.beginPath();
+          ringToPath(ctx, ring, m);
+          ctx.strokeStyle = "rgba(0,0,0,0.30)";
+          ctx.lineWidth = (isMajor ? 2.8 : 1.5) + 1.4;
           ctx.stroke();
-          ctx.restore();
 
           // linea principale
+          ctx.beginPath();
+          ringToPath(ctx, ring, m);
           ctx.strokeStyle = isMajor ? "rgba(255,255,255,0.92)" : "rgba(255,255,255,0.62)";
           ctx.lineWidth = isMajor ? 2.8 : 1.5;
-          ctx.lineCap = "round"; ctx.lineJoin = "round";
           ctx.stroke();
 
-          // etichetta su linee maggiori e ring lunghi
-          if(isMajor && ring.length > 250){
+          // etichette solo sulle maggiori e ring lunghi
+          if(isMajor && ring.length > 260){
             const mid = ring[Math.floor(ring.length/2)];
             const lat = m.la1 - mid[1]*m.dy;
             const lon = m.lo1 + mid[0]*m.dx;
             const pm  = map.latLngToContainerPoint([lat, lon]);
-
             const txt = String(v);
 
             ctx.save();
             ctx.font = "900 13px Arial";
             ctx.textAlign = "center";
             ctx.textBaseline = "middle";
-
             ctx.lineWidth = 5;
             ctx.strokeStyle = "rgba(0,0,0,0.75)";
             ctx.strokeText(txt, pm.x, pm.y);
@@ -767,17 +705,15 @@
       }
     });
 
-    // 4) A/B sui veri picchi: cerca massimi/minimi locali con filtro distanza
+    // 4) A/B sui picchi: massimo/minimo locale + filtro distanza
     const extrema = [];
-    const step = 2; // salto per non uccidere fps, ma abbastanza preciso
-    const rad = 4;  // raggio vicinato
+    const step = 2;
+    const rad = 5; // più “intelligente” (guarda un intorno più ampio)
 
     for(let y=rad; y<m.ny-rad; y+=step){
       for(let x=rad; x<m.nx-rad; x+=step){
         const i = y*m.nx + x;
         const v = ps[i];
-
-        // consideriamo solo zone "sensate"
         if(v < 995 || v > 1025){
           let isMax = true, isMin = true;
           for(let dy=-rad; dy<=rad; dy++){
@@ -796,65 +732,134 @@
       }
     }
 
-    // ordina: A decrescente, B crescente
     const highs = extrema.filter(e=>e.type==='A').sort((a,b)=>b.v-a.v);
     const lows  = extrema.filter(e=>e.type==='B').sort((a,b)=>a.v-b.v);
 
-    // distanza minima tra etichette (pixel)
     const placed = [];
     function canPlace(px,py){
       for(const q of placed){
         const dx = px-q.x, dy = py-q.y;
-        if(dx*dx+dy*dy < 90*90) return false;
+        if(dx*dx+dy*dy < 110*110) return false;
       }
       return true;
     }
 
-    function drawLabel(type, x, y, val){
+    function drawAB(type, x, y, val){
       const lat = m.la1 - y*m.dy;
       const lon = m.lo1 + x*m.dx;
       const pt = map.latLngToContainerPoint([lat, lon]);
       if(pt.x<0||pt.y<0||pt.x>s.x||pt.y>s.y) return false;
       if(!canPlace(pt.x, pt.y)) return false;
-
       placed.push({x:pt.x,y:pt.y});
 
       ctx.save();
       ctx.textAlign = "center";
       ctx.textBaseline = "middle";
 
-      // grande e leggibile
-      ctx.font = "950 34px Arial";
+      // grande e super leggibile
+      ctx.font = "950 36px Arial";
       ctx.lineWidth = 7;
-      ctx.strokeStyle = "rgba(0,0,0,0.75)";
+      ctx.strokeStyle = "rgba(0,0,0,0.78)";
       ctx.strokeText(type, pt.x, pt.y);
-
       ctx.fillStyle = (type==='A') ? "#ff2b2b" : "#2b6bff";
       ctx.fillText(type, pt.x, pt.y);
 
-      // valore sotto
       const txt = String(Math.round(val));
       ctx.font = "900 14px Arial";
       ctx.lineWidth = 5;
       ctx.strokeStyle = "rgba(0,0,0,0.80)";
-      ctx.strokeText(txt, pt.x, pt.y + 26);
+      ctx.strokeText(txt, pt.x, pt.y + 28);
       ctx.fillStyle = "rgba(255,255,255,0.95)";
-      ctx.fillText(txt, pt.x, pt.y + 26);
+      ctx.fillText(txt, pt.x, pt.y + 28);
 
       ctx.restore();
       return true;
     }
 
-    // piazza fino a 2 A e 2 B, coerenti (picchi più forti) e non sovrapposti
+    // piazza più etichette ma sempre “pulito”
     let countA = 0, countB = 0;
-    for(const h of highs){
-      if(countA>=2) break;
-      if(drawLabel('A', h.x, h.y, h.v)) countA++;
+    for(const h of highs){ if(countA>=3) break; if(drawAB('A', h.x, h.y, h.v)) countA++; }
+    for(const l of lows ){ if(countB>=3) break; if(drawAB('B', l.x, l.y, l.v)) countB++; }
+
+    ctx.restore();
+  }
+
+  // ✅ ISOTERME (linee temperatura) – disegnate in bianco, maggiori più spesse + etichette
+  function drawIsotherms(){
+    const ctx = isoThermCanvas.getContext('2d');
+    const s = map.getSize();
+    isoThermCanvas.width = s.x; isoThermCanvas.height = s.y;
+    L.DomUtil.setPosition(isoThermCanvas, map.containerPointToLayerPoint([0,0]));
+    ctx.clearRect(0,0,s.x,s.y);
+
+    if(!showIsotherms || !currentData?.temp || !currentData?.meta) return;
+
+    const m = currentData.meta;
+    const raw = currentData.temp;
+
+    // pulizia + clamp ragionevole
+    const t = new Float32Array(raw.length);
+    for(let i=0;i<raw.length;i++){
+      const v = raw[i];
+      t[i] = (v === null || v === undefined || Number.isNaN(v) || v < -80 || v > 60) ? 0 : v;
     }
-    for(const l of lows){
-      if(countB>=2) break;
-      if(drawLabel('B', l.x, l.y, l.v)) countB++;
-    }
+
+    // smoothing leggero per evitare “spaghetti” e linee nere strane
+    const ts = smoothGrid(t, m.nx, m.ny);
+
+    // soglie: ogni 2°C (sensibili ma non pesantissime). Maggiori ogni 4°C
+    const thresholds = d3.range(-20, 46, 2);
+    const contours = d3.contours().size([m.nx, m.ny]).thresholds(thresholds)(ts);
+
+    ctx.save();
+    ctx.lineCap = "round"; ctx.lineJoin = "round";
+
+    contours.forEach(c => {
+      const v = Math.round(c.value);
+      const isMajor = (v % 4 === 0);
+
+      for(const poly of c.coordinates){
+        for(const ring of poly){
+          if(!ring || ring.length < 2) continue;
+
+          // bordo scuro leggero per staccare su layer colorati
+          ctx.beginPath();
+          ringToPath(ctx, ring, m);
+          ctx.strokeStyle = "rgba(0,0,0,0.30)";
+          ctx.lineWidth = (isMajor ? 2.2 : 1.1) + 1.2;
+          ctx.stroke();
+
+          // linea bianca
+          ctx.beginPath();
+          ringToPath(ctx, ring, m);
+          ctx.strokeStyle = isMajor ? "rgba(255,255,255,0.80)" : "rgba(255,255,255,0.45)";
+          ctx.lineWidth = isMajor ? 2.2 : 1.1;
+          ctx.stroke();
+
+          // etichetta su maggiori, ring lunghi
+          if(isMajor && ring.length > 260){
+            const mid = ring[Math.floor(ring.length/2)];
+            const lat = m.la1 - mid[1]*m.dy;
+            const lon = m.lo1 + mid[0]*m.dx;
+            const pm  = map.latLngToContainerPoint([lat, lon]);
+            const txt = `${v}°`;
+
+            ctx.save();
+            ctx.font = "900 12px Arial";
+            ctx.textAlign = "center";
+            ctx.textBaseline = "middle";
+            ctx.lineWidth = 5;
+            ctx.strokeStyle = "rgba(0,0,0,0.75)";
+            ctx.strokeText(txt, pm.x, pm.y);
+            ctx.fillStyle = "rgba(255,255,255,0.95)";
+            ctx.fillText(txt, pm.x, pm.y);
+            ctx.restore();
+          }
+        }
+      }
+    });
+
+    ctx.restore();
   }
 
   window.toggleLayer = function(name){
@@ -862,6 +867,7 @@
     updateToggleUI(); redrawAll();
   }
   window.toggleIsobars = function(){ showIsobars=!showIsobars; updateToggleUI(); redrawAll(); }
+  window.toggleIsotherms = function(){ showIsotherms=!showIsotherms; updateToggleUI(); redrawAll(); }
   window.toggleGrid = function(){ showGrid=!showGrid; updateToggleUI(); redrawAll(); }
   window.toggleParticles = function(){ particlesOn=!particlesOn; updateToggleUI(); redrawAll(); }
 
@@ -875,6 +881,7 @@
       else if(txt.includes('pressione') && selected.has('press')) el.classList.add('active');
       else if(txt.includes('nuvole') && selected.has('cloud')) el.classList.add('active');
       else if(txt.includes('isobare') && showIsobars) el.classList.add('active');
+      else if(txt.includes('isoterme') && showIsotherms) el.classList.add('active');
       else if(txt.includes('reticolo') && showGrid) el.classList.add('active');
       else el.classList.remove('active');
     });
@@ -929,3 +936,4 @@
 </script>
 </body>
 </html>
+```0
