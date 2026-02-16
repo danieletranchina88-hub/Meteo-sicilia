@@ -1,7 +1,7 @@
 <!DOCTYPE html>
 <html>
 <head>
-  <title>Sicilia MeteoHub - FINAL ULTIMATE</title>
+  <title>Sicilia MeteoHub - FINAL ALIGNED</title>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
 
@@ -14,18 +14,16 @@
   <script src="https://d3js.org/d3.v7.min.js"></script>
 
   <style>
-    /* SFONDO SCURO */
     body { margin: 0; background: #1a1a1a; font-family: 'Segoe UI', sans-serif; color: #ddd; overflow: hidden; }
     #map { position: absolute; top: 0; bottom: 0; width: 100%; background: #1a1a1a; }
 
-    /* UI LAYOUT */
     #ui-container {
       position: absolute; top: 10px; right: 10px; z-index: 2000;
       display: flex; flex-direction: column; gap: 10px; align-items: flex-end;
     }
     .panel {
-      background: rgba(30,30,30,0.85); /* Leggera trasparenza per performance */
-      backdrop-filter: blur(8px);       /* Blur ridotto per performance */
+      background: rgba(30,30,30,0.85);
+      backdrop-filter: blur(8px);
       padding: 10px;
       border-radius: 14px;
       border: 1px solid rgba(255,255,255,0.1);
@@ -43,7 +41,7 @@
       cursor: pointer;
       user-select:none;
       font-weight: 700;
-      transition: background 0.15s;
+      transition: all 0.15s;
     }
     .toggle:hover { background: rgba(255,255,255,0.1); color:#fff; }
     .toggle.active {
@@ -61,7 +59,6 @@
     .mini:hover { background: rgba(255,255,255,0.1); color:#fff; }
     .mini.active { background: #eee; color:#111; border-color: #fff; }
 
-    /* INFO BOX */
     #info-box { 
         position: absolute; top: 18px; left: 18px; z-index: 2000; 
         pointer-events: none; 
@@ -71,7 +68,6 @@
     #val-display { font-size: 3.6em; font-weight: 950; line-height: 0.9; color: #fff; text-shadow: 0 2px 5px rgba(0,0,0,0.8); }
     #unit-display { font-size: 1.15em; color: #aaa; font-weight: 850; margin-top: 4px; text-shadow: 0 1px 3px rgba(0,0,0,0.9); }
 
-    /* ROSA DEI VENTI */
     #wind-rose {
         width: 50px; height: 50px;
         background: rgba(255,255,255,0.9);
@@ -87,7 +83,7 @@
     .c-s { bottom: 2px; left: 50%; transform: translateX(-50%); }
     .c-e { right: 3px; top: 50%; transform: translateY(-50%); }
     .c-w { left: 3px; top: 50%; transform: translateY(-50%); }
-    #rose-arrow { width: 26px; height: 26px; fill: #000; transition: transform 0.1s; will-change: transform; }
+    #rose-arrow { width: 26px; height: 26px; fill: #000; transition: transform 0.1s; }
 
     #bottom-bar {
       position: absolute; bottom: 0; left: 0; right: 0; height: 92px;
@@ -98,18 +94,16 @@
     #time-label { font-size: 1.45em; font-weight: 950; margin-left: 14px; min-width: 150px; text-align: center; color: #fff; }
     input[type=range] { flex-grow: 1; height: 6px; cursor: pointer; accent-color: #0077ff; background: rgba(255,255,255,0.2); }
 
+    /* Ottimizzazioni per prestazioni e rendering */
     .dark-relief-tiles {
         filter: invert(100%) hue-rotate(180deg) brightness(0.8) contrast(1.2) grayscale(20%);
     }
-
-    /* Rendering Ottimizzato */
     canvas.leaflet-layer.scalar-layer { 
-        image-rendering: auto; /* Importante per sfumatura liscia */
+        image-rendering: auto; 
         mix-blend-mode: screen; 
-        opacity: 0.85; 
-        will-change: transform; /* Suggerimento al browser per ottimizzare lo spostamento */
+        opacity: 0.85;
+        will-change: transform; /* Hint per la GPU */
     }
-
     canvas.leaflet-layer.velocity-canvas { mix-blend-mode: normal; opacity: 0.95; }
 
   </style>
@@ -180,12 +174,21 @@
   </div>
 
 <script>
-  // ========= CONFIGURAZIONE =========
-  // SBLOCCO MAPPA: Bounds definiti solo per il fit iniziale, non come limite.
-  const SICILY_BOUNDS = L.latLngBounds(L.latLng(35.0, 11.0), L.latLng(39.5, 16.5));
+  // ==========================================
+  // CONFIGURAZIONE DI ALLINEAMENTO (OFFSET)
+  // ==========================================
+  // Modifica questi valori se i layer non combaciano perfettamente.
+  // Negativo = Sposta verso Sud/Sinistra
+  // Positivo = Sposta verso Nord/Destra
+  // 0.04 gradi sono circa 4-5km.
+  const LAT_OFFSET = -0.04; 
+  const LON_OFFSET = 0.00;
 
-  // Utility per DPI Screens (Retina)
+  // Supporto schermi Retina/HD
   const DPR = window.devicePixelRatio || 1;
+
+  // BOUNDS (Solo per focus iniziale, non bloccano la mappa)
+  const SICILY_BOUNDS = L.latLngBounds(L.latLng(35.0, 11.0), L.latLng(39.5, 16.5));
 
   const WIND_COLOR_SCALE = ["#000080", "#0044ff", "#00ddff", "#00ff55", "#ffff00", "#ff6600", "#ff0000", "#ff00ff"];
 
@@ -250,7 +253,8 @@
   let showIsobars = false, showIsotherms = false, showGrid = false, particlesOn = true;
   let velocityLayer = null, scalarCanvases = {}, arrowCanvas, isoCanvas, thermCanvas, gridCanvas;
   let isPlaying = false;
-  // Shared Offscreen Canvas per performance
+  
+  // Shared offscreen canvas per ottimizzazione
   let offscreenCanvas = document.createElement('canvas');
   let offscreenCtx = offscreenCanvas.getContext('2d');
 
@@ -258,16 +262,14 @@
   function clamp(x,a,b){ return Math.max(a, Math.min(b, x)); }
   function lerp(a,b,t){ return a+(b-a)*t; }
 
-  // Ottimizzazione: Rimuoviamo controlli "in" dentro il loop
   function interpStops(val, stops) {
-    if(val <= stops[0].v) { const s=stops[0]; return {r:s.c[0],g:s.c[1],b:s.c[2],a:(s.a!==undefined)?s.a:0.90}; }
+    if(val <= stops[0].v) { const s=stops[0]; return {r:s.c[0],g:s.c[1],b:s.c[2],a:('a' in s)?s.a:0.90}; }
     for(let i=0; i<stops.length-1; i++){
-      const s1 = stops[i];
-      const s2 = stops[i+1];
+      const s1=stops[i], s2=stops[i+1];
       if(val >= s1.v && val <= s2.v){
-        const t = (val - s1.v) / (s2.v - s1.v);
-        const a1 = (s1.a!==undefined) ? s1.a : 0.90;
-        const a2 = (s2.a!==undefined) ? s2.a : 0.90;
+        const t = (val-s1.v)/(s2.v-s1.v);
+        const a1 = (s1.a!==undefined)?s1.a:0.90;
+        const a2 = (s2.a!==undefined)?s2.a:0.90;
         return {
           r: (s1.c[0]*(1-t) + s2.c[0]*t) | 0,
           g: (s1.c[1]*(1-t) + s2.c[1]*t) | 0,
@@ -277,7 +279,7 @@
       }
     }
     const s=stops[stops.length-1];
-    return {r:s.c[0],g:s.c[1],b:s.c[2],a:(s.a!==undefined)?s.a:0.90};
+    return {r:s.c[0],g:s.c[1],b:s.c[2],a:('a' in s)?s.a:0.90};
   }
 
   function vividWindColor(speedMs){
@@ -293,14 +295,12 @@
     return {r:(r1*(1-f)+r2*f)|0, g:(g1*(1-f)+g2*f)|0, b:(b1*(1-f)+b2*f)|0};
   }
 
-  // Regola colore Isobare
   function pressColorDiscrete(hPa){
-    if(hPa < 1010) return {r: 35, g: 120, b: 255};    // blu
-    if(hPa <= 1015) return {r: 170, g: 80, b: 255};   // viola
-    return {r: 255, g: 70, b: 70};                    // rosso
+    if(hPa < 1010) return {r: 35, g: 120, b: 255};
+    if(hPa <= 1015) return {r: 170, g: 80, b: 255};
+    return {r: 255, g: 70, b: 70};
   }
 
-  // Helper per disegnare i contour su canvas
   function contourToScreenPath(ctx, coordinates, m){
     for (const polygon of coordinates) {
       for (const ring of polygon) {
@@ -319,35 +319,28 @@
     }
   }
 
-  // Helper per trovare punto label (dentro bounds)
   function pickLabelPointInsideSicily(contour, m){
-    // ...logica semplificata per performance...
     if(!contour.coordinates || !contour.coordinates[0]) return null;
     const ring = contour.coordinates[0][0]; 
     if(!ring || ring.length < 10) return null;
     return ring[Math.floor(ring.length/2)];
   }
 
-  // Smooth Grid semplice (Media 3x3)
   function smoothGrid(src, nx, ny){
     const out = new Float32Array(nx*ny);
     for(let y=1; y<ny-1; y++){
       for(let x=1; x<nx-1; x++){
-        // Kernel 3x3 semplice
-        const v = src[y*nx+x]*4 + 
-                  src[y*nx+x-1] + src[y*nx+x+1] + 
-                  src[(y-1)*nx+x] + src[(y+1)*nx+x];
+        const v = src[y*nx+x]*4 + src[y*nx+x-1] + src[y*nx+x+1] + src[(y-1)*nx+x] + src[(y+1)*nx+x];
         out[y*nx+x] = v / 8;
       }
     }
     return out;
   }
 
-  // Trova massimi e minimi locali
   function findExtremaAB(field, nx, ny){
     const cand = [];
     const r = 3; 
-    for(let y=r; y<ny-r; y+=2){ // Saltiamo pixel per performance
+    for(let y=r; y<ny-r; y+=2){
       for(let x=r; x<nx-r; x+=2){
         const idx = y*nx + x;
         const v = field[idx];
@@ -366,7 +359,6 @@
     return cand;
   }
 
-  // Rimuove punti vicini
   function dedupeByDistance(points, minDistPx){
     const kept = [];
     for(const p of points){
@@ -380,28 +372,24 @@
     return kept;
   }
 
-  // ========= INIT MAP =========
   window.addEventListener('load', async () => {
-    // 1. RIMOSSO MAXBOUNDS per sbloccare la mappa
+    // 1. MAPPA SBLOCCATA (minZoom 4, nessun maxBounds restrittivo)
     map = L.map('map', {
       zoomControl: false,
       background: '#1a1a1a',
-      minZoom: 4 // Zoom out permesso
+      minZoom: 4
     }).fitBounds(SICILY_BOUNDS);
 
-    // BASE LAYER SCURO
     L.tileLayer(
       'https://server.arcgisonline.com/ArcGIS/rest/services/World_Shaded_Relief/MapServer/tile/{z}/{y}/{x}',
       { maxZoom: 13, attribution: 'Esri', className: 'dark-relief-tiles' }
     ).addTo(map);
 
-    // HILLSHADE
     L.tileLayer(
       'https://server.arcgisonline.com/ArcGIS/rest/services/Elevation/World_Hillshade/MapServer/tile/{z}/{y}/{x}',
       { maxZoom: 19, className: 'dark-relief-tiles', opacity: 0.40 }
     ).addTo(map);
 
-    // LABELS
     map.createPane('labelsPane');
     map.getPane('labelsPane').style.zIndex = 600;
     map.getPane('labelsPane').style.pointerEvents = 'none';
@@ -427,7 +415,7 @@
       const c = L.DomUtil.create('canvas', 'leaflet-layer ' + (cls||''));
       c.style.pointerEvents = 'none';
       c.style.zIndex = z;
-      c.style.imageRendering = 'auto';
+      c.style.imageRendering = 'auto'; // SMOOTH
       map.getPanes().overlayPane.appendChild(c);
       return c;
     }
@@ -447,13 +435,15 @@
   async function loadCatalog(){
     try{
       const r = await fetch('data_weather/catalog.json?t=' + Date.now());
-      if(!r.ok) throw new Error();
+      if(!r.ok) throw new Error('catalog load failed');
       catalog = await r.json();
       const slider = document.getElementById('time-slider');
       slider.max = catalog.length - 1;
       slider.addEventListener('input', (e)=> loadStep(parseInt(e.target.value)));
       await loadStep(0);
-    } catch(e){}
+    } catch(e){
+      console.error(e);
+    }
   }
 
   async function loadStep(i){
@@ -463,16 +453,25 @@
       const r = await fetch('data_weather/' + catalog[i].file + '?t=' + Date.now());
       currentData = await r.json();
       
-      // PRE-CALCOLO PULIZIA DATI (PERFORMANCE BOOST)
+      // 2. CORREZIONE ALLINEAMENTO GLOBALE (OFFSET)
+      // Modifica LAT_OFFSET se vedi che i layer sono ancora spostati.
+      if(currentData.meta) {
+          currentData.meta.la1 += LAT_OFFSET;
+          currentData.meta.la2 += LAT_OFFSET;
+          currentData.meta.lo1 += LON_OFFSET;
+          currentData.meta.lo2 += LON_OFFSET;
+      }
+
+      // PRE-CALCOLO ISOBARE (Performance)
       if(currentData.press) {
           const raw = currentData.press;
           const clean = new Float32Array(raw.length);
           for(let j=0; j<raw.length; j++){
               const v = raw[j];
-              // Pulisci valori estremi o nulli
+              // Fix linee dritte
               clean[j] = (!v || v < 850 || v > 1100) ? 1013 : v;
           }
-          currentData.cleanPress = clean; // Salva la versione pulita
+          currentData.cleanPress = clean;
       }
 
       redrawAll();
@@ -490,7 +489,7 @@
   }
 
   function drawScalars(){
-    // Gestione DPI per nitidezza
+    // 3. SUPPORTO DPI (Retina/4k) PER NITIDEZZA
     const size = map.getSize();
     const w = size.x * DPR;
     const h = size.y * DPR;
@@ -499,19 +498,17 @@
       const canvas = scalarCanvases[layer];
       const ctx = canvas.getContext('2d');
       
-      // Resize e Scale DPI
       if(canvas.width !== w || canvas.height !== h) {
           canvas.width = w; canvas.height = h;
           canvas.style.width = size.x + 'px'; canvas.style.height = size.y + 'px';
       }
-      ctx.setTransform(DPR, 0, 0, DPR, 0, 0); // Reset scale
+      ctx.setTransform(DPR, 0, 0, DPR, 0, 0);
       L.DomUtil.setPosition(canvas, map.containerPointToLayerPoint([0,0]));
       ctx.clearRect(0,0,size.x,size.y);
 
       if(!selected.has(layer) || !currentData.meta) return;
       const m = currentData.meta;
 
-      // Setup Offscreen Canvas (riusata)
       if(offscreenCanvas.width !== m.nx) offscreenCanvas.width = m.nx;
       if(offscreenCanvas.height !== m.ny) offscreenCanvas.height = m.ny;
       
@@ -546,13 +543,11 @@
       }
 
       offscreenCtx.putImageData(img, 0, 0);
-      
-      // Disegna scalato
       const tl = map.latLngToContainerPoint([m.la1, m.lo1]);
       const br = map.latLngToContainerPoint([m.la2, m.lo2]);
       
       ctx.save();
-      ctx.imageSmoothingEnabled = true; // Smooth attivo
+      ctx.imageSmoothingEnabled = true;
       ctx.drawImage(offscreenCanvas, tl.x, tl.y, br.x-tl.x, br.y-tl.y);
       ctx.restore();
     });
@@ -563,7 +558,6 @@
     const w = size.x * DPR;
     const h = size.y * DPR;
     const ctx = arrowCanvas.getContext('2d');
-    
     if(arrowCanvas.width !== w || arrowCanvas.height !== h){
         arrowCanvas.width = w; arrowCanvas.height = h;
         arrowCanvas.style.width = size.x + 'px'; arrowCanvas.style.height = size.y + 'px';
@@ -593,7 +587,7 @@
         const lon = m.lo1 + x*m.dx;
         const p = map.latLngToContainerPoint([lat, lon]);
         
-        // Skip se fuori schermo (Ottimizzazione)
+        // Skip arrow if off-screen (Optimization)
         if(p.x < -30 || p.y < -30 || p.x > size.x+30 || p.y > size.y+30) continue;
 
         const c = vividWindColor(sp);
@@ -908,8 +902,9 @@
   }
 
   function bilinearSample(arr, m, lat, lon){
-    const gx = (lon - m.lo1) / m.dx;
-    const gy = (m.la1 - lat) / m.dy;
+    // APPLICA OFFSET AL CAMPIONAMENTO
+    const gx = (lon - (m.lo1)) / m.dx;
+    const gy = ((m.la1) - lat) / m.dy;
     if(gx < 0 || gy < 0 || gx > (m.nx-1) || gy > (m.ny-1)) return null;
     const x0 = Math.floor(gx), y0 = Math.floor(gy);
     const x1 = Math.min(x0+1, m.nx-1), y1 = Math.min(y0+1, m.ny-1);
