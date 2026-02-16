@@ -273,7 +273,31 @@
     return {r:Math.round(lerp(r1,r2,f)), g:Math.round(lerp(g1,g2,f)), b:Math.round(lerp(b1,b2,f))};
   }
 
-  // d3 contours -> path (niente linee spurie)
+  // ✅ Colore isobare: blu (bassa) -> viola (normale) -> rosso (alta)
+  function pressColor(hPa){
+    // range tipico che stai disegnando
+    const lo = 960, mid = 1013, hi = 1050;
+    const blue = {r: 30, g: 110, b: 255};
+    const purple = {r: 165, g: 70, b: 255};
+    const red = {r: 255, g: 60, b: 60};
+
+    if(hPa <= mid){
+      const t = clamp((hPa - lo)/(mid - lo), 0, 1);
+      return {
+        r: Math.round(lerp(blue.r, purple.r, t)),
+        g: Math.round(lerp(blue.g, purple.g, t)),
+        b: Math.round(lerp(blue.b, purple.b, t))
+      };
+    } else {
+      const t = clamp((hPa - mid)/(hi - mid), 0, 1);
+      return {
+        r: Math.round(lerp(purple.r, red.r, t)),
+        g: Math.round(lerp(purple.g, red.g, t)),
+        b: Math.round(lerp(purple.b, red.b, t))
+      };
+    }
+  }
+
   function contourToScreenPath(ctx, coordinates, m){
     for (const polygon of coordinates) {
       for (const ring of polygon) {
@@ -492,10 +516,7 @@
       else if(layer==='rain'){ arr = currentData.rain; stops = RAIN_STOPS; }
       else if(layer==='rh'){ arr = currentData.rh; stops = RH_STOPS; }
       else if(layer==='press'){ arr = currentData.press; stops = PRESS_STOPS; }
-      else if(layer==='cloud'){
-        arr = currentData.cloud ?? currentData.cld ?? null;
-        stops = CLOUD_STOPS;
-      }
+      else if(layer==='cloud'){ arr = currentData.cloud ?? currentData.cld ?? null; stops = CLOUD_STOPS; }
       if(!arr && !isWindBg) return;
 
       for(let i=0; i<m.nx*m.ny; i++){
@@ -681,6 +702,7 @@
     ctx.font = `900 ${valueSize}px Arial`;
     const vy = y + letterSize*0.85;
     const txt = `${value} hPa`;
+
     ctx.fillStyle = "rgba(0,0,0,0.55)";
     const padX = 10, padY = 6;
     const w = ctx.measureText(txt).width + padX*2;
@@ -696,6 +718,7 @@
     ctx.restore();
   }
 
+  // ✅ ISOBARE: colorate per hPa + valore su OGNI linea
   function drawIsobars(){
     const ctx = isoCanvas.getContext('2d');
     const s = map.getSize();
@@ -721,25 +744,33 @@
       const thresholds = d3.range(960, 1050, 2);
       const contours = d3.contours().size([nx, ny]).thresholds(thresholds)(smooth);
 
+      // Disegno linee (spessore sinottico) + colore per hPa
       for(const c of contours){
         const v = Math.round(c.value);
         const is8 = (v % 8 === 0);
         const is4 = (v % 4 === 0);
 
-        ctx.strokeStyle = "rgba(255,255,255,0.80)";
-        ctx.lineWidth = is8 ? 2.4 : (is4 ? 1.7 : 1.05);
+        const rgb = pressColor(v);
+        const alpha = is8 ? 0.92 : (is4 ? 0.80 : 0.62);
+
+        ctx.strokeStyle = `rgba(${rgb.r},${rgb.g},${rgb.b},${alpha})`;
+        ctx.lineWidth = is8 ? 2.6 : (is4 ? 1.8 : 1.15);
         ctx.setLineDash([]);
         contourToScreenPath(ctx, c.coordinates, m);
       }
 
+      // Etichette: OGNI linea, ma più grandi sulle principali (ogni 4/8)
+      const z = map.getZoom();
+      const baseFont = clamp(11 + (z-7)*1.4, 11, 22);
+      const majorFont = clamp(14 + (z-7)*1.8, 14, 28);
+
       ctx.textAlign="center";
       ctx.textBaseline="middle";
-      ctx.font = "900 12px Arial";
 
       for(const c of contours){
         const v = Math.round(c.value);
-        if(v % 4 !== 0) continue;
-
+        const is8 = (v % 8 === 0);
+        const is4 = (v % 4 === 0);
         const p = pickLabelPointFromContour(c);
         if(!p) continue;
 
@@ -748,12 +779,29 @@
         const pt = map.latLngToContainerPoint([lat,lon]);
         if(pt.x < 0 || pt.y < 0 || pt.x > s.x || pt.y > s.y) continue;
 
+        const fontSize = (is8 || is4) ? majorFont : baseFont;
+        ctx.font = `900 ${fontSize}px Arial`;
+
+        const txt = `${v}`;
+        const rgb = pressColor(v);
+
+        // box dietro
         ctx.fillStyle = "rgba(0,0,0,0.55)";
-        ctx.fillRect(pt.x-16, pt.y-8, 32, 16);
-        ctx.fillStyle = "#fff";
-        ctx.fillText(v.toString(), pt.x, pt.y);
+        const w = ctx.measureText(txt).width + 18;
+        const h = fontSize + 12;
+        ctx.fillRect(pt.x - w/2, pt.y - h/2, w, h);
+
+        // stroke per contrasto
+        ctx.lineWidth = 5;
+        ctx.strokeStyle = "rgba(0,0,0,0.90)";
+        ctx.strokeText(txt, pt.x, pt.y);
+
+        // testo colorato come la linea
+        ctx.fillStyle = `rgb(${rgb.r},${rgb.g},${rgb.b})`;
+        ctx.fillText(txt, pt.x, pt.y);
       }
 
+      // A/B: lasciamo come prima (coerenti su campo smussato)
       const cand = findExtremaAB(smooth, nx, ny);
       const highs = cand.filter(p=>p.type==='A').sort((a,b)=>b.v-a.v);
       const lows  = cand.filter(p=>p.type==='B').sort((a,b)=>a.v-b.v);
@@ -766,14 +814,11 @@
       }
 
       const minDist = (map.getZoom() >= 10) ? 120 : 160;
-
       const highsPx = highs.slice(0, 30).map(projectPoint).filter(p=>p.px>=0 && p.py>=0 && p.px<=s.x && p.py<=s.y);
       const lowsPx  = lows.slice(0, 30).map(projectPoint).filter(p=>p.px>=0 && p.py>=0 && p.px<=s.x && p.py<=s.y);
-
       const Apts = dedupeByDistance(highsPx, minDist).slice(0, 3);
       const Bpts = dedupeByDistance(lowsPx,  minDist).slice(0, 3);
 
-      const z = map.getZoom();
       const letterSize = clamp(18 + (z-7)*2.2, 18, 34);
       const valueSize  = clamp(11 + (z-7)*1.2, 11, 20);
 
@@ -789,7 +834,8 @@
     }
   }
 
-  // ✅ ISOTERME: 1°C, ogni 5°C più spessa + label grande che scala con zoom
+  // ✅ ISOTERME: lasciate come approccio (1°C), ogni 5°C più spessa + label più grande
+  // ✅ + in ogni riga (ogni isolinea) mettiamo il valore (label sempre, con dimensione diversa)
   function drawIsotherms(){
     const ctx = thermCanvas.getContext('2d');
     const s = map.getSize();
@@ -835,14 +881,16 @@
       contourToScreenPath(ctx, c.coordinates, m);
     }
 
-    const fontSize = clamp(14 + (zoom-7)*2.0, 14, 30);
+    // Label su OGNI isolinea (valore sempre), più grande ogni 5°C
+    const baseFont = clamp(11 + (zoom-7)*1.3, 11, 22);
+    const majorFont = clamp(15 + (zoom-7)*2.0, 15, 32);
+
     ctx.textAlign="center";
     ctx.textBaseline="middle";
-    ctx.font = `900 ${fontSize}px Arial`;
 
     for(const c of contours){
       const v = Math.round(c.value);
-      if(v % 5 !== 0) continue;
+      const isMajor = (v % 5 === 0);
 
       const p = pickLabelPointFromContour(c);
       if(!p) continue;
@@ -852,6 +900,9 @@
       const pt = map.latLngToContainerPoint([lat,lon]);
       if(pt.x < 0 || pt.y < 0 || pt.x > s.x || pt.y > s.y) continue;
 
+      const fontSize = isMajor ? majorFont : baseFont;
+      ctx.font = `900 ${fontSize}px Arial`;
+
       const txt = `${v}°`;
 
       ctx.fillStyle = "rgba(0,0,0,0.55)";
@@ -860,7 +911,7 @@
       ctx.fillRect(pt.x - w/2, pt.y - h/2, w, h);
 
       ctx.lineWidth = 5;
-      ctx.strokeStyle = "rgba(0,0,0,0.9)";
+      ctx.strokeStyle = "rgba(0,0,0,0.90)";
       ctx.strokeText(txt, pt.x, pt.y);
 
       ctx.fillStyle = "#fff";
@@ -868,7 +919,7 @@
     }
   }
 
-  // ✅ campionamento bilineare (allinea pick vs isolinee)
+  // ✅ bilinear pick (allinea valori cliccati vs isolinee)
   function bilinearSample(arr, m, lat, lon){
     const gx = (lon - m.lo1) / m.dx;
     const gy = (m.la1 - lat) / m.dy;
@@ -929,7 +980,6 @@
     document.getElementById('wind-rose').style.display = selected.has('wind') ? 'flex' : 'none';
   }
 
-  // ✅ pick coerente (bilineare)
   function onPick(e){
     if(!currentData?.meta) return;
     const m = currentData.meta;
