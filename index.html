@@ -174,10 +174,9 @@
 
 <script>
   const SICILY_BOUNDS = L.latLngBounds(L.latLng(35.0, 11.0), L.latLng(39.5, 16.5));
-
   const WIND_COLOR_SCALE = ["#000080", "#0044ff", "#00ddff", "#00ff55", "#ffff00", "#ff6600", "#ff0000", "#ff00ff"];
 
-  // TEMP (Your custom stops: keep as-is)
+  // TEMP (Your custom stops: unchanged)
   const TEMP_STOPS = [
     {v: -15, c: [156,218,216]}, {v: -14, c: [149,214,211]}, {v: -13, c: [141,210,206]}, {v: -12, c: [134,206,201]},
     {v: -11, c: [127,202,196]}, {v: -10, c: [119,198,191]}, {v: -9,  c: [112,194,185]}, {v: -8,  c: [106,190,181]},
@@ -216,7 +215,6 @@
     {v:95, c:[56,110,165]}, {v:100, c:[56,70,114]}
   ];
 
-  // PRESS (keep as-is)
   const PRESS_STOPS = [
     {v: 900, c: [8,16,48]}, {v: 950, c: [0,32,96]}, {v: 976, c: [0,52,146]}, {v: 986, c: [0,90,148]},
     {v: 995, c: [0,117,146]}, {v: 1002, c: [26,140,147]}, {v: 1007, c: [103,162,155]}, {v: 1011.25, c: [155,183,172]},
@@ -276,7 +274,6 @@
     return {r:Math.round(lerp(r1,r2,f)), g:Math.round(lerp(g1,g2,f)), b:Math.round(lerp(b1,b2,f))};
   }
 
-  // ✅ QUESTO risolve le “linee nere/strane”: moveTo + lineTo corretti
   function ringToPath(ctx, ring, m){
     if(!ring || ring.length < 2) return false;
     const first = ring[0];
@@ -294,6 +291,12 @@
     return true;
   }
 
+  // ✅ font che cresce con lo zoom (isoterme)
+  function isoLabelFontPx(){
+    const z = map.getZoom();
+    return Math.round(clamp(12 + (z - 7) * 2.0, 12, 26));
+  }
+
   window.addEventListener('load', async () => {
     map = L.map('map', {
       zoomControl: false,
@@ -301,19 +304,16 @@
       background: '#1a1a1a'
     }).fitBounds(SICILY_BOUNDS);
 
-    // BASE: Esri World Shaded Relief (dark-inverted)
     L.tileLayer(
       'https://server.arcgisonline.com/ArcGIS/rest/services/World_Shaded_Relief/MapServer/tile/{z}/{y}/{x}',
       { maxZoom: 13, attribution: 'Esri', className: 'dark-relief-tiles' }
     ).addTo(map);
 
-    // Hillshade overlay
     L.tileLayer(
       'https://server.arcgisonline.com/ArcGIS/rest/services/Elevation/World_Hillshade/MapServer/tile/{z}/{y}/{x}',
       { maxZoom: 19, className: 'dark-relief-tiles', opacity: 0.40 }
     ).addTo(map);
 
-    // Labels
     map.createPane('labelsPane');
     map.getPane('labelsPane').style.zIndex = 600;
     map.getPane('labelsPane').style.pointerEvents = 'none';
@@ -355,7 +355,7 @@
 
     arrowCanvas  = mkCanvas(380);
     isoCanvas    = mkCanvas(420);
-    thermoCanvas = mkCanvas(430); // ✅ isoterme sopra isobare
+    thermoCanvas = mkCanvas(430);
     gridCanvas   = mkCanvas(450);
   }
 
@@ -406,7 +406,6 @@
       if(!selected.has(layer) || !currentData.meta) return;
 
       const m = currentData.meta;
-
       const off = document.createElement('canvas');
       off.width = m.nx; off.height = m.ny;
       const octx = off.getContext('2d');
@@ -434,10 +433,8 @@
           col = {r:c.r,g:c.g,b:c.b,a:0.42};
         } else {
           const val = arr[i] ?? 0;
-
           if(layer==='rain' && val < 0.6) { data[i*4+3]=0; continue; }
           if(layer==='cloud' && val < 10) { data[i*4+3]=0; continue; }
-
           col = interpStops(val, stops);
         }
 
@@ -466,7 +463,6 @@
     gridCanvas.width = s.x; gridCanvas.height = s.y;
     L.DomUtil.setPosition(gridCanvas, map.containerPointToLayerPoint([0,0]));
     ctx.clearRect(0,0,s.x,s.y);
-
     if(!showGrid) return;
 
     const b = map.getBounds();
@@ -539,7 +535,6 @@
         const shaftEndX = p.x + (currentLen-headLen)*Math.cos(angle);
         const shaftEndY = p.y + (currentLen-headLen)*Math.sin(angle);
 
-        // shaft border
         ctx.beginPath();
         ctx.moveTo(p.x, p.y);
         ctx.lineTo(shaftEndX, shaftEndY);
@@ -547,7 +542,6 @@
         ctx.lineWidth = currentWidth + 2.2;
         ctx.stroke();
 
-        // shaft fill
         ctx.beginPath();
         ctx.moveTo(p.x, p.y);
         ctx.lineTo(shaftEndX, shaftEndY);
@@ -555,7 +549,6 @@
         ctx.lineWidth = currentWidth;
         ctx.stroke();
 
-        // head
         const tipX = p.x + currentLen*Math.cos(angle);
         const tipY = p.y + currentLen*Math.sin(angle);
 
@@ -602,7 +595,6 @@
     velocityLayer.addTo(map);
   }
 
-  // ✅ ISOBARE FIX: niente “linee che partono dal basso” + A/B su veri picchi
   function drawIsobars(){
     const ctx = isoCanvas.getContext('2d');
     const s = map.getSize();
@@ -615,14 +607,12 @@
     const m = currentData.meta;
     const raw = currentData.press;
 
-    // sanitize (evita buchi che generano artefatti)
     const p = new Float32Array(raw.length);
     for(let i=0;i<raw.length;i++){
       const v = raw[i];
       p[i] = (!v || Number.isNaN(v) || v < 850 || v > 1100) ? 1013 : v;
     }
 
-    // contours
     const contours = d3.contours()
       .size([m.nx, m.ny])
       .thresholds(d3.range(960, 1050, 2))(p);
@@ -631,7 +621,6 @@
     ctx.lineCap = "round";
     ctx.lineJoin = "round";
 
-    // style: ogni 10 hPa più spessa
     contours.forEach(c => {
       const v = Math.round(c.value);
       const isMajor = (v % 10 === 0);
@@ -640,21 +629,18 @@
         for(const ring of poly){
           if(!ring || ring.length < 2) continue;
 
-          // border (scuro) per leggibilità
           ctx.beginPath();
           ringToPath(ctx, ring, m);
           ctx.strokeStyle = "rgba(0,0,0,0.28)";
           ctx.lineWidth = (isMajor ? 2.4 : 1.4) + 1.2;
           ctx.stroke();
 
-          // white line
           ctx.beginPath();
           ringToPath(ctx, ring, m);
           ctx.strokeStyle = "rgba(255,255,255,0.85)";
           ctx.lineWidth = isMajor ? 2.4 : 1.4;
           ctx.stroke();
 
-          // label solo su major e ring lunghi
           if(isMajor && ring.length > 260){
             const mid = ring[Math.floor(ring.length/2)];
             const lat = m.la1 - mid[1]*m.dy;
@@ -678,14 +664,13 @@
       }
     });
 
-    // A/B: trova estremi veri su raggio e impone distanza minima tra etichette
     const extrema = findPressureExtrema(p, m, map);
     drawAB(ctx, extrema, m);
 
     ctx.restore();
   }
 
-  // ✅ ISOTERME “molto sensibili” e coerenti col click: 1°C senza smoothing
+  // ✅ QUI: numeri grandi che reagiscono allo zoom + valori solo ogni 5°C
   function drawIsotherms(){
     const ctx = thermoCanvas.getContext('2d');
     const s = map.getSize();
@@ -704,7 +689,6 @@
       t[i] = (v === null || v === undefined || Number.isNaN(v) || v < -80 || v > 60) ? NaN : v;
     }
 
-    // 1-pass fill NaN (evita buchi che spezzano linee)
     const nx = m.nx, ny = m.ny;
     for(let y=1;y<ny-1;y++){
       for(let x=1;x<nx-1;x++){
@@ -722,7 +706,6 @@
       }
     }
 
-    // range dinamico
     let tMin = Infinity, tMax = -Infinity;
     for(let i=0;i<t.length;i++){
       const v = t[i];
@@ -734,11 +717,14 @@
 
     const start = Math.floor(tMin) - 1;
     const end   = Math.ceil(tMax) + 1;
-    const thresholds = d3.range(start, end + 0.0001, 1);
+    const thresholds = d3.range(start, end + 0.0001, 1); // linee ogni 1°C (sensibili)
 
     const contours = d3.contours()
       .size([nx, ny])
       .thresholds(thresholds)(t);
+
+    const fontPx = isoLabelFontPx();                 // ✅ reagisce allo zoom
+    const haloW  = Math.round(clamp(fontPx * 0.45, 5, 12));
 
     ctx.save();
     ctx.lineCap = "round";
@@ -746,44 +732,63 @@
 
     contours.forEach(c => {
       const v = Math.round(c.value);
-      const isMajor = (v % 5 === 0);
+
+      const isMajor = (v % 5 === 0);                 // ✅ valore ogni 5°C
+      // linee: 1°C sottili, 5°C più spesse
+      const lw = isMajor ? 2.4 : 1.1;
+      const alpha = isMajor ? 0.78 : 0.38;
 
       for(const poly of c.coordinates){
         for(const ring of poly){
           if(!ring || ring.length < 2) continue;
 
-          // border
           ctx.beginPath();
           ringToPath(ctx, ring, m);
           ctx.strokeStyle = "rgba(0,0,0,0.25)";
-          ctx.lineWidth = (isMajor ? 2.2 : 1.1) + 1.0;
+          ctx.lineWidth = lw + 1.0;
           ctx.stroke();
 
-          // line
           ctx.beginPath();
           ringToPath(ctx, ring, m);
-          ctx.strokeStyle = isMajor ? "rgba(255,255,255,0.70)" : "rgba(255,255,255,0.40)";
-          ctx.lineWidth = isMajor ? 2.2 : 1.1;
+          ctx.strokeStyle = `rgba(255,255,255,${alpha})`;
+          ctx.lineWidth = lw;
           ctx.stroke();
 
-          // label major only
-          if(isMajor && ring.length > 280){
-            const mid = ring[Math.floor(ring.length/2)];
-            const lat = m.la1 - mid[1]*m.dy;
-            const lon = m.lo1 + mid[0]*m.dx;
-            const pm = map.latLngToContainerPoint([lat, lon]);
-            const txt = `${v}°`;
+          // ✅ label grandi, zoom-aware, solo su 5°C
+          if(isMajor && ring.length > 220){
+            // più etichette se la linea è lunga
+            const count = ring.length;
+            const nLabels = clamp(Math.floor(count / 700), 1, 3); // 1..3 etichette
+            const positions = [];
+            if(nLabels === 1) positions.push(0.5);
+            if(nLabels === 2) positions.push(0.33, 0.66);
+            if(nLabels === 3) positions.push(0.25, 0.50, 0.75);
 
-            ctx.save();
-            ctx.font = "900 12px Arial";
-            ctx.textAlign = "center";
-            ctx.textBaseline = "middle";
-            ctx.lineWidth = 5;
-            ctx.strokeStyle = "rgba(0,0,0,0.75)";
-            ctx.strokeText(txt, pm.x, pm.y);
-            ctx.fillStyle = "rgba(255,255,255,0.92)";
-            ctx.fillText(txt, pm.x, pm.y);
-            ctx.restore();
+            positions.forEach(frac => {
+              const mid = ring[Math.floor(count * frac)];
+              const lat = m.la1 - mid[1]*m.dy;
+              const lon = m.lo1 + mid[0]*m.dx;
+              const pm = map.latLngToContainerPoint([lat, lon]);
+
+              const txt = `${v}°`;
+
+              ctx.save();
+              ctx.font = `900 ${fontPx}px Arial`;
+              ctx.textAlign = "center";
+              ctx.textBaseline = "middle";
+
+              ctx.lineWidth = haloW;
+              ctx.strokeStyle = "rgba(0,0,0,0.78)";
+              ctx.strokeText(txt, pm.x, pm.y);
+
+              ctx.lineWidth = Math.max(2, Math.round(haloW/3));
+              ctx.strokeStyle = "rgba(255,255,255,0.80)";
+              ctx.strokeText(txt, pm.x, pm.y);
+
+              ctx.fillStyle = "rgba(255,255,255,0.96)";
+              ctx.fillText(txt, pm.x, pm.y);
+              ctx.restore();
+            });
           }
         }
       }
@@ -794,19 +799,14 @@
 
   function findPressureExtrema(p, m, map){
     const nx = m.nx, ny = m.ny;
-
-    // raggio in celle (più grande = più “sinottico”)
     const r = 6;
     const step = 3;
-
     const candidates = [];
 
     for(let y=r; y<ny-r; y+=step){
       for(let x=r; x<nx-r; x+=step){
         const idx = y*nx + x;
         const v = p[idx];
-
-        // filtro: evita rumore attorno al medio
         if(v > 1008 && v < 1018) continue;
 
         let isMax = true, isMin = true;
@@ -823,14 +823,12 @@
         }
 
         if(isMax || isMin){
-          // “prominence” grezza: distanza da 1013
           const prom = Math.abs(v - 1013);
           candidates.push({x,y,v,prom,type: isMax?'A':'B'});
         }
       }
     }
 
-    // ordina per “prominence” e limita
     candidates.sort((a,b)=>b.prom - a.prom);
 
     const chosen = [];
@@ -849,7 +847,7 @@
       if(!ok) continue;
 
       chosen.push({ ...c, px: pt.x, py: pt.y });
-      if(chosen.length >= 6) break; // max 6 etichette
+      if(chosen.length >= 6) break;
     }
 
     return chosen;
@@ -865,7 +863,6 @@
       const txt = e.type;
       const color = (e.type==='A') ? "#ff2d2d" : "#2d6bff";
 
-      // halo chiaro + bordo scuro: si vede sempre
       ctx.lineWidth = 10;
       ctx.strokeStyle = "rgba(255,255,255,0.85)";
       ctx.strokeText(txt, e.px, e.py);
@@ -877,7 +874,6 @@
       ctx.fillStyle = color;
       ctx.fillText(txt, e.px, e.py);
 
-      // valore pressione sotto (più sinottico)
       const vtxt = `${Math.round(e.v)} hPa`;
       ctx.font = "900 12px Arial";
       ctx.lineWidth = 5;
@@ -948,15 +944,12 @@
 
     const idx = y*m.nx + x;
 
-    // Priorità: rain > temp > wind > rh > press > cloud (come prima)
     let val = '--', unit = '';
-
     if(selected.has('rain')) { val = (currentData.rain[idx] ?? 0).toFixed(1); unit='mm'; }
     else if(selected.has('temp')) { val = (currentData.temp[idx] ?? 0).toFixed(1); unit='°C'; }
     else if(selected.has('wind')) {
       const u=currentData.wind_u.data[idx], v=currentData.wind_v.data[idx];
       val = (Math.sqrt(u*u+v*v)*3.6).toFixed(1); unit='km/h';
-
       const arrow = document.getElementById('rose-arrow');
       const deg = 90 - (Math.atan2(v, u) * 180 / Math.PI);
       arrow.style.transform = `rotate(${deg}deg)`;
@@ -966,7 +959,6 @@
     else if(selected.has('cloud')) {
       const c = (currentData.cloud ?? currentData.cld ?? null);
       if(c) { val = Math.round(c[idx] ?? 0); unit='%'; }
-      else { val = '--'; unit=''; }
     }
 
     document.getElementById('val-display').innerText = val;
