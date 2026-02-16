@@ -105,7 +105,6 @@
     }
 
     canvas.leaflet-layer.velocity-canvas { mix-blend-mode: normal; opacity: 0.95; }
-
   </style>
 </head>
 
@@ -176,10 +175,9 @@
 <script>
   const SICILY_BOUNDS = L.latLngBounds(L.latLng(35.0, 11.0), L.latLng(39.5, 16.5));
 
-  // Colori vento (come avevi)
   const WIND_COLOR_SCALE = ["#000080", "#0044ff", "#00ddff", "#00ff55", "#ffff00", "#ff6600", "#ff0000", "#ff00ff"];
 
-  // TEMP (lasciati ESATTAMENTE quelli del tuo file: non li tocco)
+  // TEMP (NON TOCCO)
   const TEMP_STOPS = [
     {v: -15, c: [156,218,216]}, {v: -14, c: [149,214,211]}, {v: -13, c: [141,210,206]}, {v: -12, c: [134,206,201]},
     {v: -11, c: [127,202,196]}, {v: -10, c: [119,198,191]}, {v: -9,  c: [112,194,185]}, {v: -8,  c: [106,190,181]},
@@ -199,7 +197,6 @@
     {v: 45,  c: [89,22,3]}
   ];
 
-  // RAIN
   const RAIN_STOPS = [
     {v:0.0, c:[0,0,0], a:0.0},
     {v:0.6, c:[100,200,255], a:0.70},
@@ -210,7 +207,6 @@
     {v:50,  c:[255,0,0], a:0.92}
   ];
 
-  // RH
   const RH_STOPS = [
     {v:0, c:[173,85,56]}, {v:1, c:[173,85,56]}, {v:5, c:[173,89,56]}, {v:10, c:[173,93,56]},
     {v:15, c:[173,97,56]}, {v:20, c:[173,101,56]}, {v:25, c:[173,105,56]}, {v:30, c:[173,110,56]},
@@ -220,7 +216,6 @@
     {v:95, c:[56,110,165]}, {v:100, c:[56,70,114]}
   ];
 
-  // PRESSIONE (non la cambio)
   const PRESS_STOPS = [
     {v: 900, c: [8,16,48]}, {v: 950, c: [0,32,96]}, {v: 976, c: [0,52,146]}, {v: 986, c: [0,90,148]},
     {v: 995, c: [0,117,146]}, {v: 1002, c: [26,140,147]}, {v: 1007, c: [103,162,155]}, {v: 1011.25, c: [155,183,172]},
@@ -228,7 +223,6 @@
     {v: 1030, c: [159,81,44]}, {v: 1038, c: [142,47,57]}, {v: 1046, c: [111,24,64]}, {v: 1080, c: [48,8,24]}
   ];
 
-  // CLOUD (funziona solo se esporti cloud nel JSON)
   const CLOUD_STOPS = [
     {v:0, c:[255,255,255], a:0.00},
     {v:40, c:[220,220,220], a:0.40},
@@ -242,7 +236,6 @@
   let velocityLayer = null, scalarCanvases = {}, arrowCanvas, isoCanvas, thermCanvas, gridCanvas;
   let isPlaying = false;
 
-  // --- utils ---
   function clamp(x,a,b){ return Math.max(a, Math.min(b, x)); }
   function lerp(a,b,t){ return a+(b-a)*t; }
 
@@ -280,9 +273,8 @@
     return {r:Math.round(lerp(r1,r2,f)), g:Math.round(lerp(g1,g2,f)), b:Math.round(lerp(b1,b2,f))};
   }
 
-  // --- d3 contours: path helper (FIX definitivo linee assurde) ---
+  // d3 contours -> path (niente linee spurie)
   function contourToScreenPath(ctx, coordinates, m){
-    // d3.contours: coordinates = Polygon[]; Polygon = Ring[]; Ring = [ [x,y], ... ]
     for (const polygon of coordinates) {
       for (const ring of polygon) {
         if (!ring || ring.length < 2) continue;
@@ -321,10 +313,8 @@
     } catch(e){ return null; }
   }
 
-  // --- smoothing per extrema coerenti (A/B) ---
   function smoothGrid(src, nx, ny){
     const out = new Float32Array(nx*ny);
-    // kernel leggero 3x3
     for(let y=0;y<ny;y++){
       for(let x=0;x<nx;x++){
         let sum=0, wsum=0;
@@ -344,15 +334,12 @@
   }
 
   function findExtremaAB(field, nx, ny){
-    // ritorna lista candidati con type A/B, value, x,y.
-    // usa controllo 7x7 su griglia smussata per evitare rumore.
     const cand = [];
-    const r = 4; // 9x9 circa effettivo
+    const r = 4;
     for(let y=r; y<ny-r; y++){
       for(let x=r; x<nx-r; x++){
         const idx = y*nx + x;
         const v = field[idx];
-
         let isMax = true, isMin = true;
         for(let yy=y-r; yy<=y+r; yy++){
           for(let xx=x-r; xx<=x+r; xx++){
@@ -372,7 +359,6 @@
   }
 
   function dedupeByDistance(points, minDistPx){
-    // tiene punti più forti e elimina vicini
     const kept = [];
     for(const p of points){
       let ok = true;
@@ -385,7 +371,6 @@
     return kept;
   }
 
-  // --- init ---
   window.addEventListener('load', async () => {
     map = L.map('map', {
       zoomControl: false,
@@ -394,19 +379,16 @@
       minZoom: 6
     }).fitBounds(SICILY_BOUNDS);
 
-    // BASE: Esri Shaded Relief (darkified con filtro)
     L.tileLayer(
       'https://server.arcgisonline.com/ArcGIS/rest/services/World_Shaded_Relief/MapServer/tile/{z}/{y}/{x}',
       { maxZoom: 13, attribution: 'Esri', className: 'dark-relief-tiles' }
     ).addTo(map);
 
-    // Hillshade
     L.tileLayer(
       'https://server.arcgisonline.com/ArcGIS/rest/services/Elevation/World_Hillshade/MapServer/tile/{z}/{y}/{x}',
       { maxZoom: 19, className: 'dark-relief-tiles', opacity: 0.40 }
     ).addTo(map);
 
-    // Labels
     map.createPane('labelsPane');
     map.getPane('labelsPane').style.zIndex = 600;
     map.getPane('labelsPane').style.pointerEvents = 'none';
@@ -415,7 +397,6 @@
       opacity: 0.90
     }).addTo(map);
 
-    // Particles pane
     map.createPane('particlePane');
     map.getPane('particlePane').style.zIndex = 800;
     map.getPane('particlePane').style.pointerEvents = 'none';
@@ -489,7 +470,6 @@
 
   function drawScalars(){
     const s = map.getSize();
-
     ['wind','temp','rain','rh','press','cloud'].forEach(layer => {
       const canvas = scalarCanvases[layer];
       const ctx = canvas.getContext('2d');
@@ -507,45 +487,36 @@
       const data = img.data;
 
       let arr = null, stops = null, isWindBg = false;
-
       if(layer==='wind'){ isWindBg = true; }
       else if(layer==='temp'){ arr = currentData.temp; stops = TEMP_STOPS; }
       else if(layer==='rain'){ arr = currentData.rain; stops = RAIN_STOPS; }
       else if(layer==='rh'){ arr = currentData.rh; stops = RH_STOPS; }
       else if(layer==='press'){ arr = currentData.press; stops = PRESS_STOPS; }
       else if(layer==='cloud'){
-        // funzionerà solo se nel JSON esiste currentData.cloud (o currentData.cld)
         arr = currentData.cloud ?? currentData.cld ?? null;
         stops = CLOUD_STOPS;
       }
-
       if(!arr && !isWindBg) return;
 
       for(let i=0; i<m.nx*m.ny; i++){
         let col = {r:0,g:0,b:0,a:0};
-
         if(isWindBg){
           const u = currentData.wind_u.data[i], v = currentData.wind_v.data[i];
           const sp = Math.sqrt(u*u+v*v);
           const rgb = vividWindColor(sp);
-          col = {r:rgb.r,g:rgb.g,b:rgb.b,a:0.35}; // sfondo vento meno opaco
+          col = {r:rgb.r,g:rgb.g,b:rgb.b,a:0.35};
         } else {
           const val = (arr[i] ?? 0);
-
           if(layer==='rain' && val < 0.6) { data[i*4+3]=0; continue; }
           if(layer==='cloud' && val < 5) { data[i*4+3]=0; continue; }
-
           col = interpStops(val, stops);
-          // opacità generale un filo più alta ma senza coprire
           col.a = clamp(col.a * 1.05, 0, 0.95);
         }
-
         const p = i*4;
         data[p] = col.r; data[p+1] = col.g; data[p+2] = col.b; data[p+3] = Math.round(col.a*255);
       }
 
       octx.putImageData(img, 0, 0);
-
       const tl = map.latLngToContainerPoint([m.la1, m.lo1]);
       const br = map.latLngToContainerPoint([m.la2, m.lo2]);
 
@@ -567,8 +538,6 @@
 
     const m = currentData.meta;
     const zoom = map.getZoom();
-
-    // Più frecce + più sottili (senza ammazzare FPS)
     const stride = zoom >= 11 ? 2 : (zoom >= 10 ? 3 : 4);
     const baseLen = zoom >= 11 ? 26 : (zoom >= 10 ? 22 : 18);
 
@@ -589,23 +558,18 @@
         const c = vividWindColor(sp);
         const fillStyle = `rgb(${c.r},${c.g},${c.b})`;
 
-        // Lunghezza e spessore reattivi alla velocità
         const speedScale = clamp(sp/8.0, 0.70, 2.8);
         const len = baseLen * speedScale;
-
-        // più sottile ma leggibile
         const width = clamp(1.1 * speedScale, 1.2, 3.0);
 
         const headLen = len * 0.38;
         const headWidth = headLen * 0.70;
 
-        // direzione coerente con particelle: atan2(-v,u)
         const angle = Math.atan2(-v, u);
 
         const shaftEndX = p.x + (len-headLen)*Math.cos(angle);
         const shaftEndY = p.y + (len-headLen)*Math.sin(angle);
 
-        // asta bordo nero + interno colorato
         ctx.beginPath();
         ctx.moveTo(p.x, p.y);
         ctx.lineTo(shaftEndX, shaftEndY);
@@ -617,7 +581,6 @@
         ctx.lineWidth = width;
         ctx.stroke();
 
-        // testa
         const tipX = p.x + len*Math.cos(angle);
         const tipY = p.y + len*Math.sin(angle);
         const wing1X = shaftEndX - headWidth*Math.cos(angle - Math.PI/2);
@@ -703,6 +666,36 @@
     ctx.setLineDash([]);
   }
 
+  function drawAB(ctx, x, y, letter, color, value, letterSize, valueSize){
+    ctx.save();
+    ctx.textAlign = "center";
+    ctx.textBaseline = "middle";
+
+    ctx.font = `900 ${letterSize}px Arial`;
+    ctx.lineWidth = 5;
+    ctx.strokeStyle = "rgba(0,0,0,0.85)";
+    ctx.strokeText(letter, x, y);
+    ctx.fillStyle = color;
+    ctx.fillText(letter, x, y);
+
+    ctx.font = `900 ${valueSize}px Arial`;
+    const vy = y + letterSize*0.85;
+    const txt = `${value} hPa`;
+    ctx.fillStyle = "rgba(0,0,0,0.55)";
+    const padX = 10, padY = 6;
+    const w = ctx.measureText(txt).width + padX*2;
+    const h = valueSize + padY*2;
+    ctx.fillRect(x - w/2, vy - h/2, w, h);
+
+    ctx.lineWidth = 3;
+    ctx.strokeStyle = "rgba(0,0,0,0.85)";
+    ctx.strokeText(txt, x, vy);
+    ctx.fillStyle = "#fff";
+    ctx.fillText(txt, x, vy);
+
+    ctx.restore();
+  }
+
   function drawIsobars(){
     const ctx = isoCanvas.getContext('2d');
     const s = map.getSize();
@@ -716,7 +709,6 @@
       const m = currentData.meta;
       const nx = m.nx, ny = m.ny;
 
-      // pulizia robusta (non è solo NaN: comunque serve a stabilizzare contorni)
       const raw = currentData.press;
       const clean = new Float32Array(raw.length);
       for(let i=0;i<raw.length;i++){
@@ -724,14 +716,11 @@
         clean[i] = (!v || v < 850 || v > 1100) ? 1013 : v;
       }
 
-      // smoothing per AB coerenti (sinottico)
       const smooth = smoothGrid(clean, nx, ny);
 
-      // contours ogni 2 hPa (sinottico locale)
       const thresholds = d3.range(960, 1050, 2);
       const contours = d3.contours().size([nx, ny]).thresholds(thresholds)(smooth);
 
-      // linee: ogni 8 hPa più spessa, ogni 4 media
       for(const c of contours){
         const v = Math.round(c.value);
         const is8 = (v % 8 === 0);
@@ -743,7 +732,6 @@
         contourToScreenPath(ctx, c.coordinates, m);
       }
 
-      // etichette hPa sulle linee: solo su isobare “principali” (ogni 4 hPa)
       ctx.textAlign="center";
       ctx.textBaseline="middle";
       ctx.font = "900 12px Arial";
@@ -766,14 +754,10 @@
         ctx.fillText(v.toString(), pt.x, pt.y);
       }
 
-      // A/B: veri massimi/minimi locali su campo smussato
       const cand = findExtremaAB(smooth, nx, ny);
-
-      // ordina per intensità (A: più alto, B: più basso)
       const highs = cand.filter(p=>p.type==='A').sort((a,b)=>b.v-a.v);
       const lows  = cand.filter(p=>p.type==='B').sort((a,b)=>a.v-b.v);
 
-      // proietta in pixel + filtro distanza (così non sono “a caso”)
       function projectPoint(p){
         const lat = m.la1 - p.y*m.dy;
         const lon = m.lo1 + p.x*m.dx;
@@ -789,7 +773,6 @@
       const Apts = dedupeByDistance(highsPx, minDist).slice(0, 3);
       const Bpts = dedupeByDistance(lowsPx,  minDist).slice(0, 3);
 
-      // disegna A/B grandi + valore sotto
       const z = map.getZoom();
       const letterSize = clamp(18 + (z-7)*2.2, 18, 34);
       const valueSize  = clamp(11 + (z-7)*1.2, 11, 20);
@@ -806,116 +789,114 @@
     }
   }
 
-  function drawAB(ctx, x, y, letter, color, value, letterSize, valueSize){
-    ctx.save();
-    ctx.textAlign = "center";
-    ctx.textBaseline = "middle";
-
-    // lettera
-    ctx.font = `900 ${letterSize}px Arial`;
-    ctx.lineWidth = 5;
-    ctx.strokeStyle = "rgba(0,0,0,0.85)";
-    ctx.strokeText(letter, x, y);
-    ctx.fillStyle = color;
-    ctx.fillText(letter, x, y);
-
-    // valore sotto
-    ctx.font = `900 ${valueSize}px Arial`;
-    const vy = y + letterSize*0.85;
-    const txt = `${value} hPa`;
-    // box scuro dietro per leggibilità
-    ctx.fillStyle = "rgba(0,0,0,0.55)";
-    const padX = 10, padY = 6;
-    const w = ctx.measureText(txt).width + padX*2;
-    const h = valueSize + padY*2;
-    ctx.fillRect(x - w/2, vy - h/2, w, h);
-
-    ctx.lineWidth = 3;
-    ctx.strokeStyle = "rgba(0,0,0,0.85)";
-    ctx.strokeText(txt, x, vy);
-    ctx.fillStyle = "#fff";
-    ctx.fillText(txt, x, vy);
-
-    ctx.restore();
-  }
-
+  // ✅ ISOTERME: 1°C, ogni 5°C più spessa + label grande che scala con zoom
   function drawIsotherms(){
     const ctx = thermCanvas.getContext('2d');
     const s = map.getSize();
-    thermCanvas.width = s.x; thermCanvas.height = s.y;
+    thermCanvas.width = s.x;
+    thermCanvas.height = s.y;
     L.DomUtil.setPosition(thermCanvas, map.containerPointToLayerPoint([0,0]));
     ctx.clearRect(0,0,s.x,s.y);
 
     if(!showIsotherms || !currentData?.temp || !currentData?.meta) return;
 
-    try{
-      const m = currentData.meta;
-      const nx = m.nx, ny = m.ny;
+    const m = currentData.meta;
+    const nx = m.nx, ny = m.ny;
 
-      const raw = currentData.temp;
-      const clean = new Float32Array(raw.length);
-      let tMin = 999, tMax = -999;
-      for(let i=0;i<raw.length;i++){
-        const v = raw[i];
-        const vv = (v===null || v===undefined || Number.isNaN(v)) ? 0 : v;
-        clean[i] = vv;
-        if(vv < tMin) tMin = vv;
-        if(vv > tMax) tMax = vv;
-      }
+    const raw = currentData.temp;
+    const clean = new Float32Array(raw.length);
 
-      // 1°C sensibile (realistico)
-      const lo = Math.floor(tMin) - 1;
-      const hi = Math.ceil(tMax) + 1;
-      const thresholds = d3.range(lo, hi+1, 1);
-
-      const contours = d3.contours().size([nx, ny]).thresholds(thresholds)(clean);
-
-      // stile linee (sottili)
-      ctx.setLineDash([]);
-      ctx.strokeStyle = "rgba(255,255,255,0.38)";
-      ctx.lineWidth = 1.0;
-
-      for(const c of contours){
-        contourToScreenPath(ctx, c.coordinates, m);
-      }
-
-      // etichette solo ogni 5°C, dimensione che cresce con zoom
-      const z = map.getZoom();
-      const fontSize = clamp(12 + (z-7)*1.6, 12, 26);
-
-      ctx.textAlign="center";
-      ctx.textBaseline="middle";
-      ctx.font = `900 ${fontSize}px Arial`;
-
-      for(const c of contours){
-        const v = Math.round(c.value);
-        if(v % 5 !== 0) continue;
-
-        const p = pickLabelPointFromContour(c);
-        if(!p) continue;
-
-        const lat = m.la1 - p[1]*m.dy;
-        const lon = m.lo1 + p[0]*m.dx;
-        const pt = map.latLngToContainerPoint([lat,lon]);
-        if(pt.x < 0 || pt.y < 0 || pt.x > s.x || pt.y > s.y) continue;
-
-        // box + testo grande
-        const txt = `${v}°`;
-        ctx.fillStyle = "rgba(0,0,0,0.55)";
-        const w = ctx.measureText(txt).width + 16;
-        const h = fontSize + 10;
-        ctx.fillRect(pt.x - w/2, pt.y - h/2, w, h);
-
-        ctx.lineWidth = 4;
-        ctx.strokeStyle = "rgba(0,0,0,0.85)";
-        ctx.strokeText(txt, pt.x, pt.y);
-        ctx.fillStyle = "#fff";
-        ctx.fillText(txt, pt.x, pt.y);
-      }
-
-    } catch(err){
-      console.error("Isoterme error:", err);
+    let tMin = 999, tMax = -999;
+    for(let i=0;i<raw.length;i++){
+      const v = raw[i];
+      const vv = (v===null || v===undefined || Number.isNaN(v)) ? 0 : v;
+      clean[i] = vv;
+      if(vv < tMin) tMin = vv;
+      if(vv > tMax) tMax = vv;
     }
+
+    const lo = Math.floor(tMin);
+    const hi = Math.ceil(tMax);
+
+    const thresholds = d3.range(lo, hi+1, 1);
+    const contours = d3.contours().size([nx, ny]).thresholds(thresholds)(clean);
+
+    const zoom = map.getZoom();
+    const majorWidth = clamp(2.8 + (zoom-7)*0.3, 2.2, 4.2);
+    const minorWidth = clamp(1.0 + (zoom-7)*0.2, 0.9, 2.0);
+
+    for(const c of contours){
+      const v = Math.round(c.value);
+      const isMajor = (v % 5 === 0);
+
+      ctx.strokeStyle = isMajor ? "rgba(255,255,255,0.85)" : "rgba(255,255,255,0.35)";
+      ctx.lineWidth = isMajor ? majorWidth : minorWidth;
+      ctx.setLineDash([]);
+      contourToScreenPath(ctx, c.coordinates, m);
+    }
+
+    const fontSize = clamp(14 + (zoom-7)*2.0, 14, 30);
+    ctx.textAlign="center";
+    ctx.textBaseline="middle";
+    ctx.font = `900 ${fontSize}px Arial`;
+
+    for(const c of contours){
+      const v = Math.round(c.value);
+      if(v % 5 !== 0) continue;
+
+      const p = pickLabelPointFromContour(c);
+      if(!p) continue;
+
+      const lat = m.la1 - p[1]*m.dy;
+      const lon = m.lo1 + p[0]*m.dx;
+      const pt = map.latLngToContainerPoint([lat,lon]);
+      if(pt.x < 0 || pt.y < 0 || pt.x > s.x || pt.y > s.y) continue;
+
+      const txt = `${v}°`;
+
+      ctx.fillStyle = "rgba(0,0,0,0.55)";
+      const w = ctx.measureText(txt).width + 18;
+      const h = fontSize + 12;
+      ctx.fillRect(pt.x - w/2, pt.y - h/2, w, h);
+
+      ctx.lineWidth = 5;
+      ctx.strokeStyle = "rgba(0,0,0,0.9)";
+      ctx.strokeText(txt, pt.x, pt.y);
+
+      ctx.fillStyle = "#fff";
+      ctx.fillText(txt, pt.x, pt.y);
+    }
+  }
+
+  // ✅ campionamento bilineare (allinea pick vs isolinee)
+  function bilinearSample(arr, m, lat, lon){
+    const gx = (lon - m.lo1) / m.dx;
+    const gy = (m.la1 - lat) / m.dy;
+    if(gx < 0 || gy < 0 || gx > (m.nx-1) || gy > (m.ny-1)) return null;
+
+    const x0 = Math.floor(gx);
+    const y0 = Math.floor(gy);
+    const x1 = Math.min(x0+1, m.nx-1);
+    const y1 = Math.min(y0+1, m.ny-1);
+
+    const fx = gx - x0;
+    const fy = gy - y0;
+
+    const i00 = y0*m.nx + x0;
+    const i10 = y0*m.nx + x1;
+    const i01 = y1*m.nx + x0;
+    const i11 = y1*m.nx + x1;
+
+    const v00 = arr[i00];
+    const v10 = arr[i10];
+    const v01 = arr[i01];
+    const v11 = arr[i11];
+
+    if(!isFinite(v00)||!isFinite(v10)||!isFinite(v01)||!isFinite(v11)) return null;
+
+    const v0 = v00*(1-fx) + v10*fx;
+    const v1 = v01*(1-fx) + v11*fx;
+    return v0*(1-fy) + v1*fy;
   }
 
   // --- UI ---
@@ -945,39 +926,48 @@
 
     const btnFlow = document.getElementById('btn-flow');
     if(particlesOn) btnFlow.classList.add('active'); else btnFlow.classList.remove('active');
-
     document.getElementById('wind-rose').style.display = selected.has('wind') ? 'flex' : 'none';
   }
 
-  // --- pick value ---
+  // ✅ pick coerente (bilineare)
   function onPick(e){
     if(!currentData?.meta) return;
-
     const m = currentData.meta;
-    const y = Math.round((m.la1 - e.latlng.lat)/m.dy);
-    const x = Math.round((e.latlng.lng - m.lo1)/m.dx);
-    if(x<0||x>=m.nx||y<0||y>=m.ny) return;
-
-    const idx = y*m.nx + x;
 
     let val='--', unit='';
-    if(selected.has('rain') && currentData.rain){ val = (currentData.rain[idx] ?? 0).toFixed(1); unit='mm'; }
-    else if(selected.has('temp') && currentData.temp){ val = (currentData.temp[idx] ?? 0).toFixed(1); unit='°C'; }
-    else if(selected.has('wind')){
-      const u=currentData.wind_u.data[idx], v=currentData.wind_v.data[idx];
-      val = (Math.sqrt(u*u+v*v)*3.6).toFixed(1); unit='km/h';
-      const arrow = document.getElementById('rose-arrow');
-      const deg = 90 - (Math.atan2(v, u) * 180 / Math.PI);
-      arrow.style.transform = `rotate(${deg}deg)`;
+
+    if(selected.has('temp') && currentData.temp){
+      const v = bilinearSample(currentData.temp, m, e.latlng.lat, e.latlng.lng);
+      if(v!==null){ val = v.toFixed(1); unit='°C'; }
     }
-    else if(selected.has('rh') && currentData.rh){ val = Math.round(currentData.rh[idx] ?? 0); unit='%'; }
-    else if(selected.has('press') && currentData.press){ val = Math.round(currentData.press[idx] ?? 0); unit='hPa'; }
+    else if(selected.has('press') && currentData.press){
+      const v = bilinearSample(currentData.press, m, e.latlng.lat, e.latlng.lng);
+      if(v!==null){ val = Math.round(v); unit='hPa'; }
+    }
+    else if(selected.has('rain') && currentData.rain){
+      const v = bilinearSample(currentData.rain, m, e.latlng.lat, e.latlng.lng);
+      if(v!==null){ val = v.toFixed(1); unit='mm'; }
+    }
+    else if(selected.has('rh') && currentData.rh){
+      const v = bilinearSample(currentData.rh, m, e.latlng.lat, e.latlng.lng);
+      if(v!==null){ val = Math.round(v); unit='%'; }
+    }
+    else if(selected.has('wind')){
+      const u = bilinearSample(currentData.wind_u.data, m, e.latlng.lat, e.latlng.lng);
+      const v = bilinearSample(currentData.wind_v.data, m, e.latlng.lat, e.latlng.lng);
+      if(u!==null && v!==null){
+        val = (Math.sqrt(u*u+v*v)*3.6).toFixed(1);
+        unit='km/h';
+        const arrow = document.getElementById('rose-arrow');
+        const deg = 90 - (Math.atan2(v, u) * 180 / Math.PI);
+        arrow.style.transform = `rotate(${deg}deg)`;
+      }
+    }
 
     document.getElementById('val-display').innerText = val;
     document.getElementById('unit-display').innerText = unit;
   }
 
-  // --- play ---
   window.togglePlay = function(){
     if(isPlaying){
       isPlaying=false;
@@ -1003,3 +993,4 @@
 </script>
 </body>
 </html>
+```0
