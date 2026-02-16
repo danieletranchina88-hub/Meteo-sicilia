@@ -5,46 +5,62 @@ on:
     - cron: '0 0,6,12,18 * * *'
   workflow_dispatch:
 
+concurrency:
+  group: meteo-update
+  cancel-in-progress: true
+
 jobs:
   build:
     runs-on: ubuntu-latest
     permissions:
       contents: write
-    
+
     steps:
-    - name: Checkout repo
-      uses: actions/checkout@v3
+      - name: Checkout repo
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
-    - name: Setup Python
-      uses: actions/setup-python@v4
-      with:
-        python-version: '3.9'
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.9'
+          cache: 'pip'
 
-    - name: Install dependencies
-      run: |
-        sudo apt-get update
-        sudo apt-get install -y libeccodes-dev
-        python -m pip install --upgrade pip
-        pip install requests xarray numpy cfgrib
+      - name: Install system deps (eccodes)
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libeccodes-dev
 
-    - name: Run Data Processor
-      # Punta al tuo script nella cartella scripts
-      run: python scripts/process_data.py
+      - name: Install Python dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install requests xarray numpy cfgrib
 
-    - name: FORCE CLEANUP
-      # Pulizia di sicurezza
-      run: |
-        rm -rf temp_processing
-        rm -f temp.grib2
-        rm -f *.idx
+      - name: Run Data Processor
+        run: python scripts/process_data.py
 
-    - name: Commit and Push
-      run: |
-        git config --global user.name "MeteoBot"
-        git config --global user.email "bot@meteo.it"
-        
-        git add data_weather/
-        
-        # Se ci sono modifiche, committa e pusha. Se no, non fa nulla (evita errori rossi)
-        git diff --quiet && git diff --staged --quiet || (git commit -m "Aggiornamento dati meteo" && git push)
-        
+      - name: FORCE CLEANUP
+        run: |
+          rm -rf temp_processing || true
+          rm -f temp.grib2 || true
+          rm -f *.idx || true
+
+      - name: Commit and Push
+        run: |
+          git config --global user.name "MeteoBot"
+          git config --global user.email "bot@meteo.it"
+
+          git add data_weather/
+
+          # Se non c'è nulla da committare, esce pulito
+          if git diff --staged --quiet; then
+            echo "Nessuna modifica in data_weather/ -> niente commit."
+            exit 0
+          fi
+
+          git commit -m "Aggiornamento dati meteo"
+
+          # Evita errori se nel frattempo il repo è avanzato
+          git pull --rebase
+          git push
