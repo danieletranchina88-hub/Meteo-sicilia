@@ -1,7 +1,7 @@
 <!DOCTYPE html>
 <html>
 <head>
-  <title>Sicilia MeteoHub - FINAL ULTIMATE</title>
+  <title>Sicilia MeteoHub - STABLE</title>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
 
@@ -14,23 +14,27 @@
   <script src="https://d3js.org/d3.v7.min.js"></script>
 
   <style>
-    /* SFONDO SCURO */
     body { margin: 0; background: #1a1a1a; font-family: 'Segoe UI', sans-serif; color: #ddd; overflow: hidden; }
     #map { position: absolute; top: 0; bottom: 0; width: 100%; background: #1a1a1a; }
 
+    /* UI Z-INDEX MOLTO ALTO PER GARANTIRE IL CLICK */
     #ui-container {
-      position: absolute; top: 10px; right: 10px; z-index: 2000;
+      position: absolute; top: 10px; right: 10px; z-index: 9999;
       display: flex; flex-direction: column; gap: 10px; align-items: flex-end;
+      pointer-events: auto; /* Abilita click sui bottoni */
     }
+    
+    /* I pannelli */
     .panel {
-      background: rgba(30,30,30,0.85);
-      backdrop-filter: blur(8px);
+      background: rgba(30,30,30,0.90);
+      backdrop-filter: blur(4px);
       padding: 10px;
       border-radius: 14px;
-      border: 1px solid rgba(255,255,255,0.1);
-      box-shadow: 0 12px 30px rgba(0,0,0,0.6);
+      border: 1px solid rgba(255,255,255,0.15);
+      box-shadow: 0 4px 15px rgba(0,0,0,0.5);
       color: #eee;
     }
+
     .toggle {
       width: 175px;
       display:flex; align-items:center; justify-content:space-between;
@@ -42,9 +46,9 @@
       cursor: pointer;
       user-select:none;
       font-weight: 700;
-      transition: background 0.15s;
+      transition: background 0.1s;
     }
-    .toggle:hover { background: rgba(255,255,255,0.1); color:#fff; }
+    .toggle:hover { background: rgba(255,255,255,0.15); color:#fff; }
     .toggle.active {
       background: linear-gradient(90deg, #0077ff, #0044cc);
       border-color: rgba(0,100,200,0.5);
@@ -61,7 +65,7 @@
     .mini.active { background: #eee; color:#111; border-color: #fff; }
 
     #info-box { 
-        position: absolute; top: 18px; left: 18px; z-index: 2000; 
+        position: absolute; top: 18px; left: 18px; z-index: 9999; 
         pointer-events: none; 
         display: flex; align-items: center; gap: 15px;
     }
@@ -84,12 +88,13 @@
     .c-s { bottom: 2px; left: 50%; transform: translateX(-50%); }
     .c-e { right: 3px; top: 50%; transform: translateY(-50%); }
     .c-w { left: 3px; top: 50%; transform: translateY(-50%); }
-    #rose-arrow { width: 26px; height: 26px; fill: #000; transition: transform 0.1s; will-change: transform; }
+    #rose-arrow { width: 26px; height: 26px; fill: #000; transition: transform 0.1s; }
 
     #bottom-bar {
       position: absolute; bottom: 0; left: 0; right: 0; height: 92px;
       background: linear-gradient(to top, rgba(0,0,0,0.95), transparent);
-      display: flex; align-items: center; padding: 0 18px; z-index: 2000;
+      display: flex; align-items: center; padding: 0 18px; z-index: 9999;
+      pointer-events: auto;
     }
     #play-btn { font-size: 2.6em; background: none; border: none; color: #fff; cursor: pointer; margin-right: 14px; }
     #time-label { font-size: 1.45em; font-weight: 950; margin-left: 14px; min-width: 150px; text-align: center; color: #fff; }
@@ -99,14 +104,16 @@
         filter: invert(100%) hue-rotate(180deg) brightness(0.8) contrast(1.2) grayscale(20%);
     }
 
-    /* Rendering Ottimizzato: width/height al 100% ma canvas interno più piccolo per performance */
+    /* CANVAS STYLE: Pointer events NONE è critico per far funzionare i bottoni sotto */
+    canvas.leaflet-layer {
+        pointer-events: none !important;
+        position: absolute;
+        top: 0; left: 0;
+    }
+    
     canvas.leaflet-layer.scalar-layer { 
-        width: 100% !important; 
-        height: 100% !important;
-        image-rendering: auto; /* Sfumatura attiva (No Pixelloso) */
         mix-blend-mode: screen; 
         opacity: 0.85;
-        will-change: contents;
     }
 
     canvas.leaflet-layer.velocity-canvas { mix-blend-mode: normal; opacity: 0.95; }
@@ -180,55 +187,51 @@
 
 <script>
   // ==========================================
-  // CONFIGURAZIONE ALLINEAMENTO
+  // SETUP
   // ==========================================
-  // Se i layer sono ancora spostati, modifica questi valori.
-  // Es: -0.01 sposta leggermente a Sud/Sinistra.
+  // Offsets per allineamento fine (se necessario)
   const LAT_OFFSET = 0.00; 
   const LON_OFFSET = 0.00;
 
-  // FATTORE DI SCALA PER LA QUALITÀ/PERFORMANCE
-  // 0.25 = Rendering a 1/4 della risoluzione (Velocissimo, sfumato dal CSS)
-  // 0.50 = Rendering a 1/2 della risoluzione (Bilanciato)
-  const SCALAR_RESOLUTION = 0.35; 
+  // Performance vs Quality: 0.25 è 1/4 risoluzione (molto veloce, sfumato dal browser)
+  // Questo risolve il lag sui cellulari e il blocco dello zoom
+  const SCALAR_RESOLUTION = 0.25; 
 
   const SICILY_BOUNDS = L.latLngBounds(L.latLng(35.0, 11.0), L.latLng(39.5, 16.5));
   const DPR = window.devicePixelRatio || 1;
 
   const WIND_COLOR_SCALE = ["#000080", "#0044ff", "#00ddff", "#00ff55", "#ffff00", "#ff6600", "#ff0000", "#ff00ff"];
 
-  // TEMP (Custom)
+  // PALETTE PERSONALIZZATE
   const TEMP_STOPS = [
-    {v: -15, c: [156,218,216]}, {v: -14, c: [149,214,211]}, {v: -13, c: [141,210,206]}, {v: -12, c: [134,206,201]},
-    {v: -11, c: [127,202,196]}, {v: -10, c: [119,198,191]}, {v: -9,  c: [112,194,185]}, {v: -8,  c: [106,190,181]},
-    {v: -7,  c: [104,184,183]}, {v: -6,  c: [102,178,185]}, {v: -5,  c: [101,172,187]}, {v: -4,  c: [100,166,189]},
-    {v: -3,  c: [98,158,191]},  {v: -2,  c: [96,150,193]},  {v: -1,  c: [95,142,196]},  {v: 0,   c: [93,133,198]},
-    {v: 1,   c: [80,127,133]},  {v: 2,   c: [74,126,111]},  {v: 3,   c: [79,129,93]},   {v: 4,   c: [84,131,84]},
-    {v: 5,   c: [89,134,76]},   {v: 6,   c: [94,136,67]},   {v: 7,   c: [99,139,58]},   {v: 8,   c: [104,141,50]},
-    {v: 9,   c: [109,144,41]},  {v: 10,  c: [114,146,33]},  {v: 11,  c: [129,150,22]},  {v: 12,  c: [142,154,20]},
-    {v: 13,  c: [155,158,17]},  {v: 14,  c: [168,161,15]},  {v: 15,  c: [181,165,13]},  {v: 16,  c: [194,169,11]},
-    {v: 17,  c: [207,173,9]},   {v: 18,  c: [219,176,7]},   {v: 19,  c: [232,180,6]},   {v: 20,  c: [243,183,4]},
-    {v: 21,  c: [242,172,7]},   {v: 22,  c: [241,161,9]},   {v: 23,  c: [240,150,12]},  {v: 24,  c: [239,139,15]},
-    {v: 25,  c: [238,128,17]},  {v: 26,  c: [237,117,20]},  {v: 27,  c: [236,106,22]},  {v: 28,  c: [235,95,24]},
-    {v: 29,  c: [234,84,25]},   {v: 30,  c: [232,83,25]},   {v: 31,  c: [222,79,24]},   {v: 32,  c: [212,75,23]},
-    {v: 33,  c: [203,71,22]},   {v: 34,  c: [193,68,21]},   {v: 35,  c: [184,64,20]},   {v: 36,  c: [174,60,18]},
-    {v: 37,  c: [165,56,17]},   {v: 38,  c: [155,52,16]},   {v: 39,  c: [146,48,15]},   {v: 40,  c: [136,45,13]},
-    {v: 41,  c: [126,41,12]},   {v: 42,  c: [117,37,11]},   {v: 43,  c: [107,30,6]},    {v: 44,  c: [98,26,4]},
-    {v: 45,  c: [89,22,3]}
+    {v:-15,c:[156,218,216]}, {v:-14,c:[149,214,211]}, {v:-13,c:[141,210,206]}, {v:-12,c:[134,206,201]},
+    {v:-11,c:[127,202,196]}, {v:-10,c:[119,198,191]}, {v:-9,c:[112,194,185]}, {v:-8,c:[106,190,181]},
+    {v:-7,c:[104,184,183]}, {v:-6,c:[102,178,185]}, {v:-5,c:[101,172,187]}, {v:-4,c:[100,166,189]},
+    {v:-3,c:[98,158,191]}, {v:-2,c:[96,150,193]}, {v:-1,c:[95,142,196]}, {v:0,c:[93,133,198]},
+    {v:1,c:[80,127,133]}, {v:2,c:[74,126,111]}, {v:3,c:[79,129,93]}, {v:4,c:[84,131,84]},
+    {v:5,c:[89,134,76]}, {v:6,c:[94,136,67]}, {v:7,c:[99,139,58]}, {v:8,c:[104,141,50]},
+    {v:9,c:[109,144,41]}, {v:10,c:[114,146,33]}, {v:11,c:[129,150,22]}, {v:12,c:[142,154,20]},
+    {v:13,c:[155,158,17]}, {v:14,c:[168,161,15]}, {v:15,c:[181,165,13]}, {v:16,c:[194,169,11]},
+    {v:17,c:[207,173,9]}, {v:18,c:[219,176,7]}, {v:19,c:[232,180,6]}, {v:20,c:[243,183,4]},
+    {v:21,c:[242,172,7]}, {v:22,c:[241,161,9]}, {v:23,c:[240,150,12]}, {v:24,c:[239,139,15]},
+    {v:25,c:[238,128,17]}, {v:26,c:[237,117,20]}, {v:27,c:[236,106,22]}, {v:28,c:[235,95,24]},
+    {v:29,c:[234,84,25]}, {v:30,c:[232,83,25]}, {v:31,c:[222,79,24]}, {v:32,c:[212,75,23]},
+    {v:33,c:[203,71,22]}, {v:34,c:[193,68,21]}, {v:35,c:[184,64,20]}, {v:36,c:[174,60,18]},
+    {v:37,c:[165,56,17]}, {v:38,c:[155,52,16]}, {v:39,c:[146,48,15]}, {v:40,c:[136,45,13]},
+    {v:41,c:[126,41,12]}, {v:42,c:[117,37,11]}, {v:43,c:[107,30,6]}, {v:44,c:[98,26,4]},
+    {v:45,c:[89,22,3]}
   ];
 
-  // RAIN (Custom: Start > 0.6mm)
   const RAIN_STOPS = [
     {v:0.0, c:[0,0,0], a:0.0},
     {v:0.6, c:[100,200,255], a:0.70},
     {v:1.0, c:[0,150,255], a:0.78},
     {v:5.0, c:[0,0,255], a:0.85},
-    {v:10,  c:[255,255,0], a:0.85},
-    {v:30,  c:[255,150,0], a:0.90},
-    {v:50,  c:[255,0,0], a:0.92}
+    {v:10, c:[255,255,0], a:0.85},
+    {v:30, c:[255,150,0], a:0.90},
+    {v:50, c:[255,0,0], a:0.92}
   ];
 
-  // RH (Custom Provided)
   const RH_STOPS = [
     {v:0, c:[173,85,56]}, {v:1, c:[173,85,56]}, {v:5, c:[173,89,56]}, {v:10, c:[173,93,56]},
     {v:15, c:[173,97,56]}, {v:20, c:[173,101,56]}, {v:25, c:[173,105,56]}, {v:30, c:[173,110,56]},
@@ -238,7 +241,6 @@
     {v:95, c:[56,110,165]}, {v:100, c:[56,70,114]}
   ];
 
-  // PRESSIONE (Custom in hPa)
   const PRESS_STOPS = [
     {v: 900, c: [8,16,48]}, {v: 950, c: [0,32,96]}, {v: 976, c: [0,52,146]}, {v: 986, c: [0,90,148]},
     {v: 995, c: [0,117,146]}, {v: 1002, c: [26,140,147]}, {v: 1007, c: [103,162,155]}, {v: 1011.25, c: [155,183,172]},
@@ -258,13 +260,17 @@
   let showIsobars = false, showIsotherms = false, showGrid = false, particlesOn = true;
   let velocityLayer = null, scalarCanvases = {}, arrowCanvas, isoCanvas, thermCanvas, gridCanvas;
   let isPlaying = false;
+  
+  // Offscreen canvas (buffer)
+  let offscreenCanvas = document.createElement('canvas');
+  let offscreenCtx = offscreenCanvas.getContext('2d');
 
   function clamp(x,a,b){ return Math.max(a, Math.min(b, x)); }
   function lerp(a,b,t){ return a+(b-a)*t; }
 
-  // Interpola (Ottimizzata)
+  // Interpola colori
   function interpStops(val, stops) {
-    if(val <= stops[0].v) { const s=stops[0]; return {r:s.c[0],g:s.c[1],b:s.c[2],a:s.a||0.90}; }
+    if(val <= stops[0].v) { const s=stops[0]; return {r:s.c[0],g:s.c[1],b:s.c[2],a:(s.a!==undefined)?s.a:0.90}; }
     for(let i=0; i<stops.length-1; i++){
       const s1 = stops[i];
       const s2 = stops[i+1];
@@ -281,7 +287,7 @@
       }
     }
     const s=stops[stops.length-1];
-    return {r:s.c[0],g:s.c[1],b:s.c[2],a:s.a||0.90};
+    return {r:s.c[0],g:s.c[1],b:s.c[2],a:(s.a!==undefined)?s.a:0.90};
   }
 
   function vividWindColor(speedMs){
@@ -303,6 +309,7 @@
     return {r: 255, g: 70, b: 70};
   }
 
+  // Draw helpers
   function contourToScreenPath(ctx, coordinates, m){
     for (const polygon of coordinates) {
       for (const ring of polygon) {
@@ -310,7 +317,6 @@
         ctx.beginPath();
         let first = true;
         for (const p of ring) {
-          // OFFSET APPLICATO QUI
           let lat = (m.la1 + LAT_OFFSET) - p[1] * m.dy;
           let lon = (m.lo1 + LON_OFFSET) + p[0] * m.dx;
           let pt = map.latLngToContainerPoint([lat, lon]);
@@ -375,28 +381,12 @@
     return kept;
   }
 
-  // CAMPIONAMENTO BILINEARE PER CLICK
-  function bilinearSample(arr, m, lat, lon){
-    // APPLICA OFFSET AL CAMPIONAMENTO
-    const gx = (lon - (m.lo1 + LON_OFFSET)) / m.dx;
-    const gy = ((m.la1 + LAT_OFFSET) - lat) / m.dy;
-    
-    if(gx < 0 || gy < 0 || gx > (m.nx-1) || gy > (m.ny-1)) return null;
-    const x0 = Math.floor(gx), y0 = Math.floor(gy);
-    const x1 = Math.min(x0+1, m.nx-1), y1 = Math.min(y0+1, m.ny-1);
-    const fx = gx - x0, fy = gy - y0;
-    const v00 = arr[y0*m.nx + x0], v10 = arr[y0*m.nx + x1];
-    const v01 = arr[y1*m.nx + x0], v11 = arr[y1*m.nx + x1];
-    if(!isFinite(v00)||!isFinite(v10)||!isFinite(v01)||!isFinite(v11)) return null;
-    return (v00*(1-fx) + v10*fx)*(1-fy) + (v01*(1-fx) + v11*fx)*fy;
-  }
-
+  // --- MAPPA & EVENTI ---
   window.addEventListener('load', async () => {
-    // MAPPA SBLOCCATA
     map = L.map('map', {
       zoomControl: false,
       background: '#1a1a1a',
-      minZoom: 4 // Sbloccato
+      minZoom: 4
     }).fitBounds(SICILY_BOUNDS);
 
     L.tileLayer(
@@ -425,16 +415,37 @@
 
     map.on('mousemove', onPick);
     map.on('click', onPick);
-    map.on('moveend zoomend resize', redrawAll);
+    
+    // GESTIONE ZOOM FLUIDO E SENZA BLOCCHI
+    map.on('zoomstart', () => {
+        // Nascondi i canvas durante lo zoom per evitare "freezing"
+        Object.values(scalarCanvases).forEach(c => c.style.opacity = 0);
+        arrowCanvas.style.opacity = 0;
+        isoCanvas.style.opacity = 0;
+        thermCanvas.style.opacity = 0;
+        gridCanvas.style.opacity = 0;
+    });
+
+    map.on('zoomend', () => {
+        // Ridisegna e mostra
+        redrawAll();
+        Object.values(scalarCanvases).forEach(c => c.style.opacity = 0.85);
+        arrowCanvas.style.opacity = 1;
+        isoCanvas.style.opacity = 1;
+        thermCanvas.style.opacity = 1;
+        gridCanvas.style.opacity = 1;
+    });
+
+    map.on('moveend', redrawAll);
     document.getElementById('unit-display').innerText = '';
   });
 
   function createCanvasLayers(){
     function mkCanvas(z, cls){
       const c = L.DomUtil.create('canvas', 'leaflet-layer ' + (cls||''));
-      c.style.pointerEvents = 'none';
+      c.style.pointerEvents = 'none'; // CRITICO: evita che il canvas rubi i click
       c.style.zIndex = z;
-      c.style.imageRendering = 'auto'; // smoothing del browser
+      c.style.imageRendering = 'auto'; 
       map.getPanes().overlayPane.appendChild(c);
       return c;
     }
@@ -493,11 +504,9 @@
     updateParticles();
   }
 
-  // ===============================================
-  // DRAW SCALARS: INVERSE SAMPLING (CORREZIONE PROIEZIONE)
-  // ===============================================
+  // DRAW SCALARS con INVERSE SAMPLING (Allineamento Perfetto + Performance)
   function drawScalars(){
-    // Risoluzione ridotta per performance e smoothing
+    // Usa risoluzione ridotta per velocità (sfumatura handled by CSS)
     const size = map.getSize();
     const w = Math.ceil(size.x * SCALAR_RESOLUTION);
     const h = Math.ceil(size.y * SCALAR_RESOLUTION);
@@ -506,15 +515,12 @@
       const canvas = scalarCanvases[layer];
       const ctx = canvas.getContext('2d');
       
-      // Imposta canvas piccolo
       if(canvas.width !== w || canvas.height !== h) {
           canvas.width = w; canvas.height = h;
-          // CSS lo stira a tutto schermo
-          canvas.style.width = size.x + 'px'; 
-          canvas.style.height = size.y + 'px';
+          canvas.style.width = size.x + 'px'; canvas.style.height = size.y + 'px';
       }
-      
-      // Posiziona il canvas all'origine del container
+      // Reset transform
+      ctx.setTransform(1, 0, 0, 1, 0, 0);
       L.DomUtil.setPosition(canvas, map.containerPointToLayerPoint([0,0]));
       
       const imgData = ctx.createImageData(w, h);
@@ -536,17 +542,15 @@
       
       if(!arr && !isWindBg) { ctx.clearRect(0,0,w,h); return; }
 
-      // LOOP SUI PIXEL DELLO SCHERMO (Ridimensionato)
+      // Inverse Loop
       for(let y=0; y<h; y++){
           for(let x=0; x<w; x++){
-              // Mappa pixel -> coordinate reali schermo
-              const screenX = x / SCALAR_RESOLUTION;
-              const screenY = y / SCALAR_RESOLUTION;
+              const sx = x / SCALAR_RESOLUTION;
+              const sy = y / SCALAR_RESOLUTION;
               
-              // Leaflet ci dà Lat/Lon per quel pixel
-              const latlng = map.containerPointToLatLng([screenX, screenY]);
+              // Calcola coordinate Lat/Lon reali per questo pixel
+              const latlng = map.containerPointToLatLng([sx, sy]);
               
-              // Campioniamo il valore esatto per quella Lat/Lon (con OFFSET)
               let val = null, col = {r:0,g:0,b:0,a:0};
               
               if(isWindBg){
@@ -692,7 +696,6 @@
         contourToScreenPath(ctx, c.coordinates, m);
       }
 
-      // Labels
       const z = map.getZoom();
       const baseFont = clamp(11 + (z-7)*1.4, 11, 22);
       const majorFont = clamp(14 + (z-7)*1.8, 14, 28);
@@ -819,6 +822,140 @@
     }
   }
 
+  function drawLatLonGrid(){
+    const size = map.getSize();
+    const w = size.x * DPR;
+    const h = size.y * DPR;
+    const ctx = gridCanvas.getContext('2d');
+    if(gridCanvas.width !== w || gridCanvas.height !== h){
+        gridCanvas.width = w; gridCanvas.height = h;
+        gridCanvas.style.width = size.x + 'px'; gridCanvas.style.height = size.y + 'px';
+    }
+    ctx.setTransform(DPR, 0, 0, DPR, 0, 0);
+    L.DomUtil.setPosition(gridCanvas, map.containerPointToLayerPoint([0,0]));
+    ctx.clearRect(0,0,size.x,size.y);
+    
+    if(!showGrid) return;
+
+    const b = map.getBounds();
+    const zoom = map.getZoom();
+    let step = 1.0;
+    if(zoom >= 9) step = 0.5;
+    if(zoom >= 11) step = 0.2;
+
+    ctx.lineWidth = 1;
+    ctx.strokeStyle = "rgba(255,255,255,0.20)";
+    ctx.setLineDash([5,5]);
+    ctx.font = "10px sans-serif";
+    ctx.fillStyle = "rgba(255,255,255,0.65)";
+
+    const startLon = Math.ceil(b.getWest() / step) * step;
+    for(let lon = startLon; lon <= b.getEast(); lon += step){
+      const x = map.latLngToContainerPoint([b.getSouth(), lon]).x;
+      if(x<0||x>size.x) continue;
+      ctx.beginPath(); ctx.moveTo(x,0); ctx.lineTo(x,size.y); ctx.stroke();
+      ctx.fillText(lon.toFixed(1) + "°E", x+2, size.y-10);
+    }
+
+    const startLat = Math.ceil(b.getSouth() / step) * step;
+    for(let lat = startLat; lat <= b.getNorth(); lat += step){
+      const y = map.latLngToContainerPoint([lat, b.getWest()]).y;
+      if(y<0||y>size.y) continue;
+      ctx.beginPath(); ctx.moveTo(0,y); ctx.lineTo(size.x,y); ctx.stroke();
+      ctx.fillText(lat.toFixed(1) + "°N", 5, y-2);
+    }
+    ctx.setLineDash([]);
+  }
+
+  function bilinearSample(arr, m, lat, lon){
+    // APPLICA OFFSET
+    const gx = (lon - (m.lo1 + LON_OFFSET)) / m.dx;
+    const gy = ((m.la1 + LAT_OFFSET) - lat) / m.dy;
+    if(gx < 0 || gy < 0 || gx > (m.nx-1) || gy > (m.ny-1)) return null;
+    const x0 = Math.floor(gx), y0 = Math.floor(gy);
+    const x1 = Math.min(x0+1, m.nx-1), y1 = Math.min(y0+1, m.ny-1);
+    const fx = gx - x0, fy = gy - y0;
+    const v00 = arr[y0*m.nx + x0], v10 = arr[y0*m.nx + x1];
+    const v01 = arr[y1*m.nx + x0], v11 = arr[y1*m.nx + x1];
+    if(!isFinite(v00)||!isFinite(v10)||!isFinite(v01)||!isFinite(v11)) return null;
+    return (v00*(1-fx) + v10*fx)*(1-fy) + (v01*(1-fx) + v11*fx)*fy;
+  }
+
+  function onPick(e){
+    if(!currentData?.meta) return;
+    const m = currentData.meta;
+    let val='--', unit='';
+
+    if(selected.has('temp') && currentData.temp){
+      const v = bilinearSample(currentData.temp, m, e.latlng.lat, e.latlng.lng);
+      if(v!==null){ val = v.toFixed(1); unit='°C'; }
+    }
+    else if(selected.has('press') && currentData.press){
+      const v = bilinearSample(currentData.press, m, e.latlng.lat, e.latlng.lng);
+      if(v!==null){ val = Math.round(v); unit='hPa'; }
+    }
+    else if(selected.has('rain') && currentData.rain){
+      const v = bilinearSample(currentData.rain, m, e.latlng.lat, e.latlng.lng);
+      if(v!==null){ val = v.toFixed(1); unit='mm'; }
+    }
+    else if(selected.has('rh') && currentData.rh){
+      const v = bilinearSample(currentData.rh, m, e.latlng.lat, e.latlng.lng);
+      if(v!==null){ val = Math.round(v); unit='%'; }
+    }
+    else if(selected.has('wind')){
+      const u = bilinearSample(currentData.wind_u.data, m, e.latlng.lat, e.latlng.lng);
+      const v = bilinearSample(currentData.wind_v.data, m, e.latlng.lat, e.latlng.lng);
+      if(u!==null && v!==null){
+        val = (Math.sqrt(u*u+v*v)*3.6).toFixed(1);
+        unit='km/h';
+        const arrow = document.getElementById('rose-arrow');
+        const deg = 90 - (Math.atan2(v, u) * 180 / Math.PI);
+        arrow.style.transform = `rotate(${deg}deg)`;
+      }
+    }
+
+    document.getElementById('val-display').innerText = val;
+    document.getElementById('unit-display').innerText = unit;
+  }
+
+  window.toggleLayer = function(name){
+    if(selected.has(name)) selected.delete(name); else selected.add(name);
+    updateToggleUI(); redrawAll();
+  }
+  window.toggleIsobars = function(){ showIsobars=!showIsobars; updateToggleUI(); redrawAll(); }
+  window.toggleIsotherms = function(){ showIsotherms=!showIsotherms; updateToggleUI(); redrawAll(); }
+  window.toggleGrid = function(){ showGrid=!showGrid; updateToggleUI(); redrawAll(); }
+  window.toggleParticles = function(){ particlesOn=!particlesOn; updateToggleUI(); redrawAll(); }
+
+  function updateToggleUI(){
+    document.querySelectorAll('.toggle').forEach(el => {
+      const txt = el.innerText.toLowerCase();
+      if(txt.includes('vento') && selected.has('wind')) el.classList.add('active');
+      else if(txt.includes('temp') && selected.has('temp')) el.classList.add('active');
+      else if(txt.includes('pioggia') && selected.has('rain')) el.classList.add('active');
+      else if(txt.includes('umidità') && selected.has('rh')) el.classList.add('active');
+      else if(txt.includes('pressione') && selected.has('press')) el.classList.add('active');
+      else if(txt.includes('nuvole') && selected.has('cloud')) el.classList.add('active');
+      else if(txt.includes('isobare') && showIsobars) el.classList.add('active');
+      else if(txt.includes('isoterme') && showIsotherms) el.classList.add('active');
+      else if(txt.includes('reticolo') && showGrid) el.classList.add('active');
+      else el.classList.remove('active');
+    });
+    const btnFlow = document.getElementById('btn-flow');
+    if(particlesOn) btnFlow.classList.add('active'); else btnFlow.classList.remove('active');
+    document.getElementById('wind-rose').style.display = selected.has('wind') ? 'flex' : 'none';
+  }
+
+  window.togglePlay = function(){
+    if(isPlaying){ isPlaying=false; document.getElementById('play-btn').innerText='►'; return; }
+    isPlaying=true; document.getElementById('play-btn').innerText='❚❚';
+    const s = document.getElementById('time-slider');
+    let i = parseInt(s.value);
+    const loop = setInterval(()=>{
+      if(!isPlaying || i>=s.max){ clearInterval(loop); isPlaying=false; document.getElementById('play-btn').innerText='►'; return; }
+      i++; s.value=i; loadStep(i);
+    }, 800);
+  }
 </script>
 </body>
 </html>
