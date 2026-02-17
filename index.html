@@ -1,7 +1,7 @@
 <!DOCTYPE html>
 <html>
 <head>
-  <title>Sicilia MeteoHub - FINAL PRO MAX</title>
+  <title>Sicilia MeteoHub - FINAL GOLD</title>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
 
@@ -100,10 +100,9 @@
 
     .dark-relief-tiles { filter: invert(100%) hue-rotate(180deg) brightness(0.8) contrast(1.2) grayscale(20%); }
 
-    /* Canvas Layers */
     canvas.leaflet-layer { pointer-events: none !important; position: absolute; top: 0; left: 0; }
     canvas.leaflet-layer.scalar-layer { mix-blend-mode: screen; opacity: 0.85; }
-    canvas.leaflet-layer.velocity-canvas { mix-blend-mode: normal; opacity: 0.6; }
+    canvas.leaflet-layer.velocity-canvas { mix-blend-mode: normal; opacity: 0.35; } /* Opacità particelle ridotta ulteriormente */
 
   </style>
 </head>
@@ -296,18 +295,14 @@
     return out;
   }
 
-  // ALGORITMO PER TROVARE MASSIMI E MINIMI DI PRESSIONE
   function findExtremaAB(field, nx, ny){
     const cand = [];
-    // Raggio di ricerca aumentato (8px) per evitare "rumore" locale e trovare solo i veri centri
-    const r = 8; 
+    const r = 15; // RAGGIO DI RICERCA MOLTO AMPIO PER EVITARE RUMORE
     for(let y=r; y<ny-r; y++){
       for(let x=r; x<nx-r; x++){
         const idx = y*nx + x;
         const v = field[idx];
         let isMax=true, isMin=true;
-        
-        // Cerca nell'intorno
         for(let yy=y-r; yy<=y+r; yy++){
           for(let xx=x-r; xx<=x+r; xx++){
             const n = field[yy*nx+xx];
@@ -315,9 +310,7 @@
             if(n < v) isMin=false;
           }
         }
-        
-        // Filtro di significatività (evita massimi/minimi "deboli" in zone piatte)
-        if(isMax && v > 1014) cand.push({type:'A', x, y, v});
+        if(isMax && v > 1016) cand.push({type:'A', x, y, v});
         if(isMin && v < 1012) cand.push({type:'B', x, y, v});
       }
     }
@@ -341,34 +334,32 @@
     ctx.save();
     ctx.textAlign = "center"; ctx.textBaseline = "middle";
     
-    // OMBRA PER LEGGIBILITÀ SU SFONDI CHIARI E SCURI
-    ctx.shadowColor = "rgba(0,0,0,0.8)";
-    ctx.shadowBlur = 4;
-    
-    // LETTERA (A/B)
+    // OMBRA
+    ctx.shadowColor = "rgba(0,0,0,0.8)"; ctx.shadowBlur = 6;
+
+    // LETTERA
     ctx.font = `900 ${letterSize}px Arial`;
     ctx.fillStyle = color;
     ctx.strokeStyle = "#ffffff";
-    ctx.lineWidth = 3;
+    ctx.lineWidth = 4;
     ctx.strokeText(letter, x, y);
     ctx.fillText(letter, x, y);
 
-    // VALORE NUMERICO SOTTO
-    ctx.shadowBlur = 0; // Rimuovi ombra per il box
+    // VALORE
+    ctx.shadowBlur = 0;
     ctx.font = `bold ${valueSize}px Arial`;
-    const vy = y + letterSize * 0.75;
+    const vy = y + letterSize*0.75;
     const txt = `${Math.round(value)} hPa`;
     
     // Sfondo etichetta
-    ctx.fillStyle = "rgba(0,0,0,0.6)"; 
+    ctx.fillStyle = "rgba(0,0,0,0.7)"; 
     const w = ctx.measureText(txt).width + 12;
     const h = valueSize + 8;
     ctx.fillRect(x - w/2, vy - h/2, w, h);
 
-    // Testo
+    // Testo bianco
     ctx.fillStyle = "#fff";
     ctx.fillText(txt, x, vy);
-    
     ctx.restore();
   }
 
@@ -382,7 +373,7 @@
       { maxZoom: 13, attribution: 'Esri', className: 'dark-relief-tiles' }
     ).addTo(map);
 
-    // CONFINI ITALIA (Sotto i colori)
+    // CONFINI ITALIA (SOTTO)
     map.createPane('boundaryPane');
     map.getPane('boundaryPane').style.zIndex = 250;
     map.getPane('boundaryPane').style.pointerEvents = 'none';
@@ -395,7 +386,7 @@
                 style: {
                     color: "#ffffff",
                     weight: 1.5,
-                    opacity: 0.5,
+                    opacity: 0.4,
                     fillOpacity: 0
                 }
             }).addTo(map);
@@ -497,7 +488,6 @@
     ['wind','temp','rain','rh','press','cloud'].forEach(layer => {
       const canvas = scalarCanvases[layer];
       const ctx = canvas.getContext('2d');
-      
       if(canvas.width !== w || canvas.height !== h) {
           canvas.width = w; canvas.height = h;
           canvas.style.width = size.x + 'px'; canvas.style.height = size.y + 'px';
@@ -507,7 +497,6 @@
       const data = imgData.data;
 
       if(!selected.has(layer) || !currentData.meta) { ctx.clearRect(0,0,w,h); return; }
-      
       const m = currentData.meta;
       let arr = null, stops = null, isWindBg = false;
       if(layer==='wind'){ isWindBg = true; }
@@ -524,16 +513,13 @@
               const sx = x / SCALAR_RESOLUTION;
               const sy = y / SCALAR_RESOLUTION;
               const latlng = map.containerPointToLatLng([sx, sy]);
-              
               const gx = (latlng.lng - (m.lo1 + LON_OFFSET)) / m.dx;
               const gy = ((m.la1 + LAT_OFFSET) - latlng.lat) / m.dy;
-              
               if(gx<0 || gy<0 || gx>m.nx-1 || gy>m.ny-1) continue;
 
               const x0 = Math.floor(gx), y0 = Math.floor(gy);
               const x1 = Math.min(x0+1, m.nx-1), y1 = Math.min(y0+1, m.ny-1);
               const fx = gx - x0, fy = gy - y0;
-              
               let col = {r:0,g:0,b:0,a:0};
 
               if(isWindBg){
@@ -541,7 +527,6 @@
                   const u01 = currentData.wind_u.data[y1*m.nx+x0], u11 = currentData.wind_u.data[y1*m.nx+x1];
                   const v00 = currentData.wind_v.data[y0*m.nx+x0], v10 = currentData.wind_v.data[y0*m.nx+x1];
                   const v01 = currentData.wind_v.data[y1*m.nx+x0], v11 = currentData.wind_v.data[y1*m.nx+x1];
-                  
                   const u = (u00*(1-fx)+u10*fx)*(1-fy) + (u01*(1-fx)+u11*fx)*fy;
                   const v = (v00*(1-fx)+v10*fx)*(1-fy) + (v01*(1-fx)+v11*fx)*fy;
                   const sp = Math.sqrt(u*u+v*v);
@@ -551,7 +536,6 @@
                   const v00 = arr[y0*m.nx+x0], v10 = arr[y0*m.nx+x1];
                   const v01 = arr[y1*m.nx+x0], v11 = arr[y1*m.nx+x1];
                   const val = (v00*(1-fx)+v10*fx)*(1-fy) + (v01*(1-fx)+v11*fx)*fy;
-                  
                   if(layer==='rain' && val < 0.6) col.a = 0;
                   else if(layer==='cloud' && val < 5) col.a = 0;
                   else {
@@ -559,12 +543,8 @@
                       col.a = clamp(col.a * 1.05, 0, 0.95);
                   }
               }
-
               const idx = (y * w + x) * 4;
-              data[idx] = col.r; 
-              data[idx+1] = col.g; 
-              data[idx+2] = col.b; 
-              data[idx+3] = (col.a*255)|0;
+              data[idx] = col.r; data[idx+1] = col.g; data[idx+2] = col.b; data[idx+3] = (col.a*255)|0;
           }
       }
       ctx.putImageData(imgData, 0, 0);
@@ -585,14 +565,11 @@
     ctx.clearRect(0,0,size.x,size.y);
 
     if(!selected.has('wind') || !currentData?.meta) return;
-
     const m = currentData.meta;
     const zoom = map.getZoom();
     const stride = zoom >= 11 ? 2 : (zoom >= 10 ? 3 : 4);
     const baseLen = zoom >= 11 ? 26 : (zoom >= 10 ? 22 : 18);
-
-    ctx.lineCap = 'round';
-    ctx.lineJoin = 'round';
+    ctx.lineCap = 'round'; ctx.lineJoin = 'round';
 
     for(let y=0; y<m.ny; y+=stride){
       const lat = (m.la1 + LAT_OFFSET) - y*m.dy;
@@ -601,34 +578,24 @@
         const u = currentData.wind_u.data[idx], v = currentData.wind_v.data[idx];
         const sp = Math.sqrt(u*u+v*v);
         if(sp < 0.8) continue;
-
         const lon = (m.lo1 + LON_OFFSET) + x*m.dx;
         const p = map.latLngToContainerPoint([lat, lon]);
-        
         if(p.x < -30 || p.y < -30 || p.x > size.x+30 || p.y > size.y+30) continue;
 
         const c = vividWindColor(sp);
         const fillStyle = `rgb(${c.r},${c.g},${c.b})`;
-
         const speedScale = clamp(sp/8.0, 0.70, 2.8);
         const len = baseLen * speedScale;
         const width = clamp(1.1 * speedScale, 1.2, 3.0);
         const headLen = len * 0.38;
         const headWidth = headLen * 0.70;
         const angle = Math.atan2(-v, u);
-
         const shaftEndX = p.x + (len-headLen)*Math.cos(angle);
         const shaftEndY = p.y + (len-headLen)*Math.sin(angle);
 
-        ctx.beginPath();
-        ctx.moveTo(p.x, p.y);
-        ctx.lineTo(shaftEndX, shaftEndY);
-        ctx.strokeStyle = "rgba(0,0,0,0.95)";
-        ctx.lineWidth = width + 1.8;
-        ctx.stroke();
-        ctx.strokeStyle = fillStyle;
-        ctx.lineWidth = width;
-        ctx.stroke();
+        ctx.beginPath(); ctx.moveTo(p.x, p.y); ctx.lineTo(shaftEndX, shaftEndY);
+        ctx.strokeStyle = "rgba(0,0,0,0.95)"; ctx.lineWidth = width + 1.8; ctx.stroke();
+        ctx.strokeStyle = fillStyle; ctx.lineWidth = width; ctx.stroke();
 
         const tipX = p.x + len*Math.cos(angle);
         const tipY = p.y + len*Math.sin(angle);
@@ -637,15 +604,8 @@
         const wing2X = shaftEndX - headWidth*Math.cos(angle + Math.PI/2);
         const wing2Y = shaftEndY - headWidth*Math.sin(angle + Math.PI/2);
 
-        ctx.beginPath();
-        ctx.moveTo(tipX, tipY);
-        ctx.lineTo(wing1X, wing1Y);
-        ctx.lineTo(wing2X, wing2Y);
-        ctx.closePath();
-        ctx.fillStyle = "rgba(0,0,0,0.95)";
-        ctx.fill();
-        ctx.fillStyle = fillStyle;
-        ctx.fill();
+        ctx.beginPath(); ctx.moveTo(tipX, tipY); ctx.lineTo(wing1X, wing1Y); ctx.lineTo(wing2X, wing2Y); ctx.closePath();
+        ctx.fillStyle = "rgba(0,0,0,0.95)"; ctx.fill(); ctx.fillStyle = fillStyle; ctx.fill();
       }
     }
   }
@@ -671,16 +631,15 @@
       const thresholds = d3.range(960, 1050, 2);
       const contours = d3.contours().size([m.nx, m.ny]).thresholds(thresholds)(smooth);
 
-      // ISOBARE: Tutto Bianco (White)
+      // ISOBARE BIANCHE
       ctx.strokeStyle = "rgba(255,255,255,0.9)";
-      ctx.lineWidth = 2.0;
+      ctx.lineWidth = 1.8;
 
       for(const c of contours){
         ctx.setLineDash([]);
         contourToScreenPath(ctx, c.coordinates, m);
       }
 
-      // LABELS: Nero trasparente + Testo Bianco Grassetto
       const z = map.getZoom();
       const baseFont = clamp(12 + (z-7)*1.5, 12, 26);
       ctx.textAlign="center"; ctx.textBaseline="middle"; ctx.font = `bold ${baseFont}px Arial`;
@@ -698,7 +657,8 @@
         const txtW = ctx.measureText(txt).width + 14;
         const txtH = baseFont + 10;
         
-        ctx.fillStyle = "rgba(0,0,0,0.7)";
+        // ETICHETTA PIU' EVIDENTE
+        ctx.fillStyle = "rgba(0,0,0,0.85)";
         ctx.fillRect(pt.x - txtW/2, pt.y - txtH/2, txtW, txtH);
         
         ctx.fillStyle = "#fff";
@@ -722,7 +682,7 @@
       const Apts = dedupeByDistance(highsPx, minDist).slice(0, 3);
       const Bpts = dedupeByDistance(lowsPx,  minDist).slice(0, 3);
 
-      const letterSize = clamp(24 + (z-7)*2.5, 24, 48); // Grandi
+      const letterSize = clamp(36 + (z-7)*4, 36, 72); // A e B Molto Grandi
       const valueSize  = clamp(14 + (z-7)*1.5, 14, 26);
 
       for(const p of Apts) drawAB(ctx, p.px, p.py, "A", "#ff3333", Math.round(p.v), letterSize, valueSize);
@@ -758,7 +718,7 @@
       if(vv > tMax) tMax = vv;
     }
 
-    // Step 5 gradi (es. 10, 15, 20)
+    // Step 5 gradi (Pulizia)
     const lo = Math.floor(tMin/5)*5;
     const hi = Math.ceil(tMax/5)*5;
     const thresholds = d3.range(lo, hi+1, 5);
@@ -766,7 +726,7 @@
 
     ctx.strokeStyle = "rgba(255,255,255,0.75)";
     ctx.lineWidth = 1.3;
-    ctx.setLineDash([4, 4]); // Tratteggiato
+    ctx.setLineDash([4, 4]);
 
     for(const c of contours){
       contourToScreenPath(ctx, c.coordinates, m);
@@ -808,7 +768,7 @@
       lineWidth: 2.0,
       particleAge: 100,
       frameRate: 40,
-      opacity: 0.6, // BIANCO ETEREO
+      opacity: 0.35, // BIANCO TRASPARENTE (35%)
       colorScale: ["#ffffff"], 
       pane: 'particlePane'
     });
