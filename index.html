@@ -1,7 +1,7 @@
 <!DOCTYPE html>
 <html>
 <head>
-  <title>Sicilia MeteoHub - FINAL DYNAMIC</title>
+  <title>Sicilia MeteoHub - FINAL VECTOR FIX</title>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
 
@@ -12,11 +12,11 @@
   <script src="https://d3js.org/d3.v7.min.js"></script>
 
   <style>
-    /* STYLES */
+    /* BASE STYLE */
     body { margin: 0; background: #1a1a1a; font-family: 'Segoe UI', sans-serif; color: #ddd; overflow: hidden; }
     #map { position: absolute; top: 0; bottom: 0; width: 100%; background: #1a1a1a; }
 
-    /* UI Z-INDEX */
+    /* UI LAYOUT */
     #ui-container { position: absolute; top: 10px; right: 10px; z-index: 9999; display: flex; flex-direction: column; gap: 8px; align-items: flex-end; pointer-events: auto; }
     
     .panel { background: rgba(30,30,30,0.85); backdrop-filter: blur(6px); padding: 10px; border-radius: 12px; border: 1px solid rgba(255,255,255,0.15); box-shadow: 0 4px 15px rgba(0,0,0,0.5); color: #eee; }
@@ -28,7 +28,7 @@
     .mini { width: 170px; padding: 8px 12px; border-radius: 8px; font-size:13px; border: 1px solid rgba(255,255,255,0.1); background: rgba(255,255,255,0.05); color:#ccc; cursor:pointer; font-weight:800; }
     .mini.active { background: #eee; color:#111; border-color: #fff; }
 
-    /* INFO & WIDGETS */
+    /* INFO & HEADER */
     #info-box { position: absolute; top: 15px; left: 20px; z-index: 9999; pointer-events: none; display: flex; align-items: center; gap: 15px; }
     #val-group { display: flex; flex-direction: column; align-items: flex-start; margin-top: 40px; }
     #val-display { font-size: 3.2em; font-weight: 900; line-height: 0.9; color: #fff; text-shadow: 0 2px 5px rgba(0,0,0,0.8); }
@@ -40,20 +40,17 @@
     .c-n { top: 2px; left: 50%; transform: translateX(-50%); } .c-s { bottom: 2px; left: 50%; transform: translateX(-50%); }
     .c-e { right: 3px; top: 50%; transform: translateY(-50%); } .c-w { left: 3px; top: 50%; transform: translateY(-50%); }
 
-    /* HEADER */
     #model-info { position: absolute; top: 15px; left: 60px; z-index: 3000; pointer-events: none; text-shadow: 0 2px 4px rgba(0,0,0,0.9); }
     #model-title { font-size: 18px; font-weight: 900; color: #fff; letter-spacing: 1px; }
     #model-sub { font-size: 12px; font-weight: 500; color: #ccc; font-family: monospace; margin-top: 2px; }
     #coords-display { position: absolute; bottom: 4px; left: 90px; z-index: 3000; pointer-events: none; font-family: monospace; font-size: 11px; font-weight: bold; color: rgba(255,255,255,0.7); background: rgba(0,0,0,0.3); padding: 2px 6px; border-radius: 4px; }
     .leaflet-control-scale-line { background: rgba(0,0,0,0.5) !important; border: 1px solid rgba(255,255,255,0.4) !important; border-top: none !important; color: #eee !important; font-weight: bold; font-size: 10px; }
 
-    /* BOTTOM BAR */
     #bottom-bar { position: absolute; bottom: 0; left: 0; right: 0; height: 80px; background: linear-gradient(to top, rgba(0,0,0,0.95), transparent); display: flex; align-items: center; padding: 0 20px; z-index: 9999; pointer-events: auto; }
     #play-btn { font-size: 2.2em; background: none; border: none; color: #fff; cursor: pointer; margin-right: 15px; }
     #time-label { font-size: 1.3em; font-weight: 900; margin-left: 15px; min-width: 140px; text-align: center; color: #fff; }
     input[type=range] { flex-grow: 1; height: 5px; cursor: pointer; accent-color: #0077ff; background: rgba(255,255,255,0.2); }
 
-    /* MAP LAYERS */
     .dark-relief-tiles { filter: invert(100%) hue-rotate(180deg) brightness(0.8) contrast(1.2) grayscale(20%); }
     canvas.leaflet-layer { pointer-events: none !important; position: absolute; top: 0; left: 0; }
     canvas.leaflet-layer.scalar-layer { mix-blend-mode: screen; opacity: 0.85; will-change: contents; }
@@ -110,7 +107,7 @@
 
   const WIND_COLOR_SCALE = ["#000080", "#0044ff", "#00ddff", "#00ff55", "#ffff00", "#ff6600", "#ff0000", "#ff00ff"];
 
-  // --- PALETTE COLORI (Custom) ---
+  // PALETTE PERSONALIZZATE (User Provided)
   const TEMP_STOPS = [
     {v:-15,c:[156,218,216]}, {v:-14,c:[149,214,211]}, {v:-13,c:[141,210,206]}, {v:-12,c:[134,206,201]},
     {v:-11,c:[127,202,196]}, {v:-10,c:[119,198,191]}, {v:-9,c:[112,194,185]}, {v:-8,c:[106,190,181]},
@@ -232,16 +229,14 @@
     return out;
   }
 
-  // ALGORITMO RICERCA PICCHI PRESSIONE
   function findExtremaAB(field, nx, ny){
     const cand = [];
-    const r = 25; // Raggio MOLTO ampio (ca. 100km) per trovare solo i veri centri
+    const r = 25; 
     for(let y=r; y<ny-r; y++){
       for(let x=r; x<nx-r; x++){
         const idx = y*nx + x;
         const v = field[idx];
         let isMax=true, isMin=true;
-        
         for(let yy=y-r; yy<=y+r; yy++){
           for(let xx=x-r; xx<=x+r; xx++){
             const n = field[yy*nx+xx];
@@ -249,7 +244,6 @@
             if(n < v) isMin=false;
           }
         }
-        // Soglie 
         if(isMax && v > 1016) cand.push({type:'A', x, y, v});
         if(isMin && v < 1012) cand.push({type:'B', x, y, v});
       }
@@ -270,29 +264,23 @@
     return kept;
   }
 
-  // DRAW A/B
   function drawAB(ctx, x, y, letter, color, value, letterSize, valueSize){
     ctx.save();
     ctx.textAlign = "center"; ctx.textBaseline = "middle";
-    
-    ctx.shadowColor = "rgba(0,0,0,0.8)"; ctx.shadowBlur = 8;
-
+    ctx.shadowColor = "rgba(0,0,0,0.8)"; ctx.shadowBlur = 8; ctx.shadowOffsetY = 2;
     ctx.font = `900 ${letterSize}px Arial`;
     ctx.lineWidth = 6; ctx.strokeStyle = "#ffffff";
     ctx.strokeText(letter, x, y);
     ctx.fillStyle = color;
     ctx.fillText(letter, x, y);
-
-    ctx.shadowBlur = 0;
+    ctx.shadowBlur = 0; ctx.shadowOffsetY = 0;
     ctx.font = `bold ${valueSize}px Arial`;
-    const vy = y + letterSize*0.75;
+    const vy = y + letterSize*0.70;
     const txt = `${Math.round(value)}`;
-    
     ctx.fillStyle = "rgba(0,0,0,0.6)"; 
     const w = ctx.measureText(txt).width + 14;
     const h = valueSize + 10;
     ctx.fillRect(x - w/2, vy - h/2, w, h);
-
     ctx.fillStyle = "#fff";
     ctx.fillText(txt, x, vy);
     ctx.restore();
@@ -389,15 +377,11 @@
   }
 
   function drawScalars(){
-    // CALCOLA RISOLUZIONE DINAMICA BASATA SU ZOOM
+    // RISOLUZIONE DINAMICA: Bassa per panoramica veloce, Alta per dettaglio
     const zoom = map.getZoom();
-    
-    // Zoom < 8: bassa risoluzione (veloce)
-    // Zoom 8-10: media
-    // Zoom > 10: alta risoluzione (dettagliata)
     let dynamicRes = 0.25; 
     if(zoom >= 8) dynamicRes = 0.5;
-    if(zoom >= 10) dynamicRes = 0.8;
+    if(zoom >= 10) dynamicRes = 0.8; // HD su zoom alto
 
     const size = map.getSize();
     const w = Math.ceil(size.x * dynamicRes);
@@ -486,14 +470,14 @@
     const m = currentData.meta;
     const zoom = map.getZoom();
     
-    // Stride Dinamico: Più zoom = più frecce
+    // STRIDE DINAMICO PER ZOOM
     let stride = 6;
     if(zoom >= 8) stride = 4;
     if(zoom >= 10) stride = 3;
-    if(zoom >= 12) stride = 2;
+    if(zoom >= 12) stride = 2; // Molto denso
 
     const baseLen = zoom >= 11 ? 26 : (zoom >= 10 ? 22 : 18);
-    ctx.lineCap = 'butt'; // Punta Piatta (Ago)
+    ctx.lineCap = 'butt'; 
 
     for(let y=0; y<m.ny; y+=stride){
       const lat = (m.la1 + LAT_OFFSET) - y*m.dy;
@@ -501,29 +485,34 @@
         const idx = y*m.nx + x;
         const u = currentData.wind_u.data[idx], v = currentData.wind_v.data[idx];
         const sp = Math.sqrt(u*u+v*v);
-        if(sp < 1.0) continue; // Ignora calma piatta
+        if(sp < 1.0) continue; 
 
         const lon = (m.lo1 + LON_OFFSET) + x*m.dx;
         const p = map.latLngToContainerPoint([lat, lon]);
+        
         if(p.x < -30 || p.y < -30 || p.x > size.x+30 || p.y > size.y+30) continue;
 
         const c = vividWindColor(sp);
-        const angle = Math.atan2(-v, u); // Vento Met (verso)
+        
+        // FIX ROTAZIONE VETTORI:
+        // atan2(-v, u) -> Calcola angolo in coordinate schermo (Y invertita)
+        // ctx.rotate(angle) -> Applica rotazione
+        const angle = Math.atan2(-v, u); 
 
         const len = Math.min(baseLen * (0.6 + sp/18), baseLen * 1.6);
         
         ctx.save();
         ctx.translate(p.x, p.y);
-        ctx.rotate(-angle); // Leaflet Y inversa
+        ctx.rotate(angle); // ROTAZIONE CORRETTA
 
-        // ASTA (Ago Sottile)
+        // AGO
         ctx.beginPath();
         ctx.moveTo(-len/2, 0); ctx.lineTo(len/2, 0);
         ctx.strokeStyle = `rgb(${c.r},${c.g},${c.b})`;
         ctx.lineWidth = 1.8;
         ctx.stroke();
 
-        // PUNTA (Triangolino)
+        // PUNTA
         ctx.beginPath();
         ctx.moveTo(len/2, 0);
         ctx.lineTo(len/2 - 5, -3);
@@ -605,7 +594,7 @@
       const Apts = dedupeByDistance(highsPx, minDist).slice(0, 2);
       const Bpts = dedupeByDistance(lowsPx,  minDist).slice(0, 2);
 
-      const letterSize = clamp(40 + (z-7)*4, 40, 90); // GIGANTI
+      const letterSize = clamp(40 + (z-7)*4, 40, 90);
       const valueSize  = clamp(14 + (z-7)*1.5, 14, 26);
 
       for(const p of Apts) drawAB(ctx, p.px, p.py, "A", "#ff3333", Math.round(p.v), letterSize, valueSize);
