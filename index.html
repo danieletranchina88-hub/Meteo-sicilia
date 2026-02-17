@@ -1,33 +1,31 @@
 <!DOCTYPE html>
 <html>
 <head>
-  <title>Sicilia MeteoHub - STABLE</title>
+  <title>Sicilia MeteoHub - STABLE ZOOM</title>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
 
   <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
   <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
-
   <link rel="stylesheet" href="https://unpkg.com/leaflet-velocity@1.8.0/dist/leaflet-velocity.css" />
   <script src="https://unpkg.com/leaflet-velocity@1.8.0/dist/leaflet-velocity.js"></script>
-
   <script src="https://d3js.org/d3.v7.min.js"></script>
 
   <style>
+    /* STILE GENERALE */
     body { margin: 0; background: #1a1a1a; font-family: 'Segoe UI', sans-serif; color: #ddd; overflow: hidden; }
     #map { position: absolute; top: 0; bottom: 0; width: 100%; background: #1a1a1a; }
 
-    /* UI Z-INDEX MOLTO ALTO PER GARANTIRE IL CLICK */
+    /* UI CONTAINER */
     #ui-container {
       position: absolute; top: 10px; right: 10px; z-index: 9999;
       display: flex; flex-direction: column; gap: 10px; align-items: flex-end;
-      pointer-events: auto; /* Abilita click sui bottoni */
+      pointer-events: auto; /* IMPORTANTE: Permette il click */
     }
     
-    /* I pannelli */
     .panel {
-      background: rgba(30,30,30,0.90);
-      backdrop-filter: blur(4px);
+      background: rgba(30,30,30,0.9);
+      backdrop-filter: blur(5px);
       padding: 10px;
       border-radius: 14px;
       border: 1px solid rgba(255,255,255,0.15);
@@ -64,6 +62,7 @@
     .mini:hover { background: rgba(255,255,255,0.1); color:#fff; }
     .mini.active { background: #eee; color:#111; border-color: #fff; }
 
+    /* INFO BOX */
     #info-box { 
         position: absolute; top: 18px; left: 18px; z-index: 9999; 
         pointer-events: none; 
@@ -73,6 +72,7 @@
     #val-display { font-size: 3.6em; font-weight: 950; line-height: 0.9; color: #fff; text-shadow: 0 2px 5px rgba(0,0,0,0.8); }
     #unit-display { font-size: 1.15em; color: #aaa; font-weight: 850; margin-top: 4px; text-shadow: 0 1px 3px rgba(0,0,0,0.9); }
 
+    /* ROSA DEI VENTI */
     #wind-rose {
         width: 50px; height: 50px;
         background: rgba(255,255,255,0.9);
@@ -90,6 +90,7 @@
     .c-w { left: 3px; top: 50%; transform: translateY(-50%); }
     #rose-arrow { width: 26px; height: 26px; fill: #000; transition: transform 0.1s; }
 
+    /* TIME BAR */
     #bottom-bar {
       position: absolute; bottom: 0; left: 0; right: 0; height: 92px;
       background: linear-gradient(to top, rgba(0,0,0,0.95), transparent);
@@ -100,13 +101,14 @@
     #time-label { font-size: 1.45em; font-weight: 950; margin-left: 14px; min-width: 150px; text-align: center; color: #fff; }
     input[type=range] { flex-grow: 1; height: 6px; cursor: pointer; accent-color: #0077ff; background: rgba(255,255,255,0.2); }
 
+    /* FILTRI MAPPA */
     .dark-relief-tiles {
         filter: invert(100%) hue-rotate(180deg) brightness(0.8) contrast(1.2) grayscale(20%);
     }
 
-    /* CANVAS STYLE: Pointer events NONE è critico per far funzionare i bottoni sotto */
+    /* CANVAS LAYERS - POINTER EVENTS NONE E' FONDAMENTALE */
     canvas.leaflet-layer {
-        pointer-events: none !important;
+        pointer-events: none !important; 
         position: absolute;
         top: 0; left: 0;
     }
@@ -186,17 +188,10 @@
   </div>
 
 <script>
-  // ==========================================
-  // SETUP
-  // ==========================================
-  // Offsets per allineamento fine (se necessario)
+  // ========= CONFIG =========
   const LAT_OFFSET = 0.00; 
   const LON_OFFSET = 0.00;
-
-  // Performance vs Quality: 0.25 è 1/4 risoluzione (molto veloce, sfumato dal browser)
-  // Questo risolve il lag sui cellulari e il blocco dello zoom
-  const SCALAR_RESOLUTION = 0.25; 
-
+  const SCALAR_RESOLUTION = 0.25; // 1/4 Resolution for speed
   const SICILY_BOUNDS = L.latLngBounds(L.latLng(35.0, 11.0), L.latLng(39.5, 16.5));
   const DPR = window.devicePixelRatio || 1;
 
@@ -224,12 +219,9 @@
 
   const RAIN_STOPS = [
     {v:0.0, c:[0,0,0], a:0.0},
-    {v:0.6, c:[100,200,255], a:0.70},
-    {v:1.0, c:[0,150,255], a:0.78},
-    {v:5.0, c:[0,0,255], a:0.85},
-    {v:10, c:[255,255,0], a:0.85},
-    {v:30, c:[255,150,0], a:0.90},
-    {v:50, c:[255,0,0], a:0.92}
+    {v:0.6, c:[100,200,255], a:0.70}, {v:1.0, c:[0,150,255], a:0.78},
+    {v:5.0, c:[0,0,255], a:0.85}, {v:10, c:[255,255,0], a:0.85},
+    {v:30, c:[255,150,0], a:0.90}, {v:50, c:[255,0,0], a:0.92}
   ];
 
   const RH_STOPS = [
@@ -249,10 +241,8 @@
   ];
 
   const CLOUD_STOPS = [
-    {v:0, c:[255,255,255], a:0.00},
-    {v:40, c:[220,220,220], a:0.40},
-    {v:70, c:[170,170,170], a:0.60},
-    {v:100, c:[90,90,90], a:0.78}
+    {v:0, c:[255,255,255], a:0.00}, {v:40, c:[220,220,220], a:0.40},
+    {v:70, c:[170,170,170], a:0.60}, {v:100, c:[90,90,90], a:0.78}
   ];
 
   let map, currentData = null, catalog = [];
@@ -260,15 +250,10 @@
   let showIsobars = false, showIsotherms = false, showGrid = false, particlesOn = true;
   let velocityLayer = null, scalarCanvases = {}, arrowCanvas, isoCanvas, thermCanvas, gridCanvas;
   let isPlaying = false;
-  
-  // Offscreen canvas (buffer)
-  let offscreenCanvas = document.createElement('canvas');
-  let offscreenCtx = offscreenCanvas.getContext('2d');
 
   function clamp(x,a,b){ return Math.max(a, Math.min(b, x)); }
   function lerp(a,b,t){ return a+(b-a)*t; }
 
-  // Interpola colori
   function interpStops(val, stops) {
     if(val <= stops[0].v) { const s=stops[0]; return {r:s.c[0],g:s.c[1],b:s.c[2],a:(s.a!==undefined)?s.a:0.90}; }
     for(let i=0; i<stops.length-1; i++){
@@ -309,7 +294,6 @@
     return {r: 255, g: 70, b: 70};
   }
 
-  // Draw helpers
   function contourToScreenPath(ctx, coordinates, m){
     for (const polygon of coordinates) {
       for (const ring of polygon) {
@@ -381,34 +365,38 @@
     return kept;
   }
 
-  // --- MAPPA & EVENTI ---
+  function drawAB(ctx, x, y, letter, color, value, letterSize, valueSize){
+    ctx.save();
+    ctx.textAlign = "center"; ctx.textBaseline = "middle";
+    ctx.font = `900 ${letterSize}px Arial`;
+    ctx.lineWidth = 5; ctx.strokeStyle = "rgba(0,0,0,0.85)"; ctx.strokeText(letter, x, y);
+    ctx.fillStyle = color; ctx.fillText(letter, x, y);
+
+    ctx.font = `900 ${valueSize}px Arial`;
+    const vy = y + letterSize*0.85;
+    const txt = `${value} hPa`;
+    ctx.fillStyle = "rgba(0,0,0,0.55)";
+    const w = ctx.measureText(txt).width + 20;
+    const h = valueSize + 12;
+    ctx.fillRect(x - w/2, vy - h/2, w, h);
+
+    ctx.lineWidth = 3; ctx.strokeStyle = "rgba(0,0,0,0.85)"; ctx.strokeText(txt, x, vy);
+    ctx.fillStyle = "#fff"; ctx.fillText(txt, x, vy);
+    ctx.restore();
+  }
+
   window.addEventListener('load', async () => {
     map = L.map('map', {
-      zoomControl: false,
-      background: '#1a1a1a',
-      minZoom: 4
+      zoomControl: false, background: '#1a1a1a', minZoom: 4
     }).fitBounds(SICILY_BOUNDS);
 
-    L.tileLayer(
-      'https://server.arcgisonline.com/ArcGIS/rest/services/World_Shaded_Relief/MapServer/tile/{z}/{y}/{x}',
-      { maxZoom: 13, attribution: 'Esri', className: 'dark-relief-tiles' }
-    ).addTo(map);
+    L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/World_Shaded_Relief/MapServer/tile/{z}/{y}/{x}', { maxZoom: 13, attribution: 'Esri', className: 'dark-relief-tiles' }).addTo(map);
+    L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/Elevation/World_Hillshade/MapServer/tile/{z}/{y}/{x}', { maxZoom: 19, className: 'dark-relief-tiles', opacity: 0.40 }).addTo(map);
 
-    L.tileLayer(
-      'https://server.arcgisonline.com/ArcGIS/rest/services/Elevation/World_Hillshade/MapServer/tile/{z}/{y}/{x}',
-      { maxZoom: 19, className: 'dark-relief-tiles', opacity: 0.40 }
-    ).addTo(map);
+    map.createPane('labelsPane'); map.getPane('labelsPane').style.zIndex = 600; map.getPane('labelsPane').style.pointerEvents = 'none';
+    L.tileLayer('https://{s}.basemaps.cartocdn.com/light_only_labels/{z}/{x}/{y}{r}.png', { pane: 'labelsPane', opacity: 0.90 }).addTo(map);
 
-    map.createPane('labelsPane');
-    map.getPane('labelsPane').style.zIndex = 600;
-    map.getPane('labelsPane').style.pointerEvents = 'none';
-    L.tileLayer('https://{s}.basemaps.cartocdn.com/light_only_labels/{z}/{x}/{y}{r}.png', {
-      pane: 'labelsPane', opacity: 0.90
-    }).addTo(map);
-
-    map.createPane('particlePane');
-    map.getPane('particlePane').style.zIndex = 800;
-    map.getPane('particlePane').style.pointerEvents = 'none';
+    map.createPane('particlePane'); map.getPane('particlePane').style.zIndex = 800; map.getPane('particlePane').style.pointerEvents = 'none';
 
     createCanvasLayers();
     await loadCatalog();
@@ -416,36 +404,18 @@
     map.on('mousemove', onPick);
     map.on('click', onPick);
     
-    // GESTIONE ZOOM FLUIDO E SENZA BLOCCHI
-    map.on('zoomstart', () => {
-        // Nascondi i canvas durante lo zoom per evitare "freezing"
-        Object.values(scalarCanvases).forEach(c => c.style.opacity = 0);
-        arrowCanvas.style.opacity = 0;
-        isoCanvas.style.opacity = 0;
-        thermCanvas.style.opacity = 0;
-        gridCanvas.style.opacity = 0;
-    });
-
-    map.on('zoomend', () => {
-        // Ridisegna e mostra
-        redrawAll();
-        Object.values(scalarCanvases).forEach(c => c.style.opacity = 0.85);
-        arrowCanvas.style.opacity = 1;
-        isoCanvas.style.opacity = 1;
-        thermCanvas.style.opacity = 1;
-        gridCanvas.style.opacity = 1;
-    });
-
+    // FIX ZOOM SCOMPARSA: Ricalcola SEMPRE alla fine dello zoom/spostamento
     map.on('moveend', redrawAll);
+    
     document.getElementById('unit-display').innerText = '';
   });
 
   function createCanvasLayers(){
     function mkCanvas(z, cls){
       const c = L.DomUtil.create('canvas', 'leaflet-layer ' + (cls||''));
-      c.style.pointerEvents = 'none'; // CRITICO: evita che il canvas rubi i click
+      c.style.pointerEvents = 'none'; // IMPORTANTISSIMO PER I CLICK
       c.style.zIndex = z;
-      c.style.imageRendering = 'auto'; 
+      c.style.imageRendering = 'auto';
       map.getPanes().overlayPane.appendChild(c);
       return c;
     }
@@ -455,7 +425,6 @@
     scalarCanvases.rh    = mkCanvas(320, 'scalar-layer');
     scalarCanvases.press = mkCanvas(330, 'scalar-layer');
     scalarCanvases.cloud = mkCanvas(340, 'scalar-layer');
-
     arrowCanvas = mkCanvas(380);
     isoCanvas   = mkCanvas(420);
     thermCanvas = mkCanvas(430);
@@ -480,7 +449,6 @@
     try{
       const r = await fetch('data_weather/' + catalog[i].file + '?t=' + Date.now());
       currentData = await r.json();
-      
       if(currentData.press) {
           const raw = currentData.press;
           const clean = new Float32Array(raw.length);
@@ -504,10 +472,9 @@
     updateParticles();
   }
 
-  // DRAW SCALARS con INVERSE SAMPLING (Allineamento Perfetto + Performance)
   function drawScalars(){
-    // Usa risoluzione ridotta per velocità (sfumatura handled by CSS)
     const size = map.getSize();
+    // Usa risoluzione ridotta per performance massime
     const w = Math.ceil(size.x * SCALAR_RESOLUTION);
     const h = Math.ceil(size.y * SCALAR_RESOLUTION);
 
@@ -515,21 +482,17 @@
       const canvas = scalarCanvases[layer];
       const ctx = canvas.getContext('2d');
       
+      // Ridimensiona e posiziona
       if(canvas.width !== w || canvas.height !== h) {
           canvas.width = w; canvas.height = h;
           canvas.style.width = size.x + 'px'; canvas.style.height = size.y + 'px';
       }
-      // Reset transform
-      ctx.setTransform(1, 0, 0, 1, 0, 0);
       L.DomUtil.setPosition(canvas, map.containerPointToLayerPoint([0,0]));
       
       const imgData = ctx.createImageData(w, h);
       const data = imgData.data;
 
-      if(!selected.has(layer) || !currentData.meta) {
-          ctx.clearRect(0,0,w,h);
-          return;
-      }
+      if(!selected.has(layer) || !currentData.meta) { ctx.clearRect(0,0,w,h); return; }
       
       const m = currentData.meta;
       let arr = null, stops = null, isWindBg = false;
@@ -542,34 +505,45 @@
       
       if(!arr && !isWindBg) { ctx.clearRect(0,0,w,h); return; }
 
-      // Inverse Loop
       for(let y=0; y<h; y++){
           for(let x=0; x<w; x++){
               const sx = x / SCALAR_RESOLUTION;
               const sy = y / SCALAR_RESOLUTION;
-              
-              // Calcola coordinate Lat/Lon reali per questo pixel
               const latlng = map.containerPointToLatLng([sx, sy]);
               
-              let val = null, col = {r:0,g:0,b:0,a:0};
+              // Campiona con offset
+              const gx = (latlng.lng - (m.lo1 + LON_OFFSET)) / m.dx;
+              const gy = ((m.la1 + LAT_OFFSET) - latlng.lat) / m.dy;
               
+              if(gx<0 || gy<0 || gx>m.nx-1 || gy>m.ny-1) continue;
+
+              const x0 = Math.floor(gx), y0 = Math.floor(gy);
+              const x1 = Math.min(x0+1, m.nx-1), y1 = Math.min(y0+1, m.ny-1);
+              const fx = gx - x0, fy = gy - y0;
+              
+              let col = {r:0,g:0,b:0,a:0};
+
               if(isWindBg){
-                  const u = bilinearSample(currentData.wind_u.data, m, latlng.lat, latlng.lng);
-                  const v = bilinearSample(currentData.wind_v.data, m, latlng.lat, latlng.lng);
-                  if(u!==null && v!==null){
-                      const sp = Math.sqrt(u*u+v*v);
-                      const rgb = vividWindColor(sp);
-                      col = {r:rgb.r,g:rgb.g,b:rgb.b,a:0.35};
-                  }
+                  const u00 = currentData.wind_u.data[y0*m.nx+x0], u10 = currentData.wind_u.data[y0*m.nx+x1];
+                  const u01 = currentData.wind_u.data[y1*m.nx+x0], u11 = currentData.wind_u.data[y1*m.nx+x1];
+                  const v00 = currentData.wind_v.data[y0*m.nx+x0], v10 = currentData.wind_v.data[y0*m.nx+x1];
+                  const v01 = currentData.wind_v.data[y1*m.nx+x0], v11 = currentData.wind_v.data[y1*m.nx+x1];
+                  
+                  const u = (u00*(1-fx)+u10*fx)*(1-fy) + (u01*(1-fx)+u11*fx)*fy;
+                  const v = (v00*(1-fx)+v10*fx)*(1-fy) + (v01*(1-fx)+v11*fx)*fy;
+                  const sp = Math.sqrt(u*u+v*v);
+                  const rgb = vividWindColor(sp);
+                  col = {r:rgb.r,g:rgb.g,b:rgb.b,a:0.35};
               } else {
-                  val = bilinearSample(arr, m, latlng.lat, latlng.lng);
-                  if(val !== null){
-                      if(layer==='rain' && val < 0.6) col.a = 0;
-                      else if(layer==='cloud' && val < 5) col.a = 0;
-                      else {
-                          col = interpStops(val, stops);
-                          col.a = clamp(col.a * 1.05, 0, 0.95);
-                      }
+                  const v00 = arr[y0*m.nx+x0], v10 = arr[y0*m.nx+x1];
+                  const v01 = arr[y1*m.nx+x0], v11 = arr[y1*m.nx+x1];
+                  const val = (v00*(1-fx)+v10*fx)*(1-fy) + (v01*(1-fx)+v11*fx)*fy;
+                  
+                  if(layer==='rain' && val < 0.6) col.a = 0;
+                  else if(layer==='cloud' && val < 5) col.a = 0;
+                  else {
+                      col = interpStops(val, stops);
+                      col.a = clamp(col.a * 1.05, 0, 0.95);
                   }
               }
 
@@ -622,14 +596,12 @@
 
         const c = vividWindColor(sp);
         const fillStyle = `rgb(${c.r},${c.g},${c.b})`;
-
         const speedScale = clamp(sp/8.0, 0.70, 2.8);
         const len = baseLen * speedScale;
         const width = clamp(1.1 * speedScale, 1.2, 3.0);
         const headLen = len * 0.38;
         const headWidth = headLen * 0.70;
         const angle = Math.atan2(-v, u);
-
         const shaftEndX = p.x + (len-headLen)*Math.cos(angle);
         const shaftEndY = p.y + (len-headLen)*Math.sin(angle);
 
@@ -716,12 +688,10 @@
         ctx.font = `900 ${fontSize}px Arial`;
         const txt = `${v}`;
         const rgb = pressColorDiscrete(v);
-
         ctx.fillStyle = "rgba(0,0,0,0.55)";
         const txtW = ctx.measureText(txt).width + 18;
         const txtH = fontSize + 12;
         ctx.fillRect(pt.x - txtW/2, pt.y - txtH/2, txtW, txtH);
-
         ctx.lineWidth = 5; ctx.strokeStyle = "rgba(0,0,0,0.90)"; ctx.strokeText(txt, pt.x, pt.y);
         ctx.fillStyle = `rgb(${rgb.r},${rgb.g},${rgb.b})`; ctx.fillText(txt, pt.x, pt.y);
       }
@@ -742,7 +712,6 @@
       const lowsPx  = lows.slice(0, 30).map(projectPoint).filter(p=>p.px>=0 && p.py>=0 && p.px<=size.x && p.py<=size.y);
       const Apts = dedupeByDistance(highsPx, minDist).slice(0, 3);
       const Bpts = dedupeByDistance(lowsPx,  minDist).slice(0, 3);
-
       const letterSize = clamp(18 + (z-7)*2.2, 18, 34);
       const valueSize  = clamp(11 + (z-7)*1.2, 11, 20);
 
@@ -868,9 +837,9 @@
   }
 
   function bilinearSample(arr, m, lat, lon){
-    // APPLICA OFFSET
     const gx = (lon - (m.lo1 + LON_OFFSET)) / m.dx;
     const gy = ((m.la1 + LAT_OFFSET) - lat) / m.dy;
+    
     if(gx < 0 || gy < 0 || gx > (m.nx-1) || gy > (m.ny-1)) return null;
     const x0 = Math.floor(gx), y0 = Math.floor(gy);
     const x1 = Math.min(x0+1, m.nx-1), y1 = Math.min(y0+1, m.ny-1);
@@ -941,6 +910,7 @@
       else if(txt.includes('reticolo') && showGrid) el.classList.add('active');
       else el.classList.remove('active');
     });
+
     const btnFlow = document.getElementById('btn-flow');
     if(particlesOn) btnFlow.classList.add('active'); else btnFlow.classList.remove('active');
     document.getElementById('wind-rose').style.display = selected.has('wind') ? 'flex' : 'none';
