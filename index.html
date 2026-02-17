@@ -1,7 +1,7 @@
 <!DOCTYPE html>
 <html>
 <head>
-  <title>Sicilia MeteoHub - FINAL AESTHETIC</title>
+  <title>Sicilia MeteoHub - FINAL PRO MAX</title>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
 
@@ -103,7 +103,7 @@
     /* Canvas Layers */
     canvas.leaflet-layer { pointer-events: none !important; position: absolute; top: 0; left: 0; }
     canvas.leaflet-layer.scalar-layer { mix-blend-mode: screen; opacity: 0.85; }
-    canvas.leaflet-layer.velocity-canvas { mix-blend-mode: normal; opacity: 0.6; } /* Opacità particelle ridotta qui */
+    canvas.leaflet-layer.velocity-canvas { mix-blend-mode: normal; opacity: 0.6; }
 
   </style>
 </head>
@@ -162,7 +162,6 @@
   const SICILY_BOUNDS = L.latLngBounds(L.latLng(35.0, 11.0), L.latLng(39.5, 16.5));
   const DPR = window.devicePixelRatio || 1;
 
-  // COLORI PER FRECCE VENTO (Usati solo per le frecce statiche ora)
   const WIND_COLOR_SCALE = ["#000080", "#0044ff", "#00ddff", "#00ff55", "#ffff00", "#ff6600", "#ff0000", "#ff00ff"];
 
   // TEMP (Custom)
@@ -297,14 +296,18 @@
     return out;
   }
 
+  // ALGORITMO PER TROVARE MASSIMI E MINIMI DI PRESSIONE
   function findExtremaAB(field, nx, ny){
     const cand = [];
-    const r = 3; 
-    for(let y=r; y<ny-r; y+=2){
-      for(let x=r; x<nx-r; x+=2){
+    // Raggio di ricerca aumentato (8px) per evitare "rumore" locale e trovare solo i veri centri
+    const r = 8; 
+    for(let y=r; y<ny-r; y++){
+      for(let x=r; x<nx-r; x++){
         const idx = y*nx + x;
         const v = field[idx];
         let isMax=true, isMin=true;
+        
+        // Cerca nell'intorno
         for(let yy=y-r; yy<=y+r; yy++){
           for(let xx=x-r; xx<=x+r; xx++){
             const n = field[yy*nx+xx];
@@ -312,8 +315,10 @@
             if(n < v) isMin=false;
           }
         }
-        if(isMax) cand.push({type:'A', x, y, v});
-        else if(isMin) cand.push({type:'B', x, y, v});
+        
+        // Filtro di significatività (evita massimi/minimi "deboli" in zone piatte)
+        if(isMax && v > 1014) cand.push({type:'A', x, y, v});
+        if(isMin && v < 1012) cand.push({type:'B', x, y, v});
       }
     }
     return cand;
@@ -335,28 +340,41 @@
   function drawAB(ctx, x, y, letter, color, value, letterSize, valueSize){
     ctx.save();
     ctx.textAlign = "center"; ctx.textBaseline = "middle";
+    
+    // OMBRA PER LEGGIBILITÀ SU SFONDI CHIARI E SCURI
+    ctx.shadowColor = "rgba(0,0,0,0.8)";
+    ctx.shadowBlur = 4;
+    
+    // LETTERA (A/B)
     ctx.font = `900 ${letterSize}px Arial`;
-    ctx.lineWidth = 5; ctx.strokeStyle = "rgba(0,0,0,0.85)"; ctx.strokeText(letter, x, y);
-    ctx.fillStyle = color; ctx.fillText(letter, x, y);
+    ctx.fillStyle = color;
+    ctx.strokeStyle = "#ffffff";
+    ctx.lineWidth = 3;
+    ctx.strokeText(letter, x, y);
+    ctx.fillText(letter, x, y);
 
-    ctx.font = `900 ${valueSize}px Arial`;
-    const vy = y + letterSize*0.85;
-    const txt = `${value} hPa`;
-    ctx.fillStyle = "rgba(0,0,0,0.55)";
-    const w = ctx.measureText(txt).width + 20;
-    const h = valueSize + 12;
+    // VALORE NUMERICO SOTTO
+    ctx.shadowBlur = 0; // Rimuovi ombra per il box
+    ctx.font = `bold ${valueSize}px Arial`;
+    const vy = y + letterSize * 0.75;
+    const txt = `${Math.round(value)} hPa`;
+    
+    // Sfondo etichetta
+    ctx.fillStyle = "rgba(0,0,0,0.6)"; 
+    const w = ctx.measureText(txt).width + 12;
+    const h = valueSize + 8;
     ctx.fillRect(x - w/2, vy - h/2, w, h);
 
-    ctx.lineWidth = 3; ctx.strokeStyle = "rgba(0,0,0,0.85)"; ctx.strokeText(txt, x, vy);
-    ctx.fillStyle = "#fff"; ctx.fillText(txt, x, vy);
+    // Testo
+    ctx.fillStyle = "#fff";
+    ctx.fillText(txt, x, vy);
+    
     ctx.restore();
   }
 
   window.addEventListener('load', async () => {
     map = L.map('map', {
-      zoomControl: false,
-      background: '#1a1a1a',
-      minZoom: 4
+      zoomControl: false, background: '#1a1a1a', minZoom: 4
     }).fitBounds(SICILY_BOUNDS);
 
     L.tileLayer(
@@ -369,7 +387,6 @@
     map.getPane('boundaryPane').style.zIndex = 250;
     map.getPane('boundaryPane').style.pointerEvents = 'none';
     
-    // Carica GeoJSON Italia Regioni
     fetch('https://raw.githubusercontent.com/openpolis/geojson-italy/master/geojson/limits_IT_regions.geojson')
         .then(r => r.json())
         .then(data => {
@@ -574,7 +591,8 @@
     const stride = zoom >= 11 ? 2 : (zoom >= 10 ? 3 : 4);
     const baseLen = zoom >= 11 ? 26 : (zoom >= 10 ? 22 : 18);
 
-    ctx.lineCap = 'round'; ctx.lineJoin = 'round';
+    ctx.lineCap = 'round';
+    ctx.lineJoin = 'round';
 
     for(let y=0; y<m.ny; y+=stride){
       const lat = (m.la1 + LAT_OFFSET) - y*m.dy;
@@ -591,18 +609,26 @@
 
         const c = vividWindColor(sp);
         const fillStyle = `rgb(${c.r},${c.g},${c.b})`;
+
         const speedScale = clamp(sp/8.0, 0.70, 2.8);
         const len = baseLen * speedScale;
         const width = clamp(1.1 * speedScale, 1.2, 3.0);
         const headLen = len * 0.38;
         const headWidth = headLen * 0.70;
         const angle = Math.atan2(-v, u);
+
         const shaftEndX = p.x + (len-headLen)*Math.cos(angle);
         const shaftEndY = p.y + (len-headLen)*Math.sin(angle);
 
-        ctx.beginPath(); ctx.moveTo(p.x, p.y); ctx.lineTo(shaftEndX, shaftEndY);
-        ctx.strokeStyle = "rgba(0,0,0,0.95)"; ctx.lineWidth = width + 1.8; ctx.stroke();
-        ctx.strokeStyle = fillStyle; ctx.lineWidth = width; ctx.stroke();
+        ctx.beginPath();
+        ctx.moveTo(p.x, p.y);
+        ctx.lineTo(shaftEndX, shaftEndY);
+        ctx.strokeStyle = "rgba(0,0,0,0.95)";
+        ctx.lineWidth = width + 1.8;
+        ctx.stroke();
+        ctx.strokeStyle = fillStyle;
+        ctx.lineWidth = width;
+        ctx.stroke();
 
         const tipX = p.x + len*Math.cos(angle);
         const tipY = p.y + len*Math.sin(angle);
@@ -611,9 +637,15 @@
         const wing2X = shaftEndX - headWidth*Math.cos(angle + Math.PI/2);
         const wing2Y = shaftEndY - headWidth*Math.sin(angle + Math.PI/2);
 
-        ctx.beginPath(); ctx.moveTo(tipX, tipY); ctx.lineTo(wing1X, wing1Y); ctx.lineTo(wing2X, wing2Y); ctx.closePath();
-        ctx.fillStyle = "rgba(0,0,0,0.95)"; ctx.fill();
-        ctx.fillStyle = fillStyle; ctx.fill();
+        ctx.beginPath();
+        ctx.moveTo(tipX, tipY);
+        ctx.lineTo(wing1X, wing1Y);
+        ctx.lineTo(wing2X, wing2Y);
+        ctx.closePath();
+        ctx.fillStyle = "rgba(0,0,0,0.95)";
+        ctx.fill();
+        ctx.fillStyle = fillStyle;
+        ctx.fill();
       }
     }
   }
@@ -639,15 +671,18 @@
       const thresholds = d3.range(960, 1050, 2);
       const contours = d3.contours().size([m.nx, m.ny]).thresholds(thresholds)(smooth);
 
+      // ISOBARE: Tutto Bianco (White)
       ctx.strokeStyle = "rgba(255,255,255,0.9)";
-      ctx.lineWidth = 1.5;
+      ctx.lineWidth = 2.0;
+
       for(const c of contours){
         ctx.setLineDash([]);
         contourToScreenPath(ctx, c.coordinates, m);
       }
 
+      // LABELS: Nero trasparente + Testo Bianco Grassetto
       const z = map.getZoom();
-      const baseFont = clamp(11 + (z-7)*1.4, 11, 24);
+      const baseFont = clamp(12 + (z-7)*1.5, 12, 26);
       ctx.textAlign="center"; ctx.textBaseline="middle"; ctx.font = `bold ${baseFont}px Arial`;
 
       for(const c of contours){
@@ -660,11 +695,12 @@
         if(pt.x < 0 || pt.y < 0 || pt.x > size.x || pt.y > size.y) continue;
 
         const txt = `${v}`;
-        const w = ctx.measureText(txt).width + 12;
-        const h = baseFont + 8;
+        const txtW = ctx.measureText(txt).width + 14;
+        const txtH = baseFont + 10;
         
         ctx.fillStyle = "rgba(0,0,0,0.7)";
-        ctx.fillRect(pt.x - w/2, pt.y - h/2, w, h);
+        ctx.fillRect(pt.x - txtW/2, pt.y - txtH/2, txtW, txtH);
+        
         ctx.fillStyle = "#fff";
         ctx.fillText(txt, pt.x, pt.y);
       }
@@ -685,11 +721,12 @@
       const lowsPx  = lows.slice(0, 30).map(projectPoint).filter(p=>p.px>=0 && p.py>=0 && p.px<=size.x && p.py<=size.y);
       const Apts = dedupeByDistance(highsPx, minDist).slice(0, 3);
       const Bpts = dedupeByDistance(lowsPx,  minDist).slice(0, 3);
-      const letterSize = clamp(20 + (z-7)*2.2, 20, 36);
-      const valueSize  = clamp(12 + (z-7)*1.2, 12, 22);
 
-      for(const p of Apts) drawAB(ctx, p.px, p.py, "A", "#ff2b2b", Math.round(p.v), letterSize, valueSize);
-      for(const p of Bpts) drawAB(ctx, p.px, p.py, "B", "#2b6bff", Math.round(p.v), letterSize, valueSize);
+      const letterSize = clamp(24 + (z-7)*2.5, 24, 48); // Grandi
+      const valueSize  = clamp(14 + (z-7)*1.5, 14, 26);
+
+      for(const p of Apts) drawAB(ctx, p.px, p.py, "A", "#ff3333", Math.round(p.v), letterSize, valueSize);
+      for(const p of Bpts) drawAB(ctx, p.px, p.py, "B", "#3366ff", Math.round(p.v), letterSize, valueSize);
 
     } catch(err){ console.error(err); }
   }
@@ -721,14 +758,15 @@
       if(vv > tMax) tMax = vv;
     }
 
-    // Step 5 gradi
-    const start = Math.floor(tMin / 5) * 5;
-    const thresholds = d3.range(start, tMax + 1, 5);
+    // Step 5 gradi (es. 10, 15, 20)
+    const lo = Math.floor(tMin/5)*5;
+    const hi = Math.ceil(tMax/5)*5;
+    const thresholds = d3.range(lo, hi+1, 5);
     const contours = d3.contours().size([m.nx, m.ny]).thresholds(thresholds)(clean);
 
-    ctx.strokeStyle = "rgba(255,255,255,0.7)";
-    ctx.lineWidth = 1.2;
-    ctx.setLineDash([4, 4]);
+    ctx.strokeStyle = "rgba(255,255,255,0.75)";
+    ctx.lineWidth = 1.3;
+    ctx.setLineDash([4, 4]); // Tratteggiato
 
     for(const c of contours){
       contourToScreenPath(ctx, c.coordinates, m);
@@ -770,8 +808,8 @@
       lineWidth: 2.0,
       particleAge: 100,
       frameRate: 40,
-      opacity: 0.6, // PARTICELLE BIANCHE MENO ACCESE
-      colorScale: ["#ffffff"], // SOLO BIANCO
+      opacity: 0.6, // BIANCO ETEREO
+      colorScale: ["#ffffff"], 
       pane: 'particlePane'
     });
 
@@ -830,7 +868,6 @@
   function bilinearSample(arr, m, lat, lon){
     const gx = (lon - (m.lo1 + LON_OFFSET)) / m.dx;
     const gy = ((m.la1 + LAT_OFFSET) - lat) / m.dy;
-    
     if(gx < 0 || gy < 0 || gx > (m.nx-1) || gy > (m.ny-1)) return null;
     const x0 = Math.floor(gx), y0 = Math.floor(gy);
     const x1 = Math.min(x0+1, m.nx-1), y1 = Math.min(y0+1, m.ny-1);
