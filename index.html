@@ -1,7 +1,7 @@
 <!DOCTYPE html>
 <html>
 <head>
-  <title>Sicilia MeteoHub - SCIENTIFIC STATION FINAL</title>
+  <title>Sicilia MeteoHub - ICON-2I Edition</title>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
 
@@ -21,8 +21,7 @@
     #model-sub { font-size: 12px; font-weight: 500; color: #ccc; font-family: monospace; margin-top: 2px; }
 
     #coords-display { position: absolute; bottom: 4px; left: 90px; z-index: 3000; pointer-events: none; font-family: monospace; font-size: 11px; font-weight: bold; color: rgba(255,255,255,0.7); background: rgba(0,0,0,0.3); padding: 2px 6px; border-radius: 4px; }
-    .leaflet-control-scale-line { background: rgba(0,0,0,0.5) !important; border: 1px solid rgba(255,255,255,0.4) !important; border-top: none !important; color: #eee !important; font-weight: bold; font-size: 10px; }
-
+    
     /* INFO BOX */
     #info-box { position: absolute; top: 15px; left: 20px; z-index: 9999; pointer-events: none; display: flex; align-items: center; gap: 15px; }
     #val-group { display: flex; flex-direction: column; align-items: flex-start; margin-top: 40px; }
@@ -31,9 +30,6 @@
 
     #wind-rose { width: 45px; height: 45px; background: rgba(255,255,255,0.9); border: 2px solid rgba(255,255,255,0.5); border-radius: 50%; display: none; align-items: center; justify-content: center; position: relative; box-shadow: 0 4px 10px rgba(0,0,0,0.5); margin-top: 40px; }
     #rose-arrow { width: 24px; height: 24px; fill: #000; transition: transform 0.1s; }
-    .cardinal { position: absolute; font-size: 8px; font-weight: 900; color: #111; }
-    .c-n { top: 2px; left: 50%; transform: translateX(-50%); } .c-s { bottom: 2px; left: 50%; transform: translateX(-50%); }
-    .c-e { right: 3px; top: 50%; transform: translateY(-50%); } .c-w { left: 3px; top: 50%; transform: translateY(-50%); }
 
     /* UI CONTROLS */
     #ui-container { position: absolute; top: 10px; right: 10px; z-index: 9999; display: flex; flex-direction: column; gap: 8px; align-items: flex-end; pointer-events: auto; }
@@ -53,18 +49,19 @@
     canvas.leaflet-layer { pointer-events: none !important; position: absolute; top: 0; left: 0; }
     canvas.leaflet-layer.scalar-layer { mix-blend-mode: screen; opacity: 0.85; will-change: contents; }
     canvas.leaflet-layer.velocity-canvas { mix-blend-mode: normal; opacity: 0.35; } 
-
   </style>
 </head>
 
 <body>
-  <div id="model-info"><div id="model-title">GFS 13km <span style="color:#0077ff">RES</span></div><div id="model-sub">INIT: 12:00 UTC <span style="opacity:0.5">|</span> VALID: <span id="valid-time" style="color:#fff; font-weight:bold">--</span></div></div>
+  <div id="model-info">
+    <div id="model-title">ICON-2I <span style="color:#0077ff">2.2km</span></div>
+    <div id="model-sub">INIT: 12:00 UTC <span style="opacity:0.5">|</span> VALID: <span id="valid-time" style="color:#fff; font-weight:bold">--</span></div>
+  </div>
   <div id="coords-display">LAT: --.---- LON: --.----</div>
 
   <div id="info-box">
     <div id="val-group"><div id="val-display">--</div><div id="unit-display">Attendere...</div></div>
     <div id="wind-rose">
-        <span class="cardinal c-n">N</span><span class="cardinal c-s">S</span><span class="cardinal c-e">E</span><span class="cardinal c-w">W</span>
         <svg id="rose-arrow" viewBox="0 0 24 24"><path d="M12 2L4.5 20.29L5.21 21L12 18L18.79 21L19.5 20.29L12 2Z" /></svg>
     </div>
   </div>
@@ -102,8 +99,6 @@
   const DPR = window.devicePixelRatio || 1;
 
   const WIND_COLOR_SCALE = ["#000080", "#0044ff", "#00ddff", "#00ff55", "#ffff00", "#ff6600", "#ff0000", "#ff00ff"];
-
-  // PALETTE PERSONALIZZATE
   const TEMP_STOPS = [{v:-15,c:[156,218,216]},{v:0,c:[93,133,198]},{v:15,c:[181,165,13]},{v:30,c:[232,83,25]},{v:45,c:[89,22,3]}];
   const RAIN_STOPS = [{v:0.0,c:[0,0,0],a:0},{v:0.6,c:[100,200,255],a:0.7},{v:1.0,c:[0,150,255],a:0.78},{v:5,c:[0,0,255],a:0.85},{v:10,c:[255,255,0],a:0.85},{v:30,c:[255,150,0],a:0.9},{v:50,c:[255,0,0],a:0.92}];
   const RH_STOPS = [{v:0,c:[173,85,56]},{v:30,c:[173,110,56]},{v:60,c:[56,173,121]},{v:80,c:[56,157,173]},{v:100,c:[56,70,114]}];
@@ -168,7 +163,8 @@
   }
 
   function findExtremaAB(field, nx, ny){
-    const cand = []; const r = 25; 
+    const cand = [];
+    const r = 35; // Raggio aumentato per evitare B multiple vicine
     for(let y=r; y<ny-r; y++){
       for(let x=r; x<nx-r; x++){
         const idx = y*nx + x; const v = field[idx]; let isMax=true, isMin=true;
@@ -185,12 +181,18 @@
 
   window.addEventListener('load', async () => {
     map = L.map('map', { zoomControl: false, background: '#1a1a1a', minZoom: 4 }).fitBounds(SICILY_BOUNDS);
+    
     L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/World_Shaded_Relief/MapServer/tile/{z}/{y}/{x}', { maxZoom: 13, className: 'dark-relief-tiles' }).addTo(map);
-    map.createPane('boundaryPane').style.zIndex = 250;
-    fetch('https://raw.githubusercontent.com/openpolis/geojson-italy/master/geojson/limits_IT_regions.geojson').then(r=>r.json()).then(data=>L.geoJSON(data,{pane:'boundaryPane',style:{color:"#ffffff",weight:1.2,opacity:0.35,fillOpacity:0}}).addTo(map));
+
+    // CONFINI ITALIA SEMPRE SOPRA (zIndex 1000)
+    map.createPane('boundaryPane').style.zIndex = 1000;
+    map.getPane('boundaryPane').style.pointerEvents = 'none';
+    fetch('https://raw.githubusercontent.com/openpolis/geojson-italy/master/geojson/limits_IT_regions.geojson').then(r=>r.json()).then(data=>L.geoJSON(data,{pane:'boundaryPane',style:{color:"#ffffff",weight:1.5,opacity:0.6,fillOpacity:0}}).addTo(map));
+
     L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/Elevation/World_Hillshade/MapServer/tile/{z}/{y}/{x}', { maxZoom: 19, className: 'dark-relief-tiles', opacity: 0.4 }).addTo(map);
     L.control.scale({ position: 'bottomleft', metric: true, imperial: false }).addTo(map);
-    L.tileLayer('https://{s}.basemaps.cartocdn.com/light_only_labels/{z}/{x}/{y}{r}.png', { zIndex: 600, opacity: 0.9 }).addTo(map);
+    
+    L.tileLayer('https://{s}.basemaps.cartocdn.com/light_only_labels/{z}/{x}/{y}{r}.png', { zIndex: 1100, opacity: 0.9 }).addTo(map);
 
     createCanvasLayers();
     await loadCatalog();
@@ -224,9 +226,7 @@
     if(currentData.press) {
         const clean = new Float32Array(currentData.press.length);
         for(let j=0; j<currentData.press.length; j++){ 
-           // Supporto Pascal e hPa
-           let v = currentData.press[j];
-           if(v > 2000) v /= 100;
+           let v = currentData.press[j]; if(v > 2000) v /= 100;
            clean[j] = (!v || v < 850) ? 1013 : v; 
         }
         currentData.cleanPress = clean;
@@ -236,10 +236,12 @@
 
   function redrawAll(){
     if(!currentData) return;
-    const z = map.getZoom(); 
-    const res = z>=10?0.8:(z>=8?0.5:0.25);
-    const size = map.getSize(); const w = Math.ceil(size.x*res), h = Math.ceil(size.y*res);
+    drawScalars(); drawWindArrows(); drawIsobars(); drawIsotherms(); drawLatLonGrid(); updateParticles();
+  }
 
+  function drawScalars(){
+    const z = map.getZoom(); const res = z>=10?0.8:(z>=8?0.5:0.25);
+    const size = map.getSize(); const w = Math.ceil(size.x*res), h = Math.ceil(size.y*res);
     ['wind','temp','rain','rh','press','cloud'].forEach(l => {
       const c = scalarCanvases[l], ctx = c.getContext('2d');
       if(c.width!==w||c.height!==h){ c.width=w; c.height=h; c.style.width=size.x+'px'; c.style.height=size.y+'px'; }
@@ -252,15 +254,14 @@
           const ll = map.containerPointToLatLng([x/res, y/res]);
           const gx = (ll.lng-(m.lo1+LON_OFFSET))/m.dx, gy = ((m.la1+LAT_OFFSET)-ll.lat)/m.dy;
           if(gx<0||gy<0||gx>m.nx-1||gy>m.ny-1) continue;
-          const x0=gx|0, y0=gy|0, x1=Math.min(x0+1,m.nx-1), y1=Math.min(y0+1,m.ny-1), fx=gx-x0, fy=gy-y0;
+          const x0=gx|0, y0=gy|0, fx=gx-x0, fy=gy-y0;
+          const idx = y0*m.nx+x0;
           let col = {r:0,g:0,b:0,a:0};
           if(l==='wind'){
-            const u = (currentData.wind_u.data[y0*m.nx+x0]*(1-fx)+currentData.wind_u.data[y0*m.nx+x1]*fx)*(1-fy)+(currentData.wind_u.data[y1*m.nx+x0]*(1-fx)+currentData.wind_u.data[y1*m.nx+x1]*fx)*fy;
-            const v = (currentData.wind_v.data[y0*m.nx+x0]*(1-fx)+currentData.wind_v.data[y0*m.nx+x1]*fx)*(1-fy)+(currentData.wind_v.data[y1*m.nx+x0]*(1-fx)+currentData.wind_v.data[y1*m.nx+x1]*fx)*fy;
+            const u = currentData.wind_u.data[idx], v = currentData.wind_v.data[idx];
             const rgb = vividWindColor(Math.sqrt(u*u+v*v)); col={...rgb,a:0.35};
           } else {
-            let val = (arr[y0*m.nx+x0]*(1-fx)+arr[y0*m.nx+x1]*fx)*(1-fy)+(arr[y1*m.nx+x0]*(1-fx)+arr[y1*m.nx+x1]*fx)*fy;
-            if(l==='press' && val > 2000) val /= 100;
+            let val = arr[idx]; if(l==='press' && val > 2000) val /= 100;
             if((l==='rain'&&val<0.6)||(l==='cloud'&&val<5)) col.a=0; else { col=interpStops(val, l==='temp'?TEMP_STOPS: (l==='rain'?RAIN_STOPS: (l==='rh'?RH_STOPS: (l==='press'?PRESS_STOPS:CLOUD_STOPS)))); }
           }
           const i=(y*w+x)*4; d[i]=col.r; d[i+1]=col.g; d[i+2]=col.b; d[i+3]=col.a*255;
@@ -268,8 +269,6 @@
       }
       ctx.putImageData(img,0,0);
     });
-
-    drawWindArrows(); drawIsobars(); drawIsotherms(); drawLatLonGrid(); updateParticles();
   }
 
   function drawWindArrows(){
@@ -299,8 +298,7 @@
     ctx.setTransform(DPR,0,0,DPR,0,0); L.DomUtil.setPosition(isoCanvas, map.containerPointToLayerPoint([0,0])); ctx.clearRect(0,0,size.x,size.y);
     if(!showIsobars||!currentData?.cleanPress) return;
     const m = currentData.meta, smooth = smoothGrid(currentData.cleanPress, m.nx, m.ny);
-    const thresholds = d3.range(960,1050,2);
-    const contours = d3.contours().size([m.nx,m.ny]).thresholds(thresholds)(smooth);
+    const contours = d3.contours().size([m.nx,m.ny]).thresholds(d3.range(960,1050,2))(smooth);
     ctx.strokeStyle="rgba(255,255,255,0.8)"; ctx.lineWidth=1.8;
     contours.forEach(c => {
       c.coordinates.forEach(poly => poly.forEach(ring => {
@@ -310,14 +308,21 @@
         }); ctx.stroke();
       }));
     });
-    // Picchi A/B
     const ex = findExtremaAB(smooth, m.nx, m.ny);
-    ex.forEach(pt => {
-        const p = map.latLngToContainerPoint([(m.la1+LAT_OFFSET)-pt.y*m.dy, (m.lo1+LON_OFFSET)+pt.x*m.dx]);
+    function dedupeExtrema(points, dist){
+        const kept = [];
+        points.forEach(p => {
+            const screen = map.latLngToContainerPoint([(m.la1+LAT_OFFSET)-p.y*m.dy, (m.lo1+LON_OFFSET)+p.x*m.dx]);
+            p.sx = screen.x; p.sy = screen.y;
+            if(!kept.some(k => Math.hypot(k.sx-p.sx, k.sy-p.sy) < dist)) kept.push(p);
+        });
+        return kept;
+    }
+    dedupeExtrema(ex, 200).forEach(pt => { // 200px di distanza minima tra icone
         const zSize = clamp(50+(map.getZoom()-7)*8, 40, 90);
         ctx.save(); ctx.shadowColor="black"; ctx.shadowBlur=8; ctx.font=`900 ${zSize}px Arial`; ctx.textAlign="center"; ctx.textBaseline="middle";
         ctx.fillStyle=pt.type==='A'?"#ff2b2b":"#2b6bff"; ctx.strokeStyle="white"; ctx.lineWidth=5;
-        ctx.strokeText(pt.type, p.x, p.y); ctx.fillText(pt.type, p.x, p.y); ctx.restore();
+        ctx.strokeText(pt.type, pt.sx, pt.sy); ctx.fillText(pt.type, pt.sx, pt.sy); ctx.restore();
     });
   }
 
@@ -359,27 +364,18 @@
     if(!currentData?.meta) return; const m = currentData.meta;
     const gx = (e.latlng.lng-(m.lo1+LON_OFFSET))/m.dx, gy = ((m.la1+LAT_OFFSET)-e.latlng.lat)/m.dy;
     if(gx<0||gy<0||gx>m.nx-1||gy>m.ny-1) return;
-    const x0=gx|0, y0=gy|0, x1=Math.min(x0+1,m.nx-1), y1=Math.min(y0+1,m.ny-1), fx=gx-x0, fy=gy-y0;
-    const sample = (arr) => (arr[y0*m.nx+x0]*(1-fx)+arr[y0*m.nx+x1]*fx)*(1-fy)+(arr[y1*m.nx+x0]*(1-fx)+arr[y1*m.nx+x1]*fx)*fy;
-    
+    const idx = (gy|0)*m.nx+(gx|0);
+    const sample = (arr) => arr[idx];
     let val='--', unit='';
     if(selected.has('temp')){ val=sample(currentData.temp).toFixed(1); unit='°C'; }
     else if(selected.has('wind')){ 
-      const u=sample(currentData.wind_u.data), v=sample(currentData.wind_v.data); 
-      val=(Math.sqrt(u*u+v*v)*3.6).toFixed(1); unit='km/h'; 
+      const u=currentData.wind_u.data[idx], v=currentData.wind_v.data[idx]; val=(Math.sqrt(u*u+v*v)*3.6).toFixed(1); unit='km/h'; 
       document.getElementById('rose-arrow').style.transform=`rotate(${90-Math.atan2(v,u)*180/Math.PI}deg)`; 
-      document.getElementById('wind-rose').style.display='flex';
     }
     else if(selected.has('rain')){ val=sample(currentData.rain).toFixed(1); unit='mm'; }
     else if(selected.has('rh')){ val=Math.round(sample(currentData.rh)); unit='%'; }
-    else if(selected.has('press')){ 
-       let p = sample(currentData.press); if(p>2000) p/=100;
-       val=Math.round(p); unit='hPa'; 
-    }
-    else if(selected.has('cloud')){ 
-       let c = sample(currentData.cloud || currentData.cld);
-       val=Math.round(c); unit='%'; 
-    }
+    else if(selected.has('press')){ let p=sample(currentData.press); if(p>2000)p/=100; val=Math.round(p); unit='hPa'; }
+    else if(selected.has('cloud')){ val=Math.round(sample(currentData.cloud||currentData.cld)); unit='%'; }
     document.getElementById('val-display').innerText=val; document.getElementById('unit-display').innerText=unit;
   }
 
@@ -392,17 +388,7 @@
   function updateUI(){
     document.querySelectorAll('.toggle').forEach(el => {
       const t = el.innerText.toLowerCase();
-      const check = (key) => t.includes(key);
-      if(check('vento')&&selected.has('wind')) el.classList.add('active');
-      else if(check('temp')&&selected.has('temp')) el.classList.add('active');
-      else if(check('pioggia')&&selected.has('rain')) el.classList.add('active');
-      else if(check('umidità')&&selected.has('rh')) el.classList.add('active');
-      else if(check('pressione')&&selected.has('press')) el.classList.add('active');
-      else if(check('nuvole')&&selected.has('cloud')) el.classList.add('active');
-      else if(check('isobare')&&showIsobars) el.classList.add('active');
-      else if(check('isoterme')&&showIsotherms) el.classList.add('active');
-      else if(check('reticolo')&&showGrid) el.classList.add('active');
-      else el.classList.remove('active');
+      if((t.includes('vento')&&selected.has('wind')) || (t.includes('temp')&&selected.has('temp')) || (t.includes('pioggia')&&selected.has('rain')) || (t.includes('umidità')&&selected.has('rh')) || (t.includes('pressione')&&selected.has('press')) || (t.includes('nuvole')&&selected.has('cloud')) || (t.includes('isobare')&&showIsobars) || (t.includes('isoterme')&&showIsotherms) || (t.includes('reticolo')&&showGrid)) el.classList.add('active'); else el.classList.remove('active');
     });
     document.getElementById('btn-flow').className = particlesOn ? 'mini active' : 'mini';
   }
