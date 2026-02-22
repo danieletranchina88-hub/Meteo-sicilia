@@ -1,7 +1,7 @@
 <!DOCTYPE html>
 <html>
 <head>
-  <title>Sicilia MeteoHub - ICON-2I PRO</title>
+  <title>Sicilia MeteoHub - ICON-2I LIVE SYNC</title>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
 
@@ -32,7 +32,6 @@
     #model-info { position: absolute; top: 15px; left: 70px; z-index: 5000; pointer-events: none; text-shadow: 0 2px 4px #000; }
     #model-title { font-size: 18px; font-weight: 900; color: #fff; letter-spacing: 1px; text-transform: uppercase; }
     #model-sub { font-size: 11px; color: #aaa; font-family: monospace; }
-
     #coords-display { position: absolute; bottom: 5px; left: 100px; z-index: 5000; pointer-events: none; font-family: monospace; font-size: 10px; color: rgba(255,255,255,0.6); background: rgba(0,0,0,0.4); padding: 2px 6px; border-radius: 4px; }
 
     /* INFO BOX CURSORE */
@@ -44,17 +43,9 @@
     /* UI CONTROLS */
     #ui-container { position: absolute; top: 10px; right: 10px; z-index: 5000; display: flex; flex-direction: column; gap: 8px; pointer-events: auto; }
     .panel { background: rgba(25,25,25,0.92); backdrop-filter: blur(10px); padding: 10px; border-radius: 12px; border: 1px solid rgba(255,255,255,0.15); box-shadow: 0 4px 15px #000; }
-    
-    .toggle { 
-        width: 170px; display:flex; align-items:center; justify-content:space-between; 
-        padding: 10px 12px; margin: 4px 0; background: rgba(255,255,255,0.05); 
-        border-radius: 8px; cursor: pointer; font-weight: 700; font-size: 12px; 
-        transition: 0.2s; border: 1px solid transparent; color: #ccc;
-    }
+    .toggle { width: 170px; display:flex; align-items:center; justify-content:space-between; padding: 10px 12px; margin: 4px 0; background: rgba(255,255,255,0.05); border-radius: 8px; cursor: pointer; font-weight: 700; font-size: 12px; transition: 0.2s; border: 1px solid transparent; color: #ccc; }
     .toggle.active { background: #0077ff !important; color: #fff !important; }
-    
     .gps-btn { width: 170px; padding: 12px; border-radius: 8px; font-size: 13px; background: #28a745; color: white; cursor: pointer; font-weight: 800; border: none; margin-bottom: 5px; box-shadow: 0 4px 10px rgba(40,167,69,0.3); }
-
     .mini { width: 170px; padding: 10px 12px; border-radius: 8px; font-size:12px; background: rgba(255,255,255,0.08); color:#fff; cursor:pointer; font-weight:800; border: 1px solid rgba(255,255,255,0.1); margin-bottom: 5px; }
     .mini.active { background: #eee !important; color:#111 !important; }
 
@@ -63,8 +54,7 @@
 
     .dark-relief-tiles { filter: invert(100%) hue-rotate(180deg) brightness(0.6) contrast(1.3); }
     canvas.leaflet-layer { pointer-events: none !important; position: absolute; top: 0; left: 0; }
-    canvas.leaflet-layer.scalar-layer { mix-blend-mode: screen; opacity: 0.7; }
-
+    canvas.leaflet-layer.scalar-layer { mix-blend-mode: screen; opacity: 0.65; }
   </style>
 </head>
 
@@ -79,13 +69,12 @@
 
   <div id="model-info">
     <div id="model-title">ICON-2I <span style="color:#0077ff">2.2km</span></div>
-    <div id="model-sub">SMOOTH OVERLAY | VALID: <span id="valid-time">--</span></div>
+    <div id="model-sub">LIVE SYNC | VALID: <span id="valid-time">--</span></div>
   </div>
-
   <div id="coords-display">LAT: --.---- LON: --.----</div>
 
   <div id="info-box">
-    <div id="val-group"><div id="val-display">--</div><div id="unit-display">Attendere...</div></div>
+    <div id="val-group"><div id="val-display">--</div><div id="unit-display">Attesa...</div></div>
   </div>
 
   <div id="ui-container">
@@ -142,7 +131,7 @@
         return { r:(stops[i].c[0]*(1-t)+stops[i+1].c[0]*t)|0, g:(stops[i].c[1]*(1-t)+stops[i+1].c[1]*t)|0, b:(stops[i].c[2]*(1-t)+stops[i+1].c[2]*t)|0, a:(a1*(1-t)+a2*t) };
       }
     }
-    return {r:stops[stops.length-1].c[0],g:stops[stops.length-1].c[1],b:stops[stops.length-1].c[2],a:(stops[stops.length-1].a!==undefined?stops[stops.length-1].a:0.8)};
+    const s = stops[stops.length-1]; return {r:s.c[0],g:s.c[1],b:s.c[2],a:(s.a!==undefined?s.a:0.8)};
   }
 
   function vividWindColor(sp){
@@ -155,7 +144,6 @@
   }
 
   function toggleGpsPanel(show) { document.getElementById('gps-overlay').className = show ? 'active' : ''; }
-
   function getMyWeather() { map.locate({setView: true, maxZoom: 10}); }
 
   window.addEventListener('load', async () => {
@@ -200,9 +188,28 @@
   async function loadCatalog() {
     const r = await fetch('data_weather/catalog.json?t=' + Date.now());
     catalog = await r.json();
-    document.getElementById('time-slider').max = catalog.length - 1;
-    document.getElementById('time-slider').oninput = (e) => loadStep(parseInt(e.target.value));
-    await loadStep(0);
+    
+    const slider = document.getElementById('time-slider');
+    slider.max = catalog.length - 1;
+    slider.oninput = (e) => loadStep(parseInt(e.target.value));
+
+    // --- LOGICA AUTO-SYNC ---
+    const now = new Date();
+    let bestIdx = 0;
+    let minDiff = Infinity;
+
+    catalog.forEach((item, idx) => {
+        const parts = item.label.split(' '); // "18/02 00:00" -> ["18/02", "00:00"]
+        const dateParts = parts[0].split('/');
+        const timeParts = parts[1].split(':');
+        // Crea data fittizia per il confronto (anno corrente 2026)
+        const stepDate = new Date(2026, parseInt(dateParts[1])-1, parseInt(dateParts[0]), parseInt(timeParts[0]), parseInt(timeParts[1]));
+        const diff = Math.abs(now - stepDate);
+        if(diff < minDiff) { minDiff = diff; bestIdx = idx; }
+    });
+
+    slider.value = bestIdx;
+    await loadStep(bestIdx);
   }
 
   async function loadStep(i) {
@@ -254,10 +261,8 @@
                 const gx = (ll.lng-m.lo1)/m.dx, gy = (m.la1-ll.lat)/m.dy;
                 const idx = (y*w + x)*4;
                 if(gx<0||gy<0||gx>m.nx-1||gy>m.ny-1) continue;
-
-                const x0=gx|0, y0=gy|0, fx=gx-x0, fy=gy-y0;
-                const i00=y0*m.nx+x0, i10=Math.min(i00+1, m.nx*m.ny-1);
-                
+                const x0=gx|0, y0=gy|0;
+                const i00=y0*m.nx+x0;
                 let val, col;
                 if(l==='wind'){
                     const sp = Math.sqrt(currentData.wind_u.data[i00]**2 + currentData.wind_v.data[i00]**2);
@@ -266,8 +271,7 @@
                     val = arr[i00];
                     if(l==='press' && val>2000) val/=100;
                     if((l==='rain'&&val<0.1)||(l==='cloud'&&val<5)) continue;
-                    const res = interpStops(val, stops);
-                    col={r:res.r, g:res.g, b:res.b, a:res.a};
+                    const res = interpStops(val, stops); col={r:res.r, g:res.g, b:res.b, a:res.a};
                 }
                 d[idx]=col.r; d[idx+1]=col.g; d[idx+2]=col.b; d[idx+3]=col.a*255;
             }
@@ -310,19 +314,11 @@
     ctx.strokeStyle = "#fff"; ctx.lineWidth = 1.5;
     contours.forEach(c => {
         c.coordinates.forEach(poly => poly.forEach(ring => {
-            ctx.beginPath(); let pts = [];
-            ring.forEach((p, j) => {
+            ctx.beginPath(); ring.forEach((p, j) => {
                 const pt = map.latLngToContainerPoint([m.la1 - p[1]*m.dy, m.lo1 + p[0]*m.dx]);
                 if(j===0) ctx.moveTo(pt.x, pt.y); else ctx.lineTo(pt.x, pt.y);
-                pts.push(pt);
             });
             ctx.stroke();
-            if(pts.length > 50 && type==="iso") {
-                const mid = pts[Math.floor(pts.length/2)];
-                ctx.fillStyle = "rgba(0,0,0,0.85)"; ctx.fillRect(mid.x-14, mid.y-8, 28, 16);
-                ctx.fillStyle = "#fff"; ctx.font = "bold 10px Arial"; ctx.textAlign="center";
-                ctx.fillText(Math.round(c.value), mid.x, mid.y+4);
-            }
         }));
     });
   }
@@ -330,11 +326,7 @@
   function updateParticles() {
     if (velocityLayer) map.removeLayer(velocityLayer);
     if (!particlesOn) return;
-    velocityLayer = L.velocityLayer({
-        displayValues: false, data: [currentData.wind_u, currentData.wind_v],
-        maxVelocity: 25, velocityScale: 0.008, particleMultiplier: 1/400, 
-        lineWidth: 2, frameRate: 60, opacity: 0.85, colorScale: ["#fff"], pane: 'particlePane'
-    }).addTo(map);
+    velocityLayer = L.velocityLayer({ displayValues: false, data: [currentData.wind_u, currentData.wind_v], maxVelocity: 25, velocityScale: 0.008, particleMultiplier: 1/400, lineWidth: 2, frameRate: 60, opacity: 0.85, colorScale: ["#fff"], pane: 'particlePane' }).addTo(map);
   }
 
   function onPick(e){
@@ -348,16 +340,12 @@
     else if(selected.has('wind')) { val = (Math.sqrt(currentData.wind_u.data[i]**2 + currentData.wind_v.data[i]**2)*3.6).toFixed(1); unit = "km/h"; }
     else if(selected.has('rain')) { val = currentData.rain[i].toFixed(1); unit = "mm"; }
     else if(selected.has('rh')) { val = Math.round(currentData.rh[i]); unit = "%"; }
-    else if(selected.has('press')) { let p = currentData.press[i]; if(p>2000)p/=100; val = Math.round(p); unit = "hPa"; }
+    else if(selected.has('press')) { val = Math.round(currentData.cleanPress[i]); unit = "hPa"; }
     else if(selected.has('cloud')) { val = Math.round((currentData.cloud||currentData.cld)[i]); unit = "%"; }
     document.getElementById('val-display').innerText = val; document.getElementById('unit-display').innerText = unit;
   }
 
-  window.toggleLayer = (l) => {
-    if(selected.has(l)) selected.delete(l); else selected.add(l);
-    updateUI(); redrawAll();
-  };
-
+  window.toggleLayer = (l) => { if(selected.has(l)) selected.delete(l); else selected.add(l); updateUI(); redrawAll(); };
   window.toggleIsobars = () => { showIsobars = !showIsobars; updateUI(); redrawAll(); };
   window.toggleIsotherms = () => { showIsotherms = !showIsotherms; updateUI(); redrawAll(); };
   window.toggleParticles = () => { particlesOn = !particlesOn; updateUI(); redrawAll(); };
