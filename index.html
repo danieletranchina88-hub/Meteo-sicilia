@@ -526,96 +526,152 @@
      WIND ARROWS: invariato (tuo stile)
   =============================== */
   function drawWindArrows(ctx, low){
-    if(!currentData?.meta) return;
-    if(!selected.has('wind')) return;
+  if(!currentData?.meta) return;
+  if(!selected.has('wind')) return;
 
-    const m = currentData.meta;
-    const size = map.getSize();
-    const z = map.getZoom();
+  const m = currentData.meta;
+  const size = map.getSize();
+  const z = map.getZoom();
+  const isMobile = /Android|iPhone|iPad|iPod/i.test(navigator.userAgent);
 
-    let stride = low ? 60 : 42;
-    if(z >= 9) stride = low ? 54 : 36;
-    if(z >= 10) stride = low ? 46 : 30;
-    if(z >= 11) stride = low ? 40 : 24;
+  // stride base (più aggressivo su mobile)
+  let stride = low ? 72 : 52;
+  if(z >= 9)  stride = low ? 64 : 46;
+  if(z >= 10) stride = low ? 56 : 38;
+  if(z >= 11) stride = low ? 50 : 32;
 
-    ctx.lineCap = 'round';
-    ctx.lineJoin = 'round';
-    ctx.shadowColor = 'rgba(0,0,0,0.55)';
-    ctx.shadowBlur = 8;
-
-    for(let y=stride/2; y<size.y; y+=stride){
-      for(let x=stride/2; x<size.x; x+=stride){
-        const ll = map.containerPointToLatLng([x,y]);
-        const gx = (ll.lng - m.lo1)/m.dx;
-        const gy = (m.la1 - ll.lat)/m.dy;
-        if(gx<0||gy<0||gx>m.nx-1||gy>m.ny-1) continue;
-
-        const idx = (gy|0)*m.nx + (gx|0);
-        const u = currentData.wind_u.data[idx];
-        const v = currentData.wind_v.data[idx];
-        const sp = Math.sqrt(u*u+v*v);
-        if(!Number.isFinite(sp) || sp < 0.7) continue;
-
-        const ang = Math.atan2(-v, u);
-
-        const len = clamp(12 + sp*3.0, 16, low ? 52 : 66);
-        const thick = clamp(1.1 + sp*0.22, 1.4, 4.6);
-
-        const head = clamp(len*0.34, 7, 22);
-        const tail = len - head;
-
-        const rgb = vividWindColor(sp);
-        const col = `rgb(${rgb.r},${rgb.g},${rgb.b})`;
-        const alpha = clamp(0.45 + sp/18, 0.50, 0.95);
-
-        ctx.save();
-        ctx.translate(x,y);
-        ctx.rotate(ang);
-
-        ctx.globalAlpha = Math.min(alpha+0.05,1);
-        ctx.strokeStyle = 'rgba(0,0,0,0.92)';
-        ctx.lineWidth = thick + 2.2;
-
-        ctx.beginPath();
-        ctx.moveTo(-tail*0.55, 0);
-        ctx.lineTo(tail*0.55, 0);
-        ctx.stroke();
-
-        ctx.beginPath();
-        ctx.moveTo(tail*0.55 + head, 0);
-        ctx.lineTo(tail*0.55, -head*0.42);
-        ctx.moveTo(tail*0.55 + head, 0);
-        ctx.lineTo(tail*0.55,  head*0.42);
-        ctx.stroke();
-
-        ctx.globalAlpha = alpha;
-        ctx.strokeStyle = col;
-        ctx.lineWidth = thick;
-
-        ctx.beginPath();
-        ctx.moveTo(-tail*0.55, 0);
-        ctx.lineTo(tail*0.55, 0);
-        ctx.stroke();
-
-        ctx.beginPath();
-        ctx.moveTo(tail*0.55 + head, 0);
-        ctx.lineTo(tail*0.55, -head*0.42);
-        ctx.moveTo(tail*0.55 + head, 0);
-        ctx.lineTo(tail*0.55,  head*0.42);
-        ctx.stroke();
-
-        ctx.globalAlpha = alpha*0.9;
-        ctx.fillStyle = 'rgba(0,0,0,0.85)';
-        ctx.beginPath(); ctx.arc(-tail*0.55, 0, thick+1.2, 0, Math.PI*2); ctx.fill();
-        ctx.fillStyle = col;
-        ctx.beginPath(); ctx.arc(-tail*0.55, 0, thick*0.75, 0, Math.PI*2); ctx.fill();
-
-        ctx.restore();
-      }
-    }
-
-    ctx.shadowBlur = 0;
+  if(isMobile){
+    // su mobile tieni sempre un po' più largo
+    stride = Math.round(stride * (low ? 1.15 : 1.20));
   }
+
+  // CAP massimo frecce (evita freeze se zoom alto)
+  const maxArrows = isMobile ? (low ? 320 : 520) : (low ? 700 : 1200);
+
+  // Shadow (su mobile costa tanto)
+  ctx.lineCap = 'round';
+  ctx.lineJoin = 'round';
+  ctx.shadowColor = 'rgba(0,0,0,0.55)';
+  ctx.shadowBlur = isMobile ? 3 : 8;
+
+  // Precompute lat/lon (NO containerPointToLatLng nei loop)
+  const pb = map.getPixelBounds();
+  const min = pb.min;
+  const zoom = map.getZoom();
+
+  // coordinate campionamento a griglia
+  const half = stride * 0.5;
+  const xs = [];
+  const ys = [];
+
+  for(let x=half; x<size.x; x+=stride) xs.push(x);
+  for(let y=half; y<size.y; y+=stride) ys.push(y);
+
+  // lon dipende solo da x, lat solo da y in WebMercator
+  const lonByX = new Float32Array(xs.length);
+  const latByY = new Float32Array(ys.length);
+
+  for(let xi=0; xi<xs.length; xi++){
+    const crsX = min.x + xs[xi];
+    lonByX[xi] = map.unproject([crsX, min.y], zoom).lng;
+  }
+  for(let yi=0; yi<ys.length; yi++){
+    const crsY = min.y + ys[yi];
+    latByY[yi] = map.unproject([min.x, crsY], zoom).lat;
+  }
+
+  let drawn = 0;
+
+  // loop griglia con cap
+  for(let yi=0; yi<ys.length; yi++){
+    const lat = latByY[yi];
+    const gyf = (m.la1 - lat)/m.dy;
+    if(gyf < 0 || gyf > m.ny-1) continue;
+    const gy = gyf | 0;
+    const rowOff = gy * m.nx;
+
+    for(let xi=0; xi<xs.length; xi++){
+      if(drawn >= maxArrows) break;
+
+      const lng = lonByX[xi];
+      const gxf = (lng - m.lo1)/m.dx;
+      if(gxf < 0 || gxf > m.nx-1) continue;
+      const gx = gxf | 0;
+
+      const idx = rowOff + gx;
+
+      const u = currentData.wind_u.data[idx];
+      const v = currentData.wind_v.data[idx];
+      const sp = Math.sqrt(u*u+v*v);
+      if(!Number.isFinite(sp) || sp < (isMobile ? 1.1 : 0.7)) continue;
+
+      const x = xs[xi], y = ys[yi];
+      const ang = Math.atan2(-v, u);
+
+      const len = clamp(12 + sp*3.0, 16, low ? (isMobile?46:52) : (isMobile?58:66));
+      const thick = clamp(1.1 + sp*0.22, 1.4, isMobile ? 3.9 : 4.6);
+
+      const head = clamp(len*0.34, 7, 22);
+      const tail = len - head;
+
+      const rgb = vividWindColor(sp);
+      const col = `rgb(${rgb.r},${rgb.g},${rgb.b})`;
+      const alpha = clamp(0.45 + sp/18, 0.50, 0.95);
+
+      ctx.save();
+      ctx.translate(x,y);
+      ctx.rotate(ang);
+
+      // outline
+      ctx.globalAlpha = Math.min(alpha+0.05,1);
+      ctx.strokeStyle = 'rgba(0,0,0,0.92)';
+      ctx.lineWidth = thick + (isMobile ? 1.7 : 2.2);
+
+      ctx.beginPath();
+      ctx.moveTo(-tail*0.55, 0);
+      ctx.lineTo(tail*0.55, 0);
+      ctx.stroke();
+
+      ctx.beginPath();
+      ctx.moveTo(tail*0.55 + head, 0);
+      ctx.lineTo(tail*0.55, -head*0.42);
+      ctx.moveTo(tail*0.55 + head, 0);
+      ctx.lineTo(tail*0.55,  head*0.42);
+      ctx.stroke();
+
+      // color
+      ctx.globalAlpha = alpha;
+      ctx.strokeStyle = col;
+      ctx.lineWidth = thick;
+
+      ctx.beginPath();
+      ctx.moveTo(-tail*0.55, 0);
+      ctx.lineTo(tail*0.55, 0);
+      ctx.stroke();
+
+      ctx.beginPath();
+      ctx.moveTo(tail*0.55 + head, 0);
+      ctx.lineTo(tail*0.55, -head*0.42);
+      ctx.moveTo(tail*0.55 + head, 0);
+      ctx.lineTo(tail*0.55,  head*0.42);
+      ctx.stroke();
+
+      // base dot
+      ctx.globalAlpha = alpha*0.9;
+      ctx.fillStyle = 'rgba(0,0,0,0.85)';
+      ctx.beginPath(); ctx.arc(-tail*0.55, 0, thick+1.0, 0, Math.PI*2); ctx.fill();
+      ctx.fillStyle = col;
+      ctx.beginPath(); ctx.arc(-tail*0.55, 0, thick*0.75, 0, Math.PI*2); ctx.fill();
+
+      ctx.restore();
+
+      drawn++;
+    }
+    if(drawn >= maxArrows) break;
+  }
+
+  ctx.shadowBlur = 0;
+}
 
   // --- ISOBARE e ISOTERME: come tue, pesanti -> solo a moveend/zoomend ---
   function drawIsobarsLogic(ctx) {
