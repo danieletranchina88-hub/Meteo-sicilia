@@ -1,7 +1,7 @@
 <!DOCTYPE html>
 <html lang="it">
 <head>
-  <title>Sicilia MeteoHub - ICON-2I ULTRA (Mobile Smooth)</title>
+  <title>Sicilia MeteoHub - ICON-2I (FAST & CLEAN)</title>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
 
@@ -12,9 +12,8 @@
 
   <style>
     body { margin: 0; background: #0a0a0a; font-family: 'Segoe UI', sans-serif; color: #ddd; overflow: hidden; }
-    #map { position: absolute; top: 0; bottom: 0; width: 100%; background: #0a0a0a; }
+    #map { position: absolute; inset: 0; background: #0a0a0a; }
 
-    /* GPS OVERLAY */
     #gps-overlay {
       position: absolute; top: -150px; left: 0; right: 0; height: 100px;
       background: rgba(10,10,10,0.95); backdrop-filter: blur(20px);
@@ -28,34 +27,34 @@
     .gps-stat div:last-child { font-size: 1.8em; font-weight: 900; color: #fff; }
     #close-gps { position: absolute; right: 15px; top: 15px; cursor: pointer; color: #666; font-size: 1.2em; }
 
-    /* HEADER */
     #model-info { position: absolute; top: 15px; left: 70px; z-index: 5000; pointer-events: none; }
     #model-title { font-size: 16px; font-weight: 900; color: #fff; text-transform: uppercase; }
     #model-sub { font-size: 10px; color: #aaa; font-family: monospace; }
 
-    /* INFO BOX CURSORE */
     #info-box { position: absolute; top: 15px; left: 20px; z-index: 5000; pointer-events: none; }
     #val-group { margin-top: 45px; }
     #val-display { font-size: 3.2em; font-weight: 950; color: #fff; text-shadow: 0 2px 15px #000; line-height: 0.8; }
     #unit-display { font-size: 1em; color: #888; font-weight: 800; margin-top: 5px; }
 
-    /* UI CONTROLS */
     #ui-container { position: absolute; top: 10px; right: 10px; z-index: 5000; display: flex; flex-direction: column; gap: 8px; pointer-events: auto; }
     .panel { background: rgba(20,20,20,0.9); backdrop-filter: blur(10px); padding: 10px; border-radius: 12px; border: 1px solid rgba(255,255,255,0.1); }
-    .toggle { width: 170px; display:flex; align-items:center; justify-content:space-between; padding: 12px; margin: 4px 0; background: rgba(255,255,255,0.04); border-radius: 8px; cursor: pointer; font-weight: 800; font-size: 12px; transition: 0.2s; color: #bbb; user-select:none; }
+    .toggle { width: 170px; display:flex; align-items:center; justify-content:space-between; padding: 12px; margin: 4px 0;
+      background: rgba(255,255,255,0.04); border-radius: 8px; cursor: pointer; font-weight: 800; font-size: 12px;
+      transition: 0.2s; color: #bbb; user-select:none; }
     .toggle.active { background: #0077ff !important; color: #fff !important; }
     .gps-btn { width: 170px; padding: 14px; border-radius: 8px; font-size: 13px; background: #23a045; color: white; cursor: pointer; font-weight: 900; border: none; margin-bottom: 5px; }
     .mini { width: 170px; padding: 10px 12px; border-radius: 8px; font-size:12px; background: rgba(255,255,255,0.08); color:#fff; cursor:pointer; font-weight:800; border: 1px solid rgba(255,255,255,0.1); margin-bottom: 5px; user-select:none; }
     .mini.active { background: #eee !important; color:#111 !important; }
 
-    #bottom-bar { position: absolute; bottom: 0; left: 0; right: 0; height: 80px; background: linear-gradient(transparent, rgba(0,0,0,0.98)); display: flex; align-items: center; padding: 0 25px; z-index: 5000; }
+    #bottom-bar { position: absolute; bottom: 0; left: 0; right: 0; height: 80px;
+      background: linear-gradient(transparent, rgba(0,0,0,0.98));
+      display: flex; align-items: center; padding: 0 25px; z-index: 5000; }
     input[type=range] { flex-grow: 1; accent-color: #0077ff; cursor: pointer; }
 
-    /* scalari: screen blend (stile tuo) */
-    canvas.leaflet-layer.scalar-layer { opacity: 0.82; mix-blend-mode: screen; }
+    /* IMPORTANT: blend "screen" solo per lo scalar layer, ma con alpha più alto e più “corposo” */
+    canvas.leaflet-layer.scalar-layer { opacity: 0.92; mix-blend-mode: screen; }
     canvas.leaflet-layer.vector-layer { opacity: 1.0; mix-blend-mode: normal; }
 
-    /* piccoli miglioramenti mobile */
     * { -webkit-tap-highlight-color: transparent; }
   </style>
 </head>
@@ -83,12 +82,10 @@
 
   <div id="ui-container">
     <button class="gps-btn" onclick="getMyWeather()">📍 IL MIO METEO</button>
-
     <div class="panel">
       <button id="btn-flow" class="mini active" onclick="toggleParticles()">FLUSSO 🌬️ (ON)</button>
-      <button id="btn-hires" class="mini active" onclick="toggleHiRes()">HI-RES ✅</button>
+      <button id="btn-arrows" class="mini active" onclick="toggleArrows()">FRECCE 🧭 (ON)</button>
     </div>
-
     <div class="panel">
       <div class="toggle active" id="btn-wind" onclick="toggleLayer('wind')">VENTO 🧭</div>
       <div class="toggle" id="btn-temp" onclick="toggleLayer('temp')">TEMP 🌡️</div>
@@ -111,244 +108,189 @@
   </div>
 
 <script>
-/* ============================================================================
-   ICON-2I ULTRA: obiettivo
-   - scalari in MASSIMA risoluzione senza freeze: render progressivo a "strisce"
-   - frecce vento fluide: nessun containerPointToLatLng nei loop, render a budget (ms)
-   - particelle: lasciate come nel tuo settaggio (e pane dedicato)
-   - avvio: step più vicino all’ora attuale
-   - GPS: mostra parametri dello step "attuale"
-============================================================================ */
+  const IS_MOBILE = /Android|iPhone|iPad|iPod/i.test(navigator.userAgent);
 
-const IS_MOBILE = /Android|iPhone|iPad|iPod/i.test(navigator.userAgent);
+  const ITALY_BOUNDS = L.latLngBounds(L.latLng(35.0, 5.0), L.latLng(48.8, 19.8));
 
-const ITALY_BOUNDS = L.latLngBounds(L.latLng(35.0, 5.0), L.latLng(48.8, 19.8));
+  let map, catalog = [], currentData = null;
+  let isPlaying = false;
 
-let map;
-let catalog = [];
-let currentData = null;
+  const selected = new Set(['wind']);
+  let showIsobars = false, showIsotherms = false;
+  let particlesOn = true;
+  let arrowsOn = true;
 
-let isPlaying = false;
-let particlesOn = true;
-let showIsobars = false;
-let showIsotherms = false;
-let hiRes = true;
+  let userMarker = null, velocityLayer = null;
+  let nearestNowIndex = 0;
+  let lastGpsLatLng = null;
 
-const selected = new Set(['wind']);
-let velocityLayer = null;
-let userMarker = null;
+  // PALETTE (tue)
+  const WIND_COLOR_SCALE = ["#000080", "#0044ff", "#00ddff", "#00ff55", "#ffff00", "#ff6600", "#ff0000", "#ff00ff"];
 
-let nearestNowIndex = 0;
-let lastGpsLatLng = null;
+  const TEMP_STOPS = [{v:-15,c:[156,218,216]},{v:-10,c:[119,198,191]},{v:-5,c:[101,172,187]},{v:0,c:[93,133,198]},{v:5,c:[89,134,76]},{v:10,c:[114,146,33]},{v:15,c:[181,165,13]},{v:20,c:[243,183,4]},{v:25,c:[238,128,17]},{v:30,c:[232,83,25]},{v:35,c:[184,64,20]},{v:40,c:[136,45,13]}];
 
-/* ===== Palette (le tue) ===== */
-const WIND_COLOR_SCALE = ["#000080", "#0044ff", "#00ddff", "#00ff55", "#ffff00", "#ff6600", "#ff0000", "#ff00ff"];
-const TEMP_STOPS = [{v:-15,c:[156,218,216]},{v:-10,c:[119,198,191]},{v:-5,c:[101,172,187]},{v:0,c:[93,133,198]},{v:5,c:[89,134,76]},{v:10,c:[114,146,33]},{v:15,c:[181,165,13]},{v:20,c:[243,183,4]},{v:25,c:[238,128,17]},{v:30,c:[232,83,25]},{v:35,c:[184,64,20]},{v:40,c:[136,45,13]}];
-const RAIN_STOPS = [{v:0.0,c:[0,0,0],a:0},{v:0.6,c:[100,200,255],a:0.7},{v:1.0,c:[0,150,255],a:0.78},{v:5.0,c:[0,0,255],a:0.85},{v:10,c:[255,255,0],a:0.85},{v:30,c:[255,150,0],a:0.90},{v:50,c:[255,0,0],a:0.92}];
-const RH_STOPS = [{v:0,c:[173,85,56]},{v:30,c:[173,110,56]},{v:60,c:[56,173,121]},{v:80,c:[56,157,173]},{v:100,c:[56,70,114]}];
-const PRESS_STOPS = [{v:980,c:[0,32,96]},{v:1000,c:[0,117,146]},{v:1013,c:[182,182,182]},{v:1025,c:[163,116,67]},{v:1040,c:[111,24,64]}];
-const CLOUD_STOPS = [{v:0,c:[255,255,255],a:0},{v:50,c:[170,170,170],a:0.6},{v:100,c:[90,90,90],a:0.8}];
+  const RAIN_STOPS = [{v:0.0,c:[0,0,0],a:0},{v:0.6,c:[100,200,255],a:0.7},{v:1.0,c:[0,150,255],a:0.78},{v:5.0,c:[0,0,255],a:0.85},{v:10,c:[255,255,0],a:0.85},{v:30,c:[255,150,0],a:0.90},{v:50,c:[255,0,0],a:0.92}];
 
-/* ===== Utility ===== */
-function clamp(x,a,b){ return Math.max(a, Math.min(b, x)); }
-function lerp(a,b,t){ return a+(b-a)*t; }
+  // PIÙ VISIBILI (prima erano troppo “sott’acqua”)
+  const RH_STOPS = [
+    {v:0,c:[173,85,56],a:0.55},
+    {v:30,c:[173,110,56],a:0.62},
+    {v:60,c:[56,173,121],a:0.68},
+    {v:80,c:[56,157,173],a:0.72},
+    {v:100,c:[56,70,114],a:0.78}
+  ];
 
-function vividWindColor(sp){
-  const maxV = 22.0;
-  const t = clamp(sp/maxV, 0, 0.9999);
-  const n = WIND_COLOR_SCALE.length;
-  const pos = t*(n-1);
-  const i = Math.floor(pos);
-  const f = pos - i;
-  const hex1=WIND_COLOR_SCALE[i], hex2=WIND_COLOR_SCALE[Math.min(i+1,n-1)];
-  const r1=parseInt(hex1.slice(1,3),16), g1=parseInt(hex1.slice(3,5),16), b1=parseInt(hex1.slice(5,7),16);
-  const r2=parseInt(hex2.slice(1,3),16), g2=parseInt(hex2.slice(3,5),16), b2=parseInt(hex2.slice(5,7),16);
-  return {r:Math.round(lerp(r1,r2,f)), g:Math.round(lerp(g1,g2,f)), b:Math.round(lerp(b1,b2,f))};
-}
+  const PRESS_STOPS = [
+    {v:980,c:[0,32,96],a:0.55},
+    {v:1000,c:[0,117,146],a:0.65},
+    {v:1013,c:[182,182,182],a:0.68},
+    {v:1025,c:[163,116,67],a:0.72},
+    {v:1040,c:[111,24,64],a:0.78}
+  ];
 
-function getStopColor(val, stops) {
-  if (val <= stops[0].v) return [...stops[0].c, (stops[0].a !== undefined ? stops[0].a : 0.8)];
-  for (let i = 0; i < stops.length - 1; i++) {
-    if (val >= stops[i].v && val <= stops[i+1].v) {
-      const t = (val - stops[i].v) / (stops[i+1].v - stops[i].v);
-      const a1 = stops[i].a !== undefined ? stops[i].a : 0.8, a2 = stops[i+1].a !== undefined ? stops[i+1].a : 0.8;
-      return [
-        (stops[i].c[0]*(1-t)+stops[i+1].c[0]*t)|0,
-        (stops[i].c[1]*(1-t)+stops[i+1].c[1]*t)|0,
-        (stops[i].c[2]*(1-t)+stops[i+1].c[2]*t)|0,
-        (a1*(1-t)+a2*t)
-      ];
+  const CLOUD_STOPS = [{v:0,c:[255,255,255],a:0},{v:50,c:[170,170,170],a:0.6},{v:100,c:[90,90,90],a:0.8}];
+
+  function clamp(x,a,b){ return Math.max(a, Math.min(b, x)); }
+  function lerp(a,b,t){ return a+(b-a)*t; }
+
+  function getStopColor(val, stops) {
+    if (val <= stops[0].v) return [...stops[0].c, (stops[0].a !== undefined ? stops[0].a : 0.8)];
+    for (let i = 0; i < stops.length - 1; i++) {
+      if (val >= stops[i].v && val <= stops[i+1].v) {
+        const t = (val - stops[i].v) / (stops[i+1].v - stops[i].v);
+        const a1 = stops[i].a !== undefined ? stops[i].a : 0.8, a2 = stops[i+1].a !== undefined ? stops[i+1].a : 0.8;
+        return [
+          (stops[i].c[0]*(1-t)+stops[i+1].c[0]*t)|0,
+          (stops[i].c[1]*(1-t)+stops[i+1].c[1]*t)|0,
+          (stops[i].c[2]*(1-t)+stops[i+1].c[2]*t)|0,
+          (a1*(1-t)+a2*t)
+        ];
+      }
     }
+    const s = stops[stops.length-1]; return [...s.c, (s.a !== undefined ? s.a : 0.8)];
   }
-  const s = stops[stops.length-1];
-  return [...s.c, (s.a !== undefined ? s.a : 0.8)];
-}
 
-function toggleGpsPanel(show) {
-  document.getElementById('gps-overlay').className = show ? 'active' : '';
-}
-function getMyWeather() {
-  map.locate({ setView: true, maxZoom: 10 });
-}
-
-/* ============================================================================
-   CanvasLayer (Leaflet)
-============================================================================ */
-const CanvasLayer = L.Layer.extend({
-  initialize: function(opts){
-    this.options = opts || {};
-    this._draw = this.options.draw || function(){};
-    this._pane = this.options.pane || 'overlayPane';
-    this._className = this.options.className || '';
-    this._z = this.options.zIndex || 300;
-    this._dpr = window.devicePixelRatio || 1;
-  },
-  onAdd: function(map){
-    this._map = map;
-    this._canvas = L.DomUtil.create('canvas', 'leaflet-layer ' + this._className);
-    this._canvas.style.pointerEvents = 'none';
-    this._canvas.style.zIndex = this._z;
-    map.getPane(this._pane).appendChild(this._canvas);
-
-    map.on('move', this._reset, this);
-    map.on('zoom', this._reset, this);
-    map.on('resize', this._reset, this);
-    map.on('moveend', this._redraw, this);
-    map.on('zoomend', this._redraw, this);
-
-    this._reset();
-    this._redraw();
-  },
-  onRemove: function(map){
-    map.off('move', this._reset, this);
-    map.off('zoom', this._reset, this);
-    map.off('resize', this._reset, this);
-    map.off('moveend', this._redraw, this);
-    map.off('zoomend', this._redraw, this);
-    if(this._canvas && this._canvas.parentNode) this._canvas.parentNode.removeChild(this._canvas);
-    this._canvas = null;
-  },
-  _reset: function(){
-    if(!this._map || !this._canvas) return;
-    const size = this._map.getSize();
-    const dpr = window.devicePixelRatio || 1;
-    this._dpr = dpr;
-
-    this._canvas.width = Math.round(size.x * dpr);
-    this._canvas.height = Math.round(size.y * dpr);
-    this._canvas.style.width = size.x + 'px';
-    this._canvas.style.height = size.y + 'px';
-
-    const topLeft = this._map.containerPointToLayerPoint([0,0]);
-    L.DomUtil.setPosition(this._canvas, topLeft);
-  },
-  _redraw: function(){
-    if(!this._map || !this._canvas) return;
-    const ctx = this._canvas.getContext('2d', { alpha: true, desynchronized: true });
-    ctx.setTransform(this._dpr,0,0,this._dpr,0,0);
-    ctx.clearRect(0,0,this._canvas.width/this._dpr, this._canvas.height/this._dpr);
-    this._draw(ctx, this._map);
+  function vividWindColor(sp){
+    const maxV = 22.0;
+    const t = clamp(sp/maxV, 0, 0.9999);
+    const n = WIND_COLOR_SCALE.length;
+    const pos = t*(n-1);
+    const i = Math.floor(pos);
+    const f = pos - i;
+    const hex1=WIND_COLOR_SCALE[i], hex2=WIND_COLOR_SCALE[Math.min(i+1,n-1)];
+    const r1=parseInt(hex1.slice(1,3),16), g1=parseInt(hex1.slice(3,5),16), b1=parseInt(hex1.slice(5,7),16);
+    const r2=parseInt(hex2.slice(1,3),16), g2=parseInt(hex2.slice(3,5),16), b2=parseInt(hex2.slice(5,7),16);
+    return {r:Math.round(lerp(r1,r2,f)), g:Math.round(lerp(g1,g2,f)), b:Math.round(lerp(b1,b2,f))};
   }
-});
 
-/* ============================================================================
-   PROIEZIONE VELOCE: tabelle lat/lon per pixel (massima risoluzione)
-   - lon dipende solo da x, lat solo da y (WebMercator)
-   - ricostruite solo quando serve (moveend/zoomend/resize)
-============================================================================ */
-const ProjCache = {
-  w: 0, h: 0, zoom: 0,
-  pxMinX: 0, pxMinY: 0,
-  lonByX: null,
-  latByY: null,
-  update(){
-    const size = map.getSize();
-    const w = size.x|0, h = size.y|0;
-    const z = map.getZoom();
-    const pb = map.getPixelBounds();
-    const pxMinX = pb.min.x, pxMinY = pb.min.y;
+  function toggleGpsPanel(show) { document.getElementById('gps-overlay').className = show ? 'active' : ''; }
+  function getMyWeather() { map.locate({setView: true, maxZoom: 10}); }
 
-    const same =
-      this.w === w && this.h === h && this.zoom === z &&
-      this.pxMinX === pxMinX && this.pxMinY === pxMinY;
+  /* ===============================
+     CanvasLayer
+  =============================== */
+  const CanvasLayer = L.Layer.extend({
+    initialize: function(opts){
+      this.options = opts || {};
+      this._draw = this.options.draw || function(){};
+      this._pane = this.options.pane || 'overlayPane';
+      this._className = this.options.className || '';
+      this._z = this.options.zIndex || 300;
+      this._dpr = window.devicePixelRatio || 1;
+    },
+    onAdd: function(map){
+      this._map = map;
+      this._canvas = L.DomUtil.create('canvas', 'leaflet-layer ' + this._className);
+      this._canvas.style.pointerEvents = 'none';
+      this._canvas.style.zIndex = this._z;
+      map.getPane(this._pane).appendChild(this._canvas);
 
-    if(same && this.lonByX && this.latByY) return;
+      map.on('move', this._reset, this);
+      map.on('zoom', this._reset, this);
+      map.on('resize', this._reset, this);
+      map.on('moveend', this._redraw, this);
+      map.on('zoomend', this._redraw, this);
 
-    this.w = w; this.h = h; this.zoom = z;
-    this.pxMinX = pxMinX; this.pxMinY = pxMinY;
-    this.lonByX = new Float32Array(w);
-    this.latByY = new Float32Array(h);
+      this._reset();
+      this._redraw();
+    },
+    onRemove: function(map){
+      map.off('move', this._reset, this);
+      map.off('zoom', this._reset, this);
+      map.off('resize', this._reset, this);
+      map.off('moveend', this._redraw, this);
+      map.off('zoomend', this._redraw, this);
+      if(this._canvas && this._canvas.parentNode) this._canvas.parentNode.removeChild(this._canvas);
+      this._canvas = null;
+    },
+    _reset: function(){
+      if(!this._map || !this._canvas) return;
+      const size = this._map.getSize();
+      const dpr = window.devicePixelRatio || 1;
+      this._dpr = dpr;
 
-    // Nota: unproject in loop 1000-2000 volte è ok; farlo per pixel sarebbe un disastro.
-    for(let x=0; x<w; x++){
-      this.lonByX[x] = map.unproject([pxMinX + x + 0.5, pxMinY], z).lng;
+      this._canvas.width = Math.round(size.x * dpr);
+      this._canvas.height = Math.round(size.y * dpr);
+      this._canvas.style.width = size.x + 'px';
+      this._canvas.style.height = size.y + 'px';
+
+      const topLeft = this._map.containerPointToLayerPoint([0,0]);
+      L.DomUtil.setPosition(this._canvas, topLeft);
+    },
+    _redraw: function(){
+      if(!this._map || !this._canvas) return;
+      const ctx = this._canvas.getContext('2d', { alpha:true, desynchronized:true });
+      ctx.setTransform(this._dpr,0,0,this._dpr,0,0);
+      ctx.clearRect(0,0,this._canvas.width/this._dpr, this._canvas.height/this._dpr);
+      this._draw(ctx, this._map);
     }
-    for(let y=0; y<h; y++){
-      this.latByY[y] = map.unproject([pxMinX, pxMinY + y + 0.5], z).lat;
+  });
+
+  let scalarLayer = null;
+  let arrowLayer  = null;
+  let isoLayer    = null;
+  let thermLayer  = null;
+
+  /* ===============================
+     PROJECTION CACHE (per frecce)
+     lon(x) e lat(y) per la viewport
+  =============================== */
+  const ProjCache = {
+    w:0,h:0,z:0,pxMinX:0,pxMinY:0,
+    lonByX:null, latByY:null,
+    update(){
+      const size = map.getSize();
+      const w = size.x|0, h = size.y|0;
+      const z = map.getZoom();
+      const pb = map.getPixelBounds();
+      const pxMinX = pb.min.x, pxMinY = pb.min.y;
+      const same = (this.w===w && this.h===h && this.z===z && this.pxMinX===pxMinX && this.pxMinY===pxMinY);
+      if(same && this.lonByX && this.latByY) return;
+
+      this.w=w; this.h=h; this.z=z; this.pxMinX=pxMinX; this.pxMinY=pxMinY;
+      this.lonByX = new Float32Array(w);
+      this.latByY = new Float32Array(h);
+
+      for(let x=0;x<w;x++) this.lonByX[x] = map.unproject([pxMinX + x + 0.5, pxMinY], z).lng;
+      for(let y=0;y<h;y++) this.latByY[y] = map.unproject([pxMinX, pxMinY + y + 0.5], z).lat;
     }
-  }
-};
+  };
 
-/* ============================================================================
-   SCALARS: rendering progressivo FULL-RES (strisce)
-   - crea un buffer (ImageData) della dimensione della viewport (massima risoluzione)
-   - calcola N righe per frame con budget ms per restare fluido
-============================================================================ */
-const ScalarRenderer = {
-  off: document.createElement('canvas'),
-  offCtx: null,
-  img: null,
-  dirty: true,
-  running: false,
-  y: 0,
-  targetMs: IS_MOBILE ? 7.5 : 10.0,   // budget per frame
-  linesPerChunk: IS_MOBILE ? 22 : 34, // fallback
-  setDirty(){ this.dirty = true; this.y = 0; },
-  ensure(){
-    const size = map.getSize();
-    const w = size.x|0, h = size.y|0;
-    if(this.off.width !== w || this.off.height !== h || !this.offCtx){
-      this.off.width = w;
-      this.off.height = h;
-      this.offCtx = this.off.getContext('2d', { willReadFrequently: true });
-      this.img = this.offCtx.createImageData(w, h);
-      this.setDirty();
-    }
-  },
-  start(){
-    if(this.running) return;
-    this.running = true;
-    requestAnimationFrame(()=>this.step());
-  },
-  stop(){
-    this.running = false;
-  },
-  step(){
-    if(!this.running) return;
-    if(!currentData?.meta){ this.running = false; return; }
-
-    this.ensure();
-    ProjCache.update();
-
-    // se hiRes OFF: rendi una volta sola low-res (ma tu vuoi hi-res ON di default)
-    if(!hiRes){
-      this.renderAllLowRes();
-      this.running = false;
-      scalarLayer && scalarLayer._redraw();
-      return;
-    }
-
-    // rendering progressivo
-    if(!this.dirty){
-      // niente da fare
-      this.running = false;
-      return;
-    }
-
-    const t0 = performance.now();
+  /* ===============================
+     SCALARS (come il tuo, ma con alpha corretti)
+  =============================== */
+  function drawScalar(ctx){
+    if(!currentData?.meta) return;
     const m = currentData.meta;
-    const w = this.off.width, h = this.off.height;
-    const d = this.img.data;
+    const size = map.getSize();
+
+    // risoluzione scalari: più alta, ma sostenibile
+    const scale = IS_MOBILE ? 0.68 : 0.80;
+    const w = Math.max(180, Math.round(size.x * scale));
+    const h = Math.max(180, Math.round(size.y * scale));
+
+    const img = ctx.createImageData(w, h);
+    const d = img.data;
 
     const hasWind = selected.has('wind');
     const hasTemp = selected.has('temp');
@@ -363,145 +305,7 @@ const ScalarRenderer = {
     const pressArr= currentData.cleanP;
     const cloudArr= (currentData.cloud || currentData.cld);
 
-    const lonByX = ProjCache.lonByX;
-    const latByY = ProjCache.latByY;
-
-    // clear solo la prima volta
-    if(this.y === 0){
-      d.fill(0);
-    }
-
-    // calcola un tot righe, ma fermati se sfori budget
-    let y = this.y;
-    let linesDone = 0;
-
-    while(y < h){
-      const lat = latByY[y];
-      const gyf = (m.la1 - lat) / m.dy;
-      if(gyf >= 0 && gyf <= m.ny-1){
-        const gy = gyf | 0;
-        const rowOff = gy * m.nx;
-
-        for(let x=0; x<w; x++){
-          const lng = lonByX[x];
-          const gxf = (lng - m.lo1) / m.dx;
-          if(gxf < 0 || gxf > m.nx-1) continue;
-
-          const gx = gxf | 0;
-          const idx = rowOff + gx;
-
-          let R=0, G=0, B=0, A=0;
-
-          // WIND sfondo
-          if(hasWind){
-            const u = currentData.wind_u.data[idx], v = currentData.wind_v.data[idx];
-            const sp = Math.sqrt(u*u+v*v);
-            if(sp > 0.2){
-              const rgb = vividWindColor(sp);
-              const oa = clamp(sp/18, 0.06, 0.34);
-              R = rgb.r*oa + R*(1-oa);
-              G = rgb.g*oa + G*(1-oa);
-              B = rgb.b*oa + B*(1-oa);
-              A = 1 - (1-A)*(1-oa);
-            }
-          }
-
-          if(hasTemp && tempArr){
-            const col = getStopColor(tempArr[idx], TEMP_STOPS);
-            const oa = clamp(col[3], 0, 0.92);
-            R = col[0]*oa + R*(1-oa);
-            G = col[1]*oa + G*(1-oa);
-            B = col[2]*oa + B*(1-oa);
-            A = 1 - (1-A)*(1-oa);
-          }
-
-          if(hasRain && rainArr){
-            const vv = rainArr[idx];
-            if(vv >= 0.1){
-              const col = getStopColor(vv, RAIN_STOPS);
-              const oa = clamp(col[3], 0, 0.92);
-              R = col[0]*oa + R*(1-oa);
-              G = col[1]*oa + G*(1-oa);
-              B = col[2]*oa + B*(1-oa);
-              A = 1 - (1-A)*(1-oa);
-            }
-          }
-
-          if(hasRh && rhArr){
-            const col = getStopColor(rhArr[idx], RH_STOPS);
-            const oa = clamp(col[3], 0.15, 0.55) * 0.70;
-            R = col[0]*oa + R*(1-oa);
-            G = col[1]*oa + G*(1-oa);
-            B = col[2]*oa + B*(1-oa);
-            A = 1 - (1-A)*(1-oa);
-          }
-
-          if(hasPress && pressArr){
-            const col = getStopColor(pressArr[idx], PRESS_STOPS);
-            const oa = clamp(col[3], 0.15, 0.60) * 0.65;
-            R = col[0]*oa + R*(1-oa);
-            G = col[1]*oa + G*(1-oa);
-            B = col[2]*oa + B*(1-oa);
-            A = 1 - (1-A)*(1-oa);
-          }
-
-          if(hasCloud && cloudArr){
-            const vv = cloudArr[idx];
-            if(vv >= 5){
-              const col = getStopColor(vv, CLOUD_STOPS);
-              const oa = clamp(col[3], 0.10, 0.80);
-              R = col[0]*oa + R*(1-oa);
-              G = col[1]*oa + G*(1-oa);
-              B = col[2]*oa + B*(1-oa);
-              A = 1 - (1-A)*(1-oa);
-            }
-          }
-
-          const p = (y*w + x)*4;
-          d[p]   = R|0;
-          d[p+1] = G|0;
-          d[p+2] = B|0;
-          d[p+3] = (clamp(A,0,1)*255)|0;
-        }
-      }
-
-      y++;
-      linesDone++;
-      if(linesDone >= this.linesPerChunk){
-        if((performance.now() - t0) >= this.targetMs) break;
-        linesDone = 0;
-      }
-    }
-
-    this.y = y;
-
-    // carica su offscreen (una sola putImageData a step)
-    this.offCtx.putImageData(this.img, 0, 0);
-
-    // trigger redraw layer (che disegna l’offscreen)
-    scalarLayer && scalarLayer._redraw();
-
-    if(this.y >= h){
-      this.dirty = false;
-      this.running = false;
-      return;
-    }
-    requestAnimationFrame(()=>this.step());
-  },
-
-  renderAllLowRes(){
-    // fallback: quando hiRes OFF, render low-res in 1 pass (sempre fluido)
-    const size = map.getSize();
-    const w = Math.max(180, Math.round(size.x * (IS_MOBILE ? 0.62 : 0.72)));
-    const h = Math.max(180, Math.round(size.y * (IS_MOBILE ? 0.62 : 0.72)));
-
-    const tmp = document.createElement('canvas');
-    tmp.width = w; tmp.height = h;
-    const tctx = tmp.getContext('2d');
-    const img = tctx.createImageData(w,h);
-    const d = img.data;
-
-    const m = currentData.meta;
+    // mapping low-res -> lat/lon usando unproject (solo w+h, non w*h)
     const pb = map.getPixelBounds();
     const min = pb.min;
     const z = map.getZoom();
@@ -510,656 +314,709 @@ const ScalarRenderer = {
 
     const lonByX = new Float32Array(w);
     const latByY = new Float32Array(h);
-
-    for(let x=0;x<w;x++){
-      lonByX[x] = map.unproject([min.x + (x+0.5)*invX, min.y], z).lng;
+    for(let px=0; px<w; px++){
+      lonByX[px] = map.unproject([min.x + (px+0.5)*invX, min.y], z).lng;
     }
-    for(let y=0;y<h;y++){
-      latByY[y] = map.unproject([min.x, min.y + (y+0.5)*invY], z).lat;
+    for(let py=0; py<h; py++){
+      latByY[py] = map.unproject([min.x, min.y + (py+0.5)*invY], z).lat;
     }
 
-    const hasWind = selected.has('wind');
-    const hasTemp = selected.has('temp');
-    const hasRain = selected.has('rain');
-    const hasRh   = selected.has('rh');
-    const hasPress= selected.has('press');
-    const hasCloud= selected.has('cloud');
-
-    const tempArr = currentData.temp;
-    const rainArr = currentData.rain;
-    const rhArr   = currentData.rh;
-    const pressArr= currentData.cleanP;
-    const cloudArr= (currentData.cloud || currentData.cld);
-
-    for(let y=0;y<h;y++){
-      const lat = latByY[y];
+    for(let py=0; py<h; py++){
+      const lat = latByY[py];
       const gyf = (m.la1 - lat)/m.dy;
-      if(gyf<0 || gyf>m.ny-1) continue;
+      if(gyf < 0 || gyf > m.ny-1) continue;
       const gy = gyf|0;
       const rowOff = gy*m.nx;
 
-      for(let x=0;x<w;x++){
-        const lng = lonByX[x];
+      for(let px=0; px<w; px++){
+        const lng = lonByX[px];
         const gxf = (lng - m.lo1)/m.dx;
-        if(gxf<0 || gxf>m.nx-1) continue;
+        if(gxf < 0 || gxf > m.nx-1) continue;
         const gx = gxf|0;
         const idx = rowOff + gx;
 
         let R=0,G=0,B=0,A=0;
 
+        // WIND BACKGROUND
         if(hasWind){
-          const u=currentData.wind_u.data[idx], v=currentData.wind_v.data[idx];
-          const sp=Math.sqrt(u*u+v*v);
-          if(sp>0.2){
-            const rgb=vividWindColor(sp);
-            const oa=clamp(sp/18,0.06,0.34);
-            R=rgb.r*oa + R*(1-oa);
-            G=rgb.g*oa + G*(1-oa);
-            B=rgb.b*oa + B*(1-oa);
-            A=1-(1-A)*(1-oa);
-          }
-        }
-        if(hasTemp && tempArr){
-          const col=getStopColor(tempArr[idx], TEMP_STOPS);
-          const oa=clamp(col[3],0,0.92);
-          R=col[0]*oa + R*(1-oa);
-          G=col[1]*oa + G*(1-oa);
-          B=col[2]*oa + B*(1-oa);
-          A=1-(1-A)*(1-oa);
-        }
-        if(hasRain && rainArr){
-          const vv=rainArr[idx];
-          if(vv>=0.1){
-            const col=getStopColor(vv, RAIN_STOPS);
-            const oa=clamp(col[3],0,0.92);
-            R=col[0]*oa + R*(1-oa);
-            G=col[1]*oa + G*(1-oa);
-            B=col[2]*oa + B*(1-oa);
-            A=1-(1-A)*(1-oa);
-          }
-        }
-        if(hasRh && rhArr){
-          const col=getStopColor(rhArr[idx], RH_STOPS);
-          const oa=clamp(col[3],0.15,0.55)*0.70;
-          R=col[0]*oa + R*(1-oa);
-          G=col[1]*oa + G*(1-oa);
-          B=col[2]*oa + B*(1-oa);
-          A=1-(1-A)*(1-oa);
-        }
-        if(hasPress && pressArr){
-          const col=getStopColor(pressArr[idx], PRESS_STOPS);
-          const oa=clamp(col[3],0.15,0.60)*0.65;
-          R=col[0]*oa + R*(1-oa);
-          G=col[1]*oa + G*(1-oa);
-          B=col[2]*oa + B*(1-oa);
-          A=1-(1-A)*(1-oa);
-        }
-        if(hasCloud && cloudArr){
-          const vv=cloudArr[idx];
-          if(vv>=5){
-            const col=getStopColor(vv, CLOUD_STOPS);
-            const oa=clamp(col[3],0.10,0.80);
-            R=col[0]*oa + R*(1-oa);
-            G=col[1]*oa + G*(1-oa);
-            B=col[2]*oa + B*(1-oa);
-            A=1-(1-A)*(1-oa);
+          const u = currentData.wind_u.data[idx], v = currentData.wind_v.data[idx];
+          const sp = Math.sqrt(u*u+v*v);
+          if(sp > 0.2){
+            const rgb = vividWindColor(sp);
+            const oa = clamp(sp/18, 0.08, 0.40); // più presente
+            R = rgb.r*oa + R*(1-oa);
+            G = rgb.g*oa + G*(1-oa);
+            B = rgb.b*oa + B*(1-oa);
+            A = 1 - (1-A)*(1-oa);
           }
         }
 
-        const p=(y*w+x)*4;
+        if(hasTemp && tempArr){
+          const col = getStopColor(tempArr[idx], TEMP_STOPS);
+          const oa = clamp(col[3], 0.20, 0.95);
+          R = col[0]*oa + R*(1-oa);
+          G = col[1]*oa + G*(1-oa);
+          B = col[2]*oa + B*(1-oa);
+          A = 1 - (1-A)*(1-oa);
+        }
+
+        if(hasRain && rainArr){
+          const vv = rainArr[idx];
+          if(vv >= 0.1){
+            const col = getStopColor(vv, RAIN_STOPS);
+            const oa = clamp(col[3], 0.30, 0.95);
+            R = col[0]*oa + R*(1-oa);
+            G = col[1]*oa + G*(1-oa);
+            B = col[2]*oa + B*(1-oa);
+            A = 1 - (1-A)*(1-oa);
+          }
+        }
+
+        if(hasRh && rhArr){
+          const col = getStopColor(rhArr[idx], RH_STOPS);
+          const oa = clamp(col[3], 0.45, 0.90);
+          R = col[0]*oa + R*(1-oa);
+          G = col[1]*oa + G*(1-oa);
+          B = col[2]*oa + B*(1-oa);
+          A = 1 - (1-A)*(1-oa);
+        }
+
+        if(hasPress && pressArr){
+          const col = getStopColor(pressArr[idx], PRESS_STOPS);
+          const oa = clamp(col[3], 0.45, 0.90);
+          R = col[0]*oa + R*(1-oa);
+          G = col[1]*oa + G*(1-oa);
+          B = col[2]*oa + B*(1-oa);
+          A = 1 - (1-A)*(1-oa);
+        }
+
+        if(hasCloud && cloudArr){
+          const vv = cloudArr[idx];
+          if(vv >= 5){
+            const col = getStopColor(vv, CLOUD_STOPS);
+            const oa = clamp(col[3], 0.20, 0.85);
+            R = col[0]*oa + R*(1-oa);
+            G = col[1]*oa + G*(1-oa);
+            B = col[2]*oa + B*(1-oa);
+            A = 1 - (1-A)*(1-oa);
+          }
+        }
+
+        const p=(py*w+px)*4;
         d[p]=R|0; d[p+1]=G|0; d[p+2]=B|0; d[p+3]=(clamp(A,0,1)*255)|0;
       }
     }
 
-    tctx.putImageData(img,0,0);
+    const tmp = document.createElement('canvas');
+    tmp.width=w; tmp.height=h;
+    tmp.getContext('2d').putImageData(img,0,0);
 
-    // copia su offscreen full-size per disegno rapido
-    this.ensure();
-    this.offCtx.clearRect(0,0,this.off.width,this.off.height);
-    this.offCtx.imageSmoothingEnabled = true;
-    this.offCtx.drawImage(tmp, 0, 0, this.off.width, this.off.height);
-    this.dirty = false;
+    ctx.imageSmoothingEnabled = true;
+    ctx.drawImage(tmp, 0, 0, size.x, size.y);
   }
-};
 
-/* ============================================================================
-   FRECCE VENTO: render “budget-based” (mai crash)
-   - NIENTE containerPointToLatLng nei loop
-   - genera griglia in pixel, poi usa ProjCache lon/lat per indicizzare i dati
-   - disegna finché non supera un budget ms (resta sempre fluido)
-============================================================================ */
-const ArrowRenderer = {
-  targetMs: IS_MOBILE ? 4.5 : 7.5,   // budget per redraw
-  minStride: IS_MOBILE ? 44 : 34,
-  maxStride: IS_MOBILE ? 90 : 70,
-  stride: IS_MOBILE ? 62 : 48,
-  lastCost: 0,
-  draw(ctx){
-    if(!currentData?.meta) return;
-    if(!selected.has('wind')) return;
+  /* ===============================
+     WIND ARROWS (CACHE OFFSCREEN)
+     - Ridisegna SOLO su moveend/zoomend/step change/toggle
+     - Durante drag: non si ridisegna => niente freeze
+  =============================== */
+  const ArrowCache = {
+    key: '',
+    off: document.createElement('canvas'),
+    render(){
+      if(!currentData?.meta) return;
+      if(!selected.has('wind') || !arrowsOn) { this.key=''; return; }
 
-    ProjCache.update();
+      ProjCache.update();
+
+      const size = map.getSize();
+      const z = map.getZoom();
+      const idxStep = parseInt(document.getElementById('time-slider').value);
+
+      // chiave cache: step + zoom + bounds approx + size
+      const pb = map.getPixelBounds();
+      const key = `${idxStep}|z${z}|w${size.x}h${size.y}|${pb.min.x|0},${pb.min.y|0}`;
+      if(key === this.key) return;
+      this.key = key;
+
+      // setup offscreen
+      const dpr = window.devicePixelRatio || 1;
+      this.off.width  = Math.round(size.x * dpr);
+      this.off.height = Math.round(size.y * dpr);
+      const ctx = this.off.getContext('2d', { alpha:true, desynchronized:true });
+      ctx.setTransform(dpr,0,0,dpr,0,0);
+      ctx.clearRect(0,0,size.x,size.y);
+
+      const m = currentData.meta;
+      const lonByX = ProjCache.lonByX;
+      const latByY = ProjCache.latByY;
+
+      // stride deciso per non ammazzare mobile
+      let stride = IS_MOBILE ? 70 : 52;
+      if(z >= 10) stride = IS_MOBILE ? 62 : 46;
+      if(z >= 11) stride = IS_MOBILE ? 56 : 40;
+      if(z >= 12) stride = IS_MOBILE ? 52 : 36;
+
+      // ombre quasi nulle su mobile
+      ctx.lineCap='round'; ctx.lineJoin='round';
+      ctx.shadowColor = 'rgba(0,0,0,0.55)';
+      ctx.shadowBlur = IS_MOBILE ? 2 : 6;
+
+      const half = stride*0.5;
+      const w = size.x|0, h = size.y|0;
+
+      // hard cap frecce
+      const maxArrows = IS_MOBILE ? 420 : 1200;
+      let drawn = 0;
+
+      for(let y=half; y<h; y+=stride){
+        const yi = y|0;
+        const lat = latByY[yi];
+        const gyf = (m.la1 - lat)/m.dy;
+        if(gyf < 0 || gyf > m.ny-1) continue;
+        const gy = gyf|0;
+        const rowOff = gy*m.nx;
+
+        for(let x=half; x<w; x+=stride){
+          if(drawn >= maxArrows) break;
+          const xi = x|0;
+          const lng = lonByX[xi];
+          const gxf = (lng - m.lo1)/m.dx;
+          if(gxf < 0 || gxf > m.nx-1) continue;
+          const gx = gxf|0;
+          const k = rowOff + gx;
+
+          const u = currentData.wind_u.data[k];
+          const v = currentData.wind_v.data[k];
+          const sp = Math.sqrt(u*u+v*v);
+          if(!Number.isFinite(sp) || sp < (IS_MOBILE ? 1.2 : 0.8)) continue;
+
+          const ang = Math.atan2(-v, u);
+
+          const len = clamp(12 + sp*2.8, 16, IS_MOBILE ? 54 : 64);
+          const thick = clamp(1.1 + sp*0.20, 1.4, IS_MOBILE ? 3.6 : 4.4);
+          const head = clamp(len*0.34, 7, 20);
+          const tail = len - head;
+
+          const rgb = vividWindColor(sp);
+          const col = `rgb(${rgb.r},${rgb.g},${rgb.b})`;
+          const alpha = clamp(0.48 + sp/18, 0.55, 0.95);
+
+          ctx.save();
+          ctx.translate(xi, yi);
+          ctx.rotate(ang);
+
+          // outline
+          ctx.globalAlpha = Math.min(alpha+0.05,1);
+          ctx.strokeStyle = 'rgba(0,0,0,0.92)';
+          ctx.lineWidth = thick + (IS_MOBILE ? 1.6 : 2.0);
+
+          ctx.beginPath();
+          ctx.moveTo(-tail*0.55, 0);
+          ctx.lineTo(tail*0.55, 0);
+          ctx.stroke();
+
+          ctx.beginPath();
+          ctx.moveTo(tail*0.55 + head, 0);
+          ctx.lineTo(tail*0.55, -head*0.42);
+          ctx.moveTo(tail*0.55 + head, 0);
+          ctx.lineTo(tail*0.55,  head*0.42);
+          ctx.stroke();
+
+          // color
+          ctx.globalAlpha = alpha;
+          ctx.strokeStyle = col;
+          ctx.lineWidth = thick;
+
+          ctx.beginPath();
+          ctx.moveTo(-tail*0.55, 0);
+          ctx.lineTo(tail*0.55, 0);
+          ctx.stroke();
+
+          ctx.beginPath();
+          ctx.moveTo(tail*0.55 + head, 0);
+          ctx.lineTo(tail*0.55, -head*0.42);
+          ctx.moveTo(tail*0.55 + head, 0);
+          ctx.lineTo(tail*0.55,  head*0.42);
+          ctx.stroke();
+
+          // base dot
+          ctx.globalAlpha = alpha*0.9;
+          ctx.fillStyle = 'rgba(0,0,0,0.85)';
+          ctx.beginPath(); ctx.arc(-tail*0.55, 0, thick+0.9, 0, Math.PI*2); ctx.fill();
+          ctx.fillStyle = col;
+          ctx.beginPath(); ctx.arc(-tail*0.55, 0, thick*0.72, 0, Math.PI*2); ctx.fill();
+
+          ctx.restore();
+
+          drawn++;
+        }
+        if(drawn >= maxArrows) break;
+      }
+
+      ctx.shadowBlur = 0;
+    }
+  };
+
+  function drawWindArrowsFromCache(ctx){
+    if(!selected.has('wind') || !arrowsOn) return;
+    ArrowCache.render();
+    const size = map.getSize();
+    if(ArrowCache.off.width && ArrowCache.off.height){
+      ctx.imageSmoothingEnabled = true;
+      // disegna offscreen già in DPR, ma ctx è già scalato dal layer => basta drawImage in px css
+      ctx.drawImage(ArrowCache.off, 0, 0, size.x, size.y);
+    }
+  }
+
+  /* ===============================
+     ISOBARS: tutte bianche + etichette + A/B su massimi/minimi
+  =============================== */
+  function drawIsobarsWhite(ctx){
+    if(!currentData?.meta || !currentData.cleanP) return;
     const m = currentData.meta;
-    const w = ProjCache.w, h = ProjCache.h;
-    const lonByX = ProjCache.lonByX;
-    const latByY = ProjCache.latByY;
 
-    // stride dinamico: se costoso, aumenta; se leggero, diminuisci
-    if(this.lastCost > this.targetMs*1.15) this.stride = Math.min(this.maxStride, Math.round(this.stride * 1.12));
-    else if(this.lastCost < this.targetMs*0.70) this.stride = Math.max(this.minStride, Math.round(this.stride * 0.92));
+    const step = 2; // hPa
+    const minP = 960, maxP = 1050;
+    const contours = d3.contours().size([m.nx, m.ny]).thresholds(d3.range(minP, maxP+1, step))(currentData.cleanP);
 
-    const stride = this.stride;
-    const half = stride * 0.5;
+    ctx.lineJoin='round'; ctx.lineCap='round';
+    ctx.strokeStyle = 'rgba(255,255,255,0.78)';
+    ctx.lineWidth = 1.4;
 
-    // shadow: mobile meno pesante
-    ctx.lineCap = 'round';
-    ctx.lineJoin = 'round';
-    ctx.shadowColor = 'rgba(0,0,0,0.55)';
-    ctx.shadowBlur = IS_MOBILE ? 3 : 8;
+    // labels: scrittura bianca con bordo nero (non linee nere!)
+    function drawLabel(text, x, y){
+      ctx.font = "900 12px Arial";
+      ctx.textAlign="center"; ctx.textBaseline="middle";
+      ctx.lineWidth = 4;
+      ctx.strokeStyle = "rgba(0,0,0,0.85)";
+      ctx.strokeText(text, x, y);
+      ctx.fillStyle = "#fff";
+      ctx.fillText(text, x, y);
+    }
 
-    const t0 = performance.now();
-    let drawn = 0;
+    // disegna linee + etichette ogni 4 hPa
+    contours.forEach(c=>{
+      const v = Math.round(c.value);
+      const thick = (v % 8 === 0) ? 2.4 : ((v % 4 === 0) ? 1.8 : 1.2);
+      ctx.lineWidth = thick;
+      ctx.strokeStyle = 'rgba(255,255,255,0.80)';
 
-    for(let y = half; y < h; y += stride){
-      const yi = y|0;
-      const lat = latByY[yi];
-      const gyf = (m.la1 - lat) / m.dy;
-      if(gyf < 0 || gyf > m.ny-1) continue;
-      const gy = gyf | 0;
-      const rowOff = gy * m.nx;
-
-      for(let x = half; x < w; x += stride){
-        const xi = x|0;
-        const lng = lonByX[xi];
-        const gxf = (lng - m.lo1) / m.dx;
-        if(gxf < 0 || gxf > m.nx-1) continue;
-        const gx = gxf | 0;
-        const idx = rowOff + gx;
-
-        const u = currentData.wind_u.data[idx];
-        const v = currentData.wind_v.data[idx];
-        const sp = Math.sqrt(u*u + v*v);
-        if(!Number.isFinite(sp) || sp < (IS_MOBILE ? 1.1 : 0.7)) continue;
-
-        const ang = Math.atan2(-v, u);
-
-        const len = clamp(12 + sp*3.0, 16, IS_MOBILE ? 58 : 66);
-        const thick = clamp(1.1 + sp*0.22, 1.4, IS_MOBILE ? 3.9 : 4.6);
-        const head = clamp(len*0.34, 7, 22);
-        const tail = len - head;
-
-        const rgb = vividWindColor(sp);
-        const col = `rgb(${rgb.r},${rgb.g},${rgb.b})`;
-        const alpha = clamp(0.45 + sp/18, 0.50, 0.95);
-
-        ctx.save();
-        ctx.translate(xi, yi);
-        ctx.rotate(ang);
-
-        // outline
-        ctx.globalAlpha = Math.min(alpha+0.05,1);
-        ctx.strokeStyle = 'rgba(0,0,0,0.92)';
-        ctx.lineWidth = thick + (IS_MOBILE ? 1.7 : 2.2);
-
+      c.coordinates.forEach(poly => poly.forEach(ring => {
         ctx.beginPath();
-        ctx.moveTo(-tail*0.55, 0);
-        ctx.lineTo(tail*0.55, 0);
+        const pts = [];
+        for(let j=0;j<ring.length;j++){
+          const p = ring[j];
+          const pt = map.latLngToContainerPoint([m.la1 - p[1]*m.dy, m.lo1 + p[0]*m.dx]);
+          if(j===0) ctx.moveTo(pt.x, pt.y); else ctx.lineTo(pt.x, pt.y);
+          pts.push(pt);
+        }
         ctx.stroke();
 
-        ctx.beginPath();
-        ctx.moveTo(tail*0.55 + head, 0);
-        ctx.lineTo(tail*0.55, -head*0.42);
-        ctx.moveTo(tail*0.55 + head, 0);
-        ctx.lineTo(tail*0.55,  head*0.42);
-        ctx.stroke();
+        // label
+        if((v % 4 === 0) && pts.length > 90){
+          const mid = pts[Math.floor(pts.length*0.55)];
+          drawLabel(String(v), mid.x, mid.y);
+        }
+      }));
+    });
 
-        // colore
-        ctx.globalAlpha = alpha;
-        ctx.strokeStyle = col;
-        ctx.lineWidth = thick;
+    // A/B su massimi/minimi (semplice, robusto, pochi marker)
+    const nx=m.nx, ny=m.ny, arr=currentData.cleanP;
+    const markers = [];
 
-        ctx.beginPath();
-        ctx.moveTo(-tail*0.55, 0);
-        ctx.lineTo(tail*0.55, 0);
-        ctx.stroke();
+    // campionamento griglia
+    const sx = 26, sy = 22; // più grande = meno marker
+    for(let y=sy; y<ny-sy; y+=sy){
+      for(let x=sx; x<nx-sx; x+=sx){
+        const i = y*nx+x;
+        const p = arr[i];
+        if(!Number.isFinite(p)) continue;
 
-        ctx.beginPath();
-        ctx.moveTo(tail*0.55 + head, 0);
-        ctx.lineTo(tail*0.55, -head*0.42);
-        ctx.moveTo(tail*0.55 + head, 0);
-        ctx.lineTo(tail*0.55,  head*0.42);
-        ctx.stroke();
-
-        // dot base
-        ctx.globalAlpha = alpha*0.9;
-        ctx.fillStyle = 'rgba(0,0,0,0.85)';
-        ctx.beginPath(); ctx.arc(-tail*0.55, 0, thick+1.0, 0, Math.PI*2); ctx.fill();
-        ctx.fillStyle = col;
-        ctx.beginPath(); ctx.arc(-tail*0.55, 0, thick*0.75, 0, Math.PI*2); ctx.fill();
-
-        ctx.restore();
-
-        drawn++;
-
-        if((performance.now() - t0) >= this.targetMs){
-          this.lastCost = performance.now() - t0;
-          ctx.shadowBlur = 0;
-          return;
+        // check 8-neighbors “a distanza”
+        let isMax=true, isMin=true;
+        const d = 7; // neighborhood distance
+        const nn = [
+          (y-d)*nx+(x-d), (y-d)*nx+x, (y-d)*nx+(x+d),
+          y*nx+(x-d),               y*nx+(x+d),
+          (y+d)*nx+(x-d), (y+d)*nx+x, (y+d)*nx+(x+d),
+        ];
+        for(const j of nn){
+          const q = arr[j];
+          if(q >= p) isMax = false;
+          if(q <= p) isMin = false;
+          if(!isMax && !isMin) break;
+        }
+        if(isMax || isMin){
+          markers.push({x,y,p, type: isMax ? 'A' : 'B'});
         }
       }
     }
 
-    this.lastCost = performance.now() - t0;
-    ctx.shadowBlur = 0;
-  }
-};
-
-/* ============================================================================
-   ISOBARE / ISOTERME: lasciate, ma già “on demand”
-============================================================================ */
-function drawIsobarsLogic(ctx) {
-  if(!currentData?.meta || !currentData.cleanP) return;
-  const m = currentData.meta;
-  const contours = d3.contours().size([m.nx, m.ny]).thresholds(d3.range(960, 1050, 2))(currentData.cleanP);
-
-  contours.forEach(c => {
-    const v = Math.round(c.value);
-    let stroke = "rgba(160,100,255,0.78)";
-    if(v < 1010) stroke = "rgba(60,120,255,0.80)";
-    if(v > 1015) stroke = "rgba(255,80,80,0.80)";
-
-    const is8 = (v % 8 === 0);
-    const is4 = (v % 4 === 0);
-    ctx.strokeStyle = stroke;
-    ctx.lineWidth = is8 ? 2.4 : (is4 ? 1.8 : 1.1);
-
-    c.coordinates.forEach(poly => poly.forEach(ring => {
-      ctx.beginPath();
-      const pts = [];
-      ring.forEach((p, j) => {
-        const pt = map.latLngToContainerPoint([m.la1-p[1]*m.dy, m.lo1+p[0]*m.dx]);
-        if(j===0) ctx.moveTo(pt.x, pt.y); else ctx.lineTo(pt.x, pt.y);
-        pts.push(pt);
-      });
-      ctx.stroke();
-
-      if(pts.length > 70 && (v % 4 === 0)) {
-        const mid = pts[Math.floor(pts.length*0.55)];
-        const txt = String(v);
-        ctx.font = "900 12px Arial";
-        ctx.textAlign="center"; ctx.textBaseline="middle";
-        const w = ctx.measureText(txt).width + 18;
-        const h = 18;
-        ctx.fillStyle = "rgba(0,0,0,0.55)";
-        ctx.fillRect(mid.x - w/2, mid.y - h/2, w, h);
-        ctx.lineWidth = 3;
-        ctx.strokeStyle = "rgba(0,0,0,0.85)";
-        ctx.strokeText(txt, mid.x, mid.y);
-        ctx.fillStyle = "#fff";
-        ctx.fillText(txt, mid.x, mid.y);
+    // filtra marker troppo vicini
+    const keep = [];
+    const minDistPx = 85;
+    for(const mk of markers.sort((a,b)=> (b.p-a.p))){
+      const lat = m.la1 - mk.y*m.dy;
+      const lng = m.lo1 + mk.x*m.dx;
+      const pt = map.latLngToContainerPoint([lat,lng]);
+      let ok=true;
+      for(const k of keep){
+        const dx=pt.x-k.pt.x, dy=pt.y-k.pt.y;
+        if(dx*dx+dy*dy < minDistPx*minDistPx){ ok=false; break; }
       }
-    }));
-  });
-}
-
-function drawIsothermsLogic(ctx) {
-  if(!currentData?.meta || !currentData.temp) return;
-  const m = currentData.meta;
-
-  const raw = currentData.temp;
-  let tMin =  999, tMax = -999;
-  for(let i=0;i<raw.length;i++){
-    const v = raw[i];
-    if(v < tMin) tMin = v;
-    if(v > tMax) tMax = v;
-  }
-  const lo = Math.floor(tMin)-1, hi = Math.ceil(tMax)+1;
-  const contours = d3.contours().size([m.nx, m.ny]).thresholds(d3.range(lo, hi+1, 1))(raw);
-
-  contours.forEach(c => {
-    const v = Math.round(c.value);
-    const thick = (v % 5 === 0) ? 2.2 : 1.0;
-    ctx.strokeStyle = (v % 5 === 0) ? "rgba(255,255,255,0.70)" : "rgba(255,255,255,0.38)";
-    ctx.lineWidth = thick;
-
-    c.coordinates.forEach(poly => poly.forEach(ring => {
-      ctx.beginPath();
-      const pts = [];
-      ring.forEach((p, j) => {
-        const pt = map.latLngToContainerPoint([m.la1-p[1]*m.dy, m.lo1+p[0]*m.dx]);
-        if(j===0) ctx.moveTo(pt.x, pt.y); else ctx.lineTo(pt.x, pt.y);
-        pts.push(pt);
-      });
-      ctx.stroke();
-
-      if((v % 5 === 0) && pts.length > 90){
-        const mid = pts[Math.floor(pts.length*0.55)];
-        const txt = `${v}°`;
-        const z = map.getZoom();
-        const fontSize = clamp(12 + (z-6)*1.6, 12, 28);
-        ctx.font = `900 ${fontSize}px Arial`;
-        ctx.textAlign="center"; ctx.textBaseline="middle";
-        const w = ctx.measureText(txt).width + 16;
-        const h = fontSize + 10;
-        ctx.fillStyle = "rgba(0,0,0,0.55)";
-        ctx.fillRect(mid.x - w/2, mid.y - h/2, w, h);
-        ctx.lineWidth = 4;
-        ctx.strokeStyle = "rgba(0,0,0,0.85)";
-        ctx.strokeText(txt, mid.x, mid.y);
-        ctx.fillStyle = "#fff";
-        ctx.fillText(txt, mid.x, mid.y);
+      if(ok){
+        keep.push({pt, mk});
+        if(keep.length >= 10) break; // pochi, puliti
       }
-    }));
-  });
-}
-
-/* ============================================================================
-   PARTICELLE: come impostazione tua (non "pompate")
-============================================================================ */
-function updateParticles() {
-  if (velocityLayer) map.removeLayer(velocityLayer);
-  if (!particlesOn || !currentData?.wind_u || !currentData?.wind_v) return;
-
-  velocityLayer = L.velocityLayer({
-    displayValues: false,
-    data: [currentData.wind_u, currentData.wind_v],
-    maxVelocity: 25,
-    velocityScale: 0.008,
-    particleMultiplier: IS_MOBILE ? 1/900 : 1/550,
-    lineWidth: 2,
-    particleAge: IS_MOBILE ? 70 : 100,
-    frameRate: IS_MOBILE ? 35 : 55,
-    opacity: 0.85,
-    colorScale: WIND_COLOR_SCALE,
-    pane: 'particlePane'
-  }).addTo(map);
-}
-
-/* ============================================================================
-   PICK CURSORE + GPS
-============================================================================ */
-function onPick(e){
-  if(!currentData?.meta) return;
-  const m = currentData.meta;
-
-  const gx = Math.round((e.latlng.lng - m.lo1) / m.dx);
-  const gy = Math.round((m.la1 - e.latlng.lat) / m.dy);
-  if(gx<0 || gy<0 || gx>=m.nx || gy>=m.ny) return;
-
-  const i = gy * m.nx + gx;
-
-  let val = "--", unit = "";
-  if(selected.has('temp')) { val = (currentData.temp?.[i] ?? 0).toFixed(1); unit = "°C"; }
-  else if(selected.has('wind')) {
-    const u=currentData.wind_u.data[i], v=currentData.wind_v.data[i];
-    val = (Math.sqrt(u*u+v*v)*3.6).toFixed(1); unit = "km/h";
-  }
-  else if(selected.has('rain')) { val = (currentData.rain?.[i] ?? 0).toFixed(1); unit = "mm"; }
-  else if(selected.has('rh')) { val = Math.round(currentData.rh?.[i] ?? 0); unit = "%"; }
-  else if(selected.has('press')) { val = Math.round(currentData.cleanP?.[i] ?? 1013); unit = "hPa"; }
-  else if(selected.has('cloud')) { val = Math.round((currentData.cloud||currentData.cld)?.[i] ?? 0); unit = "%"; }
-
-  document.getElementById('val-display').innerText = val;
-  document.getElementById('unit-display').innerText = unit;
-}
-
-function parseCatalogTime(item){
-  const cand = item.ts ?? item.time ?? item.valid ?? item.iso ?? item.datetime ?? null;
-  if (cand != null){
-    if (typeof cand === 'number') return cand < 1e12 ? cand*1000 : cand;
-    const t = Date.parse(cand);
-    return Number.isFinite(t) ? t : null;
-  }
-  if (item.label){
-    const t = Date.parse(item.label);
-    return Number.isFinite(t) ? t : null;
-  }
-  return null;
-}
-
-function findNearestNowIndex(){
-  const now = Date.now();
-  let bestI = 0, bestD = Infinity;
-  for (let i=0;i<catalog.length;i++){
-    const t = parseCatalogTime(catalog[i]);
-    if (t == null) continue;
-    const d = Math.abs(t-now);
-    if (d < bestD){ bestD = d; bestI = i; }
-  }
-  return bestI;
-}
-
-async function fetchStepDataForIndex(i){
-  const cur = parseInt(document.getElementById('time-slider').value);
-  if(i === cur) return currentData;
-
-  const r = await fetch('data_weather/' + catalog[i].file + '?t=' + Date.now());
-  const d = await r.json();
-
-  if(d.press){
-    d.cleanP = new Float32Array(d.press.length);
-    for(let j=0;j<d.press.length;j++){
-      let v = d.press[j]; if(v > 2000) v /= 100;
-      d.cleanP[j] = (!v || v < 850) ? 1013 : v;
     }
-  }
-  return d;
-}
 
-async function updateGpsStatsAt(latlng, idx){
-  if(!catalog.length) return;
+    // disegna A/B
+    for(const it of keep){
+      const {pt, mk} = it;
+      const letter = mk.type;
+      const txt = letter;
 
-  const data = await fetchStepDataForIndex(idx);
-  if(!data?.meta) return;
+      const r = 18;
+      ctx.beginPath();
+      ctx.fillStyle = "rgba(0,0,0,0.55)";
+      ctx.arc(pt.x, pt.y, r, 0, Math.PI*2);
+      ctx.fill();
 
-  const m = data.meta;
-  const gx = Math.round((latlng.lng - m.lo1) / m.dx);
-  const gy = Math.round((m.la1 - latlng.lat) / m.dy);
-  if(gx<0 || gy<0 || gx>=m.nx || gy>=m.ny) return;
+      ctx.font = "900 20px Arial";
+      ctx.textAlign="center"; ctx.textBaseline="middle";
+      ctx.lineWidth = 5;
+      ctx.strokeStyle = "rgba(0,0,0,0.9)";
+      ctx.strokeText(txt, pt.x, pt.y);
+      ctx.fillStyle = "#fff";
+      ctx.fillText(txt, pt.x, pt.y);
 
-  const i = gy * m.nx + gx;
-
-  document.getElementById('gps-t').innerText = (data.temp?.[i] ?? 0).toFixed(1) + "°";
-  document.getElementById('gps-r').innerText = (data.rain?.[i] ?? 0).toFixed(1) + "mm";
-  const u = data.wind_u.data[i], v = data.wind_v.data[i];
-  document.getElementById('gps-w').innerText = (Math.sqrt(u*u + v*v)*3.6).toFixed(0) + " km/h";
-  document.getElementById('gps-h').innerText = Math.round(data.rh?.[i] ?? 0) + "%";
-}
-
-/* ============================================================================
-   UI: toggle + playback
-============================================================================ */
-window.toggleLayer = (l) => { if(selected.has(l)) selected.delete(l); else selected.add(l); updateUI(); hardRedraw(); };
-window.toggleIsobars = () => { showIsobars = !showIsobars; updateUI(); hardRedraw(); };
-window.toggleIsotherms = () => { showIsotherms = !showIsotherms; updateUI(); hardRedraw(); };
-window.toggleParticles = () => { particlesOn = !particlesOn; updateUI(); updateParticles(); };
-window.toggleHiRes = () => { hiRes = !hiRes; updateUI(); ScalarRenderer.setDirty(); ScalarRenderer.start(); };
-
-function updateUI(){
-  ['wind','temp','rain','rh','press','cloud'].forEach(l => {
-    const btn = document.getElementById('btn-' + l);
-    if(selected.has(l)) btn.classList.add('active'); else btn.classList.remove('active');
-  });
-  showIsobars ? document.getElementById('btn-iso').classList.add('active') : document.getElementById('btn-iso').classList.remove('active');
-  showIsotherms ? document.getElementById('btn-therm').classList.add('active') : document.getElementById('btn-therm').classList.remove('active');
-  particlesOn ? document.getElementById('btn-flow').classList.add('active') : document.getElementById('btn-flow').classList.remove('active');
-  hiRes ? document.getElementById('btn-hires').classList.add('active') : document.getElementById('btn-hires').classList.remove('active');
-  document.getElementById('btn-hires').innerText = hiRes ? "HI-RES ✅" : "HI-RES ❌";
-}
-
-function togglePlay() {
-  isPlaying = !isPlaying;
-  document.getElementById('play-btn').innerText = isPlaying ? "❚❚" : "►";
-  if(isPlaying) playLoop();
-}
-function playLoop() {
-  if(!isPlaying) return;
-  const s = document.getElementById('time-slider');
-  let v = parseInt(s.value) + 1;
-  if(v >= catalog.length) v = 0;
-  s.value = v;
-  loadStep(v, false);
-  setTimeout(playLoop, 950);
-}
-
-/* ============================================================================
-   LOAD: catalog + step
-============================================================================ */
-async function loadCatalog() {
-  const r = await fetch('data_weather/catalog.json?t=' + Date.now());
-  catalog = await r.json();
-
-  const slider = document.getElementById('time-slider');
-  slider.max = Math.max(0, catalog.length - 1);
-  slider.oninput = (e) => loadStep(parseInt(e.target.value), false);
-
-  nearestNowIndex = findNearestNowIndex();
-  slider.value = nearestNowIndex;
-
-  await loadStep(nearestNowIndex, true);
-}
-
-async function loadStep(i, isAutoNow) {
-  const r = await fetch('data_weather/' + catalog[i].file + '?t=' + Date.now());
-  currentData = await r.json();
-
-  document.getElementById('time-label').innerText = catalog[i].label ?? String(i);
-  document.getElementById('valid-time').innerText = catalog[i].label ?? String(i);
-
-  if(isAutoNow) nearestNowIndex = i;
-
-  if(currentData.press) {
-    currentData.cleanP = new Float32Array(currentData.press.length);
-    for(let j=0; j<currentData.press.length; j++) {
-      let v = currentData.press[j]; if(v > 2000) v /= 100;
-      currentData.cleanP[j] = (!v || v < 850) ? 1013 : v;
+      // valore sotto (piccolo)
+      ctx.font = "900 12px Arial";
+      ctx.lineWidth = 4;
+      ctx.strokeStyle = "rgba(0,0,0,0.85)";
+      ctx.strokeText(String(Math.round(mk.p)), pt.x, pt.y + 22);
+      ctx.fillStyle = "#fff";
+      ctx.fillText(String(Math.round(mk.p)), pt.x, pt.y + 22);
     }
   }
 
-  hardRedraw();
+  /* ===============================
+     ISOTHERMS (bianche, ok)
+  =============================== */
+  function drawIsothermsLogic(ctx) {
+    if(!currentData?.meta || !currentData.temp) return;
+    const m = currentData.meta;
 
-  // se overlay GPS aperto, riallinea al tempo "attuale"
-  if (document.getElementById('gps-overlay').classList.contains('active') && lastGpsLatLng) {
-    updateGpsStatsAt(lastGpsLatLng, nearestNowIndex);
+    const raw = currentData.temp;
+    let tMin =  999, tMax = -999;
+    for(let i=0;i<raw.length;i++){
+      const v = raw[i];
+      if(v < tMin) tMin = v;
+      if(v > tMax) tMax = v;
+    }
+    const lo = Math.floor(tMin)-1, hi = Math.ceil(tMax)+1;
+    const contours = d3.contours().size([m.nx, m.ny]).thresholds(d3.range(lo, hi+1, 1))(raw);
+
+    contours.forEach(c => {
+      const v = Math.round(c.value);
+      const thick = (v % 5 === 0) ? 2.2 : 1.0;
+      ctx.strokeStyle = (v % 5 === 0) ? "rgba(255,255,255,0.70)" : "rgba(255,255,255,0.38)";
+      ctx.lineWidth = thick;
+
+      c.coordinates.forEach(poly => poly.forEach(ring => {
+        ctx.beginPath();
+        const pts = [];
+        ring.forEach((p, j) => {
+          const pt = map.latLngToContainerPoint([m.la1-p[1]*m.dy, m.lo1+p[0]*m.dx]);
+          if(j===0) ctx.moveTo(pt.x, pt.y); else ctx.lineTo(pt.x, pt.y);
+          pts.push(pt);
+        });
+        ctx.stroke();
+
+        if((v % 5 === 0) && pts.length > 90){
+          const mid = pts[Math.floor(pts.length*0.55)];
+          const txt = `${v}°`;
+          const z = map.getZoom();
+          const fontSize = clamp(12 + (z-6)*1.6, 12, 28);
+          ctx.font = `900 ${fontSize}px Arial`;
+          ctx.textAlign="center"; ctx.textBaseline="middle";
+          const w = ctx.measureText(txt).width + 16;
+          const h = fontSize + 10;
+          ctx.fillStyle = "rgba(0,0,0,0.55)";
+          ctx.fillRect(mid.x - w/2, mid.y - h/2, w, h);
+          ctx.lineWidth = 4;
+          ctx.strokeStyle = "rgba(0,0,0,0.85)";
+          ctx.strokeText(txt, mid.x, mid.y);
+          ctx.fillStyle = "#fff";
+          ctx.fillText(txt, mid.x, mid.y);
+        }
+      }));
+    });
   }
-}
 
-/* ============================================================================
-   REDRAW: orchestrazione
-============================================================================ */
-let scalarLayer, arrowLayer, isoLayer, thermLayer;
+  /* ===============================
+     PARTICELLE (come le tue)
+  =============================== */
+  function updateParticles() {
+    if (velocityLayer) map.removeLayer(velocityLayer);
+    if (!particlesOn || !currentData?.wind_u || !currentData?.wind_v) return;
 
-function hardRedraw(){
-  // scalari: progressive full-res
-  ScalarRenderer.setDirty();
-  ScalarRenderer.start();
+    velocityLayer = L.velocityLayer({
+      displayValues: false,
+      data: [currentData.wind_u, currentData.wind_v],
+      maxVelocity: 25,
+      velocityScale: 0.008,
+      particleMultiplier: IS_MOBILE ? 1/900 : 1/550,
+      lineWidth: 2,
+      particleAge: IS_MOBILE ? 70 : 100,
+      frameRate: IS_MOBILE ? 35 : 55,
+      opacity: 0.85,
+      colorScale: WIND_COLOR_SCALE,
+      pane: 'particlePane'
+    }).addTo(map);
+  }
 
-  // frecce: immediate (budget)
-  arrowLayer && arrowLayer._redraw();
+  /* ===============================
+     CURSOR PICK
+  =============================== */
+  function onPick(e){
+    if(!currentData?.meta) return;
+    const m = currentData.meta;
+    const gx = Math.round((e.latlng.lng - m.lo1) / m.dx), gy = Math.round((m.la1 - e.latlng.lat) / m.dy);
+    if(gx<0 || gy<0 || gx>=m.nx || gy>=m.ny) return;
+    const i = gy * m.nx + gx;
 
-  // contour: solo se attivi
-  if(showIsobars) isoLayer && isoLayer._redraw();
-  if(showIsotherms) thermLayer && thermLayer._redraw();
-
-  // particelle
-  updateParticles();
-}
-
-/* ============================================================================
-   BOOT
-============================================================================ */
-window.addEventListener('load', async () => {
-  map = L.map('map', {
-    zoomControl: false,
-    background: '#0a0a0a',
-    worldCopyJump: true
-  }).fitBounds(ITALY_BOUNDS);
-
-  // base map dark
-  L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png', { maxZoom: 19 }).addTo(map);
-  L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_only_labels/{z}/{x}/{y}{r}.png', { maxZoom: 19, opacity: 0.9 }).addTo(map);
-
-  // panes
-  map.createPane('scalarPane'); map.getPane('scalarPane').style.zIndex = 200;
-  map.createPane('particlePane'); map.getPane('particlePane').style.zIndex = 400;
-  map.createPane('vectorPane'); map.getPane('vectorPane').style.zIndex = 700;
-
-  // layers
-  scalarLayer = new CanvasLayer({
-    pane: 'scalarPane',
-    className: 'scalar-layer',
-    zIndex: 210,
-    draw: (ctx) => {
-      // disegna semplicemente l’offscreen full-res già pronto (o parziale)
-      if(!ScalarRenderer.offCtx) ScalarRenderer.ensure();
-      ctx.imageSmoothingEnabled = true;
-      ctx.drawImage(ScalarRenderer.off, 0, 0);
+    let val = "--", unit = "";
+    if(selected.has('temp')) { val = (currentData.temp?.[i] ?? 0).toFixed(1); unit = "°C"; }
+    else if(selected.has('wind')) {
+      const u=currentData.wind_u.data[i], v=currentData.wind_v.data[i];
+      val = (Math.sqrt(u*u+v*v)*3.6).toFixed(1); unit = "km/h";
     }
-  }).addTo(map);
+    else if(selected.has('rain')) { val = (currentData.rain?.[i] ?? 0).toFixed(1); unit = "mm"; }
+    else if(selected.has('rh')) { val = Math.round(currentData.rh?.[i] ?? 0); unit = "%"; }
+    else if(selected.has('press')) { val = Math.round(currentData.cleanP?.[i] ?? 1013); unit = "hPa"; }
+    else if(selected.has('cloud')) { val = Math.round((currentData.cloud||currentData.cld)?.[i] ?? 0); unit = "%"; }
 
-  arrowLayer = new CanvasLayer({
-    pane: 'vectorPane',
-    className: 'vector-layer',
-    zIndex: 710,
-    draw: (ctx) => {
-      ArrowRenderer.draw(ctx);
+    document.getElementById('val-display').innerText = val;
+    document.getElementById('unit-display').innerText = unit;
+  }
+
+  /* ===============================
+     TIME: nearest real-world step
+  =============================== */
+  function parseCatalogTime(item){
+    // 1) se c'è un timestamp esplicito
+    const cand = item.ts ?? item.time ?? item.valid ?? item.iso ?? item.datetime ?? null;
+    if(cand != null){
+      if(typeof cand === 'number') return cand < 1e12 ? cand*1000 : cand;
+      const t = Date.parse(cand);
+      if(Number.isFinite(t)) return t;
     }
-  }).addTo(map);
 
-  isoLayer = new CanvasLayer({
-    pane: 'vectorPane',
-    className: 'vector-layer',
-    zIndex: 720,
-    draw: (ctx) => { if(showIsobars) drawIsobarsLogic(ctx); }
-  }).addTo(map);
+    // 2) prova a parsare label tipo "24/02 18:00" oppure "2026-02-24 18:00"
+    if(typeof item.label === 'string'){
+      const s = item.label.trim();
 
-  thermLayer = new CanvasLayer({
-    pane: 'vectorPane',
-    className: 'vector-layer',
-    zIndex: 730,
-    draw: (ctx) => { if(showIsotherms) drawIsothermsLogic(ctx); }
-  }).addTo(map);
+      // ISO-ish
+      const tIso = Date.parse(s);
+      if(Number.isFinite(tIso)) return tIso;
 
-  // eventi
-  map.on('mousemove', onPick);
+      // dd/mm hh:mm (assume anno corrente)
+      const m = s.match(/(\d{1,2})[\/\-](\d{1,2}).*?(\d{1,2}):(\d{2})/);
+      if(m){
+        const dd = parseInt(m[1],10);
+        const MM = parseInt(m[2],10);
+        const hh = parseInt(m[3],10);
+        const mi = parseInt(m[4],10);
+        const now = new Date();
+        const y = now.getFullYear();
+        const d = new Date(y, MM-1, dd, hh, mi, 0, 0);
+        return d.getTime();
+      }
+    }
+    return null;
+  }
 
-  // evita calcoli mentre trascini (fluidità): rimanda al moveend
-  let moving = false;
-  map.on('movestart', ()=>{ moving = true; ScalarRenderer.stop(); });
-  map.on('moveend', ()=>{
-    moving = false;
-    // aggiorna proiezione + ridisegna
-    ProjCache.update();
-    hardRedraw();
+  function findNearestNowIndex(){
+    const now = Date.now();
+    let bestI = 0, bestD = Infinity;
+    for(let i=0;i<catalog.length;i++){
+      const t = parseCatalogTime(catalog[i]);
+      if(t == null) continue;
+      const d = Math.abs(t-now);
+      if(d < bestD){ bestD=d; bestI=i; }
+    }
+    return bestI;
+  }
+
+  /* ===============================
+     GPS stats: sempre sullo step "attuale" (nearestNowIndex)
+  =============================== */
+  function updateGpsStatsAt(latlng){
+    if(!currentData?.meta) return;
+    const m = currentData.meta;
+    const gx = Math.round((latlng.lng - m.lo1) / m.dx), gy = Math.round((m.la1 - latlng.lat) / m.dy);
+    if(gx<0 || gy<0 || gx>=m.nx || gy>=m.ny) return;
+    const i = gy * m.nx + gx;
+
+    document.getElementById('gps-t').innerText = (currentData.temp?.[i] ?? 0).toFixed(1) + "°";
+    document.getElementById('gps-r').innerText = (currentData.rain?.[i] ?? 0).toFixed(1) + "mm";
+    const u = currentData.wind_u.data[i], v = currentData.wind_v.data[i];
+    document.getElementById('gps-w').innerText = (Math.sqrt(u*u + v*v)*3.6).toFixed(0) + " km/h";
+    document.getElementById('gps-h').innerText = Math.round(currentData.rh?.[i] ?? 0) + "%";
+  }
+
+  /* ===============================
+     UI actions
+  =============================== */
+  window.toggleLayer = (l) => { if(selected.has(l)) selected.delete(l); else selected.add(l); updateUI(); redrawAll(true); };
+  window.toggleIsobars = () => { showIsobars = !showIsobars; updateUI(); redrawAll(true); };
+  window.toggleIsotherms = () => { showIsotherms = !showIsotherms; updateUI(); redrawAll(true); };
+  window.toggleParticles = () => { particlesOn = !particlesOn; updateUI(); updateParticles(); };
+  window.toggleArrows = () => { arrowsOn = !arrowsOn; ArrowCache.key=''; updateUI(); redrawAll(true); };
+
+  function updateUI(){
+    ['wind','temp','rain','rh','press','cloud'].forEach(l => {
+      const btn = document.getElementById('btn-' + l);
+      if(selected.has(l)) btn.classList.add('active'); else btn.classList.remove('active');
+    });
+    document.getElementById('btn-iso').classList.toggle('active', showIsobars);
+    document.getElementById('btn-therm').classList.toggle('active', showIsotherms);
+
+    document.getElementById('btn-flow').classList.toggle('active', particlesOn);
+    document.getElementById('btn-flow').innerText = particlesOn ? "FLUSSO 🌬️ (ON)" : "FLUSSO 🌬️ (OFF)";
+
+    document.getElementById('btn-arrows').classList.toggle('active', arrowsOn);
+    document.getElementById('btn-arrows').innerText = arrowsOn ? "FRECCE 🧭 (ON)" : "FRECCE 🧭 (OFF)";
+  }
+
+  function togglePlay() {
+    isPlaying = !isPlaying;
+    document.getElementById('play-btn').innerText = isPlaying ? "❚❚" : "►";
+    if(isPlaying) playLoop();
+  }
+  function playLoop() {
+    if(!isPlaying) return;
+    const s = document.getElementById('time-slider');
+    let v = parseInt(s.value) + 1;
+    if(v >= catalog.length) v = 0;
+    s.value = v;
+    loadStep(v);
+    setTimeout(playLoop, 950);
+  }
+
+  /* ===============================
+     Load catalog + step
+  =============================== */
+  async function loadCatalog() {
+    const r = await fetch('data_weather/catalog.json?t=' + Date.now());
+    catalog = await r.json();
+
+    const slider = document.getElementById('time-slider');
+    slider.max = Math.max(0, catalog.length - 1);
+    slider.oninput = (e) => loadStep(parseInt(e.target.value));
+
+    nearestNowIndex = findNearestNowIndex();
+    slider.value = nearestNowIndex;
+    await loadStep(nearestNowIndex);
+  }
+
+  async function loadStep(i) {
+    const r = await fetch('data_weather/' + catalog[i].file + '?t=' + Date.now());
+    currentData = await r.json();
+
+    document.getElementById('time-label').innerText = catalog[i].label ?? String(i);
+    document.getElementById('valid-time').innerText = catalog[i].label ?? String(i);
+
+    if(currentData.press) {
+      currentData.cleanP = new Float32Array(currentData.press.length);
+      for(let j=0; j<currentData.press.length; j++) {
+        let v = currentData.press[j];
+        if(v > 2000) v /= 100;
+        currentData.cleanP[j] = (!v || v < 850) ? 1013 : v;
+      }
+    }
+
+    // invalidate frecce cache su cambio step
+    ArrowCache.key = '';
+
+    redrawAll(true);
+
+    // se gps attivo aggiorna (step corrente, che all’avvio è “reale”)
+    if(document.getElementById('gps-overlay').classList.contains('active') && lastGpsLatLng){
+      updateGpsStatsAt(lastGpsLatLng);
+    }
+  }
+
+  function redrawAll(force){
+    if(!currentData) return;
+
+    // scalari sempre (sono quelli che devono rispondere ai toggle)
+    scalarLayer._redraw();
+
+    // frecce SOLO su moveend/zoomend/step/toggle (qui siamo in redrawAll => ok)
+    if(force) arrowLayer._redraw();
+
+    if(showIsobars) isoLayer._redraw();
+    if(showIsotherms) thermLayer._redraw();
+
+    updateParticles();
+  }
+
+  /* ===============================
+     BOOT
+  =============================== */
+  window.addEventListener('load', async () => {
+    map = L.map('map', { zoomControl:false, background:'#0a0a0a', worldCopyJump:true }).fitBounds(ITALY_BOUNDS);
+
+    L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png', { maxZoom: 19 }).addTo(map);
+    L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_only_labels/{z}/{x}/{y}{r}.png', { maxZoom: 19, opacity: 0.9 }).addTo(map);
+
+    map.createPane('scalarPane'); map.getPane('scalarPane').style.zIndex = 200;
+    map.createPane('particlePane'); map.getPane('particlePane').style.zIndex = 400;
+    map.createPane('vectorPane'); map.getPane('vectorPane').style.zIndex = 700;
+
+    scalarLayer = new CanvasLayer({
+      pane:'scalarPane', className:'scalar-layer', zIndex: 210,
+      draw: (ctx)=> drawScalar(ctx)
+    }).addTo(map);
+
+    arrowLayer  = new CanvasLayer({
+      pane:'vectorPane', className:'vector-layer', zIndex: 710,
+      draw: (ctx)=> drawWindArrowsFromCache(ctx)
+    }).addTo(map);
+
+    isoLayer = new CanvasLayer({
+      pane:'vectorPane', className:'vector-layer', zIndex: 720,
+      draw: (ctx)=> { if(showIsobars) drawIsobarsWhite(ctx); }
+    }).addTo(map);
+
+    thermLayer = new CanvasLayer({
+      pane:'vectorPane', className:'vector-layer', zIndex: 730,
+      draw: (ctx)=> { if(showIsotherms) drawIsothermsLogic(ctx); }
+    }).addTo(map);
+
+    map.on('mousemove', onPick);
+
+    // IMPORTANT: durante drag NON ridisegniamo frecce/isobare (solo al termine)
+    map.on('movestart', ()=>{ /* niente */ });
+    map.on('moveend', ()=>{ ArrowCache.key=''; redrawAll(true); });
+    map.on('zoomend', ()=>{ ArrowCache.key=''; redrawAll(true); });
+    map.on('resize', ()=>{ ArrowCache.key=''; redrawAll(true); });
+
+    map.on('locationfound', (e) => {
+      lastGpsLatLng = e.latlng;
+      if (userMarker) map.removeLayer(userMarker);
+      userMarker = L.circleMarker(e.latlng, { radius: 8, color: '#0077ff', weight: 4, fillOpacity: 1, fillColor: 'white' }).addTo(map);
+      updateGpsStatsAt(e.latlng);
+      toggleGpsPanel(true);
+    });
+
+    await loadCatalog();
+    document.getElementById('unit-display').innerText = '';
+    updateUI();
   });
-
-  map.on('zoomstart', ()=>{ moving = true; ScalarRenderer.stop(); });
-  map.on('zoomend', ()=>{
-    moving = false;
-    ProjCache.update();
-    hardRedraw();
-  });
-
-  map.on('resize', ()=>{
-    ProjCache.update();
-    ScalarRenderer.ensure();
-    hardRedraw();
-  });
-
-  map.on('locationfound', (e) => {
-    lastGpsLatLng = e.latlng;
-    if (userMarker) map.removeLayer(userMarker);
-    userMarker = L.circleMarker(e.latlng, { radius: 8, color: '#0077ff', weight: 4, fillOpacity: 1, fillColor: 'white' }).addTo(map);
-
-    // GPS deve mostrare parametri "attuali" (step più vicino a ora)
-    updateGpsStatsAt(e.latlng, nearestNowIndex);
-    toggleGpsPanel(true);
-  });
-
-  await loadCatalog();
-  document.getElementById('unit-display').innerText = '';
-  updateUI();
-});
 </script>
 </body>
 </html>
