@@ -1,7 +1,7 @@
 <!DOCTYPE html>
 <html>
 <head>
-  <title>Sicilia MeteoHub - ICON-2I ULTIMATE FLUID</title>
+  <title>Sicilia MeteoHub - ICON-2I VECTORS & SYNC</title>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
 
@@ -14,7 +14,7 @@
     body { margin: 0; background: #050505; font-family: 'Segoe UI', sans-serif; color: #ddd; overflow: hidden; }
     #map { position: absolute; top: 0; bottom: 0; width: 100%; background: #050505; }
 
-    /* REPORT GPS IN ALTO */
+    /* GPS OVERLAY */
     #gps-overlay {
         position: absolute; top: -150px; left: 0; right: 0; height: 110px;
         background: rgba(10,10,10,0.96); backdrop-filter: blur(15px);
@@ -42,7 +42,7 @@
     /* UI CONTROLS */
     #ui-container { position: absolute; top: 10px; right: 10px; z-index: 5000; display: flex; flex-direction: column; gap: 8px; pointer-events: auto; }
     .panel { background: rgba(15,15,15,0.92); backdrop-filter: blur(10px); padding: 10px; border-radius: 12px; border: 1px solid rgba(255,255,255,0.1); box-shadow: 0 8px 30px #000; }
-    .toggle { width: 170px; display:flex; align-items:center; justify-content:space-between; padding: 12px 14px; margin: 4px 0; background: rgba(255,255,255,0.05); border-radius: 8px; cursor: pointer; font-weight: 800; font-size: 12px; transition: 0.2s; color: #bbb; }
+    .toggle { width: 170px; display:flex; align-items:center; justify-content:space-between; padding: 12px 14px; margin: 4px 0; background: rgba(255,255,255,0.05); border-radius: 8px; cursor: pointer; font-weight: 800; font-size: 12px; transition: 0.2s; color: #bbb; border: 1px solid transparent; }
     .toggle.active { background: #0077ff !important; color: #fff !important; box-shadow: 0 0 15px rgba(0,119,255,0.4); }
     .gps-btn { width: 170px; padding: 14px; border-radius: 8px; font-size: 13px; background: #23a045; color: white; cursor: pointer; font-weight: 900; border: none; margin-bottom: 5px; }
     .mini { width: 170px; padding: 12px; border-radius: 8px; font-size:12px; background: rgba(255,255,255,0.1); color:#fff; cursor:pointer; font-weight:900; border: 1px solid rgba(255,255,255,0.1); margin-bottom: 5px; }
@@ -53,7 +53,10 @@
 
     /* LAYERS STILI */
     .dark-relief-tiles { filter: invert(100%) hue-rotate(180deg) brightness(0.4) contrast(1.5); }
-    .smooth-overlay { image-rendering: auto; opacity: 0.85; mix-blend-mode: normal; } /* AUTO = Smooth Hardware */
+    .smooth-overlay { image-rendering: auto; opacity: 0.85; mix-blend-mode: normal; }
+    
+    /* VETTORI IN SOVRAPPOSIZIONE */
+    canvas.leaflet-zoom-animated { pointer-events: none !important; }
   </style>
 </head>
 
@@ -68,7 +71,7 @@
 
   <div id="model-info">
     <div id="model-title">ICON-2I <span style="color:#0077ff">2.2km</span></div>
-    <div id="model-sub">HARDWARE ACCELERATED | VALID: <span id="valid-time">--</span></div>
+    <div id="model-sub">GEO-ALIGNED VECTORS | VALID: <span id="valid-time">--</span></div>
   </div>
 
   <div id="info-box"><div id="val-group"><div id="val-display">--</div><div id="unit-display">Caricamento...</div></div></div>
@@ -107,10 +110,10 @@
   const selected = new Set(['wind']);
   let showIsobars = false, showIsotherms = false, particlesOn = true;
   
-  let scalarOverlay = null; // Il nuovo layer immagine GPU-accelerato
+  let scalarOverlay = null; // Livello per lo sfondo
   let userMarker, velocityLayer = null;
 
-  // COLORI EVIDENTI (Alto Contrasto per cambi netti)
+  // COLORI EVIDENTI
   const WIND_COLOR_SCALE = ["#000080", "#0044ff", "#00ddff", "#00ff55", "#ffff00", "#ff6600", "#ff0000", "#ff00ff"];
   const TEMP_STOPS = [
     {v:-10, c:[40,0,80]}, {v:-5, c:[60,50,180]}, {v:0, c:[100,180,250]}, 
@@ -143,12 +146,11 @@
     return {r:(r1*(1-f)+r2*f)|0, g:(g1*(1-f)+g2*f)|0, b:(b1*(1-f)+b2*f)|0};
   }
 
-  // --- CUSTOM CANVAS LAYER (Per Frecce e Isobare. Si aggiorna senza lag) ---
+  // --- LAYER CANVAS CUSTOM (PER FRECCE E ISOBARE) ---
   const VectorLayer = L.Layer.extend({
       onAdd: function(map) {
           this._map = map;
           this._canvas = L.DomUtil.create('canvas', 'leaflet-zoom-animated');
-          this._canvas.style.pointerEvents = 'none';
           this._canvas.style.zIndex = '600';
           this.getPane().appendChild(this._canvas);
           map.on('moveend zoomend', this._reset, this);
@@ -175,7 +177,7 @@
           ctx.setTransform(DPR, 0, 0, DPR, 0, 0);
           ctx.clearRect(0, 0, this._canvas.width/DPR, this._canvas.height/DPR);
           if (!currentData) return;
-          if (selected.has('wind')) drawProWindVectors(ctx, this._map);
+          if (selected.has('wind')) drawSleekWindVectors(ctx, this._map);
           if (showIsobars) drawContours(ctx, this._map, "iso");
           if (showIsotherms) drawContours(ctx, this._map, "therm");
       }
@@ -251,14 +253,14 @@
     updateAllVisuals();
   }
 
+  // AGGIORNA SOLO QUANDO CAMBIANO I DATI O I TASTI (NESSUN LAG SUL MOVIMENTO MAPPA)
   function updateAllVisuals() {
     updateHardwareScalar();
     customVectorLayer.redraw();
     updateParticles();
   }
 
-  // --- RENDERING ACCELERATO HARDWARE ---
-  // Genera un'immagine perfetta che Leaflet gestisce senza lag
+  // --- ANCORAGGIO GEOGRAFICO PERFETTO ---
   function updateHardwareScalar() {
       if (scalarOverlay) { map.removeLayer(scalarOverlay); scalarOverlay = null; }
       
@@ -292,21 +294,22 @@
       }
       ctx.putImageData(img, 0, 0);
 
-      // Limiti esatti del modello geografico
-      const bounds = [[m.la1 - m.ny*m.dy, m.lo1], [m.la1, m.lo1 + m.nx*m.dx]];
+      // BOUNDS CALCOLATI AL MILLIMETRO PER CENTRARE I PIXEL SULLE COORDINATE ICON-2I
+      const bounds = [
+          [m.la1 - m.ny*m.dy + m.dy/2, m.lo1 - m.dx/2], 
+          [m.la1 + m.dy/2, m.lo1 + m.nx*m.dx - m.dx/2]
+      ];
       
       scalarOverlay = L.imageOverlay(tCanvas.toDataURL(), bounds, {
           opacity: 0.85,
-          className: 'smooth-overlay' // Questo attiva il CSS image-rendering: auto (liscio e perfetto)
+          className: 'smooth-overlay' 
       }).addTo(map);
   }
 
-  // --- FRECCE VENTO "PRO" (Forma di Freccia solida con bordo) ---
-  function drawProWindVectors(ctx, mmap) {
+  // --- VETTORI "SLEEK" E SCIENTIFICI ---
+  function drawSleekWindVectors(ctx, mmap) {
     const m = currentData.meta, size = mmap.getSize();
-    
-    // Spaziatura fissa basata sullo schermo, non sui dati. Mai sovrapposte.
-    const stepPx = 45; 
+    const stepPx = 45; // Spaziatura garantita e fissa, mai sovrapposti
 
     for(let y = 20; y < size.y; y += stepPx) {
         for(let x = 20; x < size.x; x += stepPx) {
@@ -317,10 +320,9 @@
             const idx = (gy|0)*m.nx+(gx|0);
             const u = currentData.wind_u.data[idx], v = currentData.wind_v.data[idx];
             const sp = Math.sqrt(u*u+v*v);
+            if(sp < 0.5) continue; // Salta piatta
             
-            if(sp < 0.5) continue; // Ignora calma piatta
-            
-            const len = Math.max(18, Math.min(sp * 2.8, 50)); // Minimo 18px per far vedere la freccia
+            const len = Math.max(15, Math.min(sp * 2.8, 45)); 
             const ang = Math.atan2(-v, u);
             const c = vividWindColor(sp);
 
@@ -328,29 +330,25 @@
             ctx.translate(x, y);
             ctx.rotate(ang);
 
-            // Disegno Poligono Freccia (Corpo + Punta)
-            const hw = 3;  // Metà spessore asta
-            const hl = 10; // Lunghezza punta
-            const hhw = 7; // Metà larghezza punta
-
+            // CREAZIONE DEL VETTORE (Asta + Punta a V)
             ctx.beginPath();
-            ctx.moveTo(-len/2, -hw);
-            ctx.lineTo(len/2 - hl, -hw);
-            ctx.lineTo(len/2 - hl, -hhw);
-            ctx.lineTo(len/2, 0);
-            ctx.lineTo(len/2 - hl, hhw);
-            ctx.lineTo(len/2 - hl, hw);
-            ctx.lineTo(-len/2, hw);
-            ctx.closePath();
+            ctx.moveTo(-len/2, 0);
+            ctx.lineTo(len/2, 0); // Asta
+            ctx.lineTo(len/2 - 6, -4); // Aletta su
+            ctx.moveTo(len/2, 0);
+            ctx.lineTo(len/2 - 6, 4); // Aletta giù
 
-            // Bordo Nero Spesso
-            ctx.strokeStyle = "rgba(0,0,0,0.9)";
-            ctx.lineWidth = 2.5;
+            // Bordo Nero Esterno
+            ctx.strokeStyle = "rgba(0,0,0,0.85)";
+            ctx.lineWidth = 3.5;
+            ctx.lineCap = "round";
+            ctx.lineJoin = "round";
             ctx.stroke();
 
-            // Interno Colorato
-            ctx.fillStyle = `rgb(${c.r},${c.g},${c.b})`;
-            ctx.fill();
+            // Linea Colorata Interna
+            ctx.strokeStyle = `rgb(${c.r},${c.g},${c.b})`;
+            ctx.lineWidth = 1.5;
+            ctx.stroke();
 
             ctx.restore();
         }
@@ -424,10 +422,7 @@
   window.toggleLayer = (l) => { 
       if(selected.has(l)) selected.delete(l); 
       else {
-          // Mantieni i layer scalari esclusivi tra loro per pulizia, tranne il vento che convive con tutto
-          if (l !== 'wind') {
-             selected.delete('temp'); selected.delete('rain'); selected.delete('rh'); selected.delete('press'); selected.delete('cloud');
-          }
+          if (l !== 'wind') { selected.delete('temp'); selected.delete('rain'); selected.delete('rh'); selected.delete('press'); selected.delete('cloud'); }
           selected.add(l); 
       }
       updateUI(); updateAllVisuals(); 
