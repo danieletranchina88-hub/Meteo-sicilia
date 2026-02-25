@@ -225,44 +225,52 @@
     return c;
   }
 
+  // ✅ DRAW SCALAR: trasformazione affine ancorata ai corner geografici del modello (niente disallineamento)
   function drawSmoothScalar() {
     if (!currentData || !currentStepKey) return;
 
     const m = currentData.meta;
-    const size = map.getSize();
+    const nx = m.nx, ny = m.ny;
 
-    const nw = map.getBounds().getNorthWest();
-    const se = map.getBounds().getSouthEast();
+    // corner geografici griglia
+    const latN = m.la1;
+    const lonW = m.lo1;
+    const lonE = m.lo1 + m.dx * (nx - 1);
+    const latS = m.la1 - m.dy * (ny - 1);
 
-    // bounds -> grid coords
-    const gx1 = (nw.lng - m.lo1) / m.dx;
-    const gy1 = (m.la1 - nw.lat) / m.dy;
-    const gx2 = (se.lng - m.lo1) / m.dx;
-    const gy2 = (m.la1 - se.lat) / m.dy;
+    // proiezione in pixel (container coords)
+    const p00 = map.latLngToContainerPoint([latN, lonW]); // NW
+    const p10 = map.latLngToContainerPoint([latN, lonE]); // NE
+    const p01 = map.latLngToContainerPoint([latS, lonW]); // SW
 
-    // clamp
-    const sx = Math.max(0, Math.min(m.nx-1, gx1));
-    const sy = Math.max(0, Math.min(m.ny-1, gy1));
-    const ex = Math.max(0, Math.min(m.nx-1, gx2));
-    const ey = Math.max(0, Math.min(m.ny-1, gy2));
-
-    const sw = Math.max(1, ex - sx);
-    const sh = Math.max(1, ey - sy);
+    // affine transform: screen = A * tex + T
+    const a = (p10.x - p00.x) / (nx - 1);
+    const b = (p10.y - p00.y) / (nx - 1);
+    const c = (p01.x - p00.x) / (ny - 1);
+    const d = (p01.y - p00.y) / (ny - 1);
+    const e = p00.x;
+    const f = p00.y;
 
     ['wind','temp','rain','rh','press','cloud'].forEach(l => {
-      const c = scalarCanvases[l];
-      const ctx = c.getContext('2d');
-      ctx.clearRect(0,0,c.width,c.height);
+      const canvas = scalarCanvases[l];
+      const ctx = canvas.getContext('2d');
+
+      // reset & clear
+      ctx.setTransform(1,0,0,1,0,0);
+      ctx.clearRect(0, 0, canvas.width, canvas.height);
 
       if (!selected.has(l)) return;
 
       const tex = rasterCache[currentStepKey]?.[l];
       if (!tex) return;
 
-      ctx.setTransform(DPR,0,0,DPR,0,0);
       ctx.imageSmoothingEnabled = true;
 
-      ctx.drawImage(tex, sx, sy, sw, sh, 0, 0, size.x, size.y);
+      // applica transform in spazio DPR
+      ctx.setTransform(DPR*a, DPR*b, DPR*c, DPR*d, DPR*e, DPR*f);
+
+      // disegna texture nello spazio griglia (0..nx,0..ny)
+      ctx.drawImage(tex, 0, 0, nx, ny);
     });
   }
 
@@ -446,7 +454,6 @@
     if(selected.has(l)) selected.delete(l); else selected.add(l);
     updateUI();
 
-    // Lazy-build se manca la raster del layer in questo step (robustezza)
     if (currentStepKey && selected.has(l) && !rasterCache[currentStepKey]?.[l]) {
       rasterCache[currentStepKey] = rasterCache[currentStepKey] || {};
       rasterCache[currentStepKey][l] = await buildLayerRaster(l);
@@ -486,7 +493,6 @@
       loadStep(idx);
     });
 
-    // SYNC ORARIO ATTUALE
     const now = new Date();
     let bestIdx = 0, minD = Infinity;
     catalog.forEach((item, idx) => {
@@ -508,7 +514,6 @@
     document.getElementById('time-label').innerText = catalog[i].label;
     document.getElementById('valid-time').innerText = catalog[i].label;
 
-    // Normalizzazione pressione
     if(currentData.press) {
       currentData.cleanP = new Float32Array(currentData.press.length);
       for(let j=0; j<currentData.press.length; j++) {
@@ -520,11 +525,9 @@
 
     currentStepKey = catalog[i].file;
 
-    // init cache step
     if (!rasterCache[currentStepKey]) rasterCache[currentStepKey] = {};
     if (!contourCache[currentStepKey]) contourCache[currentStepKey] = { iso:null, therm:null };
 
-    // build raster per tutti i layer (puoi renderlo lazy se vuoi ancora più velocità al cambio timestep)
     const needed = ['wind','temp','rain','rh','press','cloud'];
     for (const l of needed) {
       if (!rasterCache[currentStepKey][l]) {
@@ -542,7 +545,6 @@
     const size = map.getSize();
     const panePos = map.containerPointToLayerPoint([0, 0]);
 
-    // resize canvas
     [...Object.values(scalarCanvases), arrowCanvas, isoCanvas, thermCanvas].forEach(c => {
       c.width = size.x * DPR; c.height = size.y * DPR;
       c.style.width = size.x + 'px'; c.style.height = size.y + 'px';
@@ -589,11 +591,9 @@
     isoCanvas = mk('vectorPane');
     thermCanvas = mk('vectorPane');
 
-    // movimento
     map.on('movestart', () => { isMoving = true; });
     map.on('moveend zoomend', () => { isMoving = false; requestRedraw(); });
 
-    // redraw throttled
     map.on('move', requestRedraw);
     map.on('viewreset zoomend moveend', requestRedraw);
 
