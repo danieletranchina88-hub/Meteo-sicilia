@@ -214,6 +214,7 @@
     document.getElementById('time-label').innerText = catalog[i].label;
     document.getElementById('valid-time').innerText = catalog[i].label;
     
+    const m = currentData.meta;
     const len = currentData.temp ? currentData.temp.length : 0;
 
     if(currentData.press) {
@@ -222,6 +223,25 @@
             let v = currentData.press[j]; if(v > 2000) v /= 100; 
             currentData.cleanP[j] = (!v || v < 850 || v > 1080) ? 1013 : v;
         }
+
+        // --- IL SEGRETO DELLA VELOCITÀ: SOTTOCAMPIONAMENTO ---
+        // Prendiamo un punto ogni 5 per le isobare. Riducono i calcoli del 96%.
+        const downStep = 5; 
+        const smallNx = Math.ceil(m.nx / downStep);
+        const smallNy = Math.ceil(m.ny / downStep);
+        const smallData = new Float32Array(smallNx * smallNy);
+
+        for (let y = 0; y < smallNy; y++) {
+            for (let x = 0; x < smallNx; x++) {
+                const origY = Math.min(y * downStep, m.ny - 1);
+                const origX = Math.min(x * downStep, m.nx - 1);
+                smallData[y * smallNx + x] = currentData.cleanP[origY * m.nx + origX];
+            }
+        }
+
+        const thresholds = d3.range(970, 1052, 2); 
+        currentData.cachedContours = d3.contours().size([smallNx, smallNy]).thresholds(thresholds)(smallData);
+        currentData.contourDownStep = downStep; 
     }
 
     if(currentData.temp && currentData.rh && currentData.wind_u) {
@@ -233,12 +253,6 @@
             let e = (RH / 100.0) * 6.105 * Math.exp((17.27 * T) / (237.7 + T));
             currentData.feels_like[j] = T + 0.33 * e - 0.70 * v_ms - 4.00;
         }
-    }
-
-    // CACHE ISOBARE: Ora calcoliamo una linea ogni 2 hPa (DIMEZZATI I CALCOLI!)
-    if(currentData.cleanP) {
-        const thresholds = d3.range(970, 1052, 2); 
-        currentData.cachedContours = d3.contours().size([currentData.meta.nx, currentData.meta.ny]).thresholds(thresholds)(currentData.cleanP);
     }
 
     redrawAll();
@@ -324,9 +338,7 @@
             if(sp_kmh < 3) continue; 
 
             let len = Math.min(sp_kmh * 1.8, 70); if(len < 18) len = 18; 
-            
             const ang = Math.atan2(-v, u); 
-            
             const c = vividWindArrowColor(sp_kmh);
 
             ctx.save();
@@ -352,6 +364,7 @@
     ctx.setTransform(DPR, 0, 0, DPR, 0, 0);
     const m = currentData.meta;
     const contours = currentData.cachedContours; 
+    const step = currentData.contourDownStep; // Fattore moltiplicativo
 
     ctx.shadowColor = "rgba(0,0,0,1)"; 
     ctx.shadowBlur = 4; 
@@ -367,16 +380,19 @@
             ctx.beginPath(); 
             let pts=[]; 
             ring.forEach((p, j) => {
-                const pt = map.latLngToContainerPoint([m.la1-p[1]*m.dy, m.lo1+p[0]*m.dx]);
+                // Moltiplichiamo le coordinate ridotte per riportarle alla posizione geografica reale
+                const origX = p[0] * step;
+                const origY = p[1] * step;
+                const pt = map.latLngToContainerPoint([m.la1 - origY * m.dy, m.lo1 + origX * m.dx]);
+                
                 if(j===0) ctx.moveTo(pt.x, pt.y); else ctx.lineTo(pt.x, pt.y); 
                 pts.push(pt);
             }); 
             ctx.stroke();
 
-            // Riquadro con valore ogni 4 hPa
-            if(pts.length > 90 && isMajor) {
+            // Riquadro con valore
+            if(pts.length > 25 && isMajor) { // Soglia più bassa perché i punti ora sono molto meno!
                 let midIdx = Math.floor(pts.length/2); 
-                if(midIdx%2!==0) midIdx = Math.floor(pts.length/3);
                 const mid = pts[midIdx];
                 
                 ctx.shadowBlur = 0; 
@@ -393,7 +409,86 @@
     });
     ctx.shadowBlur = 0;
     
-    // Niente più funzione "A" e "B" qui, eliminata per fluidità!
+    // RIMESSE LE "A" E "B"!
+    drawExtremaLight(ctx, m);
+  }
+
+  function drawExtremaLight(ctx, m) {
+    const data = currentData.cleanP;
+    const width = m.nx, height = m.ny;
+    const blockSize = 40; 
+    const cols = Math.ceil(width / blockSize);
+    const rows = Math.ceil(height / blockSize);
+
+    let blocks = Array.from({ length: rows }, () => 
+        Array.from({ length: cols }, () => ({ maxV: -Infinity, maxX: 0, maxY: 0, minV: Infinity, minX: 0, minY: 0 }))
+    );
+
+    for (let y = 0; y < height; y++) {
+        const r = Math.floor(y / blockSize);
+        for (let x = 0; x < width; x++) {
+            const c = Math.floor(x / blockSize);
+            const val = data[y * width + x];
+            const b = blocks[r][c];
+            if (val > b.maxV) { b.maxV = val; b.maxX = x; b.maxY = y; }
+            if (val < b.minV) { b.minV = val; b.minX = x; b.minY = y; }
+        }
+    }
+
+    let extrema = [];
+
+    for(let r = 1; r < rows - 1; r++) {
+        for(let c = 1; c < cols - 1; c++) {
+            const b = blocks[r][c];
+
+            if (b.maxV > 1016) {
+                let isMax = true;
+                for(let dr = -1; dr <= 1; dr++) {
+                    for(let dc = -1; dc <= 1; dc++) {
+                        if(dr === 0 && dc === 0) continue;
+                        if(blocks[r+dr][c+dc].maxV > b.maxV) isMax = false;
+                    }
+                }
+                if (isMax) extrema.push({ type: 'A', val: b.maxV, x: b.maxX, y: b.maxY });
+            }
+
+            if (b.minV < 1012) {
+                let isMin = true;
+                for(let dr = -1; dr <= 1; dr++) {
+                    for(let dc = -1; dc <= 1; dc++) {
+                        if(dr === 0 && dc === 0) continue;
+                        if(blocks[r+dr][c+dc].minV < b.minV) isMin = false;
+                    }
+                }
+                if (isMin) extrema.push({ type: 'B', val: b.minV, x: b.minX, y: b.minY });
+            }
+        }
+    }
+
+    let drawn = [];
+    extrema.sort((a,b) => (b.val - a.val) * (a.type === 'A' ? 1 : -1)); 
+
+    extrema.forEach(ex => {
+        const pt = map.latLngToContainerPoint([m.la1 - ex.y * m.dy, m.lo1 + ex.x * m.dx]);
+        
+        if(!drawn.some(d => Math.hypot(d.x - pt.x, d.y - pt.y) < 100)) {
+            drawn.push(pt);
+            
+            ctx.font = "900 45px 'Arial Black', sans-serif"; 
+            ctx.textAlign="center"; ctx.textBaseline="middle";
+            ctx.shadowColor="rgba(0,0,0,0.8)"; ctx.shadowBlur=8; ctx.shadowOffsetY=2;
+            
+            ctx.fillStyle = ex.type === 'A' ? "#ff3333" : "#0077ff"; 
+            ctx.strokeStyle = "#ffffff"; ctx.lineWidth = 4;
+            
+            ctx.strokeText(ex.type, pt.x, pt.y);
+            ctx.fillText(ex.type, pt.x, pt.y);
+            
+            ctx.font = "bold 15px sans-serif"; ctx.shadowBlur=3; ctx.lineWidth=2;
+            ctx.strokeText(Math.round(ex.val), pt.x, pt.y + 30);
+            ctx.fillText(Math.round(ex.val), pt.x, pt.y + 30);
+        }
+    });
   }
 
   function updateParticles() {
