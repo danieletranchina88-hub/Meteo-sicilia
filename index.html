@@ -116,19 +116,21 @@
   }
   
   // NUOVA PALETTE TEMPERATURA AD ALTO CONTRASTO E STACCHI NETTI
-  const TEMP_STOPS = [
-    {v:-20, c:[150,0,200]},   // Viola scuro (Gelo estremo)
-    {v:-10, c:[0,0,255]},     // Blu puro
-    {v:-5,  c:[0,150,255]},   // Azzurro
-    {v:0,   c:[0,255,255]},   // Ciano (Zero termico - stacco nettissimo)
-    {v:5,   c:[0,200,100]},   // Verde petrolio
-    {v:10,  c:[100,255,0]},   // Verde-Giallo
-    {v:15,  c:[255,255,0]},   // Giallo puro
-    {v:20,  c:[255,180,0]},   // Giallo-Arancio
-    {v:25,  c:[255,100,0]},   // Arancio puro
-    {v:30,  c:[255,0,0]},     // Rosso
-    {v:35,  c:[180,0,0]},     // Rosso scuro
-    {v:40,  c:[100,0,0]}      // Marrone/Nero (Caldo estremo)
+    const TEMP_STOPS = [
+    {v:-30,c:[48,0,89]},      // Viola scuro (Gelo estremo)
+    {v:-20,c:[115,0,171]},    // Viola
+    {v:-10,c:[0,43,161]},     // Blu scuro
+    {v:-5,c:[0,115,255]},     // Blu
+    {v:0,c:[0,217,255]},      // Ciano / Ghiaccio (Zero termico)
+    {v:5,c:[0,191,134]},      // Verde acqua
+    {v:10,c:[51,184,51]},     // Verde (Fresco)
+    {v:15,c:[166,217,43]},    // Verde-Giallo
+    {v:20,c:[255,242,0]},     // Giallo (Mite)
+    {v:25,c:[255,166,0]},     // Arancione (Caldo piacevole)
+    {v:30,c:[255,64,0]},      // Rosso-Arancio (Molto caldo)
+    {v:35,c:[204,0,0]},       // Rosso scuro (Canicola)
+    {v:40,c:[128,0,34]},      // Bordeaux (Estremo)
+    {v:45,c:[224,137,204]}    // Rosa (Anomalia termica assoluta)
   ];
 
   const RAIN_STOPS = [{v:0.0,c:[0,0,0],a:0},{v:0.2,c:[80,160,255],a:0.6},{v:1.0,c:[0,100,255],a:0.8},{v:3.0,c:[0,40,200],a:0.85},{v:7.0,c:[40,180,40],a:0.9},{v:15,c:[255,220,0],a:0.9},{v:30,c:[255,120,0],a:0.92},{v:60,c:[220,20,0],a:0.95},{v:100,c:[140,0,60],a:0.95}];
@@ -349,86 +351,146 @@
     }
   }
 
-  function drawContours() {
+    function drawContours() {
     const ctx = isoCanvas.getContext('2d');
     ctx.clearRect(0,0,isoCanvas.width, isoCanvas.height);
     ctx.setTransform(DPR, 0, 0, DPR, 0, 0);
     const m = currentData.meta, data = currentData.cleanP;
     
-    // OTTIMIZZAZIONE ESTREMA: DOWNSAMPLING
-    // Prende solo un punto di pressione ogni 3 per disegnare le isobare.
-    const skip = 3; 
-    const sNx = Math.ceil(m.nx / skip);
-    const sNy = Math.ceil(m.ny / skip);
-    const smallData = new Float32Array(sNx * sNy);
+    // Isobare calcolate ogni 1 hPa per massima precisione
+    const thresholds = d3.range(970, 1051, 1); 
+    const contours = d3.contours().size([m.nx, m.ny]).thresholds(thresholds)(data);
 
-    for (let y = 0; y < sNy; y++) {
-        for (let x = 0; x < sNx; x++) {
-            let origY = Math.min(y * skip, m.ny - 1);
-            let origX = Math.min(x * skip, m.nx - 1);
-            smallData[y * sNx + x] = data[origY * m.nx + origX];
-        }
-    }
-
-    // Un'isobara ogni 2 hPa
-    const thresholds = d3.range(960, 1050, 2); 
-    const contours = d3.contours().size([sNx, sNy]).thresholds(thresholds)(smallData);
-
-    ctx.strokeStyle = "rgba(255,255,255,0.9)"; ctx.lineWidth = 1.2;
-    ctx.shadowColor = "rgba(0,0,0,1)"; ctx.shadowBlur = 3; 
+    ctx.strokeStyle = "rgba(255,255,255,0.9)"; 
+    ctx.shadowColor = "rgba(0,0,0,1)"; 
+    ctx.shadowBlur = 3; 
 
     contours.forEach(c => {
         const val = Math.round(c.value);
-        const isMajor = val % 4 === 0;
+        const isMajor = val % 4 === 0; // Evidenzia ogni 4 hPa
         ctx.lineWidth = isMajor ? 1.8 : 1.0;
-        ctx.strokeStyle = isMajor ? "rgba(255,255,255,1)" : "rgba(255,255,255,0.7)";
+        ctx.strokeStyle = isMajor ? "rgba(255,255,255,1)" : "rgba(255,255,255,0.5)";
 
         c.coordinates.forEach(poly => poly.forEach(ring => {
-            ctx.beginPath(); let pts=[]; 
+            ctx.beginPath(); 
+            let pts=[]; 
             ring.forEach((p, j) => {
-                // Riconversione delle coordinate downsampled a quelle geografiche reali
-                const pt = map.latLngToContainerPoint([m.la1 - (p[1]*skip)*m.dy, m.lo1 + (p[0]*skip)*m.dx]);
-                if(j===0) ctx.moveTo(pt.x, pt.y); else ctx.lineTo(pt.x, pt.y); pts.push(pt);
+                const pt = map.latLngToContainerPoint([m.la1-p[1]*m.dy, m.lo1+p[0]*m.dx]);
+                if(j===0) ctx.moveTo(pt.x, pt.y); else ctx.lineTo(pt.x, pt.y); 
+                pts.push(pt);
             }); 
             ctx.stroke();
 
-            if(pts.length > 30 && isMajor) {
+            // Etichetta con quadrato nero semitrasparente
+            if(pts.length > 90 && isMajor) {
                 let midIdx = Math.floor(pts.length/2); 
+                if(midIdx%2!==0) midIdx = Math.floor(pts.length/3);
                 const mid = pts[midIdx];
-                ctx.shadowBlur=0; 
-                ctx.fillStyle = "rgba(10,10,10,0.8)"; ctx.fillRect(mid.x-14, mid.y-8, 28, 16); 
-                ctx.fillStyle = "#fff"; ctx.font = "bold 11px 'Segoe UI', Arial"; ctx.textAlign="center"; ctx.textBaseline="middle";
+                
+                ctx.shadowBlur = 0; // Disattiva ombra per il box
+                ctx.fillStyle = "rgba(0, 0, 0, 0.75)"; // Sfondo nero semitrasparente
+                ctx.fillRect(mid.x - 16, mid.y - 10, 32, 20); 
+                
+                ctx.fillStyle = "#ffffff"; // Testo bianco
+                ctx.font = "bold 12px 'Segoe UI', Arial"; 
+                ctx.textAlign="center"; ctx.textBaseline="middle";
                 ctx.fillText(val, mid.x, mid.y);
-                ctx.shadowBlur=3; 
+                ctx.shadowBlur = 3; // Riattiva ombra
             }
         }));
     });
-    ctx.shadowBlur=0;
-    drawExtremaPrecise(ctx, m);
+    ctx.shadowBlur = 0;
+    
+    // Chiama la nuova funzione super-leggera
+    drawExtremaLight(ctx, m);
   }
 
-  function drawExtremaPrecise(ctx, m) {
+  // NUOVA FUNZIONE: Estremamente veloce, zero lag sul cellulare
+  function drawExtremaLight(ctx, m) {
     const data = currentData.cleanP;
     const width = m.nx, height = m.ny;
-    const radius = 20; 
-    const step = 10;
-    const minDistancePixels = 120; 
+    const blockSize = 40; // Dimensione del blocco di ricerca (circa 80-90km)
+    const cols = Math.ceil(width / blockSize);
+    const rows = Math.ceil(height / blockSize);
+
+    // 1. Creiamo i blocchi
+    let blocks = Array.from({ length: rows }, () => 
+        Array.from({ length: cols }, () => ({ maxV: -Infinity, maxX: 0, maxY: 0, minV: Infinity, minX: 0, minY: 0 }))
+    );
+
+    // 2. Un singolo giro velocissimo su tutti i dati per trovare il picco di ogni blocco
+    for (let y = 0; y < height; y++) {
+        const r = Math.floor(y / blockSize);
+        for (let x = 0; x < width; x++) {
+            const c = Math.floor(x / blockSize);
+            const val = data[y * width + x];
+            const b = blocks[r][c];
+            if (val > b.maxV) { b.maxV = val; b.maxX = x; b.maxY = y; }
+            if (val < b.minV) { b.minV = val; b.minX = x; b.minY = y; }
+        }
+    }
 
     let extrema = [];
 
-    for (let y = radius; y < height - radius; y += step) { 
-      for (let x = radius; x < width - radius; x += step) {
-        let currentVal = data[y * width + x];
-        let isMax = true, isMin = true;
-        let bestX = x, bestY = y, extremeVal = currentVal;
+    // 3. Confrontiamo solo i blocchi tra di loro (pochissimi calcoli)
+    for(let r = 1; r < rows - 1; r++) {
+        for(let c = 1; c < cols - 1; c++) {
+            const b = blocks[r][c];
 
-        for (let ky = y - radius; ky <= y + radius; ky += 3) {
-          for (let kx = x - radius; kx <= x + radius; kx += 3) {
-             const val = data[ky * width + kx];
-             if (val > extremeVal) { extremeVal = val; bestX = kx; bestY = ky; isMax = false; } 
-             if (val < extremeVal) { extremeVal = val; bestX = kx; bestY = ky; isMin = false; } 
-          }
+            // Cerca Alta Pressione (A)
+            if (b.maxV > 1016) {
+                let isMax = true;
+                for(let dr = -1; dr <= 1; dr++) {
+                    for(let dc = -1; dc <= 1; dc++) {
+                        if(dr === 0 && dc === 0) continue;
+                        if(blocks[r+dr][c+dc].maxV > b.maxV) isMax = false;
+                    }
+                }
+                if (isMax) extrema.push({ type: 'A', val: b.maxV, x: b.maxX, y: b.maxY });
+            }
+
+            // Cerca Bassa Pressione (B)
+            if (b.minV < 1012) {
+                let isMin = true;
+                for(let dr = -1; dr <= 1; dr++) {
+                    for(let dc = -1; dc <= 1; dc++) {
+                        if(dr === 0 && dc === 0) continue;
+                        if(blocks[r+dr][c+dc].minV < b.minV) isMin = false;
+                    }
+                }
+                if (isMin) extrema.push({ type: 'B', val: b.minV, x: b.minX, y: b.minY });
+            }
         }
+    }
+
+    // 4. Disegno su mappa
+    let drawn = [];
+    extrema.sort((a,b) => (b.val - a.val) * (a.type === 'A' ? 1 : -1)); // Ordina per importanza
+
+    extrema.forEach(ex => {
+        const pt = map.latLngToContainerPoint([m.la1 - ex.y * m.dy, m.lo1 + ex.x * m.dx]);
+        
+        // Evita di accavallare le scritte
+        if(!drawn.some(d => Math.hypot(d.x - pt.x, d.y - pt.y) < 100)) {
+            drawn.push(pt);
+            
+            ctx.font = "900 45px 'Arial Black', sans-serif"; // Più eleganti ma visibili
+            ctx.textAlign="center"; ctx.textBaseline="middle";
+            ctx.shadowColor="rgba(0,0,0,0.8)"; ctx.shadowBlur=8; ctx.shadowOffsetY=2;
+            
+            ctx.fillStyle = ex.type === 'A' ? "#ff3333" : "#0077ff"; 
+            ctx.strokeStyle = "#ffffff"; ctx.lineWidth = 4;
+            
+            ctx.strokeText(ex.type, pt.x, pt.y);
+            ctx.fillText(ex.type, pt.x, pt.y);
+            
+            // Valore della pressione sotto la lettera
+            ctx.font = "bold 15px sans-serif"; ctx.shadowBlur=3; ctx.lineWidth=2;
+            ctx.strokeText(Math.round(ex.val), pt.x, pt.y + 30);
+            ctx.fillText(Math.round(ex.val), pt.x, pt.y + 30);
+        }
+    });
+  }
 
         let finalIsMax = true, finalIsMin = true;
         for (let ky = bestY - radius; ky <= bestY + radius; ky+=3) {
