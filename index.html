@@ -14,7 +14,6 @@
     body { margin: 0; background: #0a0a0a; font-family: 'Segoe UI', Roboto, sans-serif; color: #ddd; overflow: hidden; }
     #map { position: absolute; top: 0; bottom: 0; width: 100%; background: #0a0a0a; }
 
-    /* GPS OVERLAY MIGLIORATO PER CELLULARI (Griglia 3x2) */
     #gps-overlay {
         position: absolute; top: -200px; left: 0; right: 0; 
         background: rgba(10,10,10,0.95); backdrop-filter: blur(20px); -webkit-backdrop-filter: blur(20px);
@@ -28,18 +27,15 @@
     .gps-stat div:last-child { font-size: 1.5em; font-weight: 900; color: #fff; }
     #close-gps { position: absolute; right: 15px; top: 10px; cursor: pointer; color: #888; font-size: 1.4em; font-weight: bold; padding: 5px;}
 
-    /* UI - HEADER */
     #model-info { position: absolute; top: 15px; left: 70px; z-index: 5000; pointer-events: none; text-shadow: 0 2px 4px rgba(0,0,0,0.8); }
     #model-title { font-size: 18px; font-weight: 900; color: #fff; text-transform: uppercase; letter-spacing: 1px; }
     #model-sub { font-size: 11px; color: #00eaff; font-family: monospace; font-weight: bold; }
 
-    /* INFO BOX CURSORE */
     #info-box { position: absolute; top: 15px; left: 20px; z-index: 5000; pointer-events: none; }
     #val-group { margin-top: 55px; }
     #val-display { font-size: 3.5em; font-weight: 950; color: #fff; text-shadow: 0 2px 15px #000; line-height: 0.8; font-variant-numeric: tabular-nums; }
     #unit-display { font-size: 1.1em; color: #ccc; font-weight: 700; margin-top: 5px; margin-left: 5px; }
 
-    /* UI CONTROLS */
     #ui-container { position: absolute; top: 10px; right: 10px; z-index: 5000; display: flex; flex-direction: column; gap: 8px; pointer-events: auto; max-height: 85vh; overflow-y: auto; padding-right: 5px; scrollbar-width: none; }
     #ui-container::-webkit-scrollbar { display: none; }
     .panel { background: rgba(20,20,20,0.9); backdrop-filter: blur(10px); -webkit-backdrop-filter: blur(10px); padding: 10px; border-radius: 12px; border: 1px solid rgba(255,255,255,0.1); box-shadow: 0 4px 15px rgba(0,0,0,0.5); }
@@ -119,7 +115,6 @@
     if(s<5) return {r:100,g:150,b:255}; if(s<15) return {r:0,g:220,b:255}; if(s<30) return {r:0,g:255,b:100}; if(s<50) return {r:200,g:255,b:0}; if(s<80) return {r:255,g:140,b:0}; if(s<110) return {r:255,g:30,b:0}; return {r:255,g:0,b:180};
   }
   
-  // Scala temperatura aggiornata e scientificamente coerente
   const TEMP_STOPS = [
     {v:-30,c:[48,0,89]}, {v:-20,c:[115,0,171]}, {v:-10,c:[0,43,161]}, {v:-5,c:[0,115,255]}, 
     {v:0,c:[0,217,255]}, {v:5,c:[0,191,134]}, {v:10,c:[51,184,51]}, {v:15,c:[166,217,43]}, 
@@ -175,7 +170,6 @@
 
     await loadCatalog();
     
-    // Ottimizzazione cellulare: ridisegna solo a fine movimento
     map.on('moveend zoomend resize', redrawAll);
     map.on('mousemove click', onPick);
   });
@@ -241,6 +235,12 @@
         }
     }
 
+    // CACHE ISOBARE: Calcola le curve una sola volta quando carica i dati, evitando il lag!
+    if(currentData.cleanP) {
+        const thresholds = d3.range(970, 1051, 1);
+        currentData.cachedContours = d3.contours().size([currentData.meta.nx, currentData.meta.ny]).thresholds(thresholds)(currentData.cleanP);
+    }
+
     redrawAll();
     if(userMarker) updateGpsReadout(userMarker.getLatLng());
   }
@@ -261,7 +261,7 @@
 
   function drawSmoothScalar() {
     const m = currentData.meta, size = map.getSize();
-    const scaleFactor = 0.5; // Ottimizzato per performance cellulare
+    const scaleFactor = 0.5;
     const ctx_w = Math.ceil(size.x * scaleFactor), ctx_h = Math.ceil(size.y * scaleFactor);
 
     ['wind','temp','feels','rain','rh','press','cloud'].forEach(l => {
@@ -324,7 +324,10 @@
             if(sp_kmh < 3) continue; 
 
             let len = Math.min(sp_kmh * 1.8, 70); if(len < 18) len = 18; 
-            const ang = Math.atan2(v, u); 
+            
+            // CORREZIONE VETTORI: l'asse Y del canvas è invertito, quindi usiamo -v
+            const ang = Math.atan2(-v, u); 
+            
             const c = vividWindArrowColor(sp_kmh);
 
             ctx.save();
@@ -345,21 +348,22 @@
   function drawContours() {
     const ctx = isoCanvas.getContext('2d');
     ctx.clearRect(0,0,isoCanvas.width, isoCanvas.height);
-    ctx.setTransform(DPR, 0, 0, DPR, 0, 0);
-    const m = currentData.meta, data = currentData.cleanP;
-    
-    const thresholds = d3.range(970, 1051, 1); 
-    const contours = d3.contours().size([m.nx, m.ny]).thresholds(thresholds)(data);
+    if (!currentData || !currentData.cachedContours) return;
 
-    ctx.strokeStyle = "rgba(255,255,255,0.9)"; 
+    ctx.setTransform(DPR, 0, 0, DPR, 0, 0);
+    const m = currentData.meta;
+    const contours = currentData.cachedContours; // Usa le curve salvate in cache!
+
     ctx.shadowColor = "rgba(0,0,0,1)"; 
-    ctx.shadowBlur = 3; 
+    ctx.shadowBlur = 4; 
 
     contours.forEach(c => {
         const val = Math.round(c.value);
         const isMajor = val % 4 === 0; 
-        ctx.lineWidth = isMajor ? 1.8 : 1.0;
-        ctx.strokeStyle = isMajor ? "rgba(255,255,255,1)" : "rgba(255,255,255,0.5)";
+        
+        // CORREZIONE SPESSORE: Linee raddoppiate per renderle visibili e corpose
+        ctx.lineWidth = isMajor ? 3.0 : 1.5;
+        ctx.strokeStyle = isMajor ? "rgba(255,255,255,1)" : "rgba(255,255,255,0.6)";
 
         c.coordinates.forEach(poly => poly.forEach(ring => {
             ctx.beginPath(); 
@@ -371,27 +375,26 @@
             }); 
             ctx.stroke();
 
-            // Riquadro nero semitrasparente
+            // Etichetta con box nero
             if(pts.length > 90 && isMajor) {
                 let midIdx = Math.floor(pts.length/2); 
                 if(midIdx%2!==0) midIdx = Math.floor(pts.length/3);
                 const mid = pts[midIdx];
                 
                 ctx.shadowBlur = 0; 
-                ctx.fillStyle = "rgba(0, 0, 0, 0.75)"; 
-                ctx.fillRect(mid.x - 16, mid.y - 10, 32, 20); 
+                ctx.fillStyle = "rgba(0, 0, 0, 0.8)"; 
+                ctx.fillRect(mid.x - 18, mid.y - 12, 36, 24); // Box leggermente più grande
                 
                 ctx.fillStyle = "#ffffff"; 
-                ctx.font = "bold 12px 'Segoe UI', Arial"; 
+                ctx.font = "bold 13px 'Segoe UI', Arial"; // Font un po' più grande
                 ctx.textAlign="center"; ctx.textBaseline="middle";
                 ctx.fillText(val, mid.x, mid.y);
-                ctx.shadowBlur = 3; 
+                ctx.shadowBlur = 4; 
             }
         }));
     });
     ctx.shadowBlur = 0;
     
-    // Disegna A/B senza far esplodere il telefono
     drawExtremaLight(ctx, m);
   }
 
