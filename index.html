@@ -16,11 +16,11 @@
 
     /* GPS OVERLAY */
     #gps-overlay {
-        position: absolute; top: -150px; left: 0; right: 0; height: 100px;
-        background: rgba(10,10,10,0.95); backdrop-filter: blur(20px);
-        z-index: 6000; display: flex; align-items: center; justify-content: space-around;
-        border-bottom: 2px solid #0077ff; transition: top 0.4s ease;
-        padding: 0 40px; box-shadow: 0 10px 40px #000;
+      position: absolute; top: -150px; left: 0; right: 0; height: 100px;
+      background: rgba(10,10,10,0.95); backdrop-filter: blur(20px);
+      z-index: 6000; display: flex; align-items: center; justify-content: space-around;
+      border-bottom: 2px solid #0077ff; transition: top 0.4s ease;
+      padding: 0 40px; box-shadow: 0 10px 40px #000;
     }
     #gps-overlay.active { top: 0; }
     .gps-stat { text-align: center; }
@@ -100,7 +100,7 @@
   </div>
 
 <script>
-  // DPR: se vuoi MASSIMA fluidità su mobile senza perdita percepibile, usa Math.min(...,2)
+  // Se vuoi più fluidità su mobile senza perdita percepibile, usa Math.min(...,2)
   // const DPR = Math.min(window.devicePixelRatio || 1, 2);
   const DPR = window.devicePixelRatio || 1;
 
@@ -225,37 +225,35 @@
     return c;
   }
 
-  // ✅ DRAW SCALAR: trasformazione affine ancorata ai corner geografici del modello (niente disallineamento)
+  // ✅ DRAW SCALAR: affine georeferenziata + FIX half-pixel (allinea centro cella)
   function drawSmoothScalar() {
     if (!currentData || !currentStepKey) return;
 
     const m = currentData.meta;
     const nx = m.nx, ny = m.ny;
 
-    // corner geografici griglia
     const latN = m.la1;
     const lonW = m.lo1;
     const lonE = m.lo1 + m.dx * (nx - 1);
     const latS = m.la1 - m.dy * (ny - 1);
 
-    // proiezione in pixel (container coords)
     const p00 = map.latLngToContainerPoint([latN, lonW]); // NW
     const p10 = map.latLngToContainerPoint([latN, lonE]); // NE
     const p01 = map.latLngToContainerPoint([latS, lonW]); // SW
 
-    // affine transform: screen = A * tex + T
     const a = (p10.x - p00.x) / (nx - 1);
     const b = (p10.y - p00.y) / (nx - 1);
     const c = (p01.x - p00.x) / (ny - 1);
     const d = (p01.y - p00.y) / (ny - 1);
-    const e = p00.x;
-    const f = p00.y;
+
+    // FIX: allinea (0.5,0.5) della texture al gridpoint (lo1,la1)
+    const e = p00.x - a*0.5 - c*0.5;
+    const f = p00.y - b*0.5 - d*0.5;
 
     ['wind','temp','rain','rh','press','cloud'].forEach(l => {
       const canvas = scalarCanvases[l];
       const ctx = canvas.getContext('2d');
 
-      // reset & clear
       ctx.setTransform(1,0,0,1,0,0);
       ctx.clearRect(0, 0, canvas.width, canvas.height);
 
@@ -265,11 +263,7 @@
       if (!tex) return;
 
       ctx.imageSmoothingEnabled = true;
-
-      // applica transform in spazio DPR
       ctx.setTransform(DPR*a, DPR*b, DPR*c, DPR*d, DPR*e, DPR*f);
-
-      // disegna texture nello spazio griglia (0..nx,0..ny)
       ctx.drawImage(tex, 0, 0, nx, ny);
     });
   }
@@ -279,8 +273,6 @@
     ctx.clearRect(0,0,arrowCanvas.width, arrowCanvas.height);
 
     if(!selected.has('wind') || !currentData) return;
-
-    // Durante movimento: niente frecce (particles già rendono il flusso)
     if (isMoving) return;
 
     const size = map.getSize();
@@ -328,7 +320,6 @@
   function drawContours(type) {
     const ctx = (type==="iso") ? isoCanvas.getContext('2d') : thermCanvas.getContext('2d');
     ctx.clearRect(0,0,(type==="iso"?isoCanvas.width:thermCanvas.width),(type==="iso"?isoCanvas.height:thermCanvas.height));
-
     ctx.setTransform(DPR, 0, 0, DPR, 0, 0);
 
     const m = currentData.meta;
