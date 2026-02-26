@@ -18,17 +18,16 @@ TEMP_FILE = "temp.grib2"
 
 # ============================================================
 # ITALIA (inclusi Sicilia + Sardegna)
-# Nota: puoi stringere/allargare se vuoi.
 # ============================================================
 LAT_MIN, LAT_MAX = 35.0, 48.5
 LON_MIN, LON_MAX = 6.0, 19.5
 
 # ============================================================
-# CONTROLLO DIMENSIONE GRIGLIA (anti JSON enormi + anti lag)
-# Se la griglia ritagliata supera MAX_PIXELS, applica downsample.
-# Es: 350*350 = 122.500 punti (ok). Sopra, riduce.
+# CONTROLLO DIMENSIONE GRIGLIA
+# Alzato a 600_000 per accogliere TUTTA l'Italia a risoluzione
+# nativa (2.2km) senza fare downsampling! Niente più quadratoni.
 # ============================================================
-MAX_PIXELS = 140_000  # puoi alzare/abbassare
+MAX_PIXELS = 600_000 
 
 
 def get_latest_run_files():
@@ -56,7 +55,6 @@ def get_latest_run_files():
 
 def calculate_rh_numpy(temp_k, dew_k):
     """Calcola RH usando Numpy puro per evitare errori di allineamento Xarray"""
-    # Formula August-Roche-Magnus
     T = temp_k - 273.15
     Td = dew_k - 273.15
     a = 17.625
@@ -83,10 +81,7 @@ def extract_raw_grid(ds, mask, var_names):
 
 
 def try_open_cloud_dataset(grib_path):
-    """
-    Prova ad aprire un dataset che contenga la copertura nuvolosa.
-    In GRIB può essere tcc/tcdc/clct ecc con vari typeOfLevel.
-    """
+    """Prova ad aprire un dataset che contenga la copertura nuvolosa."""
     candidates = [
         {'filter_by_keys': {'shortName': 'tcc'}},
         {'filter_by_keys': {'shortName': 'tcdc'}},
@@ -108,7 +103,6 @@ def try_open_cloud_dataset(grib_path):
                 return ds
         except Exception:
             continue
-
     return None
 
 
@@ -130,7 +124,6 @@ def compute_downsample_factor(ny, nx, max_pixels=MAX_PIXELS):
     pixels = int(ny) * int(nx)
     if pixels <= max_pixels:
         return 1
-    # sqrt(pixels/max_pixels) arrotondato per eccesso
     f = int(np.ceil(np.sqrt(pixels / max_pixels)))
     return max(1, f)
 
@@ -185,15 +178,13 @@ def process_data():
                 TEMP_FILE, engine='cfgrib',
                 backend_kwargs={'filter_by_keys': {'typeOfLevel': 'heightAboveGround', 'level': 10}}
             )
-
             ds_thermo = None
             try:
                 ds_thermo = xr.open_dataset(
                     TEMP_FILE, engine='cfgrib',
                     backend_kwargs={'filter_by_keys': {'typeOfLevel': 'heightAboveGround', 'level': 2}}
                 )
-            except Exception:
-                pass
+            except: pass
 
             ds_press = None
             try:
@@ -201,8 +192,7 @@ def process_data():
                     TEMP_FILE, engine='cfgrib',
                     backend_kwargs={'filter_by_keys': {'typeOfLevel': 'meanSea'}}
                 )
-            except Exception:
-                pass
+            except: pass
 
             ds_rain = None
             try:
@@ -210,8 +200,7 @@ def process_data():
                     TEMP_FILE, engine='cfgrib',
                     backend_kwargs={'filter_by_keys': {'typeOfLevel': 'surface', 'stepType': 'accum'}}
                 )
-            except Exception:
-                pass
+            except: pass
 
             ds_cloud = try_open_cloud_dataset(TEMP_FILE)
 
@@ -232,7 +221,7 @@ def process_data():
 
                 step_hours = int(raw_step / np.timedelta64(1, 'h')) if isinstance(raw_step, np.timedelta64) else int(raw_step)
 
-                # --- MASCHERA ---
+                # --- MASCHERA E TAGLIO (Bounding Box Italia) ---
                 dw_step = dw_step.sortby('latitude', ascending=False).sortby('longitude', ascending=True)
                 mask = (
                     (dw_step.latitude >= LAT_MIN) & (dw_step.latitude <= LAT_MAX) &
@@ -252,17 +241,14 @@ def process_data():
                 u_val = np.nan_to_num(cut_w[u_key].values)
                 v_val = np.nan_to_num(cut_w[v_key].values)
 
-                # coordinate
                 lat = cut_w.latitude.values
                 lon = cut_w.longitude.values
-                if lat.ndim > 1:
-                    lat = lat[:, 0]
-                if lon.ndim > 1:
-                    lon = lon[0, :]
+                if lat.ndim > 1: lat = lat[:, 0]
+                if lon.ndim > 1: lon = lon[0, :]
 
                 ny, nx = u_val.shape
 
-                # --- DOWNSAMPLE “INTELLIGENTE” (se serve) ---
+                # --- DOWNSAMPLE (Non interverrà più grazie a MAX_PIXELS=600_000) ---
                 f = compute_downsample_factor(ny, nx, MAX_PIXELS)
                 if f > 1:
                     u_val = downsample_2d(u_val, f)
@@ -271,7 +257,6 @@ def process_data():
                     lon = downsample_1d(lon, f)
                     ny, nx = u_val.shape
 
-                # grid meta (dopo eventuale downsample)
                 la1, lo1 = float(lat[0]), float(lon[0])
                 dx = float(abs(lon[1] - lon[0])) if nx > 1 else 0.0
                 dy = float(abs(lat[0] - lat[1])) if ny > 1 else 0.0
@@ -289,20 +274,12 @@ def process_data():
                     t_raw = extract_raw_grid(dt_step, mask, ['t2m', 't'])
                     d_raw = extract_raw_grid(dt_step, mask, ['d2m', '2d'])
 
-                    if t_raw is not None:
-                        # allinea forma + downsample come vento
-                        if t_raw.shape != (int(mask.where(mask, drop=True).sizes.get('latitude', t_raw.shape[0])),
-                                           int(mask.where(mask, drop=True).sizes.get('longitude', t_raw.shape[-1]))):
-                            pass
-
                     if t_raw is not None and t_raw.ndim == 2:
-                        if f > 1:
-                            t_raw = downsample_2d(t_raw, f)
+                        if f > 1: t_raw = downsample_2d(t_raw, f)
                         if t_raw.shape == u_val.shape:
                             temp_c = t_raw - 273.15
                             if d_raw is not None and d_raw.ndim == 2:
-                                if f > 1:
-                                    d_raw = downsample_2d(d_raw, f)
+                                if f > 1: d_raw = downsample_2d(d_raw, f)
                                 if d_raw.shape == u_val.shape:
                                     rh_val = calculate_rh_numpy(t_raw, d_raw)
 
@@ -314,8 +291,7 @@ def process_data():
 
                     p_raw = extract_raw_grid(dp_step, mask, ['pmsl', 'prmsl', 'msl'])
                     if p_raw is not None and p_raw.ndim == 2:
-                        if f > 1:
-                            p_raw = downsample_2d(p_raw, f)
+                        if f > 1: p_raw = downsample_2d(p_raw, f)
                         if p_raw.shape == u_val.shape:
                             p_clean = np.nan_to_num(p_raw)
                             press = (p_clean / 100.0) if np.max(p_clean) > 80000 else p_clean
@@ -331,27 +307,23 @@ def process_data():
 
                     r_raw = extract_raw_grid(dr_step, mask, ['tp', 'tot_prec'])
                     if r_raw is not None and r_raw.ndim == 2:
-                        if f > 1:
-                            r_raw = downsample_2d(r_raw, f)
+                        if f > 1: r_raw = downsample_2d(r_raw, f)
                         if r_raw.shape == u_val.shape:
                             rain = np.nan_to_num(r_raw)
 
-                # --- 4) NUVOLOSITÀ (% 0-100) ---
+                # --- 4) NUVOLOSITÀ ---
                 cloud = np.zeros_like(u_val)
                 if ds_cloud is not None:
                     dc_step = ds_cloud.isel(step=i) if ds_cloud.sizes.get('step', 1) > 1 else ds_cloud
                     dc_step = dc_step.sortby('latitude', ascending=False).sortby('longitude', ascending=True)
 
-                    c_raw = extract_raw_grid(dc_step, mask, [
-                        'tcc', 'tcdc', 'clct', 'cc', 'tcc_total', 'totalCloudCover'
-                    ])
+                    c_raw = extract_raw_grid(dc_step, mask, ['tcc', 'tcdc', 'clct', 'cc', 'tcc_total', 'totalCloudCover'])
                     if c_raw is not None and c_raw.ndim == 2:
-                        if f > 1:
-                            c_raw = downsample_2d(c_raw, f)
+                        if f > 1: c_raw = downsample_2d(c_raw, f)
                         if c_raw.shape == u_val.shape:
                             cloud = normalize_cloud_to_percent(c_raw)
 
-                # --- EXPORT JSON ---
+                # --- EXPORT JSON MINIFICATO ---
                 valid_dt = run_dt + timedelta(hours=step_hours)
                 iso_date = valid_dt.strftime("%Y-%m-%dT%H:%M:%S.000Z")
 
@@ -381,8 +353,11 @@ def process_data():
                 }
 
                 out_name = f"step_{step_hours}.json"
+                
+                # LA VERA MAGIA: 'separators=(',', ':')' comprime il JSON rimuovendo gli spazi bianchi!
+                # Questo rende il caricamento velocissimo anche in 4G sul telefono.
                 with open(f"{TEMP_DIR}/{out_name}", 'w') as jf:
-                    json.dump(step_data, jf)
+                    json.dump(step_data, jf, separators=(',', ':'))
 
                 if not any(x['hour'] == step_hours for x in catalog):
                     catalog.append({
@@ -397,7 +372,6 @@ def process_data():
 
         print(" -> Done")
 
-    # Cleanup finale
     if os.path.exists(TEMP_FILE):
         os.remove(TEMP_FILE)
     if os.path.exists(f"{TEMP_FILE}.idx"):
@@ -406,7 +380,7 @@ def process_data():
     if catalog:
         catalog.sort(key=lambda x: x['hour'])
         with open(f"{TEMP_DIR}/catalog.json", 'w') as f:
-            json.dump(catalog, f)
+            json.dump(catalog, f, separators=(',', ':'))
 
         if os.path.exists(FINAL_DIR):
             shutil.rmtree(FINAL_DIR)
