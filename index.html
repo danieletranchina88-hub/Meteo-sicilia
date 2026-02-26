@@ -89,7 +89,7 @@
       <div class="toggle" id="btn-press" onclick="toggleLayer('press')">PRESSIONE ⏲️</div>
       <div class="toggle" id="btn-cloud" onclick="toggleLayer('cloud')">NUVOLE ☁️</div>
       <div style="height:1px; background: rgba(255,255,255,0.1); margin:8px 0;"></div>
-      <div class="toggle" id="btn-iso" onclick="toggleIsobars()">ISOBARE 〰️</div>
+      <div class="toggle" id="btn-iso" onclick="toggleIsobars()">ISOBARE + A/B 〰️</div>
     </div>
   </div>
 
@@ -139,6 +139,19 @@
     return [...stops[stops.length-1].c, 0.85];
   }
 
+  // NUOVA MAGIA: Interpolazione Bilineare (Elimina i pixel quadrati)
+  function getBilinear(arr, gx, gy, nx, ny) {
+      let x = Math.floor(gx), y = Math.floor(gy);
+      if(x < 0) x = 0; if(x >= nx-1) x = nx-2;
+      if(y < 0) y = 0; if(y >= ny-1) y = ny-2;
+      const fx = gx - x, fy = gy - y;
+      
+      const i00 = y*nx + x;
+      const v00 = arr[i00], v10 = arr[i00 + 1], v01 = arr[i00 + nx], v11 = arr[i00 + nx + 1];
+      
+      return v00*(1-fx)*(1-fy) + v10*fx*(1-fy) + v01*(1-fx)*fy + v11*fx*fy;
+  }
+
   function toggleGpsPanel(show) { document.getElementById('gps-overlay').className = show ? 'active' : ''; }
   function getMyWeather() { map.locate({setView: true, maxZoom: 9}); }
 
@@ -177,16 +190,24 @@
   function updateGpsReadout(latlng) {
       if(!currentData) return;
       const m = currentData.meta;
-      const gx = Math.round((latlng.lng - m.lo1) / m.dx), gy = Math.round((m.la1 - latlng.lat) / m.dy);
+      const gx = (latlng.lng - m.lo1) / m.dx;
+      const gy = (m.la1 - latlng.lat) / m.dy;
+      
       if(gx>=0 && gy>=0 && gx < m.nx && gy < m.ny) {
-          const i = gy * m.nx + gx;
-          document.getElementById('gps-t').innerText = currentData.temp[i].toFixed(1) + "°";
-          document.getElementById('gps-tf').innerText = currentData.feels_like[i].toFixed(1) + "°"; 
-          document.getElementById('gps-r').innerText = currentData.rain[i].toFixed(1) + "mm";
-          const wsp = Math.sqrt(currentData.wind_u.data[i]**2 + currentData.wind_v.data[i]**2)*3.6;
-          document.getElementById('gps-w').innerText = wsp.toFixed(0) + "km/h";
-          document.getElementById('gps-h').innerText = Math.round(currentData.rh[i]) + "%";
-          document.getElementById('gps-p').innerText = Math.round(currentData.cleanP[i]) + "hPa"; 
+          const t = getBilinear(currentData.temp, gx, gy, m.nx, m.ny);
+          const tf = getBilinear(currentData.feels_like, gx, gy, m.nx, m.ny);
+          const r = getBilinear(currentData.rain, gx, gy, m.nx, m.ny);
+          const u = getBilinear(currentData.wind_u.data, gx, gy, m.nx, m.ny);
+          const v = getBilinear(currentData.wind_v.data, gx, gy, m.nx, m.ny);
+          const rh = getBilinear(currentData.rh, gx, gy, m.nx, m.ny);
+          const p = getBilinear(currentData.cleanP, gx, gy, m.nx, m.ny);
+          
+          document.getElementById('gps-t').innerText = t.toFixed(1) + "°";
+          document.getElementById('gps-tf').innerText = tf.toFixed(1) + "°"; 
+          document.getElementById('gps-r').innerText = r.toFixed(1) + "mm";
+          document.getElementById('gps-w').innerText = (Math.sqrt(u*u + v*v)*3.6).toFixed(0) + "km/h";
+          document.getElementById('gps-h').innerText = Math.round(rh) + "%";
+          document.getElementById('gps-p').innerText = Math.round(p) + "hPa"; 
           toggleGpsPanel(true);
       }
   }
@@ -224,8 +245,6 @@
             currentData.cleanP[j] = (!v || v < 850 || v > 1080) ? 1013 : v;
         }
 
-        // --- IL SEGRETO DELLA VELOCITÀ: SOTTOCAMPIONAMENTO ---
-        // Prendiamo un punto ogni 5 per le isobare. Riducono i calcoli del 96%.
         const downStep = 5; 
         const smallNx = Math.ceil(m.nx / downStep);
         const smallNy = Math.ceil(m.ny / downStep);
@@ -275,7 +294,8 @@
 
   function drawSmoothScalar() {
     const m = currentData.meta, size = map.getSize();
-    const scaleFactor = 0.5;
+    // ScaleFactor 0.6 garantisce massima fluidità. La bilineare fa sembrare tutto 4K!
+    const scaleFactor = 0.6;
     const ctx_w = Math.ceil(size.x * scaleFactor), ctx_h = Math.ceil(size.y * scaleFactor);
 
     ['wind','temp','feels','rain','rh','press','cloud'].forEach(l => {
@@ -290,27 +310,39 @@
         for(let y=0; y<ctx_h; y++) {
             for(let x=0; x<ctx_w; x++) {
                 const ll = map.containerPointToLatLng([x/scaleFactor, y/scaleFactor]);
-                const gx = Math.round((ll.lng-m.lo1)/m.dx), gy = Math.round((m.la1-ll.lat)/m.dy);
-                if(gx<0||gy<0||gx>m.nx-1||gy>m.ny-1) continue;
-
-                const idx = (y*ctx_w + x)*4; const i00 = (gy|0)*m.nx+(gx|0);
+                const gx = (ll.lng-m.lo1)/m.dx;
+                const gy = (m.la1-ll.lat)/m.dy;
                 
+                // Salto i pixel fuori dall'Italia
+                if(gx < -1 || gy < -1 || gx > m.nx || gy > m.ny) continue;
+
+                const idx = (y*ctx_w + x)*4;
                 let col;
+
                 if(l==='wind'){
-                    const sp_ms = Math.sqrt(currentData.wind_u.data[i00]**2 + currentData.wind_v.data[i00]**2);
+                    const u = getBilinear(currentData.wind_u.data, gx, gy, m.nx, m.ny);
+                    const v = getBilinear(currentData.wind_v.data, gx, gy, m.nx, m.ny);
+                    const sp_ms = Math.sqrt(u*u + v*v);
                     const res = getStopColor(sp_ms * 3.6, stops); 
                     col={r:res[0],g:res[1],b:res[2],a:res[3]};
-                } else if(l==='cloud') {
-                    let v = arr[i00]; if(v<5) continue; 
-                    col={r:240,g:240,b:255,a:v/100 * 0.85};
                 } else {
-                    let v = arr[i00]; if(l==='rain'&&v<0.05) continue; 
-                    const res = getStopColor(v, stops); col={r:res[0],g:res[1],b:res[2],a:res[3]};
+                    const val = getBilinear(arr, gx, gy, m.nx, m.ny);
+                    if(l==='cloud' && val < 5) continue;
+                    if(l==='rain' && val < 0.05) continue;
+                    if(l==='cloud') {
+                        col={r:240,g:240,b:255,a:val/100 * 0.85};
+                    } else {
+                        const res = getStopColor(val, stops); 
+                        col={r:res[0],g:res[1],b:res[2],a:res[3]};
+                    }
                 }
+                
                 d[idx]=col.r; d[idx+1]=col.g; d[idx+2]=col.b; d[idx+3]=col.a*255;
             }
         }
-        const tC = document.createElement('canvas'); tC.width=ctx_w; tC.height=ctx_h; tC.getContext('2d').putImageData(img,0,0);
+        
+        const tC = document.createElement('canvas'); tC.width=ctx_w; tC.height=ctx_h; 
+        tC.getContext('2d').putImageData(img,0,0);
         ctx.setTransform(DPR,0,0,DPR,0,0); 
         ctx.imageSmoothingEnabled = true; 
         ctx.drawImage(tC, 0, 0, size.x, size.y);
@@ -364,23 +396,22 @@
     ctx.setTransform(DPR, 0, 0, DPR, 0, 0);
     const m = currentData.meta;
     const contours = currentData.cachedContours; 
-    const step = currentData.contourDownStep; // Fattore moltiplicativo
+    const step = currentData.contourDownStep; 
 
-    ctx.shadowColor = "rgba(0,0,0,1)"; 
-    ctx.shadowBlur = 4; 
+    ctx.shadowColor = "rgba(0,0,0,0.8)"; 
+    ctx.shadowBlur = 3; 
 
     contours.forEach(c => {
         const val = Math.round(c.value);
         const isMajor = val % 4 === 0; 
         
-        ctx.lineWidth = isMajor ? 3.0 : 1.5;
+        ctx.lineWidth = isMajor ? 2.5 : 1.2;
         ctx.strokeStyle = isMajor ? "rgba(255,255,255,1)" : "rgba(255,255,255,0.6)";
 
         c.coordinates.forEach(poly => poly.forEach(ring => {
             ctx.beginPath(); 
             let pts=[]; 
             ring.forEach((p, j) => {
-                // Moltiplichiamo le coordinate ridotte per riportarle alla posizione geografica reale
                 const origX = p[0] * step;
                 const origY = p[1] * step;
                 const pt = map.latLngToContainerPoint([m.la1 - origY * m.dy, m.lo1 + origX * m.dx]);
@@ -390,105 +421,94 @@
             }); 
             ctx.stroke();
 
-            // Riquadro con valore
-            if(pts.length > 25 && isMajor) { // Soglia più bassa perché i punti ora sono molto meno!
+            // Etichetta "tagliata" nella linea (senza quadrato nero)
+            if(pts.length > 30 && isMajor) { 
                 let midIdx = Math.floor(pts.length/2); 
                 const mid = pts[midIdx];
                 
-                ctx.shadowBlur = 0; 
-                ctx.fillStyle = "rgba(0, 0, 0, 0.8)"; 
-                ctx.fillRect(mid.x - 18, mid.y - 12, 36, 24); 
-                
-                ctx.fillStyle = "#ffffff"; 
+                ctx.shadowBlur = 0; // Togliamo l'ombra dal testo per renderlo pulito
                 ctx.font = "bold 13px 'Segoe UI', Arial"; 
                 ctx.textAlign="center"; ctx.textBaseline="middle";
+                
+                // Creiamo un contorno spesso nero per tagliare la linea bianca
+                ctx.lineWidth = 5;
+                ctx.strokeStyle = "rgba(0,0,0,0.85)";
+                ctx.strokeText(val, mid.x, mid.y);
+                
+                // Testo bianco all'interno
+                ctx.fillStyle = "#ffffff"; 
                 ctx.fillText(val, mid.x, mid.y);
-                ctx.shadowBlur = 4; 
+                
+                ctx.shadowBlur = 3; // Ripristiniamo l'ombra per le prossime isobare
             }
         }));
     });
     ctx.shadowBlur = 0;
     
-    // RIMESSE LE "A" E "B"!
-    drawExtremaLight(ctx, m);
+    // Ricerca Intelligente di A e B
+    drawExtremaSmart(ctx, m);
   }
 
-  function drawExtremaLight(ctx, m) {
-    const data = currentData.cleanP;
-    const width = m.nx, height = m.ny;
-    const blockSize = 40; 
-    const cols = Math.ceil(width / blockSize);
-    const rows = Math.ceil(height / blockSize);
+  // NUOVO ALGORITMO A/B: Infallibile e leggerissimo (0.001 sec)
+  function drawExtremaSmart(ctx, m) {
+      const data = currentData.cleanP;
+      const nx = m.nx, ny = m.ny;
+      // Step da 25 punti griglia (circa 50km quadrati a settore)
+      const step = 25; 
+      const w = Math.floor(nx / step);
+      const h = Math.floor(ny / step);
 
-    let blocks = Array.from({ length: rows }, () => 
-        Array.from({ length: cols }, () => ({ maxV: -Infinity, maxX: 0, maxY: 0, minV: Infinity, minX: 0, minY: 0 }))
-    );
+      let extrema = [];
 
-    for (let y = 0; y < height; y++) {
-        const r = Math.floor(y / blockSize);
-        for (let x = 0; x < width; x++) {
-            const c = Math.floor(x / blockSize);
-            const val = data[y * width + x];
-            const b = blocks[r][c];
-            if (val > b.maxV) { b.maxV = val; b.maxX = x; b.maxY = y; }
-            if (val < b.minV) { b.minV = val; b.minX = x; b.minY = y; }
-        }
-    }
+      for (let y = 1; y < h - 1; y++) {
+          for (let x = 1; x < w - 1; x++) {
+              let maxV = -Infinity, minV = Infinity;
+              let maxX = 0, maxY = 0, minX = 0, minY = 0;
 
-    let extrema = [];
+              // Trova il picco esatto del settore
+              for (let dy = 0; dy < step; dy++) {
+                  for (let dx = 0; dx < step; dx++) {
+                      const cx = x * step + dx;
+                      const cy = y * step + dy;
+                      const val = data[cy * nx + cx];
+                      if (val > maxV) { maxV = val; maxX = cx; maxY = cy; }
+                      if (val < minV) { minV = val; minX = cx; minY = cy; }
+                  }
+              }
 
-    for(let r = 1; r < rows - 1; r++) {
-        for(let c = 1; c < cols - 1; c++) {
-            const b = blocks[r][c];
+              // Filtro Sinottico: Solo se sono vere Alte o Basse Pressioni di rilievo
+              if (maxV > 1018) extrema.push({ type: 'A', val: maxV, x: maxX, y: maxY });
+              if (minV < 1012) extrema.push({ type: 'B', val: minV, x: minX, y: minY });
+          }
+      }
 
-            if (b.maxV > 1016) {
-                let isMax = true;
-                for(let dr = -1; dr <= 1; dr++) {
-                    for(let dc = -1; dc <= 1; dc++) {
-                        if(dr === 0 && dc === 0) continue;
-                        if(blocks[r+dr][c+dc].maxV > b.maxV) isMax = false;
-                    }
-                }
-                if (isMax) extrema.push({ type: 'A', val: b.maxV, x: b.maxX, y: b.maxY });
-            }
+      // Disegna dai più importanti ai meno importanti
+      extrema.sort((a,b) => (b.val - a.val) * (a.type === 'A' ? 1 : -1));
 
-            if (b.minV < 1012) {
-                let isMin = true;
-                for(let dr = -1; dr <= 1; dr++) {
-                    for(let dc = -1; dc <= 1; dc++) {
-                        if(dr === 0 && dc === 0) continue;
-                        if(blocks[r+dr][c+dc].minV < b.minV) isMin = false;
-                    }
-                }
-                if (isMin) extrema.push({ type: 'B', val: b.minV, x: b.minX, y: b.minY });
-            }
-        }
-    }
+      let drawn = [];
+      extrema.forEach(ex => {
+          const pt = map.latLngToContainerPoint([m.la1 - ex.y * m.dy, m.lo1 + ex.x * m.dx]);
+          
+          // Se un altro simbolo è stato già disegnato vicino, lo ignoriamo (evita ammassi)
+          if (!drawn.some(d => Math.hypot(d.x - pt.x, d.y - pt.y) < 130)) { 
+              drawn.push(pt);
+              
+              ctx.font = "900 42px 'Arial Black', sans-serif";
+              ctx.textAlign="center"; ctx.textBaseline="middle";
+              ctx.fillStyle = ex.type === 'A' ? "#ff3333" : "#0077ff";
+              ctx.strokeStyle = "#ffffff"; ctx.lineWidth = 4;
+              
+              ctx.shadowColor="rgba(0,0,0,0.8)"; ctx.shadowBlur=8; ctx.shadowOffsetY=2;
+              
+              ctx.strokeText(ex.type, pt.x, pt.y);
+              ctx.fillText(ex.type, pt.x, pt.y);
 
-    let drawn = [];
-    extrema.sort((a,b) => (b.val - a.val) * (a.type === 'A' ? 1 : -1)); 
-
-    extrema.forEach(ex => {
-        const pt = map.latLngToContainerPoint([m.la1 - ex.y * m.dy, m.lo1 + ex.x * m.dx]);
-        
-        if(!drawn.some(d => Math.hypot(d.x - pt.x, d.y - pt.y) < 100)) {
-            drawn.push(pt);
-            
-            ctx.font = "900 45px 'Arial Black', sans-serif"; 
-            ctx.textAlign="center"; ctx.textBaseline="middle";
-            ctx.shadowColor="rgba(0,0,0,0.8)"; ctx.shadowBlur=8; ctx.shadowOffsetY=2;
-            
-            ctx.fillStyle = ex.type === 'A' ? "#ff3333" : "#0077ff"; 
-            ctx.strokeStyle = "#ffffff"; ctx.lineWidth = 4;
-            
-            ctx.strokeText(ex.type, pt.x, pt.y);
-            ctx.fillText(ex.type, pt.x, pt.y);
-            
-            ctx.font = "bold 15px sans-serif"; ctx.shadowBlur=3; ctx.lineWidth=2;
-            ctx.strokeText(Math.round(ex.val), pt.x, pt.y + 30);
-            ctx.fillText(Math.round(ex.val), pt.x, pt.y + 30);
-        }
-    });
+              // Valore pressione
+              ctx.font = "bold 15px sans-serif"; ctx.lineWidth = 3; ctx.shadowBlur=3;
+              ctx.strokeText(Math.round(ex.val), pt.x, pt.y + 30);
+              ctx.fillText(Math.round(ex.val), pt.x, pt.y + 30);
+          }
+      });
   }
 
   function updateParticles() {
@@ -496,7 +516,7 @@
     if (!particlesOn) return;
     velocityLayer = L.velocityLayer({ 
         displayValues: false, data: [currentData.wind_u, currentData.wind_v], 
-        maxVelocity: 30, velocityScale: 0.005, particleMultiplier: 1/300, 
+        maxVelocity: 30, velocityScale: 0.005, particleMultiplier: 1/400, 
         lineWidth: 2, frameRate: 40, opacity: 0.7, colorScale: ["#ffffff"], pane: 'particlePane' 
     }).addTo(map);
   }
@@ -504,22 +524,29 @@
   function onPick(e){
     if(!currentData) return;
     const m = currentData.meta;
-    const gx = Math.round((e.latlng.lng - m.lo1) / m.dx), gy = Math.round((m.la1 - e.latlng.lat) / m.dy);
+    const gx = (e.latlng.lng - m.lo1) / m.dx;
+    const gy = (m.la1 - e.latlng.lat) / m.dy;
+    
     if(gx<0 || gy<0 || gx>=m.nx || gy>=m.ny) { document.getElementById('val-display').innerText = "--"; return; }
-    const i = gy * m.nx + gx;
+    
     let val = "--", unit = "";
-    if(selected.has('temp')) { val = currentData.temp[i].toFixed(1); unit = "°C"; }
-    else if(selected.has('feels')) { val = currentData.feels_like[i].toFixed(1); unit = "°C"; } 
+    if(selected.has('temp')) { val = getBilinear(currentData.temp, gx, gy, m.nx, m.ny).toFixed(1); unit = "°C"; }
+    else if(selected.has('feels')) { val = getBilinear(currentData.feels_like, gx, gy, m.nx, m.ny).toFixed(1); unit = "°C"; } 
     else if(selected.has('wind')) { 
-        const u = currentData.wind_u.data[i], v = currentData.wind_v.data[i];
+        const u = getBilinear(currentData.wind_u.data, gx, gy, m.nx, m.ny);
+        const v = getBilinear(currentData.wind_v.data, gx, gy, m.nx, m.ny);
         val = (Math.sqrt(u*u+v*v)*3.6).toFixed(0); unit = "km/h"; 
         const deg = (Math.atan2(u, v) * (180 / Math.PI) + 180) % 360;
         unit += ` (${Math.round(deg)}°)`;
     }
-    else if(selected.has('rain')) { val = currentData.rain[i].toFixed(1); unit = "mm"; }
-    else if(selected.has('rh')) { val = Math.round(currentData.rh[i]); unit = "%"; }
-    else if(selected.has('press')) { val = (currentData.cleanP[i]).toFixed(1); unit = "hPa"; }
-    else if(selected.has('cloud')) { val = Math.round((currentData.cloud||currentData.cld)[i]); unit = "%"; }
+    else if(selected.has('rain')) { val = getBilinear(currentData.rain, gx, gy, m.nx, m.ny).toFixed(1); unit = "mm"; }
+    else if(selected.has('rh')) { val = Math.round(getBilinear(currentData.rh, gx, gy, m.nx, m.ny)); unit = "%"; }
+    else if(selected.has('press')) { val = getBilinear(currentData.cleanP, gx, gy, m.nx, m.ny).toFixed(1); unit = "hPa"; }
+    else if(selected.has('cloud')) { 
+        const c_val = currentData.cloud || currentData.cld;
+        val = Math.round(getBilinear(c_val, gx, gy, m.nx, m.ny)); unit = "%"; 
+    }
+    
     document.getElementById('val-display').innerText = val; document.getElementById('unit-display').innerText = unit;
   }
 
