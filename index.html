@@ -12,7 +12,6 @@
     body { margin: 0; background: #0a0a0a; font-family: 'Segoe UI', Roboto, sans-serif; color: #ddd; overflow: hidden; }
     #map { position: absolute; top: 0; bottom: 0; width: 100%; background: #0a0a0a; }
 
-    /* UI Layer */
     #model-info { position: absolute; top: 15px; left: 20px; z-index: 5000; pointer-events: none; }
     #model-title { font-size: 18px; font-weight: 900; color: #fff; text-transform: uppercase; }
     #model-sub { font-size: 11px; color: #00eaff; font-family: monospace; }
@@ -35,16 +34,8 @@
   </style>
 </head>
 <body>
-  <div id="model-info">
-    <div id="model-title">ITALIA METEOHUB <span style="color:#00eaff">ICON-2I PRO</span></div>
-    <div id="model-sub">LIVE SYNC | VALID: <span id="valid-time">--</span></div>
-  </div>
-  
-  <div id="info-box">
-    <div id="val-display">--</div>
-    <div id="unit-display">Clicca la mappa</div>
-  </div>
-
+  <div id="model-info"><div id="model-title">ITALIA METEOHUB <span style="color:#00eaff">ICON-2I PRO</span></div><div id="model-sub">LIVE SYNC | VALID: <span id="valid-time">--</span></div></div>
+  <div id="info-box"><div id="val-display">--</div><div id="unit-display">Clicca la mappa</div></div>
   <div id="loading-indicator">Sincronizzazione GPU...</div>
   
   <div id="ui-container">
@@ -58,7 +49,7 @@
         <div class="toggle" id="btn-rh" onclick="toggleLayer('rh')">UMIDITÀ 💧</div>
         <div class="toggle" id="btn-press" onclick="toggleLayer('press')">PRESSIONE ⏲️</div>
         <div style="height:1px; background: rgba(255,255,255,0.1); margin:8px 0;"></div>
-        <div class="toggle" onclick="alert('Fase 2 in arrivo: Isobare e Particelle WebGL')" style="opacity:0.4">AVANZATE 🚀</div>
+        <div class="toggle" onclick="alert('In arrivo: Isobare e Particelle Vettoriali')" style="opacity:0.4">AVANZATE 🚀</div>
     </div>
   </div>
 
@@ -71,7 +62,6 @@
   </div>
 
 <script>
-  // CONFIGURAZIONE SCALE COLORI
   const WIND_BG_STOPS = [{v:0, c:[30,30,35], a:0.6}, {v:15, c:[0,120,160], a:0.75}, {v:30, c:[0,180,140], a:0.8}, {v:70, c:[220,160,0], a:0.9}, {v:120, c:[180,0,40], a:0.95}];
   const TEMP_STOPS = [{v:-20,c:[115,0,171]},{v:-10,c:[0,43,161]},{v:0,c:[0,217,255]},{v:10,c:[51,184,51]},{v:20,c:[255,242,0]},{v:25,c:[255,166,0]},{v:30,c:[255,64,0]},{v:35,c:[204,0,0]},{v:40,c:[128,0,34]}];
   const RAIN_STOPS = [{v:0,c:[0,0,0],a:0},{v:0.1,c:[80,160,255],a:0.6},{v:5,c:[0,50,200],a:0.85},{v:20,c:[255,200,0],a:0.95}];
@@ -108,7 +98,7 @@
     });
 
     map.on('load', async () => {
-        // AGGIUNTA CONFINI REGIONALI (Per riferimento geografico)
+        // Confini regionali ad alto contrasto
         map.addSource('italy-borders', {
             type: 'geojson',
             data: 'https://raw.githubusercontent.com/openpolis/geojson-italy/master/geojson/limits_IT_regions.geojson'
@@ -121,11 +111,10 @@
             paint: {
                 'line-color': '#ffffff',
                 'line-width': 0.8,
-                'line-opacity': 0.4
+                'line-opacity': 0.5
             }
         });
 
-        // SORGENTE METEO GPU
         map.addSource('weather-source', {
             type: 'image',
             url: 'data:image/gif;base64,R0lGODlhAQABAAD/ACwAAAAAAQABAAACADs=', 
@@ -136,8 +125,8 @@
             id: 'weather-layer',
             type: 'raster',
             source: 'weather-source',
-            paint: { 'raster-opacity': 0.85, 'raster-resampling': 'linear' }
-        }, 'borders-layer'); // Colore sotto i confini
+            paint: { 'raster-opacity': 0.82, 'raster-resampling': 'linear' }
+        }, 'borders-layer'); // Sotto i confini
 
         await loadCatalog();
     });
@@ -152,7 +141,6 @@
             let val = (activeLayer === 'wind') ? 
                 Math.sqrt(currentData.wind_u.data[idx]**2 + currentData.wind_v.data[idx]**2)*3.6 : 
                 currentData[activeLayer === 'feels' ? 'feels_like' : activeLayer][idx];
-            
             document.getElementById('val-display').innerText = val.toFixed(1);
             document.getElementById('unit-display').innerText = (activeLayer==='temp'||activeLayer==='feels') ? "°C" : (activeLayer==='wind'?"km/h" : (activeLayer==='rain'?"mm":"%"));
         }
@@ -236,13 +224,19 @@
     }
     offscreenCtx.putImageData(imgData, 0, 0);
 
-    // CORREZIONE ALLINEAMENTO MATEMATICO (Bordi esterni)
-    const dx2 = m.dx / 2, dy2 = m.dy / 2;
+    // CORREZIONE ALLINEAMENTO MATEMATICO (Bordi del pixel invece che centri)
+    const dx2 = m.dx / 2;
+    const dy2 = m.dy / 2;
+    const left = m.lo1 - dx2;
+    const right = (m.lo1 + (m.nx - 1) * m.dx) + dx2;
+    const top = m.la1 + dy2;
+    const bottom = (m.la1 - (m.ny - 1) * m.dy) - dy2;
+
     const coords = [
-        [m.lo1 - dx2, m.la1 + dy2], 
-        [m.lo1 + (m.nx-1)*m.dx + dx2, m.la1 + dy2], 
-        [m.lo1 + (m.nx-1)*m.dx + dx2, (m.la1 - (m.ny-1)*m.dy) - dy2], 
-        [m.lo1 - dx2, (m.la1 - (m.ny-1)*m.dy) - dy2]
+        [left, top], 
+        [right, top], 
+        [right, bottom], 
+        [left, bottom]
     ];
 
     map.getSource('weather-source').updateImage({ url: offscreenCanvas.toDataURL(), coordinates: coords });
@@ -256,3 +250,4 @@
 </script>
 </body>
 </html>
+
