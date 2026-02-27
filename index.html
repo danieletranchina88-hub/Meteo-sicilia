@@ -1,7 +1,7 @@
 <!DOCTYPE html>
 <html lang="it">
 <head>
-  <title>Italia MeteoHub Pro - GPU Accelerated</title>
+  <title>Italia MeteoHub Pro - Synoptic GPU</title>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
   
@@ -12,7 +12,6 @@
     body { margin: 0; background: #0a0a0a; font-family: 'Segoe UI', Roboto, sans-serif; color: #ddd; overflow: hidden; }
     #map { position: absolute; top: 0; bottom: 0; width: 100%; background: #0a0a0a; }
 
-    /* UI Invariata */
     #model-info { position: absolute; top: 15px; left: 20px; z-index: 5000; pointer-events: none; }
     #model-title { font-size: 18px; font-weight: 900; color: #fff; text-transform: uppercase; }
     #model-sub { font-size: 11px; color: #00eaff; font-family: monospace; }
@@ -35,7 +34,7 @@
   </style>
 </head>
 <body>
-  <div id="model-info"><div id="model-title">ITALIA METEOHUB <span style="color:#00eaff">3D ENGINE</span></div><div id="model-sub">LIVE SYNC | VALID: <span id="valid-time">--</span></div></div>
+  <div id="model-info"><div id="model-title">ITALIA METEOHUB <span style="color:#00eaff">ICON-2I PRO</span></div><div id="model-sub">LIVE SYNC | VALID: <span id="valid-time">--</span></div></div>
   <div id="info-box"><div id="val-display">--</div><div id="unit-display">Clicca la mappa</div></div>
   <div id="loading-indicator">Elaborazione GPU...</div>
   
@@ -63,7 +62,7 @@
   </div>
 
 <script>
-  // TAVOLOZZE COLORI
+  // TAVOLOZZE COLORI (Mantenute intatte per la sovrapposizione)
   const WIND_BG_STOPS = [{v:0, c:[30,30,35], a:0.6}, {v:15, c:[0,120,160], a:0.75}, {v:30, c:[0,180,140], a:0.8}, {v:70, c:[220,160,0], a:0.9}, {v:120, c:[180,0,40], a:0.95}];
   const TEMP_STOPS = [{v:-20,c:[115,0,171]},{v:-10,c:[0,43,161]},{v:0,c:[0,217,255]},{v:10,c:[51,184,51]},{v:20,c:[255,242,0]},{v:25,c:[255,166,0]},{v:30,c:[255,64,0]},{v:35,c:[204,0,0]},{v:40,c:[128,0,34]}];
   const RAIN_STOPS = [{v:0,c:[0,0,0],a:0},{v:0.1,c:[80,160,255],a:0.6},{v:5,c:[0,50,200],a:0.85},{v:20,c:[255,200,0],a:0.95}];
@@ -95,23 +94,13 @@
         container: 'map',
         style: 'https://basemaps.cartocdn.com/gl/dark-matter-gl-style/style.json', 
         bounds: [[6.0, 35.0], [19.5, 47.5]],
-        pitch: 45, // INCLINAZIONE 3D
-        maxPitch: 65,
-        antialias: true
+        dragRotate: false, // BLOCCA LA ROTAZIONE: Mantiene il Nord sempre in alto
+        pitchWithRotate: false, // BLOCCA L'INCLINAZIONE: Mappa strettamente 2D (Zenitale)
+        antialias: false // Disabilitato per risparmiare risorse, inutile nel 2D puro
     });
 
     map.on('load', async () => {
-        // MONTAGNE 3D STABILI (Niente flickering)
-        map.addSource('terrain-dem', {
-            'type': 'raster-dem',
-            'tiles': ['https://s3.amazonaws.com/elevation-tiles-prod/terrarium/{z}/{x}/{y}.png'],
-            'encoding': 'terrarium',
-            'tileSize': 256,
-            'maxzoom': 13
-        });
-        map.setTerrain({ 'source': 'terrain-dem', 'exaggeration': 1.3 });
-
-        // SORGENTE IMMAGINE (Questa resta fissa sulla mappa, la GPU si arrangia quando muovi la visuale)
+        // Nessun layer topografico 3D, solo l'immagine meteo piatta e precisa
         map.addSource('weather-source', {
             type: 'image',
             url: 'data:image/gif;base64,R0lGODlhAQABAAD/ACwAAAAAAQABAAACADs=', 
@@ -131,13 +120,11 @@
         await loadCatalog();
     });
 
-    // Clic per prendere i valori
     map.on('click', (e) => {
         if(!currentData) return;
         const m = currentData.meta;
         const lng = e.lngLat.lng, lat = e.lngLat.lat;
         
-        // Calcolo indice
         const gx = Math.round((lng - m.lo1) / m.dx), gy = Math.round((m.la1 - lat) / m.dy);
         
         if(gx>=0 && gy>=0 && gx<m.nx && gy<m.ny) {
@@ -274,17 +261,16 @@
 
     offscreenCtx.putImageData(imgData, 0, 0);
 
-    // FIX COORDINATE: Allineamento perfetto sull'Italia usando i dati estremi della griglia Python
     const topLat = m.la1;
     const bottomLat = m.la1 - (m.ny - 1) * m.dy;
     const leftLon = m.lo1;
     const rightLon = m.lo1 + (m.nx - 1) * m.dx;
 
     const coordinates = [
-        [leftLon, topLat],     // Top-Left
-        [rightLon, topLat],    // Top-Right
-        [rightLon, bottomLat], // Bottom-Right
-        [leftLon, bottomLat]   // Bottom-Left
+        [leftLon, topLat],
+        [rightLon, topLat],
+        [rightLon, bottomLat],
+        [leftLon, bottomLat]
     ];
 
     map.getSource('weather-source').updateImage({
@@ -293,7 +279,6 @@
     });
   }
 
-  // Comandi UI
   window.toggleLayer = (l) => { 
       if(selected.has(l)) selected.delete(l); 
       else selected.add(l); 
