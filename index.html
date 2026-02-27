@@ -41,7 +41,6 @@
     canvas.leaflet-layer { pointer-events: none !important; position: absolute; top: 0; left: 0; }
     .dark-relief-tiles { filter: invert(100%) hue-rotate(180deg) brightness(0.5) contrast(1.2); }
     
-    /* Indicatore di caricamento */
     #loading-indicator { display: none; position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%); background: rgba(0,0,0,0.8); color: white; padding: 15px 25px; border-radius: 10px; font-weight: bold; z-index: 9999; }
     #loading-indicator.active { display: block; }
   </style>
@@ -60,7 +59,7 @@
     <div class="panel">
         <div class="toggle active" id="btn-wind" onclick="toggleLayer('wind')">VENTO 🧭</div>
         <div class="toggle" id="btn-temp" onclick="toggleLayer('temp')">TEMPERATURA 🌡️</div>
-        <div class="toggle" id="btn-feels" onclick="toggleLayer('feels')">PERCEPITA (DEM) 🏔️</div>
+        <div class="toggle" id="btn-feels" onclick="toggleLayer('feels')">PERCEPITA 🤒</div>
         <div class="toggle" id="btn-rain" onclick="toggleLayer('rain')">PIOGGIA ☔</div>
         <div class="toggle" id="btn-rh" onclick="toggleLayer('rh')">UMIDITÀ 💧</div>
         <div class="toggle" id="btn-press" onclick="toggleLayer('press')">PRESSIONE ⏲️</div>
@@ -82,17 +81,13 @@
   const ITALY_BOUNDS = L.latLngBounds(L.latLng(35.0, 6.0), L.latLng(47.5, 19.5));
   let map, currentData = null, catalog = [], isPlaying = false;
   
-  // SELEZIONE MULTIPLA RIATTIVATA
   const selected = new Set(['wind']); 
   let showIsobars = false, particlesOn = false; 
   let scalarCanvases = {}, arrowCanvas, isoCanvas, userMarker, velocityLayer = null; 
-  
-  // SISTEMA DI CACHE (Salva in RAM i file per evitare di riscaricarli)
   const dataCache = {};
 
   const WIND_BG_STOPS = [{v:0, c:[30,30,35], a:0.6}, {v:15, c:[0,120,160], a:0.75}, {v:30, c:[0,180,140], a:0.8}, {v:70, c:[220,160,0], a:0.9}, {v:120, c:[180,0,40], a:0.95}];
   const TEMP_STOPS = [{v:-20,c:[115,0,171]},{v:-10,c:[0,43,161]},{v:0,c:[0,217,255]},{v:10,c:[51,184,51]},{v:20,c:[255,242,0]},{v:25,c:[255,166,0]},{v:30,c:[255,64,0]},{v:35,c:[204,0,0]},{v:40,c:[128,0,34]}];
-  // Colori Pioggia e Nuvole con alfa (trasparenza) per sovrapporsi alla temperatura!
   const RAIN_STOPS = [{v:0,c:[0,0,0],a:0},{v:0.5,c:[80,160,255],a:0.75},{v:5,c:[0,50,200],a:0.85},{v:20,c:[255,200,0],a:0.95}];
   const CLOUD_STOPS = [{v:0,c:[255,255,255],a:0},{v:20,c:[200,200,220],a:0.4},{v:80,c:[150,150,170],a:0.8}];
   const RH_STOPS = [{v:0,c:[160,80,40],a:0.8},{v:40,c:[180,180,80],a:0.8},{v:80,c:[60,160,180],a:0.8},{v:100,c:[60,40,160],a:0.9}];
@@ -123,11 +118,21 @@
   window.addEventListener('load', async () => {
     map = L.map('map', { zoomControl: false, background: '#0a0a0a', inertia: true }).fitBounds(ITALY_BOUNDS);
     L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_nolabels/{z}/{x}/{y}{r}.png', { opacity: 0.6, className: 'dark-relief-tiles' }).addTo(map);
+    
+    // LAYER DEI CONFINI ITALIANI: Aggiunto per rendere visibile la mappa
+    map.createPane('bordersPane').style.zIndex = 500;
+    fetch('https://raw.githubusercontent.com/openpolis/geojson-italy/master/geojson/limits_IT_regions.geojson')
+        .then(r => r.json())
+        .then(data => L.geoJSON(data, { 
+            pane: 'bordersPane', 
+            style: { color: "#ffffff", weight: 1.5, opacity: 0.7, fillOpacity: 0 },
+            interactive: false
+        }).addTo(map));
+
     map.createPane('scalarPane').style.zIndex = 200;
     map.createPane('particlePane').style.zIndex = 300;
     map.createPane('vectorPane').style.zIndex = 400;
 
-    // Ordine di Z-index per permettere alle nuvole/pioggia di stare SOPRA la temperatura
     const mk = (pane, z) => { const c = L.DomUtil.create('canvas', 'leaflet-layer'); c.style.zIndex = z; map.getPane(pane).appendChild(c); return c; };
     scalarCanvases = { wind: mk('scalarPane',1), temp: mk('scalarPane',2), feels: mk('scalarPane',3), rh: mk('scalarPane',4), press: mk('scalarPane',5), cloud: mk('scalarPane',6), rain: mk('scalarPane',7) };
     arrowCanvas = mk('vectorPane', 10); isoCanvas = mk('vectorPane', 11);
@@ -146,7 +151,6 @@
         s.oninput = (e) => loadStep(parseInt(e.target.value));
         
         if(catalog.length > 0) {
-            // AUTO-SYNC ALL'ORA PIÙ VICINA ALLA REALTÀ
             let bestIdx = 0;
             let minDiff = Infinity;
             const now = new Date();
@@ -156,7 +160,6 @@
                 const parts = item.label.split(' ');
                 const dateParts = parts[0].split('/');
                 const timeParts = parts[1].split(':');
-                // Ricostruiamo la data dal formato "DD/MM HH:00"
                 const dt = new Date(currentYear, parseInt(dateParts[1])-1, parseInt(dateParts[0]), parseInt(timeParts[0]), 0);
                 const diff = Math.abs(now - dt);
                 if(diff < minDiff) { minDiff = diff; bestIdx = idx; }
@@ -173,18 +176,30 @@
     document.getElementById('loading-indicator').classList.add('active');
 
     if (dataCache[i]) {
-        // Usa i dati in RAM (Caricamento Istantaneo!)
         currentData = dataCache[i];
     } else {
-        // Scarica dal server
         const r = await fetch('data_weather/' + catalog[i].file);
         const data = await r.json();
-        
         const m = data.meta;
         const len = m.nx * m.ny;
-        if (!data.feels_like && data.temp) data.feels_like = data.temp;
+        
         if (!data.wind_u) data.wind_u = { data: new Float32Array(len) };
         if (!data.wind_v) data.wind_v = { data: new Float32Array(len) };
+
+        // CALCOLO REALE TEMPERATURA PERCEPITA (Anche senza DEM, calcola Umidità + Vento)
+        if (data.temp && data.rh && data.wind_u.data) {
+            data.feels_like = new Float32Array(len);
+            for(let j=0; j<len; j++) {
+                let T = data.temp[j];
+                let RH = data.rh[j];
+                let v_ms = Math.sqrt(data.wind_u.data[j]**2 + data.wind_v.data[j]**2);
+                let e = (RH / 100.0) * 6.105 * Math.exp((17.27 * T) / (237.7 + T));
+                // Formula Apparent Temperature
+                data.feels_like[j] = T + 0.33 * e - 0.70 * v_ms - 4.00;
+            }
+        } else if (data.temp && !data.feels_like) {
+            data.feels_like = data.temp; // Paracadute di emergenza
+        }
 
         if (data.press) {
             const dStep = 4, sNx = Math.ceil(m.nx/dStep), sNy = Math.ceil(m.ny/dStep);
@@ -194,7 +209,7 @@
             data.contourDownStep = dStep;
         }
         
-        dataCache[i] = data; // Salva nella cache
+        dataCache[i] = data; 
         currentData = data;
     }
 
@@ -228,7 +243,6 @@
         const c = scalarCanvases[l], ctx = c.getContext('2d');
         ctx.clearRect(0,0,c.width,c.height);
         
-        // Selezioni MULTIPLE attive
         if(!selected.has(l)) return;
 
         let dataKey = l === 'feels' ? 'feels_like' : l;
@@ -266,16 +280,42 @@
     ctx.clearRect(0,0,arrowCanvas.width, arrowCanvas.height);
     if(!selected.has('wind')) return;
     ctx.setTransform(DPR, 0, 0, DPR, 0, 0);
-    const stride = map.getZoom() >= 10 ? 45 : 75;
+    const stride = map.getZoom() >= 10 ? 40 : 60;
+    
+    // FRECCE PIÙ EVIDENTI: Ombra nera marcata per farle staccare dallo sfondo
+    ctx.shadowColor = "rgba(0,0,0,0.9)";
+    ctx.shadowBlur = 4;
+    ctx.lineCap = "round";
+    ctx.lineJoin = "round";
+
     for(let y=stride/2; y<size.y; y+=stride) {
         for(let x=stride/2; x<size.x; x+=stride) {
             const ll = map.containerPointToLatLng([x, y]);
             const gx = Math.round((ll.lng-m.lo1)/m.dx), gy = Math.round((m.la1-ll.lat)/m.dy);
             if(gx<0||gy<0||gx>=m.nx||gy>=m.ny) continue;
-            const u = currentData.wind_u.data[gy*m.nx+gx], v = currentData.wind_v.data[gy*m.nx+gx], sp = Math.sqrt(u*u+v*v)*3.6;
+            
+            const u = currentData.wind_u.data[gy*m.nx+gx], v = currentData.wind_v.data[gy*m.nx+gx];
+            const sp = Math.sqrt(u*u+v*v)*3.6;
             if(sp < 4) continue;
-            ctx.save(); ctx.translate(x, y); ctx.rotate(Math.atan2(-v, u));
-            ctx.strokeStyle = "white"; ctx.lineWidth = 1.5; ctx.beginPath(); ctx.moveTo(-8,0); ctx.lineTo(8,0); ctx.lineTo(4,-3); ctx.stroke();
+            
+            // Lunghezza dinamica: più vento = freccia più lunga
+            let len = Math.max(12, Math.min(sp * 0.7, 28)); 
+            
+            ctx.save(); 
+            ctx.translate(x, y); 
+            ctx.rotate(Math.atan2(-v, u));
+            
+            ctx.strokeStyle = "white"; 
+            ctx.lineWidth = 2.5; // Più spesse
+            
+            ctx.beginPath(); 
+            ctx.moveTo(-len/2, 0); 
+            ctx.lineTo(len/2, 0); 
+            ctx.lineTo(len/2 - len*0.3, -len*0.3); 
+            ctx.moveTo(len/2, 0);
+            ctx.lineTo(len/2 - len*0.3, len*0.3); 
+            ctx.stroke();
+            
             ctx.restore();
         }
     }
@@ -296,7 +336,6 @@
                 if(j===0) ctx.moveTo(pt.x, pt.y); else ctx.lineTo(pt.x, pt.y); pts.push(pt);
             });
             
-            // FIX LINEE NERE: Resettiamo lo stile prima di ogni linea!
             ctx.strokeStyle = isMajor ? "white" : "rgba(255,255,255,0.4)"; 
             ctx.lineWidth = isMajor ? 1.5 : 0.7;
             ctx.shadowColor = "black"; ctx.shadowBlur = 4;
@@ -305,12 +344,8 @@
             if(isMajor && pts.length > 70) {
                 const mid = pts[Math.floor(pts.length/2)];
                 ctx.font = "bold 11px Arial"; ctx.textAlign = "center";
-                
-                // Disegna il bordo nero per il testo
                 ctx.lineWidth = 3; ctx.strokeStyle = "black"; ctx.shadowBlur = 0; 
                 ctx.strokeText(val, mid.x, mid.y); 
-                
-                // Disegna il testo bianco
                 ctx.fillStyle = "white"; 
                 ctx.fillText(val, mid.x, mid.y);
             }
@@ -352,7 +387,6 @@
     const m = currentData.meta, gx = (e.latlng.lng - m.lo1) / m.dx, gy = (m.la1 - e.latlng.lat) / m.dy;
     if(gx<0||gy<0||gx>=m.nx||gy>=m.ny) return;
     
-    // Mostra il valore del layer "principale" attualmente visibile
     let activeLayer = [...selected].filter(l => l !== 'wind' && l !== 'iso')[0] || [...selected][0] || 'temp';
     let dataKey = activeLayer === 'feels' ? 'feels_like' : activeLayer;
     let arr = currentData[dataKey];
@@ -370,7 +404,6 @@
     document.getElementById('unit-display').innerText = (activeLayer==='temp'||activeLayer==='feels') ? "°C" : (activeLayer==='wind'?"km/h" : (activeLayer==='rain'?"mm": (activeLayer==='press'?"hPa":"%")));
   }
 
-  // Toggle multiplo corretto
   window.toggleLayer = (l) => { 
       if(selected.has(l)) selected.delete(l); 
       else selected.add(l); 
