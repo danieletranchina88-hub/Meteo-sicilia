@@ -36,7 +36,7 @@
 <body>
   <div id="model-info"><div id="model-title">ITALIA METEOHUB <span style="color:#00eaff">ICON-2I PRO</span></div><div id="model-sub">LIVE SYNC | VALID: <span id="valid-time">--</span></div></div>
   <div id="info-box"><div id="val-display">--</div><div id="unit-display">Clicca la mappa</div></div>
-  <div id="loading-indicator">Sincronizzazione GPU...</div>
+  <div id="loading-indicator">Elaborazione...</div>
   
   <div id="ui-container">
     <button class="gps-btn" onclick="getMyWeather()">📍 IL MIO METEO</button>
@@ -81,6 +81,17 @@
     return [...stops[stops.length-1].c, (stops[stops.length-1].a ?? 0.85)];
   }
 
+  // INTERPOLAZIONE BILINEARE (Fondamentale per il Mercator Warp)
+  function getBilinear(arr, gx, gy, nx, ny) {
+    if (!arr) return 0;
+    let x = Math.floor(gx), y = Math.floor(gy);
+    if(x < 0) x = 0; if(x >= nx-1) x = nx-2;
+    if(y < 0) y = 0; if(y >= ny-1) y = ny-2;
+    const fx = gx - x, fy = gy - y;
+    const i00 = y*nx + x;
+    return arr[i00]*(1-fx)*(1-fy) + arr[i00+1]*fx*(1-fy) + arr[i00+nx]*(1-fx)*fy + arr[i00+nx+1]*fx*fy;
+  }
+
   let map, currentData = null, catalog = [], isPlaying = false;
   const selected = new Set(['temp']); 
   const dataCache = {};
@@ -98,7 +109,7 @@
     });
 
     map.on('load', async () => {
-        // Confini regionali
+        // CONFINI REGIONALI
         map.addSource('italy-borders', {
             type: 'geojson',
             data: 'https://raw.githubusercontent.com/openpolis/geojson-italy/master/geojson/limits_IT_regions.geojson'
@@ -108,11 +119,7 @@
             id: 'borders-layer',
             type: 'line',
             source: 'italy-borders',
-            paint: {
-                'line-color': '#ffffff',
-                'line-width': 0.8,
-                'line-opacity': 0.5
-            }
+            paint: { 'line-color': '#ffffff', 'line-width': 0.8, 'line-opacity': 0.5 }
         });
 
         map.addSource('weather-source', {
@@ -126,7 +133,7 @@
             type: 'raster',
             source: 'weather-source',
             paint: { 'raster-opacity': 0.82, 'raster-resampling': 'linear' }
-        }, 'borders-layer'); // Sotto i confini
+        }, 'borders-layer');
 
         await loadCatalog();
     });
@@ -134,13 +141,20 @@
     map.on('click', (e) => {
         if(!currentData) return;
         const m = currentData.meta;
-        const gx = Math.round((e.lngLat.lng - m.lo1) / m.dx), gy = Math.round((m.la1 - e.lngLat.lat) / m.dy);
+        const gx = (e.lngLat.lng - m.lo1) / m.dx;
+        const gy = (m.la1 - e.lngLat.lat) / m.dy;
+        
         if(gx>=0 && gy>=0 && gx<m.nx && gy<m.ny) {
             let activeLayer = [...selected].filter(l => l !== 'wind')[0] || [...selected][0] || 'temp';
-            const idx = gy * m.nx + gx;
-            let val = (activeLayer === 'wind') ? 
-                Math.sqrt(currentData.wind_u.data[idx]**2 + currentData.wind_v.data[idx]**2)*3.6 : 
-                currentData[activeLayer === 'feels' ? 'feels_like' : activeLayer][idx];
+            let val = 0;
+            if (activeLayer === 'wind') {
+                const u = getBilinear(currentData.wind_u.data, gx, gy, m.nx, m.ny);
+                const v = getBilinear(currentData.wind_v.data, gx, gy, m.nx, m.ny);
+                val = Math.sqrt(u*u+v*v)*3.6;
+            } else {
+                let dataKey = activeLayer === 'feels' ? 'feels_like' : activeLayer;
+                val = getBilinear(currentData[dataKey], gx, gy, m.nx, m.ny);
+            }
             document.getElementById('val-display').innerText = val.toFixed(1);
             document.getElementById('unit-display').innerText = (activeLayer==='temp'||activeLayer==='feels') ? "°C" : (activeLayer==='wind'?"km/h" : (activeLayer==='rain'?"mm":"%"));
         }
@@ -196,45 +210,78 @@
   function updateGPULayer() {
     if (!currentData || !map.getSource('weather-source')) return;
     const m = currentData.meta;
-    offscreenCanvas.width = m.nx; offscreenCanvas.height = m.ny;
+    
+    offscreenCanvas.width = m.nx; 
+    offscreenCanvas.height = m.ny;
     const imgData = offscreenCtx.createImageData(m.nx, m.ny);
     const d = imgData.data;
 
     const drawOrder = ['temp', 'feels', 'rh', 'press', 'wind', 'cloud', 'rain'];
     const activeLayers = drawOrder.filter(l => selected.has(l));
 
-    for(let i=0; i < m.nx * m.ny; i++) {
-        let r=0, g=0, b=0, finalA=0;
-        for(let l of activeLayers) {
-            let val, stops, arr = (l === 'feels' ? currentData.feels_like : currentData[l]);
-            if(l === 'wind') {
-                val = Math.sqrt(currentData.wind_u.data[i]**2 + currentData.wind_v.data[i]**2)*3.6;
-                stops = WIND_BG_STOPS;
-            } else if(arr) {
-                val = arr[i];
-                stops = (l==='temp'||l==='feels') ? TEMP_STOPS : (l==='rain'?RAIN_STOPS:(l==='cloud'?CLOUD_STOPS:(l==='rh'?RH_STOPS:PRESS_STOPS)));
-            } else continue;
+    if (activeLayers.length === 0) {
+        offscreenCtx.putImageData(imgData, 0, 0);
+        return;
+    }
 
-            const col = getStopColor(val, stops);
-            const a = col[3];
-            if(finalA === 0) { r=col[0]; g=col[1]; b=col[2]; finalA=a; }
-            else { r=(col[0]*a)+(r*(1-a)); g=(col[1]*a)+(g*(1-a)); b=(col[2]*a)+(b*(1-a)); finalA=Math.max(finalA, a); }
+    // --- ALGORITMO MERCATOR PRE-WARP ---
+    // Calcoliamo i bordi reali dell'immagine per la correzione prospettica
+    const dx2 = m.dx / 2;
+    const dy2 = m.dy / 2;
+    const topLat = m.la1 + dy2;
+    const bottomLat = (m.la1 - (m.ny - 1) * m.dy) - dy2;
+
+    // Convertiamo le latitudini in spazio Y di Mercatore
+    const y1 = Math.log(Math.tan(Math.PI / 4 + (topLat * Math.PI / 180) / 2));
+    const y2 = Math.log(Math.tan(Math.PI / 4 + (bottomLat * Math.PI / 180) / 2));
+
+    for(let y=0; y < m.ny; y++) {
+        // Deformazione proporzionale in base a Web Mercator
+        const fy = y / (m.ny - 1);
+        const mercY = y1 + fy * (y2 - y1);
+        const lat = (2 * Math.atan(Math.exp(mercY)) - Math.PI / 2) * 180 / Math.PI;
+        
+        // Calcolo dell'indice Y con i float per l'interpolazione
+        const gy = (m.la1 - lat) / m.dy;
+
+        for(let x=0; x < m.nx; x++) {
+            const gx = x; // La longitudine in Mercatore è lineare, non serve piegarla!
+
+            let r=0, g=0, b=0, finalA=0;
+            for(let l of activeLayers) {
+                let val = 0, stops;
+                let arr = (l === 'feels' ? currentData.feels_like : currentData[l]);
+                
+                if(l === 'wind') {
+                    const u = getBilinear(currentData.wind_u.data, gx, gy, m.nx, m.ny);
+                    const v = getBilinear(currentData.wind_v.data, gx, gy, m.nx, m.ny);
+                    val = Math.sqrt(u*u+v*v)*3.6;
+                    stops = WIND_BG_STOPS;
+                } else if(arr) {
+                    val = getBilinear(arr, gx, gy, m.nx, m.ny);
+                    stops = (l==='temp'||l==='feels') ? TEMP_STOPS : (l==='rain'?RAIN_STOPS:(l==='cloud'?CLOUD_STOPS:(l==='rh'?RH_STOPS:PRESS_STOPS)));
+                } else continue;
+
+                const col = getStopColor(val, stops);
+                const a = col[3];
+                if(finalA === 0) { r=col[0]; g=col[1]; b=col[2]; finalA=a; }
+                else { r=(col[0]*a)+(r*(1-a)); g=(col[1]*a)+(g*(1-a)); b=(col[2]*a)+(b*(1-a)); finalA=Math.max(finalA, a); }
+            }
+            const p = (y * m.nx + x) * 4; 
+            d[p]=r; d[p+1]=g; d[p+2]=b; d[p+3]=finalA*255;
         }
-        const p = i*4; d[p]=r; d[p+1]=g; d[p+2]=b; d[p+3]=finalA*255;
     }
     offscreenCtx.putImageData(imgData, 0, 0);
 
-    // CORREZIONE ALLINEAMENTO DEFINITIVA: Coordinate pure, senza manipolazioni
-    const left = m.lo1;
-    const right = m.lo1 + (m.nx - 1) * m.dx;
-    const top = m.la1;
-    const bottom = m.la1 - (m.ny - 1) * m.dy;
+    // Coordinate esatte dei bordi
+    const leftLon = m.lo1 - dx2;
+    const rightLon = m.lo1 + (m.nx - 1) * m.dx + dx2;
 
     const coords = [
-        [left, top], 
-        [right, top], 
-        [right, bottom], 
-        [left, bottom]
+        [leftLon, topLat], 
+        [rightLon, topLat], 
+        [rightLon, bottomLat], 
+        [leftLon, bottomLat]
     ];
 
     map.getSource('weather-source').updateImage({ url: offscreenCanvas.toDataURL(), coordinates: coords });
