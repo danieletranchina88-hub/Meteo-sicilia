@@ -11,18 +11,22 @@
   <style>
     body { margin: 0; background: #0a0a0a; font-family: 'Segoe UI', Roboto, sans-serif; color: #ddd; overflow: hidden; }
     #map { position: absolute; top: 0; bottom: 0; width: 100%; background: #0a0a0a; }
+
     #gps-overlay { position: absolute; top: -250px; left: 0; right: 0; background: rgba(10,10,10,0.95); backdrop-filter: blur(20px); -webkit-backdrop-filter: blur(20px); z-index: 6000; display: flex; flex-wrap: wrap; align-items: center; justify-content: center; border-bottom: 2px solid #0077ff; transition: top 0.4s ease; padding: 30px 10px 15px 10px; box-shadow: 0 10px 40px #000; }
     #gps-overlay.active { top: 0; }
     .gps-stat { width: 30%; text-align: center; margin-bottom: 12px; }
     .gps-stat div:first-child { font-size: 0.65em; color: #888; text-transform: uppercase; font-weight: 800; }
     .gps-stat div:last-child { font-size: 1.4em; font-weight: 900; color: #fff; }
     #close-gps { position: absolute; right: 15px; top: 10px; cursor: pointer; color: #888; font-size: 1.4em; }
+
     #model-info { position: absolute; top: 15px; left: 70px; z-index: 5000; pointer-events: none; }
     #model-title { font-size: 18px; font-weight: 900; color: #fff; text-transform: uppercase; }
     #model-sub { font-size: 11px; color: #00eaff; font-family: monospace; }
+    
     #info-box { position: absolute; top: 15px; left: 20px; z-index: 5000; pointer-events: none; }
     #val-display { font-size: 3.5em; font-weight: 950; color: #fff; text-shadow: 0 2px 15px #000; line-height: 0.8; }
     #unit-display { font-size: 1.1em; color: #ccc; font-weight: 700; margin-left: 5px; }
+
     #ui-container { position: absolute; top: 10px; right: 10px; z-index: 5000; display: flex; flex-direction: column; gap: 8px; pointer-events: auto; max-height: 85vh; overflow-y: auto; scrollbar-width: none; }
     .panel { background: rgba(20,20,20,0.9); backdrop-filter: blur(10px); padding: 10px; border-radius: 12px; border: 1px solid rgba(255,255,255,0.1); box-shadow: 0 4px 15px rgba(0,0,0,0.5); }
     .toggle { width: 150px; display:flex; align-items:center; justify-content:space-between; padding: 12px 10px; margin: 4px 0; background: rgba(255,255,255,0.04); border-radius: 8px; cursor: pointer; font-weight: 800; font-size: 11px; color: #bbb; border: 1px solid transparent; transition: 0.2s; }
@@ -30,8 +34,10 @@
     .btn-special { background: rgba(255,255,255,0.1) !important; color: #fff !important; border: 1px solid rgba(255,255,255,0.2) !important; }
     .btn-special.active { background: #23a045 !important; border-color: #2ecf59 !important; }
     .gps-btn { width: 170px; padding: 14px; border-radius: 8px; font-size: 13px; background: #23a045; color: white; cursor: pointer; font-weight: 900; border: none; margin-bottom: 5px; }
+    
     #bottom-bar { position: absolute; bottom: 0; left: 0; right: 0; height: 80px; background: linear-gradient(to top, rgba(0,0,0,1), transparent); display: flex; align-items: center; padding: 0 15px; z-index: 5000; }
     input[type=range] { flex-grow: 1; accent-color: #0077ff; cursor: pointer; }
+    
     canvas.leaflet-layer { pointer-events: none !important; position: absolute; top: 0; left: 0; }
     .dark-relief-tiles { filter: invert(100%) hue-rotate(180deg) brightness(0.5) contrast(1.2); }
   </style>
@@ -70,7 +76,8 @@
   const DPR = window.devicePixelRatio || 1;
   const ITALY_BOUNDS = L.latLngBounds(L.latLng(35.0, 6.0), L.latLng(47.5, 19.5));
   let map, currentData = null, catalog = [], isPlaying = false;
-  let activeScalar = 'wind'; // Solo uno alla volta
+  
+  let activeScalar = 'wind'; 
   let showIsobars = false, particlesOn = false; 
   let scalarCanvases = {}, arrowCanvas, isoCanvas, userMarker, velocityLayer = null; 
 
@@ -78,6 +85,8 @@
   const TEMP_STOPS = [{v:-20,c:[115,0,171]},{v:-10,c:[0,43,161]},{v:0,c:[0,217,255]},{v:10,c:[51,184,51]},{v:20,c:[255,242,0]},{v:25,c:[255,166,0]},{v:30,c:[255,64,0]},{v:35,c:[204,0,0]},{v:40,c:[128,0,34]}];
   const RAIN_STOPS = [{v:0,c:[0,0,0],a:0},{v:0.5,c:[80,160,255],a:0.7},{v:5,c:[0,50,200],a:0.85},{v:20,c:[255,200,0],a:0.9}];
   const CLOUD_STOPS = [{v:0,c:[50,80,120],a:0},{v:20,c:[150,150,170],a:0.4},{v:80,c:[230,230,240],a:0.85}];
+  const RH_STOPS = [{v:0,c:[160,80,40]},{v:40,c:[180,180,80]},{v:80,c:[60,160,180]},{v:100,c:[60,40,160]}];
+  const PRESS_STOPS = [{v:980,c:[0,100,160]},{v:1013,c:[220,220,220]},{v:1030,c:[180,120,40]}];
 
   function getStopColor(val, stops) {
     if (val <= stops[0].v) return [...stops[0].c, (stops[0].a ?? 0.85)];
@@ -125,7 +134,7 @@
         s.max = catalog.length - 1;
         s.oninput = (e) => loadStep(parseInt(e.target.value));
         if(catalog.length > 0) loadStep(0);
-    } catch(e) { console.error("Errore caricamento dati"); }
+    } catch(e) { console.error("Nessun catalogo trovato"); }
   }
 
   async function loadStep(i) {
@@ -135,13 +144,15 @@
     document.getElementById('valid-time').innerText = catalog[i].label;
     document.getElementById('time-label').innerText = catalog[i].label;
     
+    // Controlli di sicurezza se Python invia dati parziali
     const m = currentData.meta;
-    // Sincronizzazione Chiavi Python
-    if (!currentData.feels_like && currentData.feels) currentData.feels_like = currentData.feels;
-    if (!currentData.rh && currentData.humidity) currentData.rh = currentData.humidity;
+    const len = m.nx * m.ny;
+    if (!currentData.feels_like && currentData.temp) currentData.feels_like = currentData.temp;
+    if (!currentData.wind_u) currentData.wind_u = { data: new Float32Array(len) };
+    if (!currentData.wind_v) currentData.wind_v = { data: new Float32Array(len) };
 
     if (currentData.press) {
-        const dStep = 5, sNx = Math.ceil(m.nx/dStep), sNy = Math.ceil(m.ny/dStep);
+        const dStep = 4, sNx = Math.ceil(m.nx/dStep), sNy = Math.ceil(m.ny/dStep);
         const sData = new Float32Array(sNx * sNy);
         for(let y=0; y<sNy; y++) for(let x=0; x<sNx; x++) sData[y*sNx+x] = currentData.press[Math.min(y*dStep, m.ny-1)*m.nx + Math.min(x*dStep, m.nx-1)];
         currentData.cachedContours = d3.contours().size([sNx, sNy]).thresholds(d3.range(960, 1052, 2))(sData);
@@ -165,12 +176,16 @@
   }
 
   function drawSmoothScalar() {
-    const m = currentData.meta, size = map.getSize(), scaleFactor = 0.8; 
+    const m = currentData.meta, size = map.getSize();
+    // SCALEFACTOR = 1.0 -> Massima nitidezza sul cellulare
+    const scaleFactor = 1.0; 
     const ctx_w = Math.ceil(size.x * scaleFactor), ctx_h = Math.ceil(size.y * scaleFactor);
 
     Object.keys(scalarCanvases).forEach(l => {
         const c = scalarCanvases[l], ctx = c.getContext('2d');
         ctx.clearRect(0,0,c.width,c.height);
+        
+        // Disegna solo il layer attivo
         if(l !== activeScalar) return;
 
         let dataKey = l === 'feels' ? 'feels_like' : l;
@@ -178,7 +193,7 @@
         if(!arr && l!=='wind') return;
 
         const img = ctx.createImageData(ctx_w, ctx_h), d = img.data;
-        let stops = (l==='temp'||l==='feels') ? TEMP_STOPS : (l==='rain' ? RAIN_STOPS : (l==='cloud'?CLOUD_STOPS:WIND_BG_STOPS));
+        let stops = (l==='temp'||l==='feels') ? TEMP_STOPS : (l==='rain' ? RAIN_STOPS : (l==='cloud'?CLOUD_STOPS: (l==='rh'?RH_STOPS: (l==='press'?PRESS_STOPS: WIND_BG_STOPS))));
 
         for(let y=0; y<ctx_h; y++) {
             for(let x=0; x<ctx_w; x++) {
@@ -267,7 +282,7 @@
 
   function updateParticles() {
     if (velocityLayer) map.removeLayer(velocityLayer);
-    if (!particlesOn || !currentData) return;
+    if (!particlesOn || !currentData || !currentData.wind_u.data) return;
     velocityLayer = L.velocityLayer({ 
         displayValues: false, data: [currentData.wind_u, currentData.wind_v], 
         maxVelocity: 30, velocityScale: 0.005, particleMultiplier: 1/400, 
@@ -279,17 +294,21 @@
     if(!currentData) return;
     const m = currentData.meta, gx = (e.latlng.lng - m.lo1) / m.dx, gy = (m.la1 - e.latlng.lat) / m.dy;
     if(gx<0||gy<0||gx>=m.nx||gy>=m.ny) return;
+    
     let dataKey = activeScalar === 'feels' ? 'feels_like' : activeScalar;
     let arr = currentData[dataKey];
     let val = 0;
+    
     if (activeScalar === 'wind') {
         const u = getBilinear(currentData.wind_u.data, gx, gy, m.nx, m.ny);
         const v = getBilinear(currentData.wind_v.data, gx, gy, m.nx, m.ny);
         val = Math.sqrt(u*u+v*v)*3.6;
-    } else val = getBilinear(arr, gx, gy, m.nx, m.ny);
+    } else if (arr) {
+        val = getBilinear(arr, gx, gy, m.nx, m.ny);
+    }
     
     document.getElementById('val-display').innerText = val.toFixed(1);
-    document.getElementById('unit-display').innerText = (activeScalar==='temp'||activeScalar==='feels') ? "°C" : (activeScalar==='wind'?"km/h" : (activeScalar==='rain'?"mm":"%"));
+    document.getElementById('unit-display').innerText = (activeScalar==='temp'||activeScalar==='feels') ? "°C" : (activeScalar==='wind'?"km/h" : (activeScalar==='rain'?"mm": (activeScalar==='press'?"hPa":"%")));
   }
 
   window.selectScalar = (l) => { activeScalar = l; redrawAll(); updateBtns(); };
