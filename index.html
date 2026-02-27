@@ -7,24 +7,17 @@
   
   <script src="https://unpkg.com/maplibre-gl@3.6.2/dist/maplibre-gl.js"></script>
   <link href="https://unpkg.com/maplibre-gl@3.6.2/dist/maplibre-gl.css" rel="stylesheet" />
-  <script src="https://d3js.org/d3.v7.min.js"></script>
 
   <style>
     body { margin: 0; background: #0a0a0a; font-family: 'Segoe UI', Roboto, sans-serif; color: #ddd; overflow: hidden; }
     #map { position: absolute; top: 0; bottom: 0; width: 100%; background: #0a0a0a; }
 
-    #gps-overlay { position: absolute; top: -250px; left: 0; right: 0; background: rgba(10,10,10,0.95); backdrop-filter: blur(20px); -webkit-backdrop-filter: blur(20px); z-index: 6000; display: flex; flex-wrap: wrap; align-items: center; justify-content: center; border-bottom: 2px solid #0077ff; transition: top 0.4s ease; padding: 30px 10px 15px 10px; box-shadow: 0 10px 40px #000; }
-    #gps-overlay.active { top: 0; }
-    .gps-stat { width: 30%; text-align: center; margin-bottom: 12px; }
-    .gps-stat div:first-child { font-size: 0.65em; color: #888; text-transform: uppercase; font-weight: 800; }
-    .gps-stat div:last-child { font-size: 1.4em; font-weight: 900; color: #fff; }
-    #close-gps { position: absolute; right: 15px; top: 10px; cursor: pointer; color: #888; font-size: 1.4em; }
-
-    #model-info { position: absolute; top: 15px; left: 70px; z-index: 5000; pointer-events: none; }
+    /* UI Invariata */
+    #model-info { position: absolute; top: 15px; left: 20px; z-index: 5000; pointer-events: none; }
     #model-title { font-size: 18px; font-weight: 900; color: #fff; text-transform: uppercase; }
     #model-sub { font-size: 11px; color: #00eaff; font-family: monospace; }
     
-    #info-box { position: absolute; top: 15px; left: 20px; z-index: 5000; pointer-events: none; text-shadow: 0px 2px 10px rgba(0,0,0,1); }
+    #info-box { position: absolute; top: 55px; left: 20px; z-index: 5000; pointer-events: none; text-shadow: 0px 2px 10px rgba(0,0,0,1); }
     #val-display { font-size: 3.5em; font-weight: 950; color: #fff; line-height: 0.8; }
     #unit-display { font-size: 1.1em; color: #ccc; font-weight: 700; margin-left: 5px; }
 
@@ -42,9 +35,8 @@
   </style>
 </head>
 <body>
-  <div id="gps-overlay"><div id="close-gps" onclick="toggleGpsPanel(false)">✕</div><div class="gps-stat"><div>Temp.</div><div id="gps-t">--</div></div><div class="gps-stat"><div>Percepita</div><div id="gps-tf">--</div></div><div class="gps-stat"><div>Pioggia</div><div id="gps-r">--</div></div><div class="gps-stat"><div>Vento</div><div id="gps-w">--</div></div><div class="gps-stat"><div>Umidità</div><div id="gps-h">--</div></div><div class="gps-stat"><div>Pressione</div><div id="gps-p">--</div></div></div>
   <div id="model-info"><div id="model-title">ITALIA METEOHUB <span style="color:#00eaff">3D ENGINE</span></div><div id="model-sub">LIVE SYNC | VALID: <span id="valid-time">--</span></div></div>
-  <div id="info-box"><div id="val-display">--</div><div id="unit-display">Attendere...</div></div>
+  <div id="info-box"><div id="val-display">--</div><div id="unit-display">Clicca la mappa</div></div>
   <div id="loading-indicator">Elaborazione GPU...</div>
   
   <div id="ui-container">
@@ -58,7 +50,7 @@
         <div class="toggle" id="btn-rh" onclick="toggleLayer('rh')">UMIDITÀ 💧</div>
         <div class="toggle" id="btn-press" onclick="toggleLayer('press')">PRESSIONE ⏲️</div>
         <div style="height:1px; background: rgba(255,255,255,0.1); margin:8px 0;"></div>
-        <div class="toggle" id="btn-iso" onclick="alert('Isobare e Particelle in arrivo col prossimo aggiornamento Vettoriale!')" style="opacity:0.4">ISOBARE 〰️</div>
+        <div class="toggle" onclick="alert('In arrivo nella FASE 2: Particelle Vettoriali e Isobare native!')" style="opacity:0.4">PROSSIMAMENTE 🚀</div>
     </div>
   </div>
 
@@ -71,7 +63,7 @@
   </div>
 
 <script>
-  // TAVOLOZZE COLORI CON ALFA (Trasparenza per sovrapposizione)
+  // TAVOLOZZE COLORI
   const WIND_BG_STOPS = [{v:0, c:[30,30,35], a:0.6}, {v:15, c:[0,120,160], a:0.75}, {v:30, c:[0,180,140], a:0.8}, {v:70, c:[220,160,0], a:0.9}, {v:120, c:[180,0,40], a:0.95}];
   const TEMP_STOPS = [{v:-20,c:[115,0,171]},{v:-10,c:[0,43,161]},{v:0,c:[0,217,255]},{v:10,c:[51,184,51]},{v:20,c:[255,242,0]},{v:25,c:[255,166,0]},{v:30,c:[255,64,0]},{v:35,c:[204,0,0]},{v:40,c:[128,0,34]}];
   const RAIN_STOPS = [{v:0,c:[0,0,0],a:0},{v:0.1,c:[80,160,255],a:0.6},{v:5,c:[0,50,200],a:0.85},{v:20,c:[255,200,0],a:0.95}];
@@ -103,13 +95,13 @@
         container: 'map',
         style: 'https://basemaps.cartocdn.com/gl/dark-matter-gl-style/style.json', 
         bounds: [[6.0, 35.0], [19.5, 47.5]],
-        pitch: 45, // INCLINAZIONE 3D AUTOMATICA
+        pitch: 45, // INCLINAZIONE 3D
         maxPitch: 65,
         antialias: true
     });
 
     map.on('load', async () => {
-        // AGGIUNTA TERRENO 3D (Montagne vere!)
+        // MONTAGNE 3D STABILI (Niente flickering)
         map.addSource('terrain-dem', {
             'type': 'raster-dem',
             'tiles': ['https://s3.amazonaws.com/elevation-tiles-prod/terrarium/{z}/{x}/{y}.png'],
@@ -117,10 +109,9 @@
             'tileSize': 256,
             'maxzoom': 13
         });
-        // Esageriamo un po' l'altezza per renderla spettacolare sul cellulare
-        map.setTerrain({ 'source': 'terrain-dem', 'exaggeration': 1.8 });
+        map.setTerrain({ 'source': 'terrain-dem', 'exaggeration': 1.3 });
 
-        // Layer meteo (verrà incollato SOPRA le montagne 3D)
+        // SORGENTE IMMAGINE (Questa resta fissa sulla mappa, la GPU si arrangia quando muovi la visuale)
         map.addSource('weather-source', {
             type: 'image',
             url: 'data:image/gif;base64,R0lGODlhAQABAAD/ACwAAAAAAQABAAACADs=', 
@@ -140,16 +131,20 @@
         await loadCatalog();
     });
 
+    // Clic per prendere i valori
     map.on('click', (e) => {
         if(!currentData) return;
         const m = currentData.meta;
         const lng = e.lngLat.lng, lat = e.lngLat.lat;
+        
+        // Calcolo indice
         const gx = Math.round((lng - m.lo1) / m.dx), gy = Math.round((m.la1 - lat) / m.dy);
         
         if(gx>=0 && gy>=0 && gx<m.nx && gy<m.ny) {
-            let activeLayer = [...selected][0] || 'temp';
+            let activeLayer = [...selected].filter(l => l !== 'wind')[0] || [...selected][0] || 'temp';
             let val = 0;
             const idx = gy * m.nx + gx;
+            
             if (activeLayer === 'wind') {
                 const u = currentData.wind_u.data[idx], v = currentData.wind_v.data[idx];
                 val = Math.sqrt(u*u+v*v)*3.6;
@@ -157,6 +152,7 @@
                 let dataKey = activeLayer === 'feels' ? 'feels_like' : activeLayer;
                 val = currentData[dataKey][idx];
             }
+            
             document.getElementById('val-display').innerText = val.toFixed(1);
             document.getElementById('unit-display').innerText = (activeLayer==='temp'||activeLayer==='feels') ? "°C" : (activeLayer==='wind'?"km/h" : (activeLayer==='rain'?"mm": (activeLayer==='press'?"hPa":"%")));
         }
@@ -228,7 +224,6 @@
     const imgData = offscreenCtx.createImageData(m.nx, m.ny);
     const d = imgData.data;
 
-    // Ordine di sovrapposizione se attivi più layer insieme (es. Pioggia SEMPRE sopra la Temperatura)
     const drawOrder = ['temp', 'feels', 'rh', 'press', 'wind', 'cloud', 'rain'];
     const activeLayers = drawOrder.filter(l => selected.has(l));
 
@@ -237,10 +232,10 @@
         return;
     }
 
+    // Costruzione pixel
     for(let i=0; i < m.nx * m.ny; i++) {
         let r=0, g=0, b=0, finalAlpha=0;
 
-        // Miscelatore dei Colori
         for(let j=0; j<activeLayers.length; j++) {
             const l = activeLayers[j];
             let val = 0, stops;
@@ -255,7 +250,6 @@
                 stops = (l==='temp'||l==='feels') ? TEMP_STOPS : (l==='rain' ? RAIN_STOPS : (l==='cloud'?CLOUD_STOPS: (l==='rh'?RH_STOPS: PRESS_STOPS)));
             } else continue;
 
-            // Ignoriamo la pioggia e le nuvole invisibili per non sporcare il livello sotto
             if (l === 'cloud' && val < 5) continue;
             if (l === 'rain' && val < 0.1) continue;
 
@@ -266,7 +260,6 @@
                 if (finalAlpha === 0) {
                     r = col[0]; g = col[1]; b = col[2]; finalAlpha = alpha;
                 } else {
-                    // Formula di blending (Sovrappone il nuovo colore a quello vecchio)
                     r = (col[0] * alpha) + (r * (1 - alpha));
                     g = (col[1] * alpha) + (g * (1 - alpha));
                     b = (col[2] * alpha) + (b * (1 - alpha));
@@ -281,13 +274,11 @@
 
     offscreenCtx.putImageData(imgData, 0, 0);
 
-    // CORREZIONE ALLINEAMENTO (Bordi del pixel invece che centri)
-    const dx2 = m.dx / 2;
-    const dy2 = m.dy / 2;
-    const topLat = m.la1 + dy2;
-    const bottomLat = m.la1 - (m.ny - 1) * m.dy - dy2;
-    const leftLon = m.lo1 - dx2;
-    const rightLon = m.lo1 + (m.nx - 1) * m.dx + dx2;
+    // FIX COORDINATE: Allineamento perfetto sull'Italia usando i dati estremi della griglia Python
+    const topLat = m.la1;
+    const bottomLat = m.la1 - (m.ny - 1) * m.dy;
+    const leftLon = m.lo1;
+    const rightLon = m.lo1 + (m.nx - 1) * m.dx;
 
     const coordinates = [
         [leftLon, topLat],     // Top-Left
@@ -302,6 +293,7 @@
     });
   }
 
+  // Comandi UI
   window.toggleLayer = (l) => { 
       if(selected.has(l)) selected.delete(l); 
       else selected.add(l); 
@@ -316,6 +308,15 @@
     });
   }
 
+  window.getMyWeather = () => {
+      if (navigator.geolocation) {
+          navigator.geolocation.getCurrentPosition(
+              (pos) => map.flyTo({ center: [pos.coords.longitude, pos.coords.latitude], zoom: 9 }),
+              (err) => alert("GPS disabilitato o negato.")
+          );
+      }
+  };
+  
   function togglePlay() { isPlaying = !isPlaying; document.getElementById('play-btn').innerText = isPlaying ? "❚❚" : "►"; if(isPlaying) playLoop(); }
   function playLoop() { if(!isPlaying) return; const s = document.getElementById('time-slider'); let v = parseInt(s.value)+1; if(v >= catalog.length) v = 0; s.value = v; loadStep(v); setTimeout(playLoop, 1200); }
 </script>
