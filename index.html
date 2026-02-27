@@ -1,81 +1,46 @@
 <!DOCTYPE html>
 <html lang="it">
 <head>
-  <title>Italia MeteoHub Scientifico - ICON-2I</title>
+  <title>Italia MeteoHub Pro - ICON-2I</title>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-
   <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
   <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
   <script src="https://unpkg.com/leaflet-velocity@1.8.0/dist/leaflet-velocity.js"></script>
   <script src="https://d3js.org/d3.v7.min.js"></script>
-
   <style>
     body { margin: 0; background: #0a0a0a; font-family: 'Segoe UI', Roboto, sans-serif; color: #ddd; overflow: hidden; }
     #map { position: absolute; top: 0; bottom: 0; width: 100%; background: #0a0a0a; }
-
-    #gps-overlay {
-        position: absolute; top: -200px; left: 0; right: 0; 
-        background: rgba(10,10,10,0.95); backdrop-filter: blur(20px); -webkit-backdrop-filter: blur(20px);
-        z-index: 6000; display: flex; flex-wrap: wrap; align-items: center; justify-content: center;
-        border-bottom: 2px solid #0077ff; transition: top 0.4s ease;
-        padding: 25px 10px 15px 10px; box-shadow: 0 10px 40px #000;
-    }
+    #gps-overlay { position: absolute; top: -250px; left: 0; right: 0; background: rgba(10,10,10,0.95); backdrop-filter: blur(20px); -webkit-backdrop-filter: blur(20px); z-index: 6000; display: flex; flex-wrap: wrap; align-items: center; justify-content: center; border-bottom: 2px solid #0077ff; transition: top 0.4s ease; padding: 30px 10px 15px 10px; box-shadow: 0 10px 40px #000; }
     #gps-overlay.active { top: 0; }
     .gps-stat { width: 30%; text-align: center; margin-bottom: 12px; }
     .gps-stat div:first-child { font-size: 0.65em; color: #888; text-transform: uppercase; font-weight: 800; }
-    .gps-stat div:last-child { font-size: 1.5em; font-weight: 900; color: #fff; }
-    #close-gps { position: absolute; right: 15px; top: 10px; cursor: pointer; color: #888; font-size: 1.4em; font-weight: bold; }
-
+    .gps-stat div:last-child { font-size: 1.4em; font-weight: 900; color: #fff; }
+    #close-gps { position: absolute; right: 15px; top: 10px; cursor: pointer; color: #888; font-size: 1.4em; }
     #model-info { position: absolute; top: 15px; left: 70px; z-index: 5000; pointer-events: none; }
     #model-title { font-size: 18px; font-weight: 900; color: #fff; text-transform: uppercase; }
     #model-sub { font-size: 11px; color: #00eaff; font-family: monospace; }
-
     #info-box { position: absolute; top: 15px; left: 20px; z-index: 5000; pointer-events: none; }
     #val-display { font-size: 3.5em; font-weight: 950; color: #fff; text-shadow: 0 2px 15px #000; line-height: 0.8; }
     #unit-display { font-size: 1.1em; color: #ccc; font-weight: 700; margin-left: 5px; }
-
     #ui-container { position: absolute; top: 10px; right: 10px; z-index: 5000; display: flex; flex-direction: column; gap: 8px; pointer-events: auto; max-height: 85vh; overflow-y: auto; scrollbar-width: none; }
     .panel { background: rgba(20,20,20,0.9); backdrop-filter: blur(10px); padding: 10px; border-radius: 12px; border: 1px solid rgba(255,255,255,0.1); }
-    .toggle { width: 150px; display:flex; align-items:center; justify-content:space-between; padding: 12px 10px; margin: 4px 0; background: rgba(255,255,255,0.04); border-radius: 8px; cursor: pointer; font-weight: 800; font-size: 11px; transition: 0.2s; color: #bbb; border: 1px solid transparent; }
+    .toggle { width: 150px; display:flex; align-items:center; justify-content:space-between; padding: 12px 10px; margin: 4px 0; background: rgba(255,255,255,0.04); border-radius: 8px; cursor: pointer; font-weight: 800; font-size: 11px; color: #bbb; border: 1px solid transparent; transition: 0.2s; }
     .toggle.active { background: #0077ff !important; color: #fff !important; }
     .gps-btn { width: 170px; padding: 14px; border-radius: 8px; font-size: 13px; background: #23a045; color: white; cursor: pointer; font-weight: 900; border: none; margin-bottom: 5px; }
-    .mini { width: 170px; padding: 12px; border-radius: 8px; font-size:12px; background: rgba(255,255,255,0.08); color:#fff; cursor:pointer; font-weight:800; border: 1px solid rgba(255,255,255,0.1); margin-bottom: 5px; }
-
     #bottom-bar { position: absolute; bottom: 0; left: 0; right: 0; height: 80px; background: linear-gradient(to top, rgba(0,0,0,1), transparent); display: flex; align-items: center; padding: 0 15px; z-index: 5000; }
-    input[type=range] { flex-grow: 1; accent-color: #0077ff; }
-
+    input[type=range] { flex-grow: 1; accent-color: #0077ff; cursor: pointer; }
     .dark-relief-tiles { filter: invert(100%) hue-rotate(180deg) brightness(0.5) contrast(1.2); }
     canvas.leaflet-layer { pointer-events: none !important; position: absolute; top: 0; left: 0; }
   </style>
 </head>
-
 <body>
-  <div id="gps-overlay">
-    <div id="close-gps" onclick="toggleGpsPanel(false)">✕</div>
-    <div class="gps-stat"><div>Temp.</div><div id="gps-t">--</div></div>
-    <div class="gps-stat"><div>Percepita</div><div id="gps-tf">--</div></div>
-    <div class="gps-stat"><div>Pioggia</div><div id="gps-r">--</div></div>
-    <div class="gps-stat"><div>Vento</div><div id="gps-w">--</div></div>
-    <div class="gps-stat"><div>Umidità</div><div id="gps-h">--</div></div>
-    <div class="gps-stat"><div>Pressione</div><div id="gps-p">--</div></div>
-  </div>
-
-  <div id="model-info">
-    <div id="model-title">ITALIA METEOHUB <span style="color:#00eaff">ICON-2I</span></div>
-    <div id="model-sub">LIVE SYNC | VALID: <span id="valid-time">--</span></div>
-  </div>
-
-  <div id="info-box">
-    <div id="val-display">--</div>
-    <div id="unit-display">Attendere...</div>
-  </div>
-
+  <div id="gps-overlay"><div id="close-gps" onclick="toggleGpsPanel(false)">✕</div><div class="gps-stat"><div>Temp.</div><div id="gps-t">--</div></div><div class="gps-stat"><div>Percepita</div><div id="gps-tf">--</div></div><div class="gps-stat"><div>Pioggia</div><div id="gps-r">--</div></div><div class="gps-stat"><div>Vento</div><div id="gps-w">--</div></div><div class="gps-stat"><div>Umidità</div><div id="gps-h">--</div></div><div class="gps-stat"><div>Pressione</div><div id="gps-p">--</div></div></div>
+  <div id="model-info"><div id="model-title">ITALIA METEOHUB <span style="color:#00eaff">ICON-2I</span></div><div id="model-sub">LIVE SYNC | VALID: <span id="valid-time">--</span></div></div>
+  <div id="info-box"><div id="val-display">--</div><div id="unit-display">Attendere...</div></div>
   <div id="ui-container">
     <button class="gps-btn" onclick="getMyWeather()">📍 IL MIO METEO</button>
-    <div class="panel">
-      <button id="btn-flow" class="mini" onclick="toggleParticles()">PARTICELLE 🌬️</button>
-    </div>
+    <div class="panel"><button id="btn-flow" class="toggle" style="width:100%" onclick="toggleParticles()">PARTICELLE 🌬️</button></div>
     <div class="panel">
       <div class="toggle active" id="btn-wind" onclick="toggleLayer('wind')">VENTO 🧭</div>
       <div class="toggle" id="btn-temp" onclick="toggleLayer('temp')">TEMP 🌡️</div>
@@ -88,55 +53,44 @@
       <div class="toggle" id="btn-iso" onclick="toggleIsobars()">ISOBARE 〰️</div>
     </div>
   </div>
-
   <div id="map"></div>
-
   <div id="bottom-bar">
     <button id="play-btn" style="background:none; border:none; color:white; font-size:2.2em; cursor:pointer;" onclick="togglePlay()">►</button>
     <input type="range" id="time-slider" min="0" max="0" value="0">
-    <div id="time-label" style="color:white; font-weight:bold; margin-left:15px; font-family: monospace;">--/-- --:--</div>
+    <div id="time-label" style="color:white; font-weight:bold; margin-left:15px; font-family: monospace; min-width: 100px;">--/-- --:--</div>
   </div>
 
 <script>
   const DPR = window.devicePixelRatio || 1;
   const ITALY_BOUNDS = L.latLngBounds(L.latLng(35.0, 6.0), L.latLng(47.5, 19.5));
-  
   let map, currentData = null, catalog = [], isPlaying = false;
   const selected = new Set(['wind']);
   let showIsobars = false, particlesOn = false; 
   let scalarCanvases = {}, arrowCanvas, isoCanvas, userMarker, velocityLayer = null; 
 
   const WIND_BG_STOPS = [{v:0, c:[30,30,35], a:0.6}, {v:15, c:[0,120,160], a:0.75}, {v:30, c:[0,180,140], a:0.8}, {v:70, c:[220,160,0], a:0.9}, {v:120, c:[180,0,40], a:0.95}];
-  function vividWindArrowColor(s){
-    if(s<15) return {r:0,g:220,b:255}; if(s<30) return {r:0,g:255,b:100}; if(s<50) return {r:255,g:242,b:0}; return {r:255,g:30,b:0};
-  }
-  
   const TEMP_STOPS = [{v:-10,c:[0,43,161]},{v:0,c:[0,217,255]},{v:10,c:[51,184,51]},{v:20,c:[255,242,0]},{v:25,c:[255,166,0]},{v:30,c:[255,64,0]},{v:35,c:[204,0,0]},{v:40,c:[128,0,34]}];
-  const RAIN_STOPS = [{v:0.0,c:[0,0,0],a:0},{v:0.2,c:[80,160,255],a:0.6},{v:1.0,c:[0,100,255],a:0.8},{v:15,c:[255,220,0],a:0.95}];
-  const PRESS_STOPS = [{v:980,c:[0,100,160]},{v:1013,c:[220,220,220]},{v:1030,c:[180,120,40]}];
 
   function getStopColor(val, stops) {
     if (val <= stops[0].v) return [...stops[0].c, (stops[0].a !== undefined ? stops[0].a : 0.85)];
     for (let i = 0; i < stops.length - 1; i++) {
       if (val >= stops[i].v && val <= stops[i+1].v) {
         const t = (val - stops[i].v) / (stops[i+1].v - stops[i].v);
-        const a1 = stops[i].a !== undefined ? stops[i].a : 0.85;
-        const a2 = stops[i+1].a !== undefined ? stops[i+1].a : 0.85;
+        const a1 = stops[i].a ?? 0.85, a2 = stops[i+1].a ?? 0.85;
         return [(stops[i].c[0]*(1-t)+stops[i+1].c[0]*t)|0, (stops[i].c[1]*(1-t)+stops[i+1].c[1]*t)|0, (stops[i].c[2]*(1-t)+stops[i+1].c[2]*t)|0, (a1*(1-t)+a2*t)];
       }
     }
     return [...stops[stops.length-1].c, 0.85];
   }
 
-  // INTERPOLAZIONE BILINEARE AVANZATA (Nitidezza + Sfumatura)
   function getBilinear(arr, gx, gy, nx, ny) {
+      if (!arr) return 0;
       let x = Math.floor(gx), y = Math.floor(gy);
       if(x < 0) x = 0; if(x >= nx-1) x = nx-2;
       if(y < 0) y = 0; if(y >= ny-1) y = ny-2;
       const fx = gx - x, fy = gy - y;
       const i00 = y*nx + x;
-      const v00 = arr[i00], v10 = arr[i00 + 1], v01 = arr[i00 + nx], v11 = arr[i00 + nx + 1];
-      return v00*(1-fx)*(1-fy) + v10*fx*(1-fy) + v01*(1-fx)*fy + v11*fx*fy;
+      return arr[i00]*(1-fx)*(1-fy) + arr[i00+1]*fx*(1-fy) + arr[i00+nx]*(1-fx)*fy + arr[i00+nx+1]*fx*fy;
   }
 
   window.addEventListener('load', async () => {
@@ -154,22 +108,36 @@
     map.on('mousemove click', onPick);
   });
 
+  async function loadCatalog() {
+    const r = await fetch('data_weather/catalog.json?t=' + Date.now());
+    catalog = await r.json();
+    const s = document.getElementById('time-slider');
+    s.max = catalog.length - 1;
+    s.oninput = (e) => loadStep(parseInt(e.target.value));
+    await loadStep(catalog.length > 0 ? 0 : 0);
+  }
+
   async function loadStep(i) {
+    if (!catalog[i]) return;
     const r = await fetch('data_weather/' + catalog[i].file);
     currentData = await r.json();
     document.getElementById('valid-time').innerText = catalog[i].label;
     document.getElementById('time-label').innerText = catalog[i].label;
     
-    // Cache isobare ogni 2 hPa
-    if(currentData.press) {
-        const thresholds = d3.range(960, 1052, 2); 
-        const downStep = 4; // Sottocampionamento per velocità
-        const m = currentData.meta;
-        const sNx = Math.ceil(m.nx/downStep), sNy = Math.ceil(m.ny/downStep);
+    // Fallback se mancano i dati nel JSON per evitare crash
+    const m = currentData.meta;
+    const len = m.nx * m.ny;
+    if (!currentData.wind_u) currentData.wind_u = { data: new Float32Array(len) };
+    if (!currentData.wind_v) currentData.wind_v = { data: new Float32Array(len) };
+    if (!currentData.temp) currentData.temp = new Float32Array(len);
+    if (!currentData.feels_like) currentData.feels_like = new Float32Array(len);
+
+    if (currentData.press) {
+        const dStep = 5, sNx = Math.ceil(m.nx/dStep), sNy = Math.ceil(m.ny/dStep);
         const sData = new Float32Array(sNx * sNy);
-        for(let y=0; y<sNy; y++) for(let x=0; x<sNx; x++) sData[y*sNx+x] = currentData.press[Math.min(y*downStep, m.ny-1)*m.nx + Math.min(x*downStep, m.nx-1)];
-        currentData.cachedContours = d3.contours().size([sNx, sNy]).thresholds(thresholds)(sData);
-        currentData.contourDownStep = downStep;
+        for(let y=0; y<sNy; y++) for(let x=0; x<sNx; x++) sData[y*sNx+x] = currentData.press[Math.min(y*dStep, m.ny-1)*m.nx + Math.min(x*dStep, m.nx-1)];
+        currentData.cachedContours = d3.contours().size([sNx, sNy]).thresholds(d3.range(960, 1052, 2))(sData);
+        currentData.contourDownStep = dStep;
     }
     redrawAll();
   }
@@ -189,7 +157,6 @@
 
   function drawSmoothScalar() {
     const m = currentData.meta, size = map.getSize();
-    // scaleFactor 1.0 = Nitidezza massima (nessun blur da ridimensionamento)
     const scaleFactor = 1.0; 
     const ctx_w = Math.ceil(size.x * scaleFactor), ctx_h = Math.ceil(size.y * scaleFactor);
 
@@ -198,16 +165,22 @@
         ctx.clearRect(0,0,c.width,c.height);
         if(!selected.has(l)) return;
         const img = ctx.createImageData(ctx_w, ctx_h), d = img.data;
-        let arr = currentData[l] || (l==='feels'?currentData.feels_like:null);
-        if(!arr) return;
-        let stops = l==='wind'?WIND_BG_STOPS:l==='temp'?TEMP_STOPS:l==='press'?PRESS_STOPS:RAIN_STOPS;
+        let arr = (l==='feels'?currentData.feels_like:currentData[l]);
+        if(!arr && l!=='wind') return;
+        let stops = l==='wind'?WIND_BG_STOPS:l==='temp'||l==='feels'?TEMP_STOPS:WIND_BG_STOPS;
 
         for(let y=0; y<ctx_h; y++) {
             for(let x=0; x<ctx_w; x++) {
                 const ll = map.containerPointToLatLng([x/scaleFactor, y/scaleFactor]);
                 const gx = (ll.lng-m.lo1)/m.dx, gy = (m.la1-ll.lat)/m.dy;
                 if(gx<0||gy<0||gx>=m.nx||gy>=m.ny) continue;
-                const val = getBilinear(arr, gx, gy, m.nx, m.ny);
+                let val = 0;
+                if(l==='wind') {
+                   const u = getBilinear(currentData.wind_u.data, gx, gy, m.nx, m.ny);
+                   const v = getBilinear(currentData.wind_v.data, gx, gy, m.nx, m.ny);
+                   val = Math.sqrt(u*u + v*v) * 3.6;
+                } else val = getBilinear(arr, gx, gy, m.nx, m.ny);
+                
                 const col = getStopColor(val, stops);
                 const idx = (y*ctx_w + x)*4;
                 d[idx]=col[0]; d[idx+1]=col[1]; d[idx+2]=col[2]; d[idx+3]=col[3]*255;
@@ -217,75 +190,56 @@
     });
   }
 
-  function drawContours() {
-    const ctx = isoCanvas.getContext('2d');
-    ctx.clearRect(0,0,isoCanvas.width, isoCanvas.height);
-    const m = currentData.meta, contours = currentData.cachedContours, step = currentData.contourDownStep;
+  function drawWindArrows() {
+    if(!selected.has('wind')) return;
+    const ctx = arrowCanvas.getContext('2d'), size = map.getSize(), m = currentData.meta;
+    ctx.clearRect(0,0,arrowCanvas.width, arrowCanvas.height);
     ctx.setTransform(DPR, 0, 0, DPR, 0, 0);
-    ctx.strokeStyle = "rgba(255,255,255,0.7)"; 
-    ctx.lineWidth = 1.2;
+    const z = map.getZoom(), stride = z >= 11 ? 40 : 60;
+    for(let y=stride/2; y<size.y; y+=stride) {
+        for(let x=stride/2; x<size.x; x+=stride) {
+            const ll = map.containerPointToLatLng([x, y]);
+            const gx = Math.round((ll.lng-m.lo1)/m.dx), gy = Math.round((m.la1-ll.lat)/m.dy);
+            if(gx<0||gy<0||gx>=m.nx||gy>=m.ny) continue;
+            const u = currentData.wind_u.data[gy*m.nx+gx], v = currentData.wind_v.data[gy*m.nx+gx], sp = Math.sqrt(u*u+v*v)*3.6;
+            if(sp < 5) continue;
+            ctx.save(); ctx.translate(x, y); ctx.rotate(Math.atan2(-v, u));
+            ctx.strokeStyle = "white"; ctx.lineWidth = 2; ctx.beginPath(); ctx.moveTo(-10,0); ctx.lineTo(10,0); ctx.lineTo(5,-3); ctx.stroke();
+            ctx.restore();
+        }
+    }
+  }
 
-    contours.forEach(c => {
-        const val = Math.round(c.value);
-        const isMajor = val % 4 === 0;
-        ctx.lineWidth = isMajor ? 2.0 : 0.8;
+  function drawContours() {
+    const ctx = isoCanvas.getContext('2d'); ctx.clearRect(0,0,isoCanvas.width, isoCanvas.height);
+    if (!currentData.cachedContours) return;
+    ctx.setTransform(DPR, 0, 0, DPR, 0, 0); ctx.strokeStyle = "white"; ctx.lineWidth = 1;
+    currentData.cachedContours.forEach(c => {
         c.coordinates.forEach(poly => poly.forEach(ring => {
             ctx.beginPath();
-            let pts = [];
             ring.forEach((p, j) => {
-                const pt = map.latLngToContainerPoint([m.la1-p[1]*step*m.dy, m.lo1+p[0]*step*m.dx]);
+                const pt = map.latLngToContainerPoint([currentData.meta.la1-p[1]*currentData.contourDownStep*currentData.meta.dy, currentData.meta.lo1+p[0]*currentData.contourDownStep*currentData.meta.dx]);
                 if(j===0) ctx.moveTo(pt.x, pt.y); else ctx.lineTo(pt.x, pt.y);
-                pts.push(pt);
             });
             ctx.stroke();
-            if(isMajor && pts.length > 50) {
-                const mid = pts[Math.floor(pts.length/2)];
-                ctx.font = "bold 12px Arial";
-                ctx.fillStyle = "white"; ctx.textAlign = "center";
-                ctx.shadowColor = "black"; ctx.shadowBlur = 4;
-                ctx.fillText(val, mid.x, mid.y);
-                ctx.shadowBlur = 0;
-            }
         }));
     });
-    drawExtremaScientific(ctx, m);
   }
 
-  // ALGORITMO A/B FILTRATO (Niente "A" ovunque)
-  function drawExtremaScientific(ctx, m) {
-      const data = currentData.press, nx = m.nx, ny = m.ny;
-      const searchRadius = 60; // Raggio ampio per trovare solo centri reali
-      let extrema = [];
-
-      for(let y=searchRadius; y<ny-searchRadius; y+=30) {
-          for(let x=searchRadius; x<nx-searchRadius; x+=30) {
-              const val = data[y*nx+x];
-              let isMax = true, isMin = true;
-              // Controllo locale rigoroso
-              for(let dy=-searchRadius; dy<=searchRadius; dy+=10) {
-                  for(let dx=-searchRadius; dx<=searchRadius; dx+=10) {
-                      const v = data[(y+dy)*nx+(x+dx)];
-                      if(v > val) isMax = false; if(v < val) isMin = false;
-                  }
-              }
-              if(isMax && val > 1016) extrema.push({t:'A', v:val, x, y});
-              if(isMin && val < 1010) extrema.push({t:'B', v:val, x, y});
-          }
-      }
-
-      extrema.forEach(ex => {
-          const pt = map.latLngToContainerPoint([m.la1-ex.y*m.dy, m.lo1+ex.x*m.dx]);
-          ctx.font = "900 40px Arial Black"; ctx.textAlign = "center";
-          ctx.fillStyle = ex.t==='A' ? "#ff3333" : "#0077ff";
-          ctx.strokeStyle = "white"; ctx.lineWidth = 3;
-          ctx.strokeText(ex.t, pt.x, pt.y); ctx.fillText(ex.t, pt.x, pt.y);
-          ctx.font = "bold 14px Arial"; ctx.fillText(Math.round(ex.v), pt.x, pt.y+25);
-      });
+  function onPick(e){
+    if(!currentData) return;
+    const m = currentData.meta, gx = (e.latlng.lng - m.lo1) / m.dx, gy = (m.la1 - e.latlng.lat) / m.dy;
+    if(gx<0||gy<0||gx>=m.nx||gy>=m.ny) return;
+    const val = getBilinear(currentData.temp, gx, gy, m.nx, m.ny);
+    document.getElementById('val-display').innerText = val.toFixed(1);
+    document.getElementById('unit-display').innerText = "°C";
   }
 
-  // Altre funzioni di supporto (Vento, Play, UI...) rimangono come nelle versioni precedenti.
-  // [Aggiungere qui il resto della logica vento e caricamento file]
-
+  window.toggleLayer = (l) => { if(selected.has(l)) selected.delete(l); else { selected.clear(); selected.add(l); } redrawAll(); updateBtns(); };
+  function updateBtns() { document.querySelectorAll('.toggle').forEach(b => { b.classList.toggle('active', selected.has(b.id.replace('btn-',''))); }); }
+  window.toggleIsobars = () => { showIsobars = !showIsobars; document.getElementById('btn-iso').classList.toggle('active', showIsobars); redrawAll(); };
+  window.toggleGpsPanel = (s) => document.getElementById('gps-overlay').classList.toggle('active', s);
+  window.getMyWeather = () => map.locate({setView: true, maxZoom: 9});
 </script>
 </body>
 </html>
