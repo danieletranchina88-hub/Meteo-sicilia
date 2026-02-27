@@ -12,6 +12,7 @@
     body { margin: 0; background: #0a0a0a; font-family: 'Segoe UI', Roboto, sans-serif; color: #ddd; overflow: hidden; }
     #map { position: absolute; top: 0; bottom: 0; width: 100%; background: #0a0a0a; }
 
+    /* UI Layer */
     #model-info { position: absolute; top: 15px; left: 20px; z-index: 5000; pointer-events: none; }
     #model-title { font-size: 18px; font-weight: 900; color: #fff; text-transform: uppercase; }
     #model-sub { font-size: 11px; color: #00eaff; font-family: monospace; }
@@ -34,9 +35,17 @@
   </style>
 </head>
 <body>
-  <div id="model-info"><div id="model-title">ITALIA METEOHUB <span style="color:#00eaff">ICON-2I PRO</span></div><div id="model-sub">LIVE SYNC | VALID: <span id="valid-time">--</span></div></div>
-  <div id="info-box"><div id="val-display">--</div><div id="unit-display">Clicca la mappa</div></div>
-  <div id="loading-indicator">Elaborazione GPU...</div>
+  <div id="model-info">
+    <div id="model-title">ITALIA METEOHUB <span style="color:#00eaff">ICON-2I PRO</span></div>
+    <div id="model-sub">LIVE SYNC | VALID: <span id="valid-time">--</span></div>
+  </div>
+  
+  <div id="info-box">
+    <div id="val-display">--</div>
+    <div id="unit-display">Clicca la mappa</div>
+  </div>
+
+  <div id="loading-indicator">Sincronizzazione GPU...</div>
   
   <div id="ui-container">
     <button class="gps-btn" onclick="getMyWeather()">📍 IL MIO METEO</button>
@@ -49,7 +58,7 @@
         <div class="toggle" id="btn-rh" onclick="toggleLayer('rh')">UMIDITÀ 💧</div>
         <div class="toggle" id="btn-press" onclick="toggleLayer('press')">PRESSIONE ⏲️</div>
         <div style="height:1px; background: rgba(255,255,255,0.1); margin:8px 0;"></div>
-        <div class="toggle" onclick="alert('In arrivo nella FASE 2: Particelle Vettoriali e Isobare native!')" style="opacity:0.4">PROSSIMAMENTE 🚀</div>
+        <div class="toggle" onclick="alert('Fase 2 in arrivo: Isobare e Particelle WebGL')" style="opacity:0.4">AVANZATE 🚀</div>
     </div>
   </div>
 
@@ -62,7 +71,7 @@
   </div>
 
 <script>
-  // TAVOLOZZE COLORI (Mantenute intatte per la sovrapposizione)
+  // CONFIGURAZIONE SCALE COLORI
   const WIND_BG_STOPS = [{v:0, c:[30,30,35], a:0.6}, {v:15, c:[0,120,160], a:0.75}, {v:30, c:[0,180,140], a:0.8}, {v:70, c:[220,160,0], a:0.9}, {v:120, c:[180,0,40], a:0.95}];
   const TEMP_STOPS = [{v:-20,c:[115,0,171]},{v:-10,c:[0,43,161]},{v:0,c:[0,217,255]},{v:10,c:[51,184,51]},{v:20,c:[255,242,0]},{v:25,c:[255,166,0]},{v:30,c:[255,64,0]},{v:35,c:[204,0,0]},{v:40,c:[128,0,34]}];
   const RAIN_STOPS = [{v:0,c:[0,0,0],a:0},{v:0.1,c:[80,160,255],a:0.6},{v:5,c:[0,50,200],a:0.85},{v:20,c:[255,200,0],a:0.95}];
@@ -85,7 +94,6 @@
   let map, currentData = null, catalog = [], isPlaying = false;
   const selected = new Set(['temp']); 
   const dataCache = {};
-  
   const offscreenCanvas = document.createElement('canvas');
   const offscreenCtx = offscreenCanvas.getContext('2d', { willReadFrequently: true });
 
@@ -94,13 +102,30 @@
         container: 'map',
         style: 'https://basemaps.cartocdn.com/gl/dark-matter-gl-style/style.json', 
         bounds: [[6.0, 35.0], [19.5, 47.5]],
-        dragRotate: false, // BLOCCA LA ROTAZIONE: Mantiene il Nord sempre in alto
-        pitchWithRotate: false, // BLOCCA L'INCLINAZIONE: Mappa strettamente 2D (Zenitale)
-        antialias: false // Disabilitato per risparmiare risorse, inutile nel 2D puro
+        dragRotate: false, 
+        pitchWithRotate: false,
+        antialias: false
     });
 
     map.on('load', async () => {
-        // Nessun layer topografico 3D, solo l'immagine meteo piatta e precisa
+        // AGGIUNTA CONFINI REGIONALI (Per riferimento geografico)
+        map.addSource('italy-borders', {
+            type: 'geojson',
+            data: 'https://raw.githubusercontent.com/openpolis/geojson-italy/master/geojson/limits_IT_regions.geojson'
+        });
+
+        map.addLayer({
+            id: 'borders-layer',
+            type: 'line',
+            source: 'italy-borders',
+            paint: {
+                'line-color': '#ffffff',
+                'line-width': 0.8,
+                'line-opacity': 0.4
+            }
+        });
+
+        // SORGENTE METEO GPU
         map.addSource('weather-source', {
             type: 'image',
             url: 'data:image/gif;base64,R0lGODlhAQABAAD/ACwAAAAAAQABAAACADs=', 
@@ -111,11 +136,8 @@
             id: 'weather-layer',
             type: 'raster',
             source: 'weather-source',
-            paint: {
-                'raster-opacity': 0.85,
-                'raster-resampling': 'linear' 
-            }
-        }, 'watername_ocean');
+            paint: { 'raster-opacity': 0.85, 'raster-resampling': 'linear' }
+        }, 'borders-layer'); // Colore sotto i confini
 
         await loadCatalog();
     });
@@ -123,25 +145,16 @@
     map.on('click', (e) => {
         if(!currentData) return;
         const m = currentData.meta;
-        const lng = e.lngLat.lng, lat = e.lngLat.lat;
-        
-        const gx = Math.round((lng - m.lo1) / m.dx), gy = Math.round((m.la1 - lat) / m.dy);
-        
+        const gx = Math.round((e.lngLat.lng - m.lo1) / m.dx), gy = Math.round((m.la1 - e.lngLat.lat) / m.dy);
         if(gx>=0 && gy>=0 && gx<m.nx && gy<m.ny) {
             let activeLayer = [...selected].filter(l => l !== 'wind')[0] || [...selected][0] || 'temp';
-            let val = 0;
             const idx = gy * m.nx + gx;
-            
-            if (activeLayer === 'wind') {
-                const u = currentData.wind_u.data[idx], v = currentData.wind_v.data[idx];
-                val = Math.sqrt(u*u+v*v)*3.6;
-            } else {
-                let dataKey = activeLayer === 'feels' ? 'feels_like' : activeLayer;
-                val = currentData[dataKey][idx];
-            }
+            let val = (activeLayer === 'wind') ? 
+                Math.sqrt(currentData.wind_u.data[idx]**2 + currentData.wind_v.data[idx]**2)*3.6 : 
+                currentData[activeLayer === 'feels' ? 'feels_like' : activeLayer][idx];
             
             document.getElementById('val-display').innerText = val.toFixed(1);
-            document.getElementById('unit-display').innerText = (activeLayer==='temp'||activeLayer==='feels') ? "°C" : (activeLayer==='wind'?"km/h" : (activeLayer==='rain'?"mm": (activeLayer==='press'?"hPa":"%")));
+            document.getElementById('unit-display').innerText = (activeLayer==='temp'||activeLayer==='feels') ? "°C" : (activeLayer==='wind'?"km/h" : (activeLayer==='rain'?"mm":"%"));
         }
     });
   });
@@ -153,7 +166,6 @@
         const s = document.getElementById('time-slider');
         s.max = catalog.length - 1;
         s.oninput = (e) => loadStep(parseInt(e.target.value));
-        
         if(catalog.length > 0) {
             let bestIdx = 0, minDiff = Infinity, now = new Date();
             catalog.forEach((item, idx) => {
@@ -165,39 +177,30 @@
             s.value = bestIdx;
             await loadStep(bestIdx);
         }
-    } catch(e) { console.error("Catalogo non trovato"); }
+    } catch(e) { console.error("Data error"); }
   }
 
   async function loadStep(i) {
     if (!catalog[i]) return;
     document.getElementById('loading-indicator').classList.add('active');
-
     if (dataCache[i]) {
         currentData = dataCache[i];
     } else {
         const r = await fetch('data_weather/' + catalog[i].file);
-        const data = await r.json();
-        const len = data.meta.nx * data.meta.ny;
-        
-        if (!data.wind_u) data.wind_u = { data: new Float32Array(len) };
-        if (!data.wind_v) data.wind_v = { data: new Float32Array(len) };
-
-        if (data.temp && data.rh && data.wind_u.data) {
-            data.feels_like = new Float32Array(len);
+        currentData = await r.json();
+        if (currentData.temp && currentData.rh && currentData.wind_u) {
+            const len = currentData.meta.nx * currentData.meta.ny;
+            currentData.feels_like = new Float32Array(len);
             for(let j=0; j<len; j++) {
-                let T = data.temp[j], RH = data.rh[j], v_ms = Math.sqrt(data.wind_u.data[j]**2 + data.wind_v.data[j]**2);
+                let T = currentData.temp[j], RH = currentData.rh[j], v = Math.sqrt(currentData.wind_u.data[j]**2 + currentData.wind_v.data[j]**2);
                 let e = (RH / 100.0) * 6.105 * Math.exp((17.27 * T) / (237.7 + T));
-                data.feels_like[j] = T + 0.33 * e - 0.70 * v_ms - 4.00;
+                currentData.feels_like[j] = T + 0.33 * e - 0.70 * v - 4.00;
             }
-        } else if (data.temp) { data.feels_like = data.temp; }
-
-        dataCache[i] = data; 
-        currentData = data;
+        }
+        dataCache[i] = currentData;
     }
-
     document.getElementById('valid-time').innerText = catalog[i].label;
     document.getElementById('time-label').innerText = catalog[i].label;
-    
     updateGPULayer();
     document.getElementById('loading-indicator').classList.remove('active');
   }
@@ -205,105 +208,51 @@
   function updateGPULayer() {
     if (!currentData || !map.getSource('weather-source')) return;
     const m = currentData.meta;
-    
-    offscreenCanvas.width = m.nx;
-    offscreenCanvas.height = m.ny;
+    offscreenCanvas.width = m.nx; offscreenCanvas.height = m.ny;
     const imgData = offscreenCtx.createImageData(m.nx, m.ny);
     const d = imgData.data;
 
     const drawOrder = ['temp', 'feels', 'rh', 'press', 'wind', 'cloud', 'rain'];
     const activeLayers = drawOrder.filter(l => selected.has(l));
 
-    if (activeLayers.length === 0) {
-        offscreenCtx.putImageData(imgData, 0, 0);
-        return;
-    }
-
-    // Costruzione pixel
     for(let i=0; i < m.nx * m.ny; i++) {
-        let r=0, g=0, b=0, finalAlpha=0;
-
-        for(let j=0; j<activeLayers.length; j++) {
-            const l = activeLayers[j];
-            let val = 0, stops;
-            let arr = l === 'feels' ? currentData.feels_like : currentData[l];
-
+        let r=0, g=0, b=0, finalA=0;
+        for(let l of activeLayers) {
+            let val, stops, arr = (l === 'feels' ? currentData.feels_like : currentData[l]);
             if(l === 'wind') {
-                const u = currentData.wind_u.data[i], v = currentData.wind_v.data[i];
-                val = Math.sqrt(u*u+v*v)*3.6;
+                val = Math.sqrt(currentData.wind_u.data[i]**2 + currentData.wind_v.data[i]**2)*3.6;
                 stops = WIND_BG_STOPS;
             } else if(arr) {
                 val = arr[i];
-                stops = (l==='temp'||l==='feels') ? TEMP_STOPS : (l==='rain' ? RAIN_STOPS : (l==='cloud'?CLOUD_STOPS: (l==='rh'?RH_STOPS: PRESS_STOPS)));
+                stops = (l==='temp'||l==='feels') ? TEMP_STOPS : (l==='rain'?RAIN_STOPS:(l==='cloud'?CLOUD_STOPS:(l==='rh'?RH_STOPS:PRESS_STOPS)));
             } else continue;
 
-            if (l === 'cloud' && val < 5) continue;
-            if (l === 'rain' && val < 0.1) continue;
-
             const col = getStopColor(val, stops);
-            const alpha = col[3];
-            
-            if (alpha > 0) {
-                if (finalAlpha === 0) {
-                    r = col[0]; g = col[1]; b = col[2]; finalAlpha = alpha;
-                } else {
-                    r = (col[0] * alpha) + (r * (1 - alpha));
-                    g = (col[1] * alpha) + (g * (1 - alpha));
-                    b = (col[2] * alpha) + (b * (1 - alpha));
-                    finalAlpha = Math.max(finalAlpha, alpha);
-                }
-            }
+            const a = col[3];
+            if(finalA === 0) { r=col[0]; g=col[1]; b=col[2]; finalA=a; }
+            else { r=(col[0]*a)+(r*(1-a)); g=(col[1]*a)+(g*(1-a)); b=(col[2]*a)+(b*(1-a)); finalA=Math.max(finalA, a); }
         }
-
-        const ptr = i * 4;
-        d[ptr] = r; d[ptr+1] = g; d[ptr+2] = b; d[ptr+3] = finalAlpha * 255;
+        const p = i*4; d[p]=r; d[p+1]=g; d[p+2]=b; d[p+3]=finalA*255;
     }
-
     offscreenCtx.putImageData(imgData, 0, 0);
 
-    const topLat = m.la1;
-    const bottomLat = m.la1 - (m.ny - 1) * m.dy;
-    const leftLon = m.lo1;
-    const rightLon = m.lo1 + (m.nx - 1) * m.dx;
-
-    const coordinates = [
-        [leftLon, topLat],
-        [rightLon, topLat],
-        [rightLon, bottomLat],
-        [leftLon, bottomLat]
+    // CORREZIONE ALLINEAMENTO MATEMATICO (Bordi esterni)
+    const dx2 = m.dx / 2, dy2 = m.dy / 2;
+    const coords = [
+        [m.lo1 - dx2, m.la1 + dy2], 
+        [m.lo1 + (m.nx-1)*m.dx + dx2, m.la1 + dy2], 
+        [m.lo1 + (m.nx-1)*m.dx + dx2, (m.la1 - (m.ny-1)*m.dy) - dy2], 
+        [m.lo1 - dx2, (m.la1 - (m.ny-1)*m.dy) - dy2]
     ];
 
-    map.getSource('weather-source').updateImage({
-        url: offscreenCanvas.toDataURL('image/png'),
-        coordinates: coordinates
-    });
+    map.getSource('weather-source').updateImage({ url: offscreenCanvas.toDataURL(), coordinates: coords });
   }
 
-  window.toggleLayer = (l) => { 
-      if(selected.has(l)) selected.delete(l); 
-      else selected.add(l); 
-      updateGPULayer(); 
-      updateBtns(); 
-  };
-  
-  function updateBtns() {
-    document.querySelectorAll('.toggle').forEach(b => {
-        const id = b.id.replace('btn-','');
-        b.classList.toggle('active', selected.has(id));
-    });
-  }
-
-  window.getMyWeather = () => {
-      if (navigator.geolocation) {
-          navigator.geolocation.getCurrentPosition(
-              (pos) => map.flyTo({ center: [pos.coords.longitude, pos.coords.latitude], zoom: 9 }),
-              (err) => alert("GPS disabilitato o negato.")
-          );
-      }
-  };
-  
-  function togglePlay() { isPlaying = !isPlaying; document.getElementById('play-btn').innerText = isPlaying ? "❚❚" : "►"; if(isPlaying) playLoop(); }
-  function playLoop() { if(!isPlaying) return; const s = document.getElementById('time-slider'); let v = parseInt(s.value)+1; if(v >= catalog.length) v = 0; s.value = v; loadStep(v); setTimeout(playLoop, 1200); }
+  window.toggleLayer = (l) => { selected.has(l) ? selected.delete(l) : selected.add(l); updateGPULayer(); updateBtns(); };
+  function updateBtns() { document.querySelectorAll('.toggle').forEach(b => b.classList.toggle('active', selected.has(b.id.replace('btn-','')))); }
+  window.togglePlay = () => { isPlaying = !isPlaying; document.getElementById('play-btn').innerText = isPlaying ? "❚❚" : "►"; if(isPlaying) playLoop(); };
+  function playLoop() { if(!isPlaying) return; const s = document.getElementById('time-slider'); let v = (parseInt(s.value)+1)%catalog.length; s.value = v; loadStep(v); setTimeout(playLoop, 1200); }
+  window.getMyWeather = () => navigator.geolocation.getCurrentPosition(p => map.flyTo({center:[p.coords.longitude, p.coords.latitude], zoom:9}));
 </script>
 </body>
 </html>
