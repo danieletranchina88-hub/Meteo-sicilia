@@ -1,7 +1,7 @@
 <!DOCTYPE html>
 <html lang="it">
 <head>
-  <title>Italia MeteoHub Pro - Synoptic GPU</title>
+  <title>Italia MeteoHub Pro - Synoptic GPU (Raw Grid)</title>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
   
@@ -15,7 +15,7 @@
     #map { position: absolute; top: 0; bottom: 0; width: 100%; background: #0a0a0a; z-index: 1; }
     #particle-canvas { position: absolute; top: 0; left: 0; width: 100%; height: 100%; z-index: 10; pointer-events: none; }
 
-    /* TENDINA GPS (Ripristinata la visibilità corretta) */
+    /* TENDINA GPS */
     #gps-overlay { position: absolute; top: -250px; left: 0; right: 0; background: rgba(10,10,10,0.95); backdrop-filter: blur(20px); -webkit-backdrop-filter: blur(20px); z-index: 6000; display: flex; flex-wrap: wrap; align-items: center; justify-content: center; border-bottom: 2px solid #0077ff; transition: top 0.4s ease; padding: 30px 10px 15px 10px; box-shadow: 0 10px 40px #000; }
     #gps-overlay.active { top: 0; }
     .gps-stat { width: 30%; text-align: center; margin-bottom: 12px; }
@@ -57,7 +57,7 @@
     <div class="gps-stat"><div>Pressione</div><div id="gps-p">--</div></div>
   </div>
 
-  <div id="model-info"><div id="model-title">ITALIA METEOHUB <span style="color:#00eaff">ICON-2I PRO</span></div><div id="model-sub">LIVE SYNC | VALID: <span id="valid-time">--</span></div></div>
+  <div id="model-info"><div id="model-title">ITALIA METEOHUB <span style="color:#00eaff">RAW GRID</span></div><div id="model-sub">LIVE SYNC | VALID: <span id="valid-time">--</span></div></div>
   <div id="info-box"><div id="val-display">--</div><div id="unit-display">Clicca la mappa</div></div>
   <div id="loading-indicator">Elaborazione...</div>
   
@@ -122,6 +122,7 @@
     return [...stops[stops.length-1].c, (stops[stops.length-1].a ?? 0.85)];
   }
 
+  // Manteniamo la bilineare per i calcoli puntuali (GPS/Click), ma per la grafica useremo Nearest
   function getBilinear(arr, gx, gy, nx, ny) {
     if (!arr) return 0;
     let x = Math.floor(gx), y = Math.floor(gy);
@@ -176,11 +177,13 @@
             url: 'data:image/gif;base64,R0lGODlhAQABAAD/ACwAAAAAAQABAAACADs=', 
             coordinates: [[0,0], [0,0], [0,0], [0,0]]
         });
+        
         map.addLayer({
             id: 'weather-layer',
             type: 'raster',
             source: 'weather-source',
-            paint: { 'raster-opacity': 0.85, 'raster-resampling': 'linear' }
+            // ECCO LA MODIFICA CHIAVE: 'nearest' invece di 'linear' per la GRIGLIA REALE
+            paint: { 'raster-opacity': 0.85, 'raster-resampling': 'nearest' }
         }, 'borders-layer');
 
         map.addSource('isobars-source', { type: 'geojson', data: { type: 'FeatureCollection', features: [] } });
@@ -388,6 +391,7 @@
             for(let l of activeLayers) {
                 let val, stops, arr = (l === 'feels' ? currentData.feels_like : currentData[l]);
                 if(l === 'wind') {
+                    // Manteniamo la bilineare per rendere fluidi i colori anche sulla griglia nuda
                     const u = getBilinear(currentData.wind_u.data, x, gy, m.nx, m.ny);
                     const v = getBilinear(currentData.wind_v.data, x, gy, m.nx, m.ny);
                     val = Math.sqrt(u*u+v*v)*3.6; stops = WIND_BG_STOPS;
@@ -517,10 +521,7 @@
           const lng = pos.coords.longitude;
           const lat = pos.coords.latitude;
           
-          // Vola sulla posizione
           map.flyTo({ center: [lng, lat], zoom: 9 });
-          
-          // Mostra la tendina
           toggleGpsPanel(true);
 
           if (!currentData) return;
@@ -528,7 +529,6 @@
           const gx = (lng - m.lo1) / m.dx;
           const gy = (m.la1 - lat) / m.dy;
 
-          // Se siamo dentro l'Italia o la griglia del modello
           if(gx >= 0 && gy >= 0 && gx < m.nx && gy < m.ny) {
               const getVal = (arr) => arr ? getBilinear(arr, gx, gy, m.nx, m.ny) : null;
               
@@ -545,7 +545,6 @@
                   w = Math.sqrt(u*u + v*v) * 3.6;
               }
 
-              // Inserisce i numeri nel popup (tendina)
               document.getElementById('gps-t').innerText = t !== null ? t.toFixed(1) + "°" : "--";
               document.getElementById('gps-tf').innerText = tf !== null ? tf.toFixed(1) + "°" : "--";
               document.getElementById('gps-r').innerText = r !== null ? r.toFixed(1) + " mm" : "--";
