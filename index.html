@@ -12,11 +12,17 @@
   <style>
     body { margin: 0; background: #0a0a0a; font-family: 'Segoe UI', Roboto, sans-serif; color: #ddd; overflow: hidden; }
     
-    /* MAPPA E PARTICELLE */
     #map { position: absolute; top: 0; bottom: 0; width: 100%; background: #0a0a0a; z-index: 1; }
     #particle-canvas { position: absolute; top: 0; left: 0; width: 100%; height: 100%; z-index: 10; pointer-events: none; }
 
-    /* UI Invariata */
+    /* TENDINA GPS (Ripristinata la visibilità corretta) */
+    #gps-overlay { position: absolute; top: -250px; left: 0; right: 0; background: rgba(10,10,10,0.95); backdrop-filter: blur(20px); -webkit-backdrop-filter: blur(20px); z-index: 6000; display: flex; flex-wrap: wrap; align-items: center; justify-content: center; border-bottom: 2px solid #0077ff; transition: top 0.4s ease; padding: 30px 10px 15px 10px; box-shadow: 0 10px 40px #000; }
+    #gps-overlay.active { top: 0; }
+    .gps-stat { width: 30%; text-align: center; margin-bottom: 12px; }
+    .gps-stat div:first-child { font-size: 0.65em; color: #888; text-transform: uppercase; font-weight: 800; }
+    .gps-stat div:last-child { font-size: 1.4em; font-weight: 900; color: #fff; }
+    #close-gps { position: absolute; right: 15px; top: 10px; cursor: pointer; color: #888; font-size: 1.4em; }
+
     #model-info { position: absolute; top: 15px; left: 20px; z-index: 5000; pointer-events: none; }
     #model-title { font-size: 18px; font-weight: 900; color: #fff; text-transform: uppercase; text-shadow: 0 2px 4px #000; }
     #model-sub { font-size: 11px; color: #00eaff; font-family: monospace; text-shadow: 0 1px 2px #000; }
@@ -41,6 +47,16 @@
   </style>
 </head>
 <body>
+  <div id="gps-overlay">
+    <div id="close-gps" onclick="toggleGpsPanel(false)">✕</div>
+    <div class="gps-stat"><div>Temp.</div><div id="gps-t">--</div></div>
+    <div class="gps-stat"><div>Percepita</div><div id="gps-tf">--</div></div>
+    <div class="gps-stat"><div>Pioggia</div><div id="gps-r">--</div></div>
+    <div class="gps-stat"><div>Vento</div><div id="gps-w">--</div></div>
+    <div class="gps-stat"><div>Umidità</div><div id="gps-h">--</div></div>
+    <div class="gps-stat"><div>Pressione</div><div id="gps-p">--</div></div>
+  </div>
+
   <div id="model-info"><div id="model-title">ITALIA METEOHUB <span style="color:#00eaff">ICON-2I PRO</span></div><div id="model-sub">LIVE SYNC | VALID: <span id="valid-time">--</span></div></div>
   <div id="info-box"><div id="val-display">--</div><div id="unit-display">Clicca la mappa</div></div>
   <div id="loading-indicator">Elaborazione...</div>
@@ -73,7 +89,6 @@
   </div>
 
 <script>
-  // TAVOLOZZE COLORI MAPPA (Ricalibrate per sovrapposizione multipla pulita)
   const WIND_BG_STOPS = [{v:0, c:[30,30,35], a:0.6}, {v:15, c:[0,120,160], a:0.75}, {v:30, c:[0,180,140], a:0.8}, {v:70, c:[220,160,0], a:0.9}, {v:120, c:[180,0,40], a:0.95}];
   const TEMP_STOPS = [{v:-20,c:[115,0,171]},{v:-10,c:[0,43,161]},{v:0,c:[0,217,255]},{v:10,c:[51,184,51]},{v:20,c:[255,242,0]},{v:25,c:[255,166,0]},{v:30,c:[255,64,0]},{v:35,c:[204,0,0]},{v:40,c:[128,0,34]}];
   const RAIN_STOPS = [{v:0,c:[0,0,0],a:0},{v:0.1,c:[80,160,255],a:0.6},{v:5,c:[0,50,200],a:0.85},{v:20,c:[255,200,0],a:0.95}];
@@ -81,15 +96,9 @@
   const RH_STOPS = [{v:0,c:[160,80,40],a:0.8},{v:40,c:[180,180,80],a:0.8},{v:80,c:[60,160,180],a:0.8},{v:100,c:[60,40,160],a:0.9}];
   const PRESS_STOPS = [{v:980,c:[0,100,160]},{v:1013,c:[220,220,220]},{v:1030,c:[180,120,40]}];
 
-  // COLORI PARTICELLE WINDY STYLE
   const PARTICLE_COLORS = [
-      {v:0,  c:"#4287f5"}, // Calmo (Blu)
-      {v:15, c:"#00ffcc"}, // Brezza (Ciano)
-      {v:30, c:"#aeff00"}, // Moderato (Verde-Giallo)
-      {v:50, c:"#ffea00"}, // Forte (Giallo)
-      {v:70, c:"#ff7300"}, // Molto forte (Arancio)
-      {v:90, c:"#ff0000"}, // Tempesta (Rosso)
-      {v:120,c:"#cc00ff"}  // Uragano (Magenta)
+      {v:0,  c:"#4287f5"}, {v:15, c:"#00ffcc"}, {v:30, c:"#aeff00"}, 
+      {v:50, c:"#ffea00"}, {v:70, c:"#ff7300"}, {v:90, c:"#ff0000"}, {v:120,c:"#cc00ff"}
   ];
 
   function getParticleColor(speed) {
@@ -124,7 +133,6 @@
   }
 
   let map, currentData = null, catalog = [], isPlaying = false;
-  // SELEZIONE MULTIPLA REALE: Usiamo un Set per permettere più layer contemporaneamente
   const selected = new Set(['temp']); 
   let showIsobars = false, showParticles = false;
   const dataCache = {};
@@ -132,7 +140,6 @@
   const offscreenCanvas = document.createElement('canvas');
   const offscreenCtx = offscreenCanvas.getContext('2d', { willReadFrequently: true });
 
-  // INIT PARTICELLE
   const pCanvas = document.getElementById('particle-canvas');
   const pCtx = pCanvas.getContext('2d');
   let particles = [];
@@ -153,7 +160,6 @@
     });
 
     map.on('load', async () => {
-        // Confini territoriali
         map.addSource('italy-borders', {
             type: 'geojson',
             data: 'https://raw.githubusercontent.com/openpolis/geojson-italy/master/geojson/limits_IT_regions.geojson'
@@ -165,7 +171,6 @@
             paint: { 'line-color': '#ffffff', 'line-width': 0.8, 'line-opacity': 0.6 }
         });
 
-        // Layer Meteo (Sotto i confini)
         map.addSource('weather-source', {
             type: 'image',
             url: 'data:image/gif;base64,R0lGODlhAQABAAD/ACwAAAAAAQABAAACADs=', 
@@ -178,11 +183,9 @@
             paint: { 'raster-opacity': 0.85, 'raster-resampling': 'linear' }
         }, 'borders-layer');
 
-        // Fonti Isobare Vuote
         map.addSource('isobars-source', { type: 'geojson', data: { type: 'FeatureCollection', features: [] } });
         map.addSource('centers-source', { type: 'geojson', data: { type: 'FeatureCollection', features: [] } });
 
-        // Linee Pressione
         map.addLayer({
             id: 'isobars-line',
             type: 'line',
@@ -195,7 +198,6 @@
             }
         });
 
-        // Lettere A e B INDICATIVE E GRANDI (Stile Sinottico)
         map.addLayer({
             id: 'centers-label',
             type: 'symbol',
@@ -204,17 +206,16 @@
                 'visibility': 'none',
                 'text-field': ['get', 'label'],
                 'text-font': ['Open Sans Bold', 'Arial Unicode MS Bold'],
-                'text-size': 45, // Grandissime
+                'text-size': 45,
                 'text-allow-overlap': true
             },
             paint: {
-                'text-color': ['match', ['get', 'type'], 'H', '#ff0000', 'L', '#0077ff', '#ffffff'], // A Rossa, B Blu
+                'text-color': ['match', ['get', 'type'], 'H', '#ff0000', 'L', '#0077ff', '#ffffff'],
                 'text-halo-color': '#ffffff',
                 'text-halo-width': 3
             }
         });
 
-        // Testo sulle Isobare
         map.addLayer({
             id: 'isobars-label',
             type: 'symbol',
@@ -229,7 +230,6 @@
             paint: { 'text-color': '#ffffff', 'text-halo-color': '#000000', 'text-halo-width': 1.5 }
         });
 
-        // Se l'utente muove la mappa, nascondi temporaneamente le particelle per evitare che sbalzino
         map.on('move', () => { 
             pCtx.clearRect(0, 0, pCanvas.width, pCanvas.height);
             particles.forEach(p => p.age = 100); 
@@ -297,7 +297,6 @@
         currentData = await r.json();
         const m = currentData.meta;
         
-        // Calcolo Percepita
         if (currentData.temp && currentData.rh && currentData.wind_u) {
             const len = m.nx * m.ny;
             currentData.feels_like = new Float32Array(len);
@@ -308,9 +307,7 @@
             }
         }
 
-        // --- ISOBARE E A/B INTELLIGENTI ---
         if (currentData.press) {
-            // Isobare ESATTE ogni 2 hPa
             const contours = d3.contours().size([m.nx, m.ny]).thresholds(d3.range(960, 1052, 2))(currentData.press);
             const features = [];
             contours.forEach(c => {
@@ -319,14 +316,12 @@
             });
             currentData.isoGeoJSON = { type: "FeatureCollection", features: features };
 
-            // A/B su GRANDE SCALA (Individua solo i centri reali, non i micro-picchi)
             const centers = [];
-            const step = 60; // Step gigante (circa 130km) per evitare cloni
+            const step = 60; 
             for(let y = step; y < m.ny - step; y += step) {
                 for(let x = step; x < m.nx - step; x += step) {
                     let val = currentData.press[y * m.nx + x];
                     let isMax = true, isMin = true;
-                    // Scansiona area circostante
                     for(let i = -step; i <= step; i += 10) {
                         for(let j = -step; j <= step; j += 10) {
                             let v = currentData.press[(y+i) * m.nx + (x+j)];
@@ -334,7 +329,6 @@
                             if (v < val) isMin = false;
                         }
                     }
-                    // Aggiunge solo se sono valori sinottici sensati
                     if (isMax && val >= 1016) {
                         centers.push({ type: "Feature", geometry: { type: "Point", coordinates: [m.lo1 + x*m.dx, m.la1 - y*m.dy] }, properties: { type: 'H', label: 'A' }});
                     }
@@ -355,7 +349,6 @@
     updateGPULayer();
     updateIsobars();
     
-    // Resetta le particelle al cambio orario
     particles.forEach(p => p.age = 100);
     
     document.getElementById('loading-indicator').classList.remove('active');
@@ -369,7 +362,6 @@
     const imgData = offscreenCtx.createImageData(m.nx, m.ny);
     const d = imgData.data;
 
-    // Ordine di renderizzazione: Pioggia sempre sopra Nuvole, Nuvole sopra Temperatura, ecc.
     const drawOrder = ['temp', 'feels', 'rh', 'press', 'wind', 'cloud', 'rain'];
     const activeLayers = drawOrder.filter(l => selected.has(l));
 
@@ -378,7 +370,6 @@
         return;
     }
 
-    // MERCATOR PRE-WARP ALLINEAMENTO PERFETTO
     const dx2 = m.dx / 2, dy2 = m.dy / 2;
     const topLat = m.la1 + dy2;
     const bottomLat = (m.la1 - (m.ny - 1) * m.dy) - dy2;
@@ -394,7 +385,6 @@
         for(let x=0; x < m.nx; x++) {
             let r=0, g=0, b=0, finalA=0;
             
-            // BLENDING MULTIPLO
             for(let l of activeLayers) {
                 let val, stops, arr = (l === 'feels' ? currentData.feels_like : currentData[l]);
                 if(l === 'wind') {
@@ -406,7 +396,6 @@
                     stops = (l==='temp'||l==='feels') ? TEMP_STOPS : (l==='rain'?RAIN_STOPS:(l==='cloud'?CLOUD_STOPS:(l==='rh'?RH_STOPS:PRESS_STOPS)));
                 } else continue;
 
-                // Salta i valori minimi per pioggia e nuvole per non coprire
                 if ((l === 'cloud' && val < 5) || (l === 'rain' && val < 0.1)) continue;
 
                 const col = getStopColor(val, stops); 
@@ -415,7 +404,6 @@
                 if(a > 0) {
                     if(finalA === 0) { r=col[0]; g=col[1]; b=col[2]; finalA=a; }
                     else { 
-                        // Corretta formula di sovrapposizione colori
                         r=(col[0]*a)+(r*(1-a)); 
                         g=(col[1]*a)+(g*(1-a)); 
                         b=(col[2]*a)+(b*(1-a)); 
@@ -432,11 +420,10 @@
     map.getSource('weather-source').updateImage({ url: offscreenCanvas.toDataURL(), coordinates: [[left, topLat], [right, topLat], [right, bottomLat], [left, bottomLat]] });
   }
 
-  // --- MOTORE PARTICELLE WINDY STYLE ---
   function initParticles() {
       particles = [];
       for(let i=0; i<NUM_PARTICLES; i++) {
-          particles.push({ lng: 0, lat: 0, age: 100 }); // Iniziano morte per rigenerarsi
+          particles.push({ lng: 0, lat: 0, age: 100 });
       }
       if(animFrame) cancelAnimationFrame(animFrame);
       animateParticles();
@@ -448,22 +435,19 @@
           return;
       }
 
-      // Effetto Scia Sfumata (Fade)
       pCtx.fillStyle = 'rgba(0, 0, 0, 0.88)';
       pCtx.globalCompositeOperation = 'destination-in';
       pCtx.fillRect(0, 0, pCanvas.width, pCanvas.height);
       pCtx.globalCompositeOperation = 'source-over';
 
       const m = currentData.meta;
-      
-      // Raggruppiamo i colori per ottimizzare la CPU
       let colorPaths = {};
 
       particles.forEach(p => {
-          if(p.age > 90) { // Durata vita particella
+          if(p.age > 90) { 
               p.lng = m.lo1 + Math.random() * (m.nx * m.dx);
               p.lat = m.la1 - Math.random() * (m.ny * m.dy);
-              p.age = Math.random() * 20; // sfalsamento
+              p.age = Math.random() * 20;
           }
 
           let gx = (p.lng - m.lo1) / m.dx;
@@ -474,10 +458,9 @@
               let v = getBilinear(currentData.wind_v.data, gx, gy, m.nx, m.ny);
               let speed = Math.sqrt(u*u + v*v);
 
-              if (speed > 1) { // Solo se c'è un po' di vento
+              if (speed > 1) { 
                   let startPx = map.project([p.lng, p.lat]);
                   
-                  // Velocità bilanciata (Windy Style)
                   p.lng += u * 0.003;
                   p.lat += v * 0.003;
                   
@@ -491,7 +474,6 @@
           p.age++;
       });
 
-      // Disegno ottimizzato per colore
       for(let c in colorPaths) {
           pCtx.beginPath();
           pCtx.strokeStyle = c;
@@ -518,7 +500,67 @@
       }
   }
 
-  // GESTIONE PULSANTI MULTIPLI
+  // --- CONTROLLO UI E GPS ---
+  
+  window.toggleGpsPanel = (show) => {
+      const el = document.getElementById('gps-overlay');
+      if(show) el.classList.add('active');
+      else el.classList.remove('active');
+  };
+
+  window.getMyWeather = () => {
+      if (!navigator.geolocation) {
+          alert("GPS non supportato dal browser.");
+          return;
+      }
+      navigator.geolocation.getCurrentPosition((pos) => {
+          const lng = pos.coords.longitude;
+          const lat = pos.coords.latitude;
+          
+          // Vola sulla posizione
+          map.flyTo({ center: [lng, lat], zoom: 9 });
+          
+          // Mostra la tendina
+          toggleGpsPanel(true);
+
+          if (!currentData) return;
+          const m = currentData.meta;
+          const gx = (lng - m.lo1) / m.dx;
+          const gy = (m.la1 - lat) / m.dy;
+
+          // Se siamo dentro l'Italia o la griglia del modello
+          if(gx >= 0 && gy >= 0 && gx < m.nx && gy < m.ny) {
+              const getVal = (arr) => arr ? getBilinear(arr, gx, gy, m.nx, m.ny) : null;
+              
+              const t = getVal(currentData.temp);
+              const tf = getVal(currentData.feels_like);
+              const r = getVal(currentData.rain);
+              const rh = getVal(currentData.rh);
+              const p = getVal(currentData.press);
+              
+              let w = null;
+              if(currentData.wind_u && currentData.wind_v) {
+                  const u = getVal(currentData.wind_u.data);
+                  const v = getVal(currentData.wind_v.data);
+                  w = Math.sqrt(u*u + v*v) * 3.6;
+              }
+
+              // Inserisce i numeri nel popup (tendina)
+              document.getElementById('gps-t').innerText = t !== null ? t.toFixed(1) + "°" : "--";
+              document.getElementById('gps-tf').innerText = tf !== null ? tf.toFixed(1) + "°" : "--";
+              document.getElementById('gps-r').innerText = r !== null ? r.toFixed(1) + " mm" : "--";
+              document.getElementById('gps-w').innerText = w !== null ? Math.round(w) + " km/h" : "--";
+              document.getElementById('gps-h').innerText = rh !== null ? Math.round(rh) + "%" : "--";
+              document.getElementById('gps-p').innerText = p !== null ? Math.round(p) + " hPa" : "--";
+          } else {
+              document.getElementById('gps-t').innerText = "Fuori";
+              document.getElementById('gps-tf').innerText = "Area";
+          }
+      }, (err) => {
+          alert("Permesso GPS negato o non disponibile.");
+      });
+  };
+
   window.toggleLayer = (l) => { 
       if(selected.has(l)) { selected.delete(l); } 
       else { selected.add(l); }
@@ -546,7 +588,6 @@
 
   window.togglePlay = () => { isPlaying = !isPlaying; document.getElementById('play-btn').innerText = isPlaying ? "❚❚" : "►"; if(isPlaying) playLoop(); };
   function playLoop() { if(!isPlaying) return; const s = document.getElementById('time-slider'); let v = (parseInt(s.value)+1)%catalog.length; s.value = v; loadStep(v); setTimeout(playLoop, 1200); }
-  window.getMyWeather = () => navigator.geolocation.getCurrentPosition(p => map.flyTo({center:[p.coords.longitude, p.coords.latitude], zoom:9}));
 </script>
 </body>
 </html>
