@@ -1,7 +1,7 @@
 <!DOCTYPE html>
 <html lang="it">
 <head>
-  <title>Italia MeteoHub Pro - ICON-2I</title>
+  <title>Italia MeteoHub Pro - Synoptic GPU</title>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
 
@@ -11,19 +11,18 @@
 
   <style>
     :root {
-      --bg: #080b10;
-      --panel: rgba(12, 16, 22, 0.78);
-      --panel-strong: rgba(12, 16, 22, 0.92);
+      --bg: #070a0f;
+      --panel: rgba(12, 16, 23, 0.82);
+      --panel-strong: rgba(10, 13, 19, 0.94);
       --stroke: rgba(255,255,255,0.12);
-      --stroke-strong: rgba(255,255,255,0.22);
-      --text: #f2f5f8;
-      --muted: #9aa7b6;
-      --accent: #00aaff;
-      --accent-2: #00eaff;
-      --green: #25b65c;
-      --danger: #ff4d5a;
+      --stroke-strong: rgba(0,180,255,0.38);
+      --text: #f4f7fb;
+      --muted: #9aa8b8;
+      --accent: #008cff;
+      --accent2: #00eaff;
+      --green: #25b85d;
       --radius: 16px;
-      --shadow: 0 16px 45px rgba(0,0,0,0.42);
+      --shadow: 0 18px 55px rgba(0,0,0,0.50);
     }
 
     * { box-sizing: border-box; }
@@ -39,25 +38,17 @@
 
     #map {
       position: absolute;
-      inset: 0;
+      top: 0;
+      bottom: 0;
       width: 100%;
       background: var(--bg);
       z-index: 1;
     }
 
-    #weather-canvas {
-      position: absolute;
-      width: 1px;
-      height: 1px;
-      left: -9999px;
-      top: -9999px;
-      opacity: 0;
-      pointer-events: none;
-    }
-
     #particle-canvas {
       position: absolute;
-      inset: 0;
+      top: 0;
+      left: 0;
       width: 100%;
       height: 100%;
       z-index: 10;
@@ -72,19 +63,78 @@
       -webkit-backdrop-filter: blur(18px) saturate(125%);
     }
 
+    #gps-overlay {
+      position: absolute;
+      top: 14px;
+      left: 50%;
+      transform: translate(-50%, -130%);
+      width: min(730px, calc(100vw - 28px));
+      background: var(--panel-strong);
+      backdrop-filter: blur(22px) saturate(130%);
+      -webkit-backdrop-filter: blur(22px) saturate(130%);
+      z-index: 6000;
+      display: grid;
+      grid-template-columns: repeat(6, 1fr);
+      gap: 8px;
+      border: 1px solid var(--stroke-strong);
+      transition: transform 0.32s ease;
+      padding: 34px 14px 14px;
+      box-shadow: 0 22px 60px rgba(0,0,0,0.62);
+      border-radius: 20px;
+    }
+
+    #gps-overlay.active {
+      transform: translate(-50%, 0);
+    }
+
+    .gps-stat {
+      min-width: 0;
+      text-align: center;
+      padding: 9px 6px;
+      background: rgba(255,255,255,0.045);
+      border: 1px solid rgba(255,255,255,0.08);
+      border-radius: 13px;
+    }
+
+    .gps-stat div:first-child {
+      font-size: 0.62rem;
+      color: var(--muted);
+      text-transform: uppercase;
+      font-weight: 900;
+      letter-spacing: 0.06em;
+      margin-bottom: 4px;
+    }
+
+    .gps-stat div:last-child {
+      font-size: 1.12rem;
+      font-weight: 950;
+      color: #fff;
+      white-space: nowrap;
+    }
+
+    #close-gps {
+      position: absolute;
+      right: 15px;
+      top: 9px;
+      cursor: pointer;
+      color: var(--muted);
+      font-size: 1.35rem;
+      line-height: 1;
+    }
+
     #top-left {
       position: absolute;
-      top: 16px;
+      top: 15px;
       left: 18px;
       z-index: 5000;
       display: flex;
       flex-direction: column;
       gap: 10px;
       pointer-events: none;
-      max-width: min(430px, calc(100vw - 34px));
+      max-width: min(430px, calc(100vw - 36px));
     }
 
-    #model-card {
+    #model-info {
       padding: 12px 14px;
       border-radius: var(--radius);
       min-width: 280px;
@@ -95,17 +145,17 @@
       align-items: center;
       gap: 8px;
       font-size: 15px;
-      font-weight: 900;
-      letter-spacing: 0.08em;
-      text-transform: uppercase;
+      font-weight: 950;
       color: #fff;
+      text-transform: uppercase;
+      letter-spacing: 0.08em;
     }
 
-    #model-badge {
+    #model-title span {
       padding: 3px 7px;
       border-radius: 999px;
       color: #001521;
-      background: linear-gradient(135deg, var(--accent-2), #7dfcff);
+      background: linear-gradient(135deg, var(--accent2), #7dfcff);
       font-size: 10px;
       letter-spacing: 0.04em;
     }
@@ -118,7 +168,7 @@
       line-height: 1.45;
     }
 
-    #readout-card {
+    #info-box {
       display: none;
       width: fit-content;
       min-width: 190px;
@@ -126,13 +176,15 @@
       border-radius: var(--radius);
     }
 
-    #readout-card.active { display: block; }
+    #info-box.active {
+      display: block;
+    }
 
     #readout-name {
       font-size: 11px;
       color: var(--muted);
       text-transform: uppercase;
-      font-weight: 800;
+      font-weight: 850;
       letter-spacing: 0.08em;
       margin-bottom: 4px;
     }
@@ -154,7 +206,7 @@
     #unit-display {
       font-size: 1.05rem;
       color: #d4dbe4;
-      font-weight: 800;
+      font-weight: 850;
       padding-bottom: 4px;
     }
 
@@ -180,20 +232,19 @@
       scrollbar-width: none;
     }
 
-    #ui-container::-webkit-scrollbar { display: none; }
+    #ui-container::-webkit-scrollbar {
+      display: none;
+    }
 
     .panel {
-      border-radius: var(--radius);
       padding: 10px;
+      border-radius: var(--radius);
     }
 
     .panel-title {
-      display: flex;
-      justify-content: space-between;
-      align-items: center;
       color: var(--muted);
       font-size: 10px;
-      font-weight: 900;
+      font-weight: 950;
       text-transform: uppercase;
       letter-spacing: 0.09em;
       margin: 2px 4px 8px;
@@ -210,7 +261,7 @@
       background: rgba(255,255,255,0.045);
       border-radius: 11px;
       cursor: pointer;
-      font-weight: 800;
+      font-weight: 850;
       font-size: 12px;
       color: #c9d2de;
       border: 1px solid transparent;
@@ -225,7 +276,7 @@
     }
 
     .toggle.active {
-      background: linear-gradient(135deg, rgba(0,119,255,0.95), rgba(0,190,255,0.78));
+      background: linear-gradient(135deg, rgba(0,119,255,0.96), rgba(0,190,255,0.78));
       border-color: rgba(122,218,255,0.55);
       color: #fff;
       box-shadow: 0 8px 20px rgba(0,119,255,0.18);
@@ -288,7 +339,7 @@
     #legend-unit {
       font-size: 11px;
       color: var(--muted);
-      font-weight: 800;
+      font-weight: 850;
     }
 
     #legend-gradient {
@@ -337,7 +388,9 @@
       place-items: center;
     }
 
-    #play-btn:hover { background: rgba(255,255,255,0.15); }
+    #play-btn:hover {
+      background: rgba(255,255,255,0.15);
+    }
 
     input[type=range] {
       flex-grow: 1;
@@ -356,70 +409,13 @@
       font-size: 13px;
     }
 
-    #gps-overlay {
-      position: absolute;
-      left: 50%;
-      top: 18px;
-      transform: translate(-50%, -130%);
-      width: min(720px, calc(100vw - 28px));
-      background: var(--panel-strong);
-      border: 1px solid rgba(0,170,255,0.38);
-      border-radius: 20px;
-      z-index: 6000;
-      display: grid;
-      grid-template-columns: repeat(6, 1fr);
-      gap: 8px;
-      padding: 34px 14px 14px;
-      box-shadow: 0 22px 60px rgba(0,0,0,0.55);
-      backdrop-filter: blur(22px) saturate(130%);
-      -webkit-backdrop-filter: blur(22px) saturate(130%);
-      transition: transform 0.32s ease;
-    }
-
-    #gps-overlay.active { transform: translate(-50%, 0); }
-
-    .gps-stat {
-      min-width: 0;
-      text-align: center;
-      padding: 9px 6px;
-      background: rgba(255,255,255,0.045);
-      border: 1px solid rgba(255,255,255,0.08);
-      border-radius: 13px;
-    }
-
-    .gps-stat div:first-child {
-      font-size: 0.62rem;
-      color: var(--muted);
-      text-transform: uppercase;
-      font-weight: 900;
-      letter-spacing: 0.06em;
-      margin-bottom: 4px;
-    }
-
-    .gps-stat div:last-child {
-      font-size: 1.15rem;
-      font-weight: 950;
-      color: #fff;
-      white-space: nowrap;
-    }
-
-    #close-gps {
-      position: absolute;
-      right: 15px;
-      top: 9px;
-      cursor: pointer;
-      color: var(--muted);
-      font-size: 1.35rem;
-      line-height: 1;
-    }
-
     #loading-indicator {
       display: none;
       position: absolute;
       top: 50%;
       left: 50%;
       transform: translate(-50%, -50%);
-      background: rgba(5, 8, 12, 0.92);
+      background: rgba(5, 8, 12, 0.94);
       border: 1px solid rgba(0,170,255,0.55);
       color: white;
       padding: 15px 22px;
@@ -429,7 +425,9 @@
       box-shadow: 0 18px 50px rgba(0,0,0,0.5);
     }
 
-    #loading-indicator.active { display: block; }
+    #loading-indicator.active {
+      display: block;
+    }
 
     @media (max-width: 760px) {
       #top-left {
@@ -439,21 +437,28 @@
         max-width: none;
       }
 
-      #model-card {
+      #model-info {
         width: calc(100vw - 20px);
         min-width: 0;
         padding: 10px 12px;
       }
 
-      #model-title { font-size: 12px; }
-      #model-sub { font-size: 10px; }
+      #model-title {
+        font-size: 12px;
+      }
 
-      #readout-card {
+      #model-sub {
+        font-size: 10px;
+      }
+
+      #info-box {
         min-width: 164px;
         padding: 10px 12px;
       }
 
-      #val-display { font-size: 2.4rem; }
+      #val-display {
+        font-size: 2.4rem;
+      }
 
       #ui-container {
         top: auto;
@@ -467,10 +472,25 @@
         gap: 8px;
       }
 
-      .panel { padding: 8px; }
-      .toggle { padding: 8px 9px; font-size: 11px; margin: 4px 0; }
-      .panel-title { font-size: 9px; margin-bottom: 5px; }
-      .gps-btn { padding: 11px; font-size: 12px; }
+      .panel {
+        padding: 8px;
+      }
+
+      .toggle {
+        padding: 8px 9px;
+        font-size: 11px;
+        margin: 4px 0;
+      }
+
+      .panel-title {
+        font-size: 9px;
+        margin-bottom: 5px;
+      }
+
+      .gps-btn {
+        padding: 11px;
+        font-size: 12px;
+      }
 
       #legend-card {
         left: 10px;
@@ -507,7 +527,9 @@
         padding-top: 34px;
       }
 
-      .gps-stat div:last-child { font-size: 1rem; }
+      .gps-stat div:last-child {
+        font-size: 1rem;
+      }
     }
   </style>
 </head>
@@ -524,14 +546,20 @@
   </div>
 
   <div id="top-left">
-    <div id="model-card" class="glass">
-      <div id="model-title">ITALIA METEOHUB <span id="model-badge">ICON-2I</span></div>
-      <div id="model-sub">Previsione modellistica · Validità: <span id="valid-time">--</span><br>Layer: <span id="active-layer-label">Temperatura</span></div>
+    <div id="model-info" class="glass">
+      <div id="model-title">ITALIA METEOHUB <span>ICON-2I</span></div>
+      <div id="model-sub">
+        Previsione modellistica · Validità: <span id="valid-time">--</span><br>
+        Layer: <span id="active-layer-label">Temperatura</span>
+      </div>
     </div>
 
-    <div id="readout-card" class="glass">
+    <div id="info-box" class="glass">
       <div id="readout-name">Valore puntuale</div>
-      <div id="val-row"><div id="val-display">--</div><div id="unit-display">--</div></div>
+      <div id="val-row">
+        <div id="val-display">--</div>
+        <div id="unit-display">--</div>
+      </div>
       <div id="coord-display">--</div>
     </div>
   </div>
@@ -563,13 +591,15 @@
   </div>
 
   <div id="legend-card" class="glass">
-    <div id="legend-head"><div id="legend-title">Temperatura</div><div id="legend-unit">°C</div></div>
+    <div id="legend-head">
+      <div id="legend-title">Temperatura</div>
+      <div id="legend-unit">°C</div>
+    </div>
     <div id="legend-gradient"></div>
     <div id="legend-ticks"></div>
   </div>
 
   <div id="map"></div>
-  <canvas id="weather-canvas"></canvas>
   <canvas id="particle-canvas"></canvas>
 
   <div id="bottom-bar" class="glass">
@@ -683,6 +713,7 @@
 
   function getParticleColor(speed) {
     const stops = PARTICLE_COLORS;
+
     if (speed <= stops[0].v) return rgbToCss(stops[0].c, 0.86);
     if (speed >= stops[stops.length - 1].v) return rgbToCss(stops[stops.length - 1].c, 0.92);
 
@@ -692,18 +723,23 @@
         return rgbToCss(interpolateRGB(stops[i].c, stops[i + 1].c, t), 0.88);
       }
     }
+
     return "rgba(255,255,255,0.85)";
   }
 
   function getStopColor(val, stops) {
-    if (val == null || Number.isNaN(val)) return [0, 0, 0, 0];
-    if (val <= stops[0].v) return [...stops[0].c, (stops[0].a ?? 0.86)];
+    if (val == null || Number.isNaN(val)) return [0,0,0,0];
+
+    if (val <= stops[0].v) {
+      return [...stops[0].c, (stops[0].a ?? 0.86)];
+    }
 
     for (let i = 0; i < stops.length - 1; i++) {
       if (val >= stops[i].v && val <= stops[i + 1].v) {
         const t = (val - stops[i].v) / (stops[i + 1].v - stops[i].v);
         const a1 = stops[i].a ?? 0.86;
         const a2 = stops[i + 1].a ?? 0.86;
+
         return [
           (stops[i].c[0] * (1 - t) + stops[i + 1].c[0] * t) | 0,
           (stops[i].c[1] * (1 - t) + stops[i + 1].c[1] * t) | 0,
@@ -712,6 +748,7 @@
         ];
       }
     }
+
     return [...stops[stops.length - 1].c, (stops[stops.length - 1].a ?? 0.86)];
   }
 
@@ -748,8 +785,8 @@
   const dataCache = new Map();
   const CACHE_LIMIT = 8;
 
-  const weatherCanvas = document.getElementById("weather-canvas");
-  const weatherCtx = weatherCanvas.getContext("2d", { willReadFrequently: true });
+  const offscreenCanvas = document.createElement("canvas");
+  const offscreenCtx = offscreenCanvas.getContext("2d", { willReadFrequently: true });
 
   const pCanvas = document.getElementById("particle-canvas");
   const pCtx = pCanvas.getContext("2d", { alpha: true });
@@ -798,9 +835,8 @@
       });
 
       map.addSource("weather-source", {
-        type: "canvas",
-        canvas: "weather-canvas",
-        animate: false,
+        type: "image",
+        url: "data:image/gif;base64,R0lGODlhAQABAAD/ACwAAAAAAQABAAACADs=",
         coordinates: [[0,0], [0,0], [0,0], [0,0]]
       });
 
@@ -880,7 +916,7 @@
       });
 
       map.on("move", () => {
-        pCtx.clearRect(0, 0, pCanvas.width, pCanvas.height);
+        pCtx.clearRect(0, 0, window.innerWidth, window.innerHeight);
       });
 
       map.on("moveend", () => {
@@ -902,6 +938,7 @@
     pCanvas.height = Math.round(window.innerHeight * dpr);
     pCanvas.style.width = window.innerWidth + "px";
     pCanvas.style.height = window.innerHeight + "px";
+
     pCtx.setTransform(dpr, 0, 0, dpr, 0, 0);
 
     const area = window.innerWidth * window.innerHeight;
@@ -933,7 +970,15 @@
 
           const d = p[0].split("/");
           const t = p[1].split(":");
-          const dt = new Date(now.getFullYear(), parseInt(d[1]) - 1, parseInt(d[0]), parseInt(t[0]), 0);
+
+          const dt = new Date(
+            now.getFullYear(),
+            parseInt(d[1]) - 1,
+            parseInt(d[0]),
+            parseInt(t[0]),
+            0
+          );
+
           const diff = Math.abs(now - dt);
 
           if (diff < minDiff) {
@@ -944,18 +989,21 @@
 
         s.value = bestIdx;
         await loadStep(bestIdx);
+
         prefetchStep(bestIdx + 1);
         prefetchStep(bestIdx - 1);
       }
     } catch(e) {
-      console.error("Errore caricamento catalogo", e);
+      console.error("Errore caricamento catalogo:", e);
       document.getElementById("loading-indicator").innerText = "Errore caricamento dati";
       document.getElementById("loading-indicator").classList.add("active");
     }
   }
 
   function touchCache(i, data) {
-    if (dataCache.has(i)) dataCache.delete(i);
+    if (dataCache.has(i)) {
+      dataCache.delete(i);
+    }
 
     dataCache.set(i, data);
 
@@ -972,7 +1020,7 @@
       const data = await fetchAndPrepareStep(i, false);
       touchCache(i, data);
     } catch(e) {
-      console.warn("Prefetch non riuscito", i, e);
+      console.warn("Prefetch non riuscito:", i, e);
     }
   }
 
@@ -1001,11 +1049,14 @@
         const RH = clamp(rh[j], 0, 100);
         const v = Math.sqrt(wu[j] * wu[j] + wv[j] * wv[j]);
         const e = (RH / 100.0) * 6.105 * Math.exp((17.27 * T) / (237.7 + T));
+
         data.feels_like[j] = T + 0.33 * e - 0.70 * v - 4.00;
       }
     }
 
-    if (buildContours) buildPressureProducts(data);
+    if (buildContours) {
+      buildPressureProducts(data);
+    }
   }
 
   function buildPressureProducts(data) {
@@ -1051,6 +1102,11 @@
   function detectPressureCenters(data) {
     const m = data.meta;
     const press = getGrid(data.press);
+
+    if (!press) {
+      return { type: "FeatureCollection", features: [] };
+    }
+
     const candidates = [];
     const step = 36;
     const radius = 28;
@@ -1156,7 +1212,7 @@
       prefetchStep(i + 1);
       prefetchStep(i - 1);
     } catch(e) {
-      console.error("Errore caricamento step", e);
+      console.error("Errore caricamento step:", e);
     }
 
     document.getElementById("loading-indicator").classList.remove("active");
@@ -1168,10 +1224,10 @@
     const m = currentData.meta;
     const info = LAYER_INFO[activeLayer];
 
-    weatherCanvas.width = m.nx;
-    weatherCanvas.height = m.ny;
+    offscreenCanvas.width = m.nx;
+    offscreenCanvas.height = m.ny;
 
-    const imgData = weatherCtx.createImageData(m.nx, m.ny);
+    const imgData = offscreenCtx.createImageData(m.nx, m.ny);
     const d = imgData.data;
 
     const dx2 = m.dx / 2;
@@ -1203,14 +1259,17 @@
           val = getBilinear(currentData[key], x, gy, m.nx, m.ny);
         }
 
+        const p0 = (y * m.nx + x) * 4;
+
         if ((activeLayer === "cloud" && val < 5) || (activeLayer === "rain" && val < 0.08)) {
-          const p0 = (y * m.nx + x) * 4;
+          d[p0] = 0;
+          d[p0 + 1] = 0;
+          d[p0 + 2] = 0;
           d[p0 + 3] = 0;
           continue;
         }
 
         const col = getStopColor(val, info.stops);
-        const p0 = (y * m.nx + x) * 4;
 
         d[p0] = col[0];
         d[p0 + 1] = col[1];
@@ -1219,21 +1278,23 @@
       }
     }
 
-    weatherCtx.putImageData(imgData, 0, 0);
+    offscreenCtx.putImageData(imgData, 0, 0);
 
-    const source = map.getSource("weather-source");
+    map.setPaintProperty(
+      "weather-layer",
+      "raster-resampling",
+      showRawGrid ? "nearest" : "linear"
+    );
 
-    if (source && source.setCoordinates) {
-      source.setCoordinates([
+    map.getSource("weather-source").updateImage({
+      url: offscreenCanvas.toDataURL("image/png"),
+      coordinates: [
         [left, topLat],
         [right, topLat],
         [right, bottomLat],
         [left, bottomLat]
-      ]);
-    }
-
-    map.setPaintProperty("weather-layer", "raster-resampling", showRawGrid ? "nearest" : "linear");
-    map.triggerRepaint();
+      ]
+    });
   }
 
   function handleMapClick(e) {
@@ -1248,7 +1309,7 @@
       const info = LAYER_INFO[activeLayer];
       const decimals = info.decimals ?? 1;
 
-      document.getElementById("readout-card").classList.add("active");
+      document.getElementById("info-box").classList.add("active");
       document.getElementById("readout-name").innerText = info.label;
       document.getElementById("val-display").innerText = Number.isFinite(val) ? val.toFixed(decimals) : "--";
       document.getElementById("unit-display").innerText = info.unit;
@@ -1266,7 +1327,6 @@
     }
 
     const key = layer === "feels" ? "feels_like" : layer;
-
     return getBilinear(currentData[key], gx, gy, m.nx, m.ny);
   }
 
@@ -1277,7 +1337,9 @@
       particles.push(makeParticle(true));
     }
 
-    if (animFrame) cancelAnimationFrame(animFrame);
+    if (animFrame) {
+      cancelAnimationFrame(animFrame);
+    }
 
     lastParticleTime = performance.now();
     lastParticleFrame = 0;
@@ -1316,7 +1378,7 @@
 
   function animateParticles(ts = performance.now()) {
     if (!showParticles || !currentData || !currentData.wind_u) {
-      pCtx.clearRect(0, 0, pCanvas.width, pCanvas.height);
+      pCtx.clearRect(0, 0, window.innerWidth, window.innerHeight);
       return;
     }
 
@@ -1341,7 +1403,7 @@
     }
 
     if (isMapMoving) {
-      pCtx.clearRect(0, 0, pCanvas.width, pCanvas.height);
+      pCtx.clearRect(0, 0, window.innerWidth, window.innerHeight);
       animFrame = requestAnimationFrame(animateParticles);
       return;
     }
@@ -1433,7 +1495,9 @@
     map.setLayoutProperty("centers-label", "visibility", vis);
 
     if (showIsobars) {
-      if (!currentData.isoGeoJSON) buildPressureProducts(currentData);
+      if (!currentData.isoGeoJSON) {
+        buildPressureProducts(currentData);
+      }
 
       map.getSource("isobars-source").setData(
         currentData.isoGeoJSON || { type: "FeatureCollection", features: [] }
@@ -1461,7 +1525,6 @@
     const parts = stops.map(s => {
       const pct = ((s.v - min) / (max - min)) * 100;
       const alpha = s.a ?? 1;
-
       return `${rgbToCss(s.c, Math.max(alpha, 0.95))} ${pct.toFixed(1)}%`;
     });
 
@@ -1571,7 +1634,7 @@
     if (showParticles) {
       initParticles();
     } else {
-      pCtx.clearRect(0, 0, pCanvas.width, pCanvas.height);
+      pCtx.clearRect(0, 0, window.innerWidth, window.innerHeight);
 
       if (animFrame) {
         cancelAnimationFrame(animFrame);
