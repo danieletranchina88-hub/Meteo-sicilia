@@ -1,7 +1,7 @@
 <!DOCTYPE html>
 <html lang="it">
 <head>
-  <title>Italia MeteoHub Pro - Synoptic GPU</title>
+  <title>Italia MeteoHub Pro - Synoptic 3D</title>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
 
@@ -276,6 +276,13 @@
       box-shadow: 0 8px 20px rgba(0,119,255,0.18);
     }
 
+    .toggle.terrain-active {
+      background: linear-gradient(135deg, rgba(35,184,93,0.96), rgba(0,220,170,0.72));
+      border-color: rgba(126,255,205,0.52);
+      color: #fff;
+      box-shadow: 0 8px 20px rgba(35,184,93,0.20);
+    }
+
     .toggle .dot {
       width: 8px;
       height: 8px;
@@ -285,7 +292,8 @@
       flex: 0 0 auto;
     }
 
-    .toggle.active .dot {
+    .toggle.active .dot,
+    .toggle.terrain-active .dot {
       background: #fff;
       box-shadow: 0 0 0 4px rgba(255,255,255,0.18);
     }
@@ -516,7 +524,7 @@
       <div id="model-title">ITALIA METEOHUB <span>ICON-2I</span></div>
       <div id="model-sub">
         Previsione modellistica · Validità: <span id="valid-time">--</span><br>
-        Layer: <span id="active-layer-label">Temperatura</span>
+        Layer: <span id="active-layer-label">Temperatura</span> · Vista: <span id="terrain-status">2D</span>
       </div>
     </div>
 
@@ -535,6 +543,11 @@
   <div id="ui-container">
     <div class="panel glass">
       <button class="gps-btn" onclick="getMyWeather()">📍 Il mio meteo</button>
+    </div>
+
+    <div class="panel glass">
+      <div class="panel-title">Vista</div>
+      <div class="toggle" id="btn-terrain" onclick="toggleTerrain3D()"><span>Rilievo 3D</span><span class="dot"></span></div>
     </div>
 
     <div class="panel glass">
@@ -721,6 +734,7 @@
   let showIsobars = false;
   let showParticles = false;
   let showRawGrid = false;
+  let showTerrain3D = false;
   let isMapMoving = false;
 
   const dataCache = new Map();
@@ -750,15 +764,23 @@
       container: "map",
       style: "https://basemaps.cartocdn.com/gl/dark-matter-gl-style/style.json",
       bounds: [[6.0, 35.0], [19.5, 47.5]],
-      dragRotate: false,
-      pitchWithRotate: false,
-      antialias: false,
+      dragRotate: true,
+      pitchWithRotate: true,
+      pitch: 0,
+      bearing: 0,
+      antialias: true,
       attributionControl: true
     });
 
-    map.addControl(new maplibregl.NavigationControl({ visualizePitch: false }), "bottom-right");
+    map.addControl(new maplibregl.NavigationControl({ visualizePitch: true }), "bottom-right");
 
     map.on("load", async () => {
+      map.addSource("terrain-dem", {
+        type: "raster-dem",
+        url: "https://demotiles.maplibre.org/terrain-tiles/tiles.json",
+        tileSize: 256
+      });
+
       map.addSource("italy-borders", {
         type: "geojson",
         data: "https://raw.githubusercontent.com/openpolis/geojson-italy/master/geojson/limits_IT_regions.geojson"
@@ -771,7 +793,7 @@
         paint: {
           "line-color": "#ffffff",
           "line-width": ["interpolate", ["linear"], ["zoom"], 4, 0.55, 8, 1.1],
-          "line-opacity": 0.34
+          "line-opacity": 0.32
         }
       });
 
@@ -786,10 +808,25 @@
         type: "raster",
         source: "weather-source",
         paint: {
-          "raster-opacity": 0.88,
+          "raster-opacity": 0.86,
           "raster-resampling": "linear"
         }
       }, "borders-layer");
+
+      map.addLayer({
+        id: "terrain-hillshade",
+        type: "hillshade",
+        source: "terrain-dem",
+        layout: {
+          visibility: "none"
+        },
+        paint: {
+          "hillshade-exaggeration": 0.24,
+          "hillshade-shadow-color": "rgba(0,0,0,0.58)",
+          "hillshade-highlight-color": "rgba(255,255,255,0.18)",
+          "hillshade-accent-color": "rgba(20,35,48,0.35)"
+        }
+      }, "weather-layer");
 
       map.addSource("isobars-source", {
         type: "geojson",
@@ -1350,6 +1387,11 @@
 
   function getZoomParticleMultiplier() {
     const z = map.getZoom();
+
+    if (showTerrain3D) {
+      return clamp(Math.pow(2, 6.2 - z), 0.24, 4.4);
+    }
+
     return clamp(Math.pow(2, 6 - z), 0.22, 3.8);
   }
 
@@ -1561,6 +1603,7 @@
       map.flyTo({
         center: [lng, lat],
         zoom: Math.max(map.getZoom(), 8.5),
+        pitch: showTerrain3D ? 52 : map.getPitch(),
         duration: 900
       });
 
@@ -1612,6 +1655,48 @@
     });
   };
 
+  window.toggleTerrain3D = () => {
+    if (!map || !map.getSource("terrain-dem")) return;
+
+    showTerrain3D = !showTerrain3D;
+
+    if (showTerrain3D) {
+      map.setTerrain({
+        source: "terrain-dem",
+        exaggeration: 1.45
+      });
+
+      if (map.getLayer("terrain-hillshade")) {
+        map.setLayoutProperty("terrain-hillshade", "visibility", "visible");
+      }
+
+      map.easeTo({
+        pitch: 56,
+        bearing: -12,
+        duration: 900
+      });
+
+      document.getElementById("terrain-status").innerText = "3D";
+    } else {
+      map.setTerrain(null);
+
+      if (map.getLayer("terrain-hillshade")) {
+        map.setLayoutProperty("terrain-hillshade", "visibility", "none");
+      }
+
+      map.easeTo({
+        pitch: 0,
+        bearing: 0,
+        duration: 800
+      });
+
+      document.getElementById("terrain-status").innerText = "2D";
+    }
+
+    particles.forEach(p => p.age = 999);
+    updateBtns();
+  };
+
   window.toggleLayer = (layer) => {
     if (!LAYER_INFO[layer]) return;
 
@@ -1620,6 +1705,12 @@
     updateGPULayer();
     updateBtns();
     updateLegend();
+
+    if (layer === "wind" && !showParticles) {
+      showParticles = true;
+      initParticles();
+      updateBtns();
+    }
   };
 
   window.toggleParticles = () => {
@@ -1662,6 +1753,7 @@
   function updateBtns() {
     document.querySelectorAll(".toggle").forEach(b => {
       b.classList.remove("active");
+      b.classList.remove("terrain-active");
     });
 
     const activeBtn = document.getElementById("btn-" + activeLayer);
@@ -1673,6 +1765,7 @@
     document.getElementById("btn-flow")?.classList.toggle("active", showParticles);
     document.getElementById("btn-iso")?.classList.toggle("active", showIsobars);
     document.getElementById("btn-raw")?.classList.toggle("active", showRawGrid);
+    document.getElementById("btn-terrain")?.classList.toggle("terrain-active", showTerrain3D);
   }
 
   window.togglePlay = () => {
