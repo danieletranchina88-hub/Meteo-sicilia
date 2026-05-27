@@ -1,21 +1,21 @@
 <!DOCTYPE html>
 <html lang="it">
 <head>
-  <title>Italia MeteoHub Pro - Orographic Mode</title>
+  <title>Italia MeteoHub Pro - True Terrain Experiment</title>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
 
-  <script src="https://unpkg.com/maplibre-gl@3.6.2/dist/maplibre-gl.js"></script>
-  <link href="https://unpkg.com/maplibre-gl@3.6.2/dist/maplibre-gl.css" rel="stylesheet" />
+  <script src="https://unpkg.com/maplibre-gl@5.24.0/dist/maplibre-gl.js"></script>
+  <link href="https://unpkg.com/maplibre-gl@5.24.0/dist/maplibre-gl.css" rel="stylesheet" />
   <script src="https://d3js.org/d3.v7.min.js"></script>
 
   <style>
     :root {
-      --bg: #070a0f;
-      --panel: rgba(12, 16, 23, 0.82);
-      --panel-strong: rgba(10, 13, 19, 0.94);
+      --bg: #05080d;
+      --panel: rgba(10, 14, 21, 0.84);
+      --panel-strong: rgba(8, 11, 17, 0.95);
       --stroke: rgba(255,255,255,0.12);
-      --stroke-strong: rgba(0,180,255,0.38);
+      --stroke-strong: rgba(0,180,255,0.42);
       --text: #f4f7fb;
       --muted: #9aa8b8;
       --accent: #008cff;
@@ -23,7 +23,7 @@
       --green: #25b85d;
       --orange: #ffb84d;
       --radius: 16px;
-      --shadow: 0 18px 55px rgba(0,0,0,0.50);
+      --shadow: 0 18px 55px rgba(0,0,0,0.52);
     }
 
     * { box-sizing: border-box; }
@@ -39,8 +39,7 @@
 
     #map {
       position: absolute;
-      top: 0;
-      bottom: 0;
+      inset: 0;
       width: 100%;
       background: var(--bg);
       z-index: 1;
@@ -48,8 +47,7 @@
 
     #particle-canvas {
       position: absolute;
-      top: 0;
-      left: 0;
+      inset: 0;
       width: 100%;
       height: 100%;
       z-index: 10;
@@ -130,7 +128,7 @@
       flex-direction: column;
       gap: 10px;
       pointer-events: none;
-      max-width: min(430px, calc(100vw - 36px));
+      max-width: min(450px, calc(100vw - 36px));
     }
 
     #model-info {
@@ -223,7 +221,7 @@
       flex-direction: column;
       gap: 10px;
       pointer-events: auto;
-      width: 220px;
+      width: 225px;
       max-height: calc(100vh - 108px);
       overflow-y: auto;
       scrollbar-width: none;
@@ -277,18 +275,11 @@
       box-shadow: 0 8px 20px rgba(0,119,255,0.18);
     }
 
-    .toggle.orography-active {
+    .toggle.terrain-active {
       background: linear-gradient(135deg, rgba(35,184,93,0.96), rgba(0,220,170,0.72));
       border-color: rgba(126,255,205,0.52);
       color: #fff;
       box-shadow: 0 8px 20px rgba(35,184,93,0.20);
-    }
-
-    .toggle.tilt-active {
-      background: linear-gradient(135deg, rgba(255,145,40,0.95), rgba(255,200,80,0.70));
-      border-color: rgba(255,205,120,0.52);
-      color: #fff;
-      box-shadow: 0 8px 20px rgba(255,170,60,0.18);
     }
 
     .toggle .dot {
@@ -301,8 +292,7 @@
     }
 
     .toggle.active .dot,
-    .toggle.orography-active .dot,
-    .toggle.tilt-active .dot {
+    .toggle.terrain-active .dot {
       background: #fff;
       box-shadow: 0 0 0 4px rgba(255,255,255,0.18);
     }
@@ -533,7 +523,7 @@
       <div id="model-title">ITALIA METEOHUB <span>ICON-2I</span></div>
       <div id="model-sub">
         Previsione modellistica · Validità: <span id="valid-time">--</span><br>
-        Layer: <span id="active-layer-label">Temperatura</span> · Rilievo: <span id="orography-status">OFF</span> · Vista: <span id="tilt-status">2D</span>
+        Layer: <span id="active-layer-label">Temperatura</span> · Terreno: <span id="terrain-status">3D ON</span>
       </div>
     </div>
 
@@ -555,9 +545,9 @@
     </div>
 
     <div class="panel glass">
-      <div class="panel-title">Orografia sperimentale</div>
-      <div class="toggle" id="btn-orography" onclick="toggleOrography()"><span>Rilievo orografico</span><span class="dot"></span></div>
-      <div class="toggle" id="btn-tilt" onclick="toggleTiltView()"><span>Vista prospettica</span><span class="dot"></span></div>
+      <div class="panel-title">Terreno reale</div>
+      <div class="toggle terrain-active" id="btn-terrain" onclick="toggleTerrainMode()"><span>Terrain 3D</span><span class="dot"></span></div>
+      <div class="toggle active" id="btn-hillshade" onclick="toggleHillshade()"><span>Ombre rilievo</span><span class="dot"></span></div>
     </div>
 
     <div class="panel glass">
@@ -744,8 +734,8 @@
   let showIsobars = false;
   let showParticles = false;
   let showRawGrid = false;
-  let showOrography = false;
-  let showTiltView = false;
+  let showTerrain = true;
+  let showHillshade = true;
   let isMapMoving = false;
 
   const dataCache = new Map();
@@ -773,25 +763,86 @@
 
     map = new maplibregl.Map({
       container: "map",
-      style: "https://basemaps.cartocdn.com/gl/dark-matter-gl-style/style.json",
-      bounds: [[6.0, 35.0], [19.5, 47.5]],
+      center: [12.7, 42.3],
+      zoom: 5.15,
+      pitch: 58,
+      bearing: -14,
+      minZoom: 4,
+      maxZoom: 13,
       dragRotate: true,
       pitchWithRotate: true,
-      pitch: 0,
-      bearing: 0,
       antialias: true,
-      attributionControl: true
+      attributionControl: true,
+      style: {
+        version: 8,
+        glyphs: "https://demotiles.maplibre.org/font/{fontstack}/{range}.pbf",
+        sources: {
+          "carto-dark": {
+            type: "raster",
+            tiles: [
+              "https://a.basemaps.cartocdn.com/dark_nolabels/{z}/{x}/{y}.png",
+              "https://b.basemaps.cartocdn.com/dark_nolabels/{z}/{x}/{y}.png",
+              "https://c.basemaps.cartocdn.com/dark_nolabels/{z}/{x}/{y}.png",
+              "https://d.basemaps.cartocdn.com/dark_nolabels/{z}/{x}/{y}.png"
+            ],
+            tileSize: 256,
+            attribution: "© CARTO © OpenStreetMap contributors"
+          },
+          "terrain-dem": {
+            type: "raster-dem",
+            tiles: [
+              "https://s3.amazonaws.com/elevation-tiles-prod/terrarium/{z}/{x}/{y}.png"
+            ],
+            encoding: "terrarium",
+            tileSize: 256,
+            maxzoom: 13,
+            attribution: "Elevation tiles © AWS Open Data"
+          }
+        },
+        layers: [
+          {
+            id: "background",
+            type: "background",
+            paint: {
+              "background-color": "#05080d"
+            }
+          },
+          {
+            id: "carto-dark-layer",
+            type: "raster",
+            source: "carto-dark",
+            paint: {
+              "raster-opacity": 0.86,
+              "raster-saturation": -0.25,
+              "raster-contrast": 0.18,
+              "raster-brightness-min": 0,
+              "raster-brightness-max": 0.72
+            }
+          },
+          {
+            id: "terrain-shadow-underlay",
+            type: "hillshade",
+            source: "terrain-dem",
+            paint: {
+              "hillshade-exaggeration": 0.45,
+              "hillshade-shadow-color": "rgba(0,0,0,0.55)",
+              "hillshade-highlight-color": "rgba(255,255,255,0.14)",
+              "hillshade-accent-color": "rgba(20,38,50,0.26)",
+              "hillshade-illumination-direction": 315,
+              "hillshade-illumination-anchor": "viewport"
+            }
+          }
+        ],
+        terrain: {
+          source: "terrain-dem",
+          exaggeration: 1.85
+        }
+      }
     });
 
     map.addControl(new maplibregl.NavigationControl({ visualizePitch: true }), "bottom-right");
 
     map.on("load", async () => {
-      map.addSource("terrain-dem", {
-        type: "raster-dem",
-        url: "https://demotiles.maplibre.org/terrain-tiles/tiles.json",
-        tileSize: 256
-      });
-
       map.addSource("weather-source", {
         type: "image",
         url: "data:image/gif;base64,R0lGODlhAQABAAD/ACwAAAAAAQABAAACADs=",
@@ -803,43 +854,23 @@
         type: "raster",
         source: "weather-source",
         paint: {
-          "raster-opacity": 0.88,
+          "raster-opacity": 0.78,
           "raster-resampling": "linear",
           "raster-fade-duration": 0
         }
       });
 
       map.addLayer({
-        id: "orography-hillshade-soft",
+        id: "terrain-shadow-over-weather",
         type: "hillshade",
         source: "terrain-dem",
-        layout: {
-          visibility: "none"
-        },
         paint: {
-          "hillshade-exaggeration": 0.30,
-          "hillshade-shadow-color": "rgba(0,0,0,0.46)",
-          "hillshade-highlight-color": "rgba(255,255,255,0.16)",
-          "hillshade-accent-color": "rgba(20,40,56,0.28)",
+          "hillshade-exaggeration": 0.20,
+          "hillshade-shadow-color": "rgba(0,0,0,0.36)",
+          "hillshade-highlight-color": "rgba(255,255,255,0.09)",
+          "hillshade-accent-color": "rgba(36,58,72,0.20)",
           "hillshade-illumination-direction": 315,
           "hillshade-illumination-anchor": "viewport"
-        }
-      });
-
-      map.addLayer({
-        id: "orography-hillshade-crisp",
-        type: "hillshade",
-        source: "terrain-dem",
-        layout: {
-          visibility: "none"
-        },
-        paint: {
-          "hillshade-exaggeration": 0.12,
-          "hillshade-shadow-color": "rgba(0,0,0,0.34)",
-          "hillshade-highlight-color": "rgba(255,255,255,0.10)",
-          "hillshade-accent-color": "rgba(60,80,95,0.18)",
-          "hillshade-illumination-direction": 45,
-          "hillshade-illumination-anchor": "map"
         }
       });
 
@@ -854,8 +885,8 @@
         source: "italy-borders",
         paint: {
           "line-color": "#ffffff",
-          "line-width": ["interpolate", ["linear"], ["zoom"], 4, 0.55, 8, 1.1],
-          "line-opacity": 0.32
+          "line-width": ["interpolate", ["linear"], ["zoom"], 4, 0.45, 8, 1.05],
+          "line-opacity": 0.34
         }
       });
 
@@ -1298,7 +1329,7 @@
     map.setPaintProperty(
       "weather-layer",
       "raster-opacity",
-      showOrography ? 0.76 : 0.88
+      showTerrain ? 0.78 : 0.88
     );
 
     map.getSource("weather-source").updateImage({
@@ -1424,7 +1455,7 @@
 
   function getZoomParticleMultiplier() {
     const z = map.getZoom();
-    return clamp(Math.pow(2, 6 - z), 0.22, showTiltView ? 4.6 : 3.8);
+    return clamp(Math.pow(2, 6.1 - z), 0.22, 4.5);
   }
 
   function animateParticles(ts = performance.now()) {
@@ -1634,8 +1665,8 @@
 
       map.flyTo({
         center: [lng, lat],
-        zoom: Math.max(map.getZoom(), 8.5),
-        pitch: showTiltView ? 42 : map.getPitch(),
+        zoom: Math.max(map.getZoom(), 8.8),
+        pitch: showTerrain ? 58 : 0,
         duration: 900
       });
 
@@ -1687,51 +1718,53 @@
     });
   };
 
-  window.toggleOrography = () => {
-    if (!map || !map.getLayer("orography-hillshade-soft")) return;
+  window.toggleTerrainMode = () => {
+    showTerrain = !showTerrain;
 
-    showOrography = !showOrography;
+    if (showTerrain) {
+      map.setTerrain({
+        source: "terrain-dem",
+        exaggeration: 1.85
+      });
 
-    const vis = showOrography ? "visible" : "none";
-
-    map.setLayoutProperty("orography-hillshade-soft", "visibility", vis);
-    map.setLayoutProperty("orography-hillshade-crisp", "visibility", vis);
-
-    if (map.getLayer("weather-layer")) {
-      map.setPaintProperty("weather-layer", "raster-opacity", showOrography ? 0.76 : 0.88);
-    }
-
-    if (map.getLayer("borders-layer")) {
-      map.setPaintProperty("borders-layer", "line-opacity", showOrography ? 0.44 : 0.32);
-    }
-
-    document.getElementById("orography-status").innerText = showOrography ? "ON" : "OFF";
-
-    updateBtns();
-  };
-
-  window.toggleTiltView = () => {
-    if (!map) return;
-
-    showTiltView = !showTiltView;
-
-    if (showTiltView) {
       map.easeTo({
-        pitch: 42,
-        bearing: -10,
+        pitch: 58,
+        bearing: -14,
         duration: 850
       });
-      document.getElementById("tilt-status").innerText = "PROSP.";
+
+      document.getElementById("terrain-status").innerText = "3D ON";
+      map.setPaintProperty("weather-layer", "raster-opacity", 0.78);
     } else {
+      map.setTerrain(null);
+
       map.easeTo({
         pitch: 0,
         bearing: 0,
-        duration: 750
+        duration: 800
       });
-      document.getElementById("tilt-status").innerText = "2D";
+
+      document.getElementById("terrain-status").innerText = "2D";
+      map.setPaintProperty("weather-layer", "raster-opacity", 0.88);
     }
 
     particles.forEach(p => p.age = 999);
+    updateBtns();
+  };
+
+  window.toggleHillshade = () => {
+    showHillshade = !showHillshade;
+
+    const vis = showHillshade ? "visible" : "none";
+
+    if (map.getLayer("terrain-shadow-underlay")) {
+      map.setLayoutProperty("terrain-shadow-underlay", "visibility", vis);
+    }
+
+    if (map.getLayer("terrain-shadow-over-weather")) {
+      map.setLayoutProperty("terrain-shadow-over-weather", "visibility", vis);
+    }
+
     updateBtns();
   };
 
@@ -1791,8 +1824,7 @@
   function updateBtns() {
     document.querySelectorAll(".toggle").forEach(b => {
       b.classList.remove("active");
-      b.classList.remove("orography-active");
-      b.classList.remove("tilt-active");
+      b.classList.remove("terrain-active");
     });
 
     const activeBtn = document.getElementById("btn-" + activeLayer);
@@ -1804,8 +1836,8 @@
     document.getElementById("btn-flow")?.classList.toggle("active", showParticles);
     document.getElementById("btn-iso")?.classList.toggle("active", showIsobars);
     document.getElementById("btn-raw")?.classList.toggle("active", showRawGrid);
-    document.getElementById("btn-orography")?.classList.toggle("orography-active", showOrography);
-    document.getElementById("btn-tilt")?.classList.toggle("tilt-active", showTiltView);
+    document.getElementById("btn-terrain")?.classList.toggle("terrain-active", showTerrain);
+    document.getElementById("btn-hillshade")?.classList.toggle("active", showHillshade);
   }
 
   window.togglePlay = () => {
