@@ -1,12 +1,12 @@
 <!DOCTYPE html>
 <html lang="it">
 <head>
-  <title>Italia MeteoHub Pro - True Terrain Experiment</title>
+  <title>Italia MeteoHub Pro - Relief Default</title>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
 
-  <script src="https://unpkg.com/maplibre-gl@5.24.0/dist/maplibre-gl.js"></script>
-  <link href="https://unpkg.com/maplibre-gl@5.24.0/dist/maplibre-gl.css" rel="stylesheet" />
+  <script src="https://unpkg.com/maplibre-gl@3.6.2/dist/maplibre-gl.js"></script>
+  <link href="https://unpkg.com/maplibre-gl@3.6.2/dist/maplibre-gl.css" rel="stylesheet" />
   <script src="https://d3js.org/d3.v7.min.js"></script>
 
   <style>
@@ -21,7 +21,6 @@
       --accent: #008cff;
       --accent2: #00eaff;
       --green: #25b85d;
-      --orange: #ffb84d;
       --radius: 16px;
       --shadow: 0 18px 55px rgba(0,0,0,0.52);
     }
@@ -275,13 +274,6 @@
       box-shadow: 0 8px 20px rgba(0,119,255,0.18);
     }
 
-    .toggle.terrain-active {
-      background: linear-gradient(135deg, rgba(35,184,93,0.96), rgba(0,220,170,0.72));
-      border-color: rgba(126,255,205,0.52);
-      color: #fff;
-      box-shadow: 0 8px 20px rgba(35,184,93,0.20);
-    }
-
     .toggle .dot {
       width: 8px;
       height: 8px;
@@ -291,8 +283,7 @@
       flex: 0 0 auto;
     }
 
-    .toggle.active .dot,
-    .toggle.terrain-active .dot {
+    .toggle.active .dot {
       background: #fff;
       box-shadow: 0 0 0 4px rgba(255,255,255,0.18);
     }
@@ -523,7 +514,7 @@
       <div id="model-title">ITALIA METEOHUB <span>ICON-2I</span></div>
       <div id="model-sub">
         Previsione modellistica · Validità: <span id="valid-time">--</span><br>
-        Layer: <span id="active-layer-label">Temperatura</span> · Terreno: <span id="terrain-status">3D ON</span>
+        Layer: <span id="active-layer-label">Temperatura</span> · Base: <span>Rilievo</span>
       </div>
     </div>
 
@@ -542,12 +533,6 @@
   <div id="ui-container">
     <div class="panel glass">
       <button class="gps-btn" onclick="getMyWeather()">📍 Il mio meteo</button>
-    </div>
-
-    <div class="panel glass">
-      <div class="panel-title">Terreno reale</div>
-      <div class="toggle terrain-active" id="btn-terrain" onclick="toggleTerrainMode()"><span>Terrain 3D</span><span class="dot"></span></div>
-      <div class="toggle active" id="btn-hillshade" onclick="toggleHillshade()"><span>Ombre rilievo</span><span class="dot"></span></div>
     </div>
 
     <div class="panel glass">
@@ -734,8 +719,6 @@
   let showIsobars = false;
   let showParticles = false;
   let showRawGrid = false;
-  let showTerrain = true;
-  let showHillshade = true;
   let isMapMoving = false;
 
   const dataCache = new Map();
@@ -763,19 +746,13 @@
 
     map = new maplibregl.Map({
       container: "map",
-      center: [12.7, 42.3],
-      zoom: 5.15,
-      pitch: 58,
-      bearing: -14,
-      minZoom: 4,
-      maxZoom: 13,
-      dragRotate: true,
-      pitchWithRotate: true,
-      antialias: true,
+      bounds: [[6.0, 35.0], [19.5, 47.5]],
+      dragRotate: false,
+      pitchWithRotate: false,
+      antialias: false,
       attributionControl: true,
       style: {
         version: 8,
-        glyphs: "https://demotiles.maplibre.org/font/{fontstack}/{range}.pbf",
         sources: {
           "carto-dark": {
             type: "raster",
@@ -788,15 +765,23 @@
             tileSize: 256,
             attribution: "© CARTO © OpenStreetMap contributors"
           },
-          "terrain-dem": {
-            type: "raster-dem",
+          "carto-labels": {
+            type: "raster",
             tiles: [
-              "https://s3.amazonaws.com/elevation-tiles-prod/terrarium/{z}/{x}/{y}.png"
+              "https://a.basemaps.cartocdn.com/dark_only_labels/{z}/{x}/{y}.png",
+              "https://b.basemaps.cartocdn.com/dark_only_labels/{z}/{x}/{y}.png",
+              "https://c.basemaps.cartocdn.com/dark_only_labels/{z}/{x}/{y}.png",
+              "https://d.basemaps.cartocdn.com/dark_only_labels/{z}/{x}/{y}.png"
             ],
-            encoding: "terrarium",
+            tileSize: 256
+          },
+          "world-hillshade": {
+            type: "raster",
+            tiles: [
+              "https://services.arcgisonline.com/ArcGIS/rest/services/Elevation/World_Hillshade/MapServer/tile/{z}/{y}/{x}"
+            ],
             tileSize: 256,
-            maxzoom: 13,
-            attribution: "Elevation tiles © AWS Open Data"
+            attribution: "World Hillshade © Esri"
           }
         },
         layers: [
@@ -812,35 +797,30 @@
             type: "raster",
             source: "carto-dark",
             paint: {
-              "raster-opacity": 0.86,
-              "raster-saturation": -0.25,
-              "raster-contrast": 0.18,
+              "raster-opacity": 0.92,
+              "raster-saturation": -0.35,
+              "raster-contrast": 0.10,
               "raster-brightness-min": 0,
-              "raster-brightness-max": 0.72
+              "raster-brightness-max": 0.78
             }
           },
           {
-            id: "terrain-shadow-underlay",
-            type: "hillshade",
-            source: "terrain-dem",
+            id: "relief-base",
+            type: "raster",
+            source: "world-hillshade",
             paint: {
-              "hillshade-exaggeration": 0.45,
-              "hillshade-shadow-color": "rgba(0,0,0,0.55)",
-              "hillshade-highlight-color": "rgba(255,255,255,0.14)",
-              "hillshade-accent-color": "rgba(20,38,50,0.26)",
-              "hillshade-illumination-direction": 315,
-              "hillshade-illumination-anchor": "viewport"
+              "raster-opacity": 0.72,
+              "raster-contrast": 0.34,
+              "raster-brightness-min": 0.06,
+              "raster-brightness-max": 0.86,
+              "raster-saturation": -1
             }
           }
-        ],
-        terrain: {
-          source: "terrain-dem",
-          exaggeration: 1.85
-        }
+        ]
       }
     });
 
-    map.addControl(new maplibregl.NavigationControl({ visualizePitch: true }), "bottom-right");
+    map.addControl(new maplibregl.NavigationControl({ visualizePitch: false }), "bottom-right");
 
     map.on("load", async () => {
       map.addSource("weather-source", {
@@ -861,16 +841,24 @@
       });
 
       map.addLayer({
-        id: "terrain-shadow-over-weather",
-        type: "hillshade",
-        source: "terrain-dem",
+        id: "relief-over-weather",
+        type: "raster",
+        source: "world-hillshade",
         paint: {
-          "hillshade-exaggeration": 0.20,
-          "hillshade-shadow-color": "rgba(0,0,0,0.36)",
-          "hillshade-highlight-color": "rgba(255,255,255,0.09)",
-          "hillshade-accent-color": "rgba(36,58,72,0.20)",
-          "hillshade-illumination-direction": 315,
-          "hillshade-illumination-anchor": "viewport"
+          "raster-opacity": 0.28,
+          "raster-contrast": 0.52,
+          "raster-brightness-min": 0.10,
+          "raster-brightness-max": 0.82,
+          "raster-saturation": -1
+        }
+      });
+
+      map.addLayer({
+        id: "carto-labels-layer",
+        type: "raster",
+        source: "carto-labels",
+        paint: {
+          "raster-opacity": 0.64
         }
       });
 
@@ -1326,10 +1314,20 @@
       showRawGrid ? "nearest" : "linear"
     );
 
+    const opacityByLayer = {
+      temp: 0.77,
+      feels: 0.77,
+      wind: 0.74,
+      rain: 0.84,
+      cloud: 0.72,
+      rh: 0.74,
+      press: 0.70
+    };
+
     map.setPaintProperty(
       "weather-layer",
       "raster-opacity",
-      showTerrain ? 0.78 : 0.88
+      opacityByLayer[activeLayer] ?? 0.78
     );
 
     map.getSource("weather-source").updateImage({
@@ -1455,7 +1453,7 @@
 
   function getZoomParticleMultiplier() {
     const z = map.getZoom();
-    return clamp(Math.pow(2, 6.1 - z), 0.22, 4.5);
+    return clamp(Math.pow(2, 6 - z), 0.22, 3.8);
   }
 
   function animateParticles(ts = performance.now()) {
@@ -1666,7 +1664,6 @@
       map.flyTo({
         center: [lng, lat],
         zoom: Math.max(map.getZoom(), 8.8),
-        pitch: showTerrain ? 58 : 0,
         duration: 900
       });
 
@@ -1716,56 +1713,6 @@
       timeout: 7000,
       maximumAge: 300000
     });
-  };
-
-  window.toggleTerrainMode = () => {
-    showTerrain = !showTerrain;
-
-    if (showTerrain) {
-      map.setTerrain({
-        source: "terrain-dem",
-        exaggeration: 1.85
-      });
-
-      map.easeTo({
-        pitch: 58,
-        bearing: -14,
-        duration: 850
-      });
-
-      document.getElementById("terrain-status").innerText = "3D ON";
-      map.setPaintProperty("weather-layer", "raster-opacity", 0.78);
-    } else {
-      map.setTerrain(null);
-
-      map.easeTo({
-        pitch: 0,
-        bearing: 0,
-        duration: 800
-      });
-
-      document.getElementById("terrain-status").innerText = "2D";
-      map.setPaintProperty("weather-layer", "raster-opacity", 0.88);
-    }
-
-    particles.forEach(p => p.age = 999);
-    updateBtns();
-  };
-
-  window.toggleHillshade = () => {
-    showHillshade = !showHillshade;
-
-    const vis = showHillshade ? "visible" : "none";
-
-    if (map.getLayer("terrain-shadow-underlay")) {
-      map.setLayoutProperty("terrain-shadow-underlay", "visibility", vis);
-    }
-
-    if (map.getLayer("terrain-shadow-over-weather")) {
-      map.setLayoutProperty("terrain-shadow-over-weather", "visibility", vis);
-    }
-
-    updateBtns();
   };
 
   window.toggleLayer = (layer) => {
@@ -1824,7 +1771,6 @@
   function updateBtns() {
     document.querySelectorAll(".toggle").forEach(b => {
       b.classList.remove("active");
-      b.classList.remove("terrain-active");
     });
 
     const activeBtn = document.getElementById("btn-" + activeLayer);
@@ -1836,8 +1782,6 @@
     document.getElementById("btn-flow")?.classList.toggle("active", showParticles);
     document.getElementById("btn-iso")?.classList.toggle("active", showIsobars);
     document.getElementById("btn-raw")?.classList.toggle("active", showRawGrid);
-    document.getElementById("btn-terrain")?.classList.toggle("terrain-active", showTerrain);
-    document.getElementById("btn-hillshade")?.classList.toggle("active", showHillshade);
   }
 
   window.togglePlay = () => {
