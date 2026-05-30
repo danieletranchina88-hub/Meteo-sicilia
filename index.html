@@ -1,7 +1,7 @@
 <!DOCTYPE html>
 <html lang="it">
 <head>
-  <title>Italia MeteoHub Pro - Relief Pro</title>
+  <title>Italia MeteoHub Pro - Synoptic Scientific Viewer</title>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
 
@@ -11,9 +11,9 @@
 
   <style>
     :root {
-      --bg: #05080d;
-      --panel: rgba(10, 14, 21, 0.84);
-      --panel-strong: rgba(8, 11, 17, 0.95);
+      --bg: #04070c;
+      --panel: rgba(8, 12, 18, 0.86);
+      --panel-strong: rgba(6, 9, 14, 0.96);
       --stroke: rgba(255,255,255,0.12);
       --stroke-strong: rgba(0,180,255,0.42);
       --text: #f4f7fb;
@@ -22,7 +22,7 @@
       --accent2: #00eaff;
       --green: #25b85d;
       --radius: 16px;
-      --shadow: 0 18px 55px rgba(0,0,0,0.52);
+      --shadow: 0 18px 55px rgba(0,0,0,0.56);
     }
 
     * { box-sizing: border-box; }
@@ -44,14 +44,17 @@
       z-index: 1;
     }
 
-    #particle-canvas {
+    #particle-canvas,
+    #vector-canvas {
       position: absolute;
       inset: 0;
       width: 100%;
       height: 100%;
-      z-index: 10;
       pointer-events: none;
     }
+
+    #particle-canvas { z-index: 10; }
+    #vector-canvas { z-index: 11; }
 
     .glass {
       background: var(--panel);
@@ -68,7 +71,7 @@
       transform: translateX(-50%);
       z-index: 6500;
       border: 1px solid rgba(255,255,255,0.15);
-      background: rgba(10,14,21,0.78);
+      background: rgba(8,12,18,0.78);
       color: #fff;
       border-radius: 999px;
       padding: 8px 13px;
@@ -85,7 +88,7 @@
       top: 14px;
       left: 50%;
       transform: translate(-50%, -130%);
-      width: min(730px, calc(100vw - 28px));
+      width: min(760px, calc(100vw - 28px));
       background: var(--panel-strong);
       backdrop-filter: blur(22px) saturate(130%);
       -webkit-backdrop-filter: blur(22px) saturate(130%);
@@ -121,7 +124,7 @@
     }
 
     .gps-stat div:last-child {
-      font-size: 1.12rem;
+      font-size: 1.08rem;
       font-weight: 950;
       color: #fff;
       white-space: nowrap;
@@ -146,13 +149,14 @@
       flex-direction: column;
       gap: 10px;
       pointer-events: none;
-      max-width: min(470px, calc(100vw - 36px));
+      max-width: min(500px, calc(100vw - 36px));
     }
 
     #model-info {
       padding: 12px 14px;
       border-radius: var(--radius);
-      min-width: 300px;
+      width: 420px;
+      max-width: calc(100vw - 36px);
     }
 
     #model-title {
@@ -175,18 +179,52 @@
       letter-spacing: 0.04em;
     }
 
-    #model-sub {
-      margin-top: 6px;
-      font-size: 11px;
+    #meta-grid {
+      margin-top: 10px;
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 7px;
+    }
+
+    .meta-item {
+      padding: 7px 8px;
+      border-radius: 10px;
+      background: rgba(255,255,255,0.045);
+      border: 1px solid rgba(255,255,255,0.07);
+      min-width: 0;
+    }
+
+    .meta-label {
+      font-size: 8.5px;
       color: var(--muted);
+      text-transform: uppercase;
+      font-weight: 950;
+      letter-spacing: 0.08em;
+      margin-bottom: 2px;
+    }
+
+    .meta-value {
+      font-size: 11.5px;
+      color: #fff;
+      font-weight: 850;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
       font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
-      line-height: 1.45;
+    }
+
+    #scientific-note {
+      margin-top: 9px;
+      font-size: 10px;
+      line-height: 1.35;
+      color: #9fb1c6;
+      font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
     }
 
     #hover-box {
       display: none;
       width: fit-content;
-      min-width: 190px;
+      min-width: 230px;
       padding: 10px 12px;
       border-radius: var(--radius);
       font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
@@ -194,13 +232,11 @@
       color: #dce8f7;
     }
 
-    #hover-box.active {
-      display: block;
-    }
+    #hover-box.active { display: block; }
 
     #info-box {
       display: none;
-      width: 315px;
+      width: 340px;
       max-width: calc(100vw - 36px);
       padding: 12px 14px;
       border-radius: var(--radius);
@@ -238,9 +274,9 @@
       padding-bottom: 4px;
     }
 
-    #coord-display {
-      margin-top: 7px;
-      font-size: 11px;
+    #coord-display, #sampling-display {
+      margin-top: 6px;
+      font-size: 10.5px;
       color: var(--muted);
       font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
     }
@@ -284,7 +320,7 @@
       flex-direction: column;
       gap: 10px;
       pointer-events: auto;
-      width: 225px;
+      width: 235px;
       max-height: calc(100vh - 108px);
       overflow-y: auto;
       scrollbar-width: none;
@@ -376,7 +412,7 @@
       left: 18px;
       bottom: 96px;
       z-index: 5000;
-      width: 330px;
+      width: 350px;
       max-width: calc(100vw - 36px);
       padding: 11px 12px 10px;
       border-radius: var(--radius);
@@ -544,7 +580,17 @@
       }
 
       #model-title { font-size: 12px; }
-      #model-sub { font-size: 10px; }
+
+      #meta-grid {
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+        gap: 5px;
+      }
+
+      .meta-value { font-size: 10px; }
+
+      #scientific-note {
+        display: none;
+      }
 
       #hover-box {
         display: none !important;
@@ -632,16 +678,43 @@
     <div class="gps-stat"><div>Percepita</div><div id="gps-tf">--</div></div>
     <div class="gps-stat"><div>Pioggia</div><div id="gps-r">--</div></div>
     <div class="gps-stat"><div>Vento</div><div id="gps-w">--</div></div>
-    <div class="gps-stat"><div>Umidità</div><div id="gps-h">--</div></div>
+    <div class="gps-stat"><div>Direzione</div><div id="gps-wd">--</div></div>
     <div class="gps-stat"><div>Pressione</div><div id="gps-p">--</div></div>
   </div>
 
   <div id="top-left">
     <div id="model-info" class="glass">
-      <div id="model-title">ITALIA METEOHUB <span>ICON-2I</span></div>
-      <div id="model-sub">
-        Validità: <span id="valid-time">--</span> · Step: <span id="forecast-offset">--</span><br>
-        Layer: <span id="active-layer-label">Temperatura</span> · Base: Rilievo
+      <div id="model-title">ITALIA METEOHUB <span>SYNOPTIC</span></div>
+
+      <div id="meta-grid">
+        <div class="meta-item">
+          <div class="meta-label">Modello</div>
+          <div class="meta-value">ICON-2I</div>
+        </div>
+        <div class="meta-item">
+          <div class="meta-label">Run</div>
+          <div class="meta-value" id="model-run">n/d</div>
+        </div>
+        <div class="meta-item">
+          <div class="meta-label">Validità</div>
+          <div class="meta-value" id="valid-time">--</div>
+        </div>
+        <div class="meta-item">
+          <div class="meta-label">Step</div>
+          <div class="meta-value" id="forecast-offset">--</div>
+        </div>
+        <div class="meta-item">
+          <div class="meta-label">Variabile</div>
+          <div class="meta-value" id="active-layer-label">Temperatura</div>
+        </div>
+        <div class="meta-item">
+          <div class="meta-label">Unità / sampling</div>
+          <div class="meta-value"><span id="field-unit">°C</span> · <span id="sampling-mode">bilinear</span></div>
+        </div>
+      </div>
+
+      <div id="scientific-note">
+        Dati modellistici numerici. Lettura puntuale tramite <span id="scientific-sampling">interpolazione bilineare</span>. Non sostituisce bollettini o avvisi ufficiali.
       </div>
     </div>
 
@@ -654,14 +727,17 @@
         <div id="unit-display">--</div>
       </div>
       <div id="coord-display">--</div>
+      <div id="sampling-display">--</div>
 
       <div id="details-grid">
-        <div class="detail-card"><div class="detail-label">Temp.</div><div class="detail-value" id="detail-temp">--</div></div>
+        <div class="detail-card"><div class="detail-label">Temp. 2 m</div><div class="detail-value" id="detail-temp">--</div></div>
         <div class="detail-card"><div class="detail-label">Percepita</div><div class="detail-value" id="detail-feels">--</div></div>
-        <div class="detail-card"><div class="detail-label">Pioggia</div><div class="detail-value" id="detail-rain">--</div></div>
-        <div class="detail-card"><div class="detail-label">Vento</div><div class="detail-value" id="detail-wind">--</div></div>
+        <div class="detail-card"><div class="detail-label">Precipit.</div><div class="detail-value" id="detail-rain">--</div></div>
+        <div class="detail-card"><div class="detail-label">Vento 10 m</div><div class="detail-value" id="detail-wind">--</div></div>
+        <div class="detail-card"><div class="detail-label">Dir. vento</div><div class="detail-value" id="detail-wdir">--</div></div>
+        <div class="detail-card"><div class="detail-label">Press. suolo</div><div class="detail-value" id="detail-press">--</div></div>
         <div class="detail-card"><div class="detail-label">Umidità</div><div class="detail-value" id="detail-rh">--</div></div>
-        <div class="detail-card"><div class="detail-label">Pressione</div><div class="detail-value" id="detail-press">--</div></div>
+        <div class="detail-card"><div class="detail-label">Nuvolosità</div><div class="detail-value" id="detail-cloud">--</div></div>
       </div>
     </div>
   </div>
@@ -674,21 +750,22 @@
     </div>
 
     <div class="panel glass">
-      <div class="panel-title">Variabile principale</div>
-      <div class="toggle active" id="btn-temp" onclick="toggleLayer('temp')"><span>Temperatura</span><span class="dot"></span></div>
+      <div class="panel-title">Campi modellistici</div>
+      <div class="toggle active" id="btn-temp" onclick="toggleLayer('temp')"><span>Temperatura 2 m</span><span class="dot"></span></div>
       <div class="toggle" id="btn-feels" onclick="toggleLayer('feels')"><span>Temp. percepita</span><span class="dot"></span></div>
       <div class="toggle" id="btn-wind" onclick="toggleLayer('wind')"><span>Vento 10 m</span><span class="dot"></span></div>
       <div class="toggle" id="btn-rain" onclick="toggleLayer('rain')"><span>Precipitazioni</span><span class="dot"></span></div>
       <div class="toggle" id="btn-cloud" onclick="toggleLayer('cloud')"><span>Nuvolosità</span><span class="dot"></span></div>
-      <div class="toggle" id="btn-rh" onclick="toggleLayer('rh')"><span>Umidità</span><span class="dot"></span></div>
+      <div class="toggle" id="btn-rh" onclick="toggleLayer('rh')"><span>Umidità relativa</span><span class="dot"></span></div>
       <div class="toggle" id="btn-press" onclick="toggleLayer('press')"><span>Pressione suolo</span><span class="dot"></span></div>
     </div>
 
     <div class="panel glass">
-      <div class="panel-title">Overlay</div>
-      <div class="toggle" id="btn-flow" onclick="toggleParticles()"><span>Particelle vento</span><span class="dot"></span></div>
-      <div class="toggle" id="btn-iso" onclick="toggleIsobars()"><span>Isobare A/B</span><span class="dot"></span></div>
-      <div class="toggle" id="btn-raw" onclick="toggleRawGrid()"><span>Griglia modello</span><span class="dot"></span></div>
+      <div class="panel-title">Overlay sinottici</div>
+      <div class="toggle" id="btn-flow" onclick="toggleParticles()"><span>Streamline vento</span><span class="dot"></span></div>
+      <div class="toggle" id="btn-vectors" onclick="toggleWindVectors()"><span>Vettori vento</span><span class="dot"></span></div>
+      <div class="toggle" id="btn-iso" onclick="toggleIsobars()"><span>Isobare + A/B</span><span class="dot"></span></div>
+      <div class="toggle" id="btn-raw" onclick="toggleRawGrid()"><span>Griglia raw</span><span class="dot"></span></div>
     </div>
   </div>
 
@@ -703,6 +780,7 @@
 
   <div id="map"></div>
   <canvas id="particle-canvas"></canvas>
+  <canvas id="vector-canvas"></canvas>
 
   <div id="bottom-bar" class="glass">
     <button id="play-btn" onclick="togglePlay()">►</button>
@@ -770,21 +848,31 @@
   ];
 
   const PRESS_STOPS = [
-    {v:980, c:[0,85,150], a:0.78},
-    {v:995, c:[70,145,190], a:0.78},
-    {v:1013, c:[220,220,220], a:0.72},
-    {v:1025, c:[215,155,70], a:0.78},
-    {v:1040, c:[155,80,35], a:0.84}
+    {v:980, c:[0,85,150], a:0.62},
+    {v:995, c:[70,145,190], a:0.66},
+    {v:1013, c:[220,220,220], a:0.54},
+    {v:1025, c:[215,155,70], a:0.62},
+    {v:1040, c:[155,80,35], a:0.68}
   ];
 
   const LAYER_INFO = {
-    temp: {label:"Temperatura", unit:"°C", stops:TEMP_STOPS, decimals:1, ticks:[-10,0,10,20,30,40]},
+    temp: {label:"Temperatura 2 m", unit:"°C", stops:TEMP_STOPS, decimals:1, ticks:[-10,0,10,20,30,40]},
     feels: {label:"Temperatura percepita", unit:"°C", stops:TEMP_STOPS, decimals:1, ticks:[-10,0,10,20,30,40]},
     wind: {label:"Vento 10 m", unit:"km/h", stops:WIND_BG_STOPS, decimals:0, ticks:[0,10,25,45,70,100,130]},
     rain: {label:"Precipitazioni", unit:"mm", stops:RAIN_STOPS, decimals:1, ticks:[0.1,1,5,10,20,40,80]},
     cloud: {label:"Nuvolosità", unit:"%", stops:CLOUD_STOPS, decimals:0, ticks:[0,25,50,75,100]},
     rh: {label:"Umidità relativa", unit:"%", stops:RH_STOPS, decimals:0, ticks:[0,40,60,80,100]},
     press: {label:"Pressione al suolo", unit:"hPa", stops:PRESS_STOPS, decimals:0, ticks:[980,995,1013,1025,1040]}
+  };
+
+  const LAYER_VISUALS = {
+    temp: {weatherOpacity:0.90, reliefOpacity:0.15},
+    feels: {weatherOpacity:0.90, reliefOpacity:0.15},
+    wind: {weatherOpacity:0.86, reliefOpacity:0.12},
+    rain: {weatherOpacity:0.95, reliefOpacity:0.07},
+    cloud: {weatherOpacity:0.80, reliefOpacity:0.08},
+    rh: {weatherOpacity:0.85, reliefOpacity:0.13},
+    press: {weatherOpacity:0.70, reliefOpacity:0.18}
   };
 
   const PARTICLE_VISUAL = {
@@ -794,16 +882,6 @@
     fade: 0.88,
     minLife: 55,
     maxLife: 130
-  };
-
-  const LAYER_VISUALS = {
-    temp: {weatherOpacity:0.90, reliefOpacity:0.16},
-    feels: {weatherOpacity:0.90, reliefOpacity:0.16},
-    wind: {weatherOpacity:0.88, reliefOpacity:0.14},
-    rain: {weatherOpacity:0.95, reliefOpacity:0.08},
-    cloud: {weatherOpacity:0.82, reliefOpacity:0.08},
-    rh: {weatherOpacity:0.86, reliefOpacity:0.14},
-    press: {weatherOpacity:0.80, reliefOpacity:0.18}
   };
 
   function getGrid(field) {
@@ -844,6 +922,16 @@
     return [...stops[stops.length - 1].c, (stops[stops.length - 1].a ?? 0.86)];
   }
 
+  function getNearest(arr, gx, gy, nx, ny) {
+    arr = getGrid(arr);
+    if (!arr) return NaN;
+
+    const x = clamp(Math.round(gx), 0, nx - 1);
+    const y = clamp(Math.round(gy), 0, ny - 1);
+
+    return arr[y * nx + x];
+  }
+
   function getBilinear(arr, gx, gy, nx, ny) {
     arr = getGrid(arr);
     if (!arr) return NaN;
@@ -871,9 +959,9 @@
   let activeLayer = "temp";
   let showIsobars = false;
   let showParticles = false;
+  let showWindVectors = false;
   let showRawGrid = false;
   let isMapMoving = false;
-  let playbackSpeed = 1;
   let playbackDelay = 1150;
 
   const dataCache = new Map();
@@ -884,6 +972,9 @@
 
   const pCanvas = document.getElementById("particle-canvas");
   const pCtx = pCanvas.getContext("2d", { alpha: true });
+
+  const vCanvas = document.getElementById("vector-canvas");
+  const vCtx = vCanvas.getContext("2d", { alpha: true });
 
   let particles = [];
   let particleTarget = 1600;
@@ -897,6 +988,7 @@
     window.addEventListener("resize", () => {
       resizeCanvas();
       particles.forEach(p => p.age = 999);
+      renderWindVectors();
     });
 
     map = new maplibregl.Map({
@@ -943,9 +1035,7 @@
           {
             id: "background",
             type: "background",
-            paint: {
-              "background-color": "#05080d"
-            }
+            paint: { "background-color": "#04070c" }
           },
           {
             id: "carto-dark-layer",
@@ -956,7 +1046,7 @@
               "raster-saturation": -0.45,
               "raster-contrast": 0.20,
               "raster-brightness-min": 0,
-              "raster-brightness-max": 0.58
+              "raster-brightness-max": 0.56
             }
           },
           {
@@ -1000,7 +1090,7 @@
         type: "raster",
         source: "world-hillshade",
         paint: {
-          "raster-opacity": 0.16,
+          "raster-opacity": 0.15,
           "raster-contrast": 0.48,
           "raster-brightness-min": 0.08,
           "raster-brightness-max": 0.72,
@@ -1012,9 +1102,7 @@
         id: "carto-labels-layer",
         type: "raster",
         source: "carto-labels",
-        paint: {
-          "raster-opacity": 0.58
-        }
+        paint: { "raster-opacity": 0.54 }
       });
 
       map.addSource("italy-borders", {
@@ -1028,8 +1116,8 @@
         source: "italy-borders",
         paint: {
           "line-color": "#ffffff",
-          "line-width": ["interpolate", ["linear"], ["zoom"], 4, 0.45, 8, 1.05],
-          "line-opacity": 0.34
+          "line-width": ["interpolate", ["linear"], ["zoom"], 4, 0.38, 8, 0.95],
+          "line-opacity": 0.28
         }
       });
 
@@ -1049,9 +1137,9 @@
         source: "isobars-source",
         layout: { "visibility": "none" },
         paint: {
-          "line-color": "#ffffff",
-          "line-width": ["case", ["==", ["%", ["to-number", ["get", "value"]], 4], 0], 1.65, 0.72],
-          "line-opacity": ["case", ["==", ["%", ["to-number", ["get", "value"]], 4], 0], 0.82, 0.42]
+          "line-color": "#f4f7fb",
+          "line-width": ["case", ["==", ["%", ["to-number", ["get", "value"]], 4], 0], 1.55, 0.68],
+          "line-opacity": ["case", ["==", ["%", ["to-number", ["get", "value"]], 4], 0], 0.86, 0.42]
         }
       });
 
@@ -1069,8 +1157,8 @@
         },
         paint: {
           "text-color": "#ffffff",
-          "text-halo-color": "rgba(0,0,0,0.85)",
-          "text-halo-width": 1.5
+          "text-halo-color": "rgba(0,0,0,0.88)",
+          "text-halo-width": 1.6
         }
       });
 
@@ -1082,29 +1170,32 @@
           "visibility": "none",
           "text-field": ["get", "label"],
           "text-font": ["Open Sans Bold", "Arial Unicode MS Bold"],
-          "text-size": ["interpolate", ["linear"], ["zoom"], 4, 26, 8, 38],
+          "text-size": ["interpolate", ["linear"], ["zoom"], 4, 25, 8, 38],
           "text-allow-overlap": false,
           "text-ignore-placement": false
         },
         paint: {
           "text-color": ["match", ["get", "type"], "H", "#ff5555", "L", "#48a2ff", "#ffffff"],
-          "text-halo-color": "rgba(0,0,0,0.75)",
-          "text-halo-width": 2.5
+          "text-halo-color": "rgba(0,0,0,0.78)",
+          "text-halo-width": 2.7
         }
       });
 
       map.on("movestart", () => {
         isMapMoving = true;
         particles.forEach(p => p.age = 999);
+        clearVectorCanvas();
       });
 
       map.on("move", () => {
         pCtx.clearRect(0, 0, window.innerWidth, window.innerHeight);
+        clearVectorCanvas();
       });
 
       map.on("moveend", () => {
         isMapMoving = false;
         particles.forEach(p => p.age = 999);
+        renderWindVectors();
       });
 
       map.on("click", handleMapClick);
@@ -1123,8 +1214,13 @@
     pCanvas.height = Math.round(window.innerHeight * dpr);
     pCanvas.style.width = window.innerWidth + "px";
     pCanvas.style.height = window.innerHeight + "px";
-
     pCtx.setTransform(dpr, 0, 0, dpr, 0, 0);
+
+    vCanvas.width = Math.round(window.innerWidth * dpr);
+    vCanvas.height = Math.round(window.innerHeight * dpr);
+    vCanvas.style.width = window.innerWidth + "px";
+    vCanvas.style.height = window.innerHeight + "px";
+    vCtx.setTransform(dpr, 0, 0, dpr, 0, 0);
 
     const area = window.innerWidth * window.innerHeight;
 
@@ -1155,6 +1251,18 @@
     );
   }
 
+  function getRunLabel(i) {
+    const item = catalog[i] || {};
+
+    return item.run ||
+           item.model_run ||
+           item.init ||
+           item.init_time ||
+           item.base_time ||
+           item.cycle ||
+           "n/d";
+  }
+
   function formatCatalogLabel(i) {
     const item = catalog[i];
     const dt = parseCatalogDate(item);
@@ -1181,6 +1289,7 @@
     const label = catalog[i]?.label || "--";
     document.getElementById("valid-time").innerText = label;
     document.getElementById("time-label").innerText = formatCatalogLabel(i);
+    document.getElementById("model-run").innerText = getRunLabel(i);
 
     const firstDt = parseCatalogDate(catalog[0]);
     const dt = parseCatalogDate(catalog[i]);
@@ -1210,6 +1319,7 @@
         catalog.forEach((item, idx) => {
           const dt = parseCatalogDate(item);
           if (!dt) return;
+
           const diff = Math.abs(now - dt);
 
           if (diff < minDiff) {
@@ -1435,6 +1545,7 @@
       updateIsobars();
       updateBtns();
       updateLegend();
+      renderWindVectors();
 
       particles.forEach(p => p.age = 999);
 
@@ -1543,30 +1654,69 @@
         [left, bottomLat]
       ]
     });
+
+    document.getElementById("active-layer-label").innerText = info.label;
+    document.getElementById("field-unit").innerText = info.unit;
+    document.getElementById("sampling-mode").innerText = showRawGrid ? "nearest" : "bilinear";
+    document.getElementById("scientific-sampling").innerText = showRawGrid ? "cella modello più vicina" : "interpolazione bilineare";
   }
 
   function getLayerValue(layer, gx, gy) {
     if (!currentData) return NaN;
 
     const m = currentData.meta;
+    const sampler = showRawGrid ? getNearest : getBilinear;
 
     if (layer === "wind") {
-      const u = getBilinear(currentData.wind_u, gx, gy, m.nx, m.ny);
-      const v = getBilinear(currentData.wind_v, gx, gy, m.nx, m.ny);
+      const u = sampler(currentData.wind_u, gx, gy, m.nx, m.ny);
+      const v = sampler(currentData.wind_v, gx, gy, m.nx, m.ny);
       return Math.sqrt(u * u + v * v) * 3.6;
     }
 
     const key = layer === "feels" ? "feels_like" : layer;
-    return getBilinear(currentData[key], gx, gy, m.nx, m.ny);
+    return sampler(currentData[key], gx, gy, m.nx, m.ny);
+  }
+
+  function getWindUV(gx, gy) {
+    if (!currentData || !currentData.wind_u || !currentData.wind_v) {
+      return {u:NaN, v:NaN};
+    }
+
+    const m = currentData.meta;
+    const sampler = showRawGrid ? getNearest : getBilinear;
+
+    return {
+      u: sampler(currentData.wind_u, gx, gy, m.nx, m.ny),
+      v: sampler(currentData.wind_v, gx, gy, m.nx, m.ny)
+    };
+  }
+
+  function windDirectionDegrees(u, v) {
+    if (!Number.isFinite(u) || !Number.isFinite(v)) return NaN;
+    return (Math.atan2(u, v) * 180 / Math.PI + 180 + 360) % 360;
+  }
+
+  function compassFromDegrees(deg) {
+    if (!Number.isFinite(deg)) return "--";
+
+    const dirs = ["N","NNE","NE","ENE","E","ESE","SE","SSE","S","SSW","SW","WSW","W","WNW","NW","NNW"];
+    const idx = Math.round(deg / 22.5) % 16;
+
+    return dirs[idx];
   }
 
   function getAllPointValues(gx, gy) {
+    const uv = getWindUV(gx, gy);
+    const wdir = windDirectionDegrees(uv.u, uv.v);
+
     return {
       temp: getLayerValue("temp", gx, gy),
       feels: getLayerValue("feels", gx, gy),
       rain: getLayerValue("rain", gx, gy),
       wind: getLayerValue("wind", gx, gy),
+      wdir,
       rh: getLayerValue("rh", gx, gy),
+      cloud: getLayerValue("cloud", gx, gy),
       press: getLayerValue("press", gx, gy)
     };
   }
@@ -1574,6 +1724,11 @@
   function fmt(value, decimals, unit) {
     if (!Number.isFinite(value)) return "--";
     return `${value.toFixed(decimals)} ${unit}`;
+  }
+
+  function fmtWindDir(deg) {
+    if (!Number.isFinite(deg)) return "--";
+    return `${Math.round(deg)}° ${compassFromDegrees(deg)}`;
   }
 
   function handleMapClick(e) {
@@ -1586,20 +1741,22 @@
     if (gx >= 0 && gy >= 0 && gx < m.nx && gy < m.ny) {
       const val = getLayerValue(activeLayer, gx, gy);
       const info = LAYER_INFO[activeLayer];
-      const decimals = info.decimals ?? 1;
       const all = getAllPointValues(gx, gy);
 
       document.getElementById("info-box").classList.add("active");
       document.getElementById("readout-name").innerText = info.label;
-      document.getElementById("val-display").innerText = Number.isFinite(val) ? val.toFixed(decimals) : "--";
+      document.getElementById("val-display").innerText = Number.isFinite(val) ? val.toFixed(info.decimals) : "--";
       document.getElementById("unit-display").innerText = info.unit;
       document.getElementById("coord-display").innerText = `${e.lngLat.lat.toFixed(3)}°, ${e.lngLat.lng.toFixed(3)}°`;
+      document.getElementById("sampling-display").innerText = showRawGrid ? "Sampling: cella modello più vicina" : "Sampling: interpolazione bilineare";
 
       document.getElementById("detail-temp").innerText = fmt(all.temp, 1, "°C");
       document.getElementById("detail-feels").innerText = fmt(all.feels, 1, "°C");
       document.getElementById("detail-rain").innerText = fmt(all.rain, 1, "mm");
       document.getElementById("detail-wind").innerText = fmt(all.wind, 0, "km/h");
+      document.getElementById("detail-wdir").innerText = fmtWindDir(all.wdir);
       document.getElementById("detail-rh").innerText = fmt(all.rh, 0, "%");
+      document.getElementById("detail-cloud").innerText = fmt(all.cloud, 0, "%");
       document.getElementById("detail-press").innerText = fmt(all.press, 0, "hPa");
     }
   }
@@ -1614,9 +1771,15 @@
     if (gx >= 0 && gy >= 0 && gx < m.nx && gy < m.ny) {
       const info = LAYER_INFO[activeLayer];
       const val = getLayerValue(activeLayer, gx, gy);
-      const text = Number.isFinite(val)
+      const all = getAllPointValues(gx, gy);
+
+      let text = Number.isFinite(val)
         ? `${info.label}: ${val.toFixed(info.decimals)} ${info.unit}`
         : `${info.label}: --`;
+
+      if (activeLayer === "wind") {
+        text += ` · da ${fmtWindDir(all.wdir)}`;
+      }
 
       const box = document.getElementById("hover-box");
       box.innerText = text;
@@ -1848,6 +2011,81 @@
     animFrame = requestAnimationFrame(animateParticles);
   }
 
+  function clearVectorCanvas() {
+    vCtx.clearRect(0, 0, window.innerWidth, window.innerHeight);
+  }
+
+  function renderWindVectors() {
+    clearVectorCanvas();
+
+    if (!showWindVectors || !currentData || !currentData.wind_u || !currentData.wind_v || !map) return;
+
+    const bounds = map.getBounds();
+    const m = currentData.meta;
+    const spacing = window.innerWidth < 760 ? 82 : 72;
+    const arrowMax = 28;
+    const arrowMin = 8;
+
+    vCtx.save();
+    vCtx.globalCompositeOperation = "source-over";
+    vCtx.lineCap = "round";
+    vCtx.lineJoin = "round";
+
+    for (let sy = 70; sy < window.innerHeight - 70; sy += spacing) {
+      for (let sx = 45; sx < window.innerWidth - 45; sx += spacing) {
+        const ll = map.unproject([sx, sy]);
+
+        if (!bounds.contains(ll)) continue;
+
+        const gx = (ll.lng - m.lo1) / m.dx;
+        const gy = (m.la1 - ll.lat) / m.dy;
+
+        if (gx < 0 || gy < 0 || gx >= m.nx - 1 || gy >= m.ny - 1) continue;
+
+        const u = getBilinear(currentData.wind_u, gx, gy, m.nx, m.ny);
+        const v = getBilinear(currentData.wind_v, gx, gy, m.nx, m.ny);
+
+        const speedMs = Math.sqrt(u * u + v * v);
+        const speedKmh = speedMs * 3.6;
+
+        if (!Number.isFinite(speedKmh) || speedKmh < 2) continue;
+
+        const len = clamp(speedKmh / 4, arrowMin, arrowMax);
+        const angle = Math.atan2(u, -v);
+
+        const ex = sx + Math.sin(angle) * len;
+        const ey = sy - Math.cos(angle) * len;
+
+        const color =
+          activeLayer === "wind"
+            ? getParticleStyle(speedKmh).color
+            : "rgba(235,245,255,0.72)";
+
+        vCtx.strokeStyle = color;
+        vCtx.fillStyle = color;
+        vCtx.lineWidth = speedKmh < 30 ? 1.1 : speedKmh < 70 ? 1.55 : 2.1;
+
+        vCtx.beginPath();
+        vCtx.moveTo(sx, sy);
+        vCtx.lineTo(ex, ey);
+        vCtx.stroke();
+
+        const head = clamp(len * 0.32, 4, 8);
+        const leftA = angle + Math.PI * 0.78;
+        const rightA = angle - Math.PI * 0.78;
+
+        vCtx.beginPath();
+        vCtx.moveTo(ex, ey);
+        vCtx.lineTo(ex + Math.sin(leftA) * head, ey - Math.cos(leftA) * head);
+        vCtx.lineTo(ex + Math.sin(rightA) * head, ey - Math.cos(rightA) * head);
+        vCtx.closePath();
+        vCtx.fill();
+      }
+    }
+
+    vCtx.restore();
+  }
+
   function updateIsobars() {
     if (!currentData || !map || !map.getSource("isobars-source")) return;
 
@@ -1880,6 +2118,7 @@
     document.getElementById("legend-title").innerText = info.label;
     document.getElementById("legend-unit").innerText = info.unit;
     document.getElementById("active-layer-label").innerText = info.label;
+    document.getElementById("field-unit").innerText = info.unit;
 
     const stops = info.stops;
     const min = stops[0].v;
@@ -1941,14 +2180,14 @@
         document.getElementById("gps-tf").innerText = fmt(all.feels, 1, "°");
         document.getElementById("gps-r").innerText = fmt(all.rain, 1, "mm");
         document.getElementById("gps-w").innerText = fmt(all.wind, 0, "km/h");
-        document.getElementById("gps-h").innerText = fmt(all.rh, 0, "%");
+        document.getElementById("gps-wd").innerText = fmtWindDir(all.wdir);
         document.getElementById("gps-p").innerText = fmt(all.press, 0, "hPa");
       } else {
         document.getElementById("gps-t").innerText = "Fuori";
         document.getElementById("gps-tf").innerText = "Area";
         document.getElementById("gps-r").innerText = "--";
         document.getElementById("gps-w").innerText = "--";
-        document.getElementById("gps-h").innerText = "--";
+        document.getElementById("gps-wd").innerText = "--";
         document.getElementById("gps-p").innerText = "--";
       }
     }, () => {
@@ -1970,9 +2209,16 @@
 
     activeLayer = layer;
 
-    if (layer === "wind" && !showParticles) {
-      showParticles = true;
-      initParticles();
+    if (layer === "wind") {
+      if (!showParticles) {
+        showParticles = true;
+        initParticles();
+      }
+
+      if (!showWindVectors) {
+        showWindVectors = true;
+        renderWindVectors();
+      }
     }
 
     if (layer === "press" && !showIsobars) {
@@ -1983,6 +2229,7 @@
     updateGPULayer();
     updateBtns();
     updateLegend();
+    renderWindVectors();
   };
 
   window.toggleParticles = () => {
@@ -1996,6 +2243,18 @@
       if (animFrame) {
         cancelAnimationFrame(animFrame);
       }
+    }
+
+    updateBtns();
+  };
+
+  window.toggleWindVectors = () => {
+    showWindVectors = !showWindVectors;
+
+    if (showWindVectors) {
+      renderWindVectors();
+    } else {
+      clearVectorCanvas();
     }
 
     updateBtns();
@@ -2019,7 +2278,11 @@
       );
     }
 
+    document.getElementById("sampling-mode").innerText = showRawGrid ? "nearest" : "bilinear";
+    document.getElementById("scientific-sampling").innerText = showRawGrid ? "cella modello più vicina" : "interpolazione bilineare";
+
     updateBtns();
+    renderWindVectors();
   };
 
   window.toggleCleanMode = () => {
@@ -2029,7 +2292,6 @@
   };
 
   window.setPlaybackSpeed = (speed) => {
-    playbackSpeed = speed;
     playbackDelay = speed === 1 ? 1150 : speed === 2 ? 650 : 350;
 
     document.querySelectorAll(".speed-btn").forEach(btn => btn.classList.remove("active"));
@@ -2056,6 +2318,7 @@
     }
 
     document.getElementById("btn-flow")?.classList.toggle("active", showParticles);
+    document.getElementById("btn-vectors")?.classList.toggle("active", showWindVectors);
     document.getElementById("btn-iso")?.classList.toggle("active", showIsobars);
     document.getElementById("btn-raw")?.classList.toggle("active", showRawGrid);
   }
