@@ -1,1109 +1,1339 @@
 <!DOCTYPE html>
 <html lang="it">
-<testa>
-  <meta charset="utf-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
-  <meta name="theme-color" content="#f5f7fa" />
-  <title>Italia MeteoHub Pro â€— Synoptic Light</title>
+<head>
+  <meta charset="utf-8">
+  <meta
+    name="viewport"
+    content="width=device-width, initial-scale=1, viewport-fit=cover"
+  >
+  <meta name="theme-color" content="#f5f7fa">
+
+  <title>Italia MeteoHub Pro - Synoptic Light</title>
+
+  <link
+    rel="stylesheet"
+    href="https://unpkg.com/maplibre-gl@3.6.2/dist/maplibre-gl.css"
+  >
 
   <script src="https://unpkg.com/maplibre-gl@3.6.2/dist/maplibre-gl.js"></script>
-  <link rel="stylesheet" href="https://unpkg.com/maplibre-gl@3.6.2/dist/maplibre-gl.css" />
   <script src="https://d3js.org/d3.v7.min.js"></script>
 
   <style>
-    :radice {
-      --inchiostro: #111827;
-      --muto: #5f6b78;
-      --linea: rgba(17, 24, 39, 0.16);
+    :root {
+      --ink: #111827;
+      --muted: #5f6b78;
+      --line: rgba(17, 24, 39, 0.16);
       --line-strong: rgba(17, 24, 39, 0.28);
       --paper: rgba(255, 255, 255, 0.91);
       --paper-strong: rgba(255, 255, 255, 0.97);
-      --accento: #0b66d4;
+      --accent: #0b66d4;
       --accent-dark: #084a9a;
-      --ombra: 0 14px 38px rgba(15, 23, 42, 0.20);
-      --raggio: 16px;
+      --shadow: 0 14px 38px rgba(15, 23, 42, 0.20);
+      --radius: 16px;
       --top-safe: env(safe-area-inset-top, 0px);
       --bottom-safe: env(safe-area-inset-bottom, 0px);
     }
 
     * {
       box-sizing: border-box;
-      -webkit-tap-highlight-color: trasparente;
+      -webkit-tap-highlight-color: transparent;
     }
 
     html,
-    corpo {
-      margine: 0;
-      larghezza: 100%;
-      altezza: 100%;
-      overflow: nascosto;
-      comportamento di scorrimento eccessivo: nessuno;
-      sfondo: #edf1f5;
-      colore: var(--inchiostro);
-      font-family: Inter, "Segoe UI", Roboto, system-ui, -apple-system, BlinkMacSystemFont, sans-serif;
+    body {
+      margin: 0;
+      width: 100%;
+      height: 100%;
+      overflow: hidden;
+      overscroll-behavior: none;
+      background: #edf1f5;
+      color: var(--ink);
+      font-family:
+        Inter,
+        "Segoe UI",
+        Roboto,
+        system-ui,
+        -apple-system,
+        BlinkMacSystemFont,
+        sans-serif;
       -webkit-font-smoothing: antialiased;
     }
 
-    pulsante,
-    input {
-      font: eredita;
+    button,
+    input,
+    select {
+      font: inherit;
     }
 
-    pulsante {
-      bordo: 0;
+    button {
+      border: 0;
     }
 
-    #mappa {
-      posizione: fissa;
-      riquadro: 0;
+    #map {
+      position: fixed;
+      inset: 0;
       z-index: 1;
-      larghezza: 100vw;
-      altezza: 100dvh;
-      sfondo: #edf1f5;
+      width: 100vw;
+      height: 100dvh;
+      background: #edf1f5;
     }
 
     #wind-canvas {
-      posizione: fissa;
-      riquadro: 0;
+      position: fixed;
+      inset: 0;
       z-index: 20;
-      larghezza: 100vw;
-      altezza: 100dvh;
-      eventi puntatore: nessuno;
+      width: 100vw;
+      height: 100dvh;
+      pointer-events: none;
     }
 
-    .bicchiere {
-      sfondo: var(--paper);
-      bordo: 1px solido rgba(17, 24, 39, 0.13);
+    .glass {
+      background: var(--paper);
+      border: 1px solid rgba(17, 24, 39, 0.13);
       box-shadow: var(--shadow);
-      background-filter: blur(17px) saturate(135%);
+      backdrop-filter: blur(17px) saturate(135%);
       -webkit-backdrop-filter: blur(17px) saturate(135%);
     }
 
-    #barra superiore {
-      posizione: fissa;
+    #topbar {
+      position: fixed;
       top: calc(var(--top-safe) + 10px);
-      sinistra: 10px;
-      destra: 10px;
+      left: 10px;
+      right: 10px;
       z-index: 5000;
-      altezza minima: 56px;
-      spaziatura interna: 8px 9px;
+      min-height: 56px;
+      padding: 8px 9px;
       display: flex;
-      allinea gli elementi: centrato;
-      giustifica il contenuto: spazio tra;
-      spazio: 10px;
-      bordo-raggio: 18px;
+      align-items: center;
+      justify-content: space-between;
+      gap: 10px;
+      border-radius: 18px;
     }
 
     #brand-wrap {
-      larghezza minima: 0;
+      min-width: 0;
       display: flex;
-      allinea gli elementi: centrato;
-      spazio: 10px;
+      align-items: center;
+      gap: 10px;
     }
 
-    #marchio-marchio {
-      larghezza: 38px;
-      altezza: 38px;
+    #brand-mark {
+      width: 38px;
+      height: 38px;
       flex: 0 0 auto;
-      visualizzazione: griglia;
-      posiziona-gli elementi: centro;
-      colore: #fff;
+      display: grid;
+      place-items: center;
+      color: #ffffff;
       font-weight: 950;
-      bordo-raggio: 12px;
-      sfondo: gradiente lineare(145 gradi, #0c6fdd, #083f89);
+      border-radius: 12px;
+      background: linear-gradient(145deg, #0c6fdd, #083f89);
       box-shadow: 0 7px 18px rgba(11, 102, 212, 0.28);
     }
 
     #brand-copy {
-      larghezza minima: 0;
+      min-width: 0;
     }
 
     #brand-title {
-      dimensione del carattere: 14px;
+      font-size: 14px;
       font-weight: 950;
-      spaziatura tra le lettere: 0,055em;
-      trasformazione testo: maiuscolo;
-      spazio bianco: nowrap;
-      overflow: nascosto;
-      testo in eccesso: puntini di sospensione;
+      letter-spacing: 0.055em;
+      text-transform: uppercase;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
     }
 
     #brand-meta {
-      margine superiore: 2px;
-      colore: var(--muted);
-      dimensione del carattere: 10,5px;
+      margin-top: 2px;
+      color: var(--muted);
+      font-size: 10.5px;
       font-weight: 750;
-      spazio bianco: nowrap;
-      overflow: nascosto;
-      testo in eccesso: puntini di sospensione;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
     }
 
-    #azioni-principali {
+    #top-actions {
       display: flex;
-      allinea gli elementi: centrato;
-      spazio: 7px;
+      align-items: center;
+      gap: 7px;
       flex: 0 0 auto;
     }
 
     .icon-btn {
-      larghezza: 39px;
-      altezza: 39px;
-      visualizzazione: griglia;
-      posiziona-gli elementi: centro;
-      bordo-raggio: 12px;
-      colore: var(--inchiostro);
-      sfondo: rgba(17, 24, 39, 0.055);
-      bordo: 1px solido rgba(17, 24, 39, 0.10);
-      cursore: puntatore;
-      dimensione del carattere: 17px;
+      min-width: 39px;
+      height: 39px;
+      padding: 0 9px;
+      display: grid;
+      place-items: center;
+      border-radius: 12px;
+      color: var(--ink);
+      background: rgba(17, 24, 39, 0.055);
+      border: 1px solid rgba(17, 24, 39, 0.10);
+      cursor: pointer;
+      font-size: 11px;
       font-weight: 900;
     }
 
     .icon-btn:active {
-      trasforma: scala(0,97);
+      transform: scale(0.97);
     }
 
-    #cassetto {
-      posizione: fissa;
+    #drawer {
+      position: fixed;
       top: calc(var(--top-safe) + 77px);
-      destra: 12px;
-      fondo: calc(var(--bottom-safe) + 91px);
+      right: 12px;
+      bottom: calc(var(--bottom-safe) + 91px);
       z-index: 4700;
-      larghezza: 276px;
+      width: 276px;
       overflow-y: auto;
-      spaziatura interna: 11px;
-      bordo-raggio: 18px;
-      larghezza della barra di scorrimento: nessuna;
-      transizione: trasformazione 0,25s ease, opacità 0,25s ease;
+      padding: 11px;
+      border-radius: 18px;
+      scrollbar-width: none;
+      transition:
+        transform 0.25s ease,
+        opacity 0.25s ease;
     }
 
     #drawer::-webkit-scrollbar {
-      display: nessuno;
+      display: none;
     }
 
-    #cassetto chiuso {
-      trasforma: traslaX(calcola(100% + 26px));
-      opacità: 0;
-      eventi puntatore: nessuno;
+    #drawer.closed {
+      transform: translateX(calc(100% + 26px));
+      opacity: 0;
+      pointer-events: none;
     }
 
-    .titolo-del-drawer {
-      spaziatura interna: 3px 6px 8px;
-      colore: var(--muted);
-      dimensione del carattere: 10px;
+    .drawer-title {
+      padding: 3px 6px 8px;
+      color: var(--muted);
+      font-size: 10px;
       font-weight: 950;
-      spaziatura tra le lettere: 0,095em;
-      trasformazione testo: maiuscolo;
+      letter-spacing: 0.095em;
+      text-transform: uppercase;
     }
 
     .layer-btn,
     .option-btn,
     .gps-btn {
-      larghezza: 100%;
-      altezza minima: 44px;
-      margine: 4px 0;
-      spaziatura interna: 10px 11px;
+      width: 100%;
+      min-height: 44px;
+      margin: 4px 0;
+      padding: 10px 11px;
       display: flex;
-      allinea gli elementi: centrato;
-      giustifica il contenuto: spazio tra;
-      spazio: 10px;
-      bordo-raggio: 12px;
-      colore: #273241;
-      sfondo: rgba(17, 24, 39, 0.045);
-      bordo: 1px solido rgba(17, 24, 39, 0.085);
-      cursore: puntatore;
-      dimensione del carattere: 12px;
+      align-items: center;
+      justify-content: space-between;
+      gap: 10px;
+      border-radius: 12px;
+      color: #273241;
+      background: rgba(17, 24, 39, 0.045);
+      border: 1px solid rgba(17, 24, 39, 0.085);
+      cursor: pointer;
+      font-size: 12px;
       font-weight: 850;
-      allineamento testo: a sinistra;
+      text-align: left;
     }
 
     .layer-btn.active,
     .option-btn.active {
-      colore: #fff;
-      sfondo: gradiente lineare(135 gradi, #0b66d4, #1882ef);
+      color: #ffffff;
+      background: linear-gradient(135deg, #0b66d4, #1882ef);
       border-color: rgba(8, 74, 154, 0.34);
       box-shadow: 0 8px 20px rgba(11, 102, 212, 0.22);
     }
 
     .layer-btn.disabled {
-      opacità: 0,36;
-      eventi puntatore: nessuno;
+      opacity: 0.36;
+      pointer-events: none;
     }
 
     .layer-dot {
-      larghezza: 10px;
-      altezza: 10px;
+      width: 10px;
+      height: 10px;
       flex: 0 0 auto;
-      raggio del bordo: 50%;
-      sfondo: rgba(17, 24, 39, 0.18);
+      border-radius: 50%;
+      background: rgba(17, 24, 39, 0.18);
       box-shadow: 0 0 0 4px rgba(17, 24, 39, 0.04);
     }
 
     .layer-btn.active .layer-dot,
     .option-btn.active .layer-dot {
-      sfondo: #fff;
+      background: #ffffff;
       box-shadow: 0 0 0 4px rgba(255, 255, 255, 0.20);
     }
 
     .gps-btn {
-      giustifica il contenuto: centrato;
-      colore: #fff;
-      sfondo: gradiente lineare (135 gradi, #168a4d, #22b764);
+      justify-content: center;
+      color: #ffffff;
+      background: linear-gradient(135deg, #168a4d, #22b764);
       border-color: rgba(9, 103, 52, 0.28);
       box-shadow: 0 9px 24px rgba(22, 138, 77, 0.20);
     }
 
-    .separatore-drawer {
-      altezza: 1px;
-      margine: 10px 2px;
-      sfondo: rgba(17, 24, 39, 0.10);
+    .drawer-separator {
+      height: 1px;
+      margin: 10px 2px;
+      background: rgba(17, 24, 39, 0.10);
     }
 
-    #leggenda {
-      posizione: fissa;
-      sinistra: 10px;
+    #legend {
+      position: fixed;
+      left: 10px;
       top: calc(var(--top-safe) + 82px);
-      fondo: calc(var(--bottom-safe) + 96px);
+      bottom: calc(var(--bottom-safe) + 96px);
       z-index: 4500;
-      larghezza: 66px;
-      altezza minima: 330px;
-      spaziatura interna: 9px 8px 8px;
+      width: 66px;
+      min-height: 330px;
+      padding: 9px 8px 8px;
       display: flex;
       flex-direction: column;
-      bordo-raggio: 15px;
-      eventi puntatore: nessuno;
+      border-radius: 15px;
+      pointer-events: none;
     }
 
     #legend-title {
-      dimensione del carattere: 9px;
-      altezza riga: 1,12;
+      font-size: 9px;
+      line-height: 1.12;
       font-weight: 950;
-      allineamento testo: centrato;
-      trasformazione testo: maiuscolo;
-      spaziatura tra le lettere: 0,04em;
+      text-align: center;
+      text-transform: uppercase;
+      letter-spacing: 0.04em;
     }
 
     #legend-unit {
-      margine superiore: 3px;
-      colore: var(--muted);
-      dimensione del carattere: 9px;
+      margin-top: 3px;
+      color: var(--muted);
+      font-size: 9px;
       font-weight: 850;
-      allineamento testo: centrato;
+      text-align: center;
     }
 
-    #corpo-leggenda {
-      posizione: relativa;
+    #legend-body {
+      position: relative;
       flex: 1 1 auto;
-      altezza minima: 245px;
-      margine superiore: 8px;
+      min-height: 245px;
+      margin-top: 8px;
     }
 
     #legend-gradient {
-      posizione: assoluta;
-      inizio: 0;
-      fondo: 0;
-      sinistra: 0;
-      larghezza: 27px;
-      bordo-raggio: 8px;
-      bordo: 1px solido rgba(17, 24, 39, 0.18);
-      background: linear-gradient(to top, #fff, #000);
-      overflow: nascosto;
+      position: absolute;
+      top: 0;
+      bottom: 0;
+      left: 0;
+      width: 27px;
+      border-radius: 8px;
+      border: 1px solid rgba(17, 24, 39, 0.18);
+      background: linear-gradient(to top, #ffffff, #000000);
+      overflow: hidden;
     }
 
-    #legenda-ticks {
-      posizione: assoluta;
-      riquadro: 0 0 0 31px;
-      font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
-      dimensione del carattere: 8,5px;
+    #legend-ticks {
+      position: absolute;
+      inset: 0 0 0 31px;
+      font-family:
+        ui-monospace,
+        SFMono-Regular,
+        Menlo,
+        Monaco,
+        Consolas,
+        monospace;
+      font-size: 8.5px;
       font-weight: 850;
-      colore: #111827;
+      color: #111827;
     }
 
     .legend-tick {
-      posizione: assoluta;
-      sinistra: 0;
-      trasforma: traslaY(50%);
-      spazio bianco: nowrap;
-      ombra del testo:
-        -1px -1px 0 rgba(255,255,255,0.92),
-         1px -1px 0 rgba(255,255,255,0.92),
-        -1px 1px 0 rgba(255,255,255,0.92),
-         1px 1px 0 rgba(255,255,255,0.92);
+      position: absolute;
+      left: 0;
+      transform: translateY(50%);
+      white-space: nowrap;
+      text-shadow:
+        -1px -1px 0 rgba(255, 255, 255, 0.92),
+         1px -1px 0 rgba(255, 255, 255, 0.92),
+        -1px  1px 0 rgba(255, 255, 255, 0.92),
+         1px  1px 0 rgba(255, 255, 255, 0.92);
     }
 
-    #nota-leggenda {
-      display: nessuno;
-      margine superiore: 6px;
-      colore: var(--muted);
-      dimensione del carattere: 7,5px;
-      altezza riga: 1,15;
-      allineamento testo: centrato;
+    #legend-note {
+      display: none;
+      margin-top: 6px;
+      color: var(--muted);
+      font-size: 7.5px;
+      line-height: 1.15;
+      text-align: center;
     }
 
     #legend.cloud-composite #legend-note {
-      visualizzazione: blocco;
+      display: block;
     }
 
-    #scheda-punto {
-      posizione: fissa;
-      sinistra: 86px;
-      fondo: calc(var(--bottom-safe) + 96px);
+    #point-card {
+      position: fixed;
+      left: 86px;
+      bottom: calc(var(--bottom-safe) + 96px);
       z-index: 4600;
-      larghezza: min(365px, calc(100vw - 380px));
-      larghezza minima: 280px;
-      spaziatura interna: 12px 13px;
-      bordo-raggio: 16px;
-      display: nessuno;
+      width: min(365px, calc(100vw - 380px));
+      min-width: 280px;
+      padding: 12px 13px;
+      border-radius: 16px;
+      display: none;
     }
 
     #point-card.active {
-      visualizzazione: blocco;
+      display: block;
     }
 
     #point-close {
-      posizione: assoluta;
-      parte superiore: 7px;
-      destra: 9px;
-      larghezza: 28px;
-      altezza: 28px;
-      visualizzazione: griglia;
-      posiziona-gli elementi: centro;
-      bordo-raggio: 9px;
-      sfondo: rgba(17, 24, 39, 0.06);
-      colore: var(--muted);
-      cursore: puntatore;
-      dimensione del carattere: 16px;
+      position: absolute;
+      top: 7px;
+      right: 9px;
+      width: 28px;
+      height: 28px;
+      display: grid;
+      place-items: center;
+      border-radius: 9px;
+      background: rgba(17, 24, 39, 0.06);
+      color: var(--muted);
+      cursor: pointer;
+      font-size: 16px;
       font-weight: 900;
     }
 
-    #etichetta-punto {
+    #point-label {
       padding-right: 28px;
-      colore: var(--muted);
-      dimensione del carattere: 9px;
+      color: var(--muted);
+      font-size: 9px;
       font-weight: 950;
-      spaziatura tra le lettere: 0,08em;
-      trasformazione testo: maiuscolo;
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
     }
 
     #point-main {
-      margine superiore: 3px;
+      margin-top: 3px;
       display: flex;
-      allinea-elementi: linea di base;
-      spazio: 6px;
+      align-items: baseline;
+      gap: 6px;
     }
 
     #point-value {
-      dimensione del carattere: 38px;
-      altezza riga: 0,95;
+      font-size: 38px;
+      line-height: 0.95;
       font-weight: 950;
       font-variant-numeric: tabular-nums;
     }
 
-    #unità-punto {
-      colore: #374151;
-      dimensione del carattere: 14px;
+    #point-unit {
+      color: #374151;
+      font-size: 14px;
       font-weight: 900;
     }
 
-    #coordinate-punto,
-    #campionamento-puntuale {
-      margine superiore: 5px;
-      colore: var(--muted);
-      font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
-      dimensione del carattere: 9,5px;
+    #point-coords,
+    #point-sampling {
+      margin-top: 5px;
+      color: var(--muted);
+      font-family:
+        ui-monospace,
+        SFMono-Regular,
+        Menlo,
+        Monaco,
+        Consolas,
+        monospace;
+      font-size: 9.5px;
     }
 
-    #griglia di punti {
-      margine superiore: 10px;
-      visualizzazione: griglia;
+    #point-grid {
+      margin-top: 10px;
+      display: grid;
       grid-template-columns: repeat(4, minmax(0, 1fr));
-      spazio: 6px;
+      gap: 6px;
     }
 
     .point-stat {
-      larghezza minima: 0;
-      spaziatura interna: 7px 7px;
-      bordo-raggio: 10px;
-      sfondo: rgba(17, 24, 39, 0.045);
-      bordo: 1px solido rgba(17, 24, 39, 0.075);
+      min-width: 0;
+      padding: 7px;
+      border-radius: 10px;
+      background: rgba(17, 24, 39, 0.045);
+      border: 1px solid rgba(17, 24, 39, 0.075);
     }
 
     .point-stat-label {
-      colore: var(--muted);
-      dimensione del carattere: 7,5px;
+      color: var(--muted);
+      font-size: 7.5px;
       font-weight: 900;
-      trasformazione testo: maiuscolo;
-      spaziatura tra le lettere: 0,04em;
+      text-transform: uppercase;
+      letter-spacing: 0.04em;
     }
 
     .point-stat-value {
-      margine superiore: 2px;
-      dimensione del carattere: 11px;
+      margin-top: 2px;
+      font-size: 11px;
       font-weight: 950;
-      spazio bianco: nowrap;
-      overflow: nascosto;
-      testo in eccesso: puntini di sospensione;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
     }
 
     #bottom-bar {
-      posizione: fissa;
-      sinistra: 10px;
-      destra: 10px;
-      fondo: calc(var(--bottom-safe) + 9px);
+      position: fixed;
+      left: 10px;
+      right: 10px;
+      bottom: calc(var(--bottom-safe) + 9px);
       z-index: 5000;
-      altezza minima: 72px;
-      spaziatura interna: 10px 12px;
-      visualizzazione: griglia;
-      grid-template-columns: auto auto minmax(110px, 1fr) auto auto auto;
-      allinea gli elementi: centrato;
-      spazio: 9px;
-      bordo-raggio: 18px;
+      min-height: 72px;
+      padding: 10px 12px;
+      display: grid;
+      grid-template-columns:
+        auto
+        auto
+        minmax(110px, 1fr)
+        auto
+        auto
+        auto;
+      align-items: center;
+      gap: 9px;
+      border-radius: 18px;
     }
 
     .time-btn {
-      larghezza: 38px;
-      altezza: 38px;
-      visualizzazione: griglia;
-      posiziona-gli elementi: centro;
-      bordo-raggio: 11px;
-      colore: var(--inchiostro);
-      sfondo: rgba(17, 24, 39, 0.055);
-      bordo: 1px solido rgba(17, 24, 39, 0.10);
-      cursore: puntatore;
-      dimensione del carattere: 18px;
+      min-width: 38px;
+      height: 38px;
+      padding: 0 8px;
+      display: grid;
+      place-items: center;
+      border-radius: 11px;
+      color: var(--ink);
+      background: rgba(17, 24, 39, 0.055);
+      border: 1px solid rgba(17, 24, 39, 0.10);
+      cursor: pointer;
+      font-size: 11px;
       font-weight: 950;
     }
 
     #play-btn {
-      colore: #fff;
-      sfondo: #0b66d4;
-      colore del bordo: #0b66d4;
+      color: #ffffff;
+      background: #0b66d4;
+      border-color: #0b66d4;
     }
 
     #time-slider {
-      larghezza: 100%;
-      larghezza minima: 100px;
+      width: 100%;
+      min-width: 100px;
       accent-color: #0b66d4;
-      cursore: puntatore;
+      cursor: pointer;
     }
 
-    #copia temporale {
-      larghezza minima: 130px;
-      allineamento testo: a destra;
+    #time-copy {
+      min-width: 130px;
+      text-align: right;
     }
 
-    #etichetta temporale {
-      dimensione del carattere: 12px;
+    #time-label {
+      font-size: 12px;
       font-weight: 950;
-      spazio bianco: nowrap;
+      white-space: nowrap;
     }
 
-    #offset-tempo {
-      margine superiore: 2px;
-      colore: var(--muted);
-      dimensione del carattere: 9,5px;
+    #time-offset {
+      margin-top: 2px;
+      color: var(--muted);
+      font-size: 9.5px;
       font-weight: 850;
-      spazio bianco: nowrap;
+      white-space: nowrap;
     }
 
     #speed-select {
-      altezza: 38px;
-      spaziatura interna: 0 10px;
-      bordo-raggio: 11px;
-      colore: var(--inchiostro);
-      sfondo: rgba(17, 24, 39, 0.055);
-      bordo: 1px solido rgba(17, 24, 39, 0.10);
-      dimensione del carattere: 11px;
+      height: 38px;
+      padding: 0 10px;
+      border-radius: 11px;
+      color: var(--ink);
+      background: rgba(17, 24, 39, 0.055);
+      border: 1px solid rgba(17, 24, 39, 0.10);
+      font-size: 11px;
       font-weight: 900;
-      schema: nessuno;
+      outline: none;
     }
 
-    #caricamento {
-      posizione: fissa;
-      massimo: 50%;
-      sinistra: 50%;
+    #loading {
+      position: fixed;
+      top: 50%;
+      left: 50%;
       z-index: 10000;
-      trasforma: trasla(-50%, -50%);
-      display: nessuno;
-      spaziatura interna: 13px 17px;
-      bordo-raggio: 14px;
-      colore: #fff;
-      sfondo: rgba(17, 24, 39, 0.93);
+      transform: translate(-50%, -50%);
+      display: none;
+      padding: 13px 17px;
+      border-radius: 14px;
+      color: #ffffff;
+      background: rgba(17, 24, 39, 0.93);
       box-shadow: 0 18px 45px rgba(15, 23, 42, 0.35);
-      dimensione del carattere: 12px;
+      font-size: 12px;
       font-weight: 900;
     }
 
-    #caricamentoattivo {
-      visualizzazione: blocco;
+    #loading.active {
+      display: block;
     }
 
-    body.clean-mode #barra superiore,
-    corpo.modalità pulizia #cassetto,
-    modalità di pulizia del corpo #leggenda,
+    body.clean-mode #topbar,
+    body.clean-mode #drawer,
+    body.clean-mode #legend,
     body.clean-mode #point-card {
-      visualizzazione: nessuna !importante;
+      display: none !important;
     }
 
     body.clean-mode #bottom-bar {
-      sinistra: 8px;
-      destra: 8px;
+      left: 8px;
+      right: 8px;
     }
 
     .maplibregl-ctrl-bottom-right {
-      fondo: 92px;
-      destra: 10px;
+      bottom: 92px;
+      right: 10px;
     }
 
     .maplibregl-ctrl-group {
-      bordo: 1px solido rgba(17, 24, 39, 0.12) !important;
+      border: 1px solid rgba(17, 24, 39, 0.12) !important;
       box-shadow: var(--shadow) !important;
-      bordo-raggio: 12px !importante;
-      overflow: nascosto;
+      border-radius: 12px !important;
+      overflow: hidden;
     }
 
     .maplibregl-ctrl-group button {
-      larghezza: 38px !important;
-      altezza: 38px !important;
+      width: 38px !important;
+      height: 38px !important;
       background-color: rgba(255, 255, 255, 0.94) !important;
     }
 
     .maplibregl-ctrl-attrib {
-      colore: #303945;
-      background: rgba(255,255,255,0.78) !important;
+      color: #303945;
+      background: rgba(255, 255, 255, 0.78) !important;
     }
 
     @media (max-width: 920px), (pointer: coarse) {
-      #barra superiore {
+      #topbar {
         top: calc(var(--top-safe) + 7px);
-        sinistra: 7px;
-        destra: 7px;
-        altezza minima: 52px;
-        spaziatura interna: 7px;
-        bordo-raggio: 16px;
+        left: 7px;
+        right: 7px;
+        min-height: 52px;
+        padding: 7px;
+        border-radius: 16px;
       }
 
-      #marchio-marchio {
-        larghezza: 35px;
-        altezza: 35px;
-        bordo-raggio: 11px;
-        dimensione del carattere: 13px;
+      #brand-mark {
+        width: 35px;
+        height: 35px;
+        border-radius: 11px;
+        font-size: 13px;
       }
 
       #brand-title {
-        dimensione del carattere: 11,5px;
+        font-size: 11.5px;
       }
 
       #brand-meta {
-        larghezza massima: 180px;
-        dimensione del carattere: 8,5px;
+        max-width: 180px;
+        font-size: 8.5px;
       }
 
       .icon-btn {
-        larghezza: 36px;
-        altezza: 36px;
-        bordo-raggio: 11px;
-        dimensione del carattere: 15px;
+        min-width: 36px;
+        height: 36px;
+        padding: 0 7px;
+        border-radius: 11px;
+        font-size: 9px;
       }
 
-      #cassetto {
-        in alto: automatico;
-        sinistra: 7px;
-        destra: 7px;
+      #drawer {
+        top: auto;
+        left: 7px;
+        right: 7px;
         bottom: calc(var(--bottom-safe) + 82px);
-        larghezza: automatica;
-        altezza massima: 56dvh;
-        spaziatura interna: 9px;
-        bordo-raggio: 17px;
-        trasforma: traslaY(0);
+        width: auto;
+        max-height: 56dvh;
+        padding: 9px;
+        border-radius: 17px;
+        transform: translateY(0);
       }
 
-      #cassetto chiuso {
-        trasforma: traslaY(calcola(100% + 100px));
+      #drawer.closed {
+        transform: translateY(calc(100% + 100px));
       }
 
       .layer-btn,
       .option-btn,
       .gps-btn {
-        altezza minima: 42px;
-        dimensione del carattere: 11,5px;
+        min-height: 42px;
+        font-size: 11.5px;
       }
 
-      #leggenda {
-        sinistra: 6px;
+      #legend {
+        left: 6px;
         top: calc(var(--top-safe) + 68px);
-        fondo: calc(var(--bottom-safe) + 83px);
-        larghezza: 57px;
-        altezza minima: 300px;
-        spaziatura interna: 7px 6px;
-        bordo-raggio: 13px;
-        sfondo: rgba(255,255,255,0.74);
+        bottom: calc(var(--bottom-safe) + 83px);
+        width: 57px;
+        min-height: 300px;
+        padding: 7px 6px;
+        border-radius: 13px;
+        background: rgba(255, 255, 255, 0.74);
       }
 
       #legend-title {
-        dimensione del carattere: 7,5px;
+        font-size: 7.5px;
       }
 
       #legend-unit {
-        dimensione del carattere: 8px;
+        font-size: 8px;
       }
 
       #legend-gradient {
-        larghezza: 23px;
+        width: 23px;
       }
 
-      #legenda-ticks {
-        sinistra: 27px;
-        dimensione del carattere: 7,5px;
+      #legend-ticks {
+        left: 27px;
+        font-size: 7.5px;
       }
 
-      #nota-leggenda {
-        dimensione del carattere: 6,5px;
+      #legend-note {
+        font-size: 6.5px;
       }
 
-      #scheda-punto {
-        sinistra: 7px;
-        destra: 7px;
+      #point-card {
+        left: 7px;
+        right: 7px;
         bottom: calc(var(--bottom-safe) + 82px);
-        larghezza: automatica;
-        larghezza minima: 0;
-        altezza massima: 38dvh;
+        width: auto;
+        min-width: 0;
+        max-height: 38dvh;
         overflow-y: auto;
-        spaziatura interna: 10px 11px;
-        bordo-raggio: 15px;
+        padding: 10px 11px;
+        border-radius: 15px;
       }
 
       #point-value {
-        dimensione del carattere: 32px;
+        font-size: 32px;
       }
 
-      #griglia di punti {
+      #point-grid {
         grid-template-columns: repeat(4, 1fr);
-        spazio: 5px;
+        gap: 5px;
       }
 
       .point-stat {
-        spaziatura interna: 6px 5px;
+        padding: 6px 5px;
       }
 
       .point-stat-label {
-        dimensione del carattere: 6,5px;
+        font-size: 6.5px;
       }
 
       .point-stat-value {
-        dimensione del carattere: 9,5px;
+        font-size: 9.5px;
       }
 
       #bottom-bar {
-        sinistra: 7px;
-        destra: 7px;
+        left: 7px;
+        right: 7px;
         bottom: calc(var(--bottom-safe) + 6px);
-        altezza minima: 65px;
-        spaziatura interna: 8px 8px;
-        grid-template-columns: auto auto minmax(80px, 1fr) auto auto;
-        spazio: 6px;
-        bordo-raggio: 16px;
+        min-height: 65px;
+        padding: 8px;
+        grid-template-columns:
+          auto
+          auto
+          minmax(80px, 1fr)
+          auto
+          auto;
+        gap: 6px;
+        border-radius: 16px;
       }
 
       .time-btn {
-        larghezza: 34px;
-        altezza: 34px;
-        bordo-raggio: 10px;
-        dimensione del carattere: 16px;
+        min-width: 34px;
+        height: 34px;
+        padding: 0 6px;
+        border-radius: 10px;
+        font-size: 9px;
       }
 
       #speed-select {
-        display: nessuno;
+        display: none;
       }
 
-      #copia temporale {
-        larghezza minima: 72px;
+      #time-copy {
+        min-width: 72px;
       }
 
-      #etichetta temporale {
-        dimensione del carattere: 9px;
+      #time-label {
+        font-size: 9px;
       }
 
-      #offset-tempo {
-        dimensione del carattere: 7,5px;
+      #time-offset {
+        font-size: 7.5px;
       }
 
       .maplibregl-ctrl-bottom-right {
-        display: nessuno;
+        display: none;
       }
     }
 
     @media (max-width: 420px) {
       #brand-meta {
-        larghezza massima: 118px;
+        max-width: 118px;
       }
 
-      #azioni-principali {
-        spazio: 4px;
+      #top-actions {
+        gap: 4px;
       }
 
       #bottom-bar {
-        grid-template-columns: auto minmax(70px, 1fr) auto auto;
+        grid-template-columns:
+          auto
+          minmax(70px, 1fr)
+          auto
+          auto;
       }
 
       #step-prev {
-        display: nessuno;
+        display: none;
       }
     }
   </style>
 </head>
 
-<corpo>
+<body>
   <div id="map"></div>
   <canvas id="wind-canvas"></canvas>
 
   <header id="topbar" class="glass">
     <div id="brand-wrap">
       <div id="brand-mark">MH</div>
+
       <div id="brand-copy">
         <div id="brand-title">Italia MeteoHub Pro</div>
-        <div id="brand-meta">ICON-2I · <span id="model-run">esecuzione n/d</span> · <span id="valid-time">validità --</span></div>
+
+        <div id="brand-meta">
+          ICON-2I -
+          <span id="model-run">run n/d</span> -
+          <span id="valid-time">validita --</span>
+        </div>
       </div>
     </div>
 
     <div id="top-actions">
-      <button class="icon-btn" id="gps-top" type="button" title="La mia posizione">âŒ–</button>
-      <button class="icon-btn" id="clean-toggle" type="button" title="Solo mappa">â—«</button>
-      <button class="icon-btn" id="menu-toggle" type="button" title="Livelli">â˜°</button>
+      <button
+        class="icon-btn"
+        id="gps-top"
+        type="button"
+        title="La mia posizione"
+      >
+        GPS
+      </button>
+
+      <button
+        class="icon-btn"
+        id="clean-toggle"
+        type="button"
+        title="Solo mappa"
+      >
+        UI
+      </button>
+
+      <button
+        class="icon-btn"
+        id="menu-toggle"
+        type="button"
+        title="Livelli"
+      >
+        MENU
+      </button>
     </div>
   </header>
 
   <aside id="drawer" class="glass closed">
-    <button class="gps-btn" id="gps-button" type="button">âŒ– Il mio meteo</button>
+    <button class="gps-btn" id="gps-button" type="button">
+      Il mio meteo
+    </button>
 
     <div class="drawer-separator"></div>
+
     <div class="drawer-title">Campi meteorologici</div>
 
-    <button class="layer-btn active" id="btn-combined" data-layer="combined" type="button">
-      <span>Precipitazioni + nuvolositÃ </span><span class="layer-dot"></span>
+    <button
+      class="layer-btn active"
+      id="btn-combined"
+      data-layer="combined"
+      type="button"
+    >
+      <span>Precipitazioni + nuvolosita</span>
+      <span class="layer-dot"></span>
     </button>
-    <button class="layer-btn" id="btn-wind" data-layer="wind" type="button">
-      <span>Vendita 10 m</span><span class="layer-dot"></span>
+
+    <button
+      class="layer-btn"
+      id="btn-wind"
+      data-layer="wind"
+      type="button"
+    >
+      <span>Vento 10 m</span>
+      <span class="layer-dot"></span>
     </button>
-    <button class="layer-btn" id="btn-temp" data-layer="temp" type="button">
-      <span>Temperatura 2 m</span><span class="layer-dot"></span>
+
+    <button
+      class="layer-btn"
+      id="btn-temp"
+      data-layer="temp"
+      type="button"
+    >
+      <span>Temperatura 2 m</span>
+      <span class="layer-dot"></span>
     </button>
-    <button class="layer-btn" id="btn-press" data-layer="press" type="button">
-      <span>Pressione + isobaro</span><span class="layer-dot"></span>
+
+    <button
+      class="layer-btn"
+      id="btn-press"
+      data-layer="press"
+      type="button"
+    >
+      <span>Pressione + isobare</span>
+      <span class="layer-dot"></span>
     </button>
-    <button class="layer-btn" id="btn-rh" data-layer="rh" type="button">
-      <span>Umidità relativa</span><span class="layer-dot"></span>
+
+    <button
+      class="layer-btn"
+      id="btn-rh"
+      data-layer="rh"
+      type="button"
+    >
+      <span>Umidita relativa</span>
+      <span class="layer-dot"></span>
     </button>
 
     <div class="drawer-separator"></div>
+
     <div class="drawer-title">Opzioni cartografiche</div>
 
-    <button class="option-btn active" id="btn-graticule" type="button">
-      <span>Reticolo geografico</span><span class="layer-dot"></span>
+    <button
+      class="option-btn active"
+      id="btn-graticule"
+      type="button"
+    >
+      <span>Reticolo geografico</span>
+      <span class="layer-dot"></span>
     </button>
-    <button class="option-btn active" id="btn-relief" type="button">
-      <span>Rilievo</span><span class="layer-dot"></span>
+
+    <button
+      class="option-btn active"
+      id="btn-relief"
+      type="button"
+    >
+      <span>Rilievo</span>
+      <span class="layer-dot"></span>
     </button>
-  </a parte>
+  </aside>
 
   <section id="legend" class="glass cloud-composite">
     <div id="legend-title">Precipitazioni</div>
     <div id="legend-unit">mm</div>
+
     <div id="legend-body">
       <div id="legend-gradient"></div>
       <div id="legend-ticks"></div>
     </div>
+
     <div id="legend-note">Nuvole: bianco / grigio</div>
-  </sezione>
+  </section>
 
   <section id="point-card" class="glass">
-    <button id="point-close" type="button">Ã—</button>
+    <button id="point-close" type="button">X</button>
+
     <div id="point-label">Valore puntuale</div>
+
     <div id="point-main">
       <div id="point-value">--</div>
       <div id="point-unit">--</div>
     </div>
+
     <div id="point-coords">--</div>
     <div id="point-sampling">Interpolazione bilineare</div>
 
     <div id="point-grid">
-      <div class="point-stat"><div class="point-stat-label">Temperatura</div><div class="point-stat-value" id="stat-temp">--</div></div>
-      <div class="point-stat"><div class="point-stat-label">Percepita</div><div class="point-stat-value" id="stat-feels">--</div></div>
-      <div class="point-stat"><div class="point-stat-label">Pioggia</div><div class="point-stat-value" id="stat-rain">--</div></div>
-      <div class="point-stat"><div class="point-stat-label">Nuvole</div><div class="point-stat-value" id="stat-cloud">--</div></div>
-      <div class="point-stat"><div class="point-stat-label">Vendita</div><div class="point-stat-value" id="stat-wind">--</div></div>
-      <div class="point-stat"><div class="point-stat-label">Direzione</div><div class="point-stat-value" id="stat-wdir">--</div></div>
-      <div class="point-stat"><div class="point-stat-label">Pressione</div><div class="point-stat-value" id="stat-press">--</div></div>
-      <div class="point-stat"><div class="point-stat-label">Valore</div><div class="point-stat-value" id="stat-rh">--</div></div>
+      <div class="point-stat">
+        <div class="point-stat-label">Temperatura</div>
+        <div class="point-stat-value" id="stat-temp">--</div>
+      </div>
+
+      <div class="point-stat">
+        <div class="point-stat-label">Percepita</div>
+        <div class="point-stat-value" id="stat-feels">--</div>
+      </div>
+
+      <div class="point-stat">
+        <div class="point-stat-label">Pioggia</div>
+        <div class="point-stat-value" id="stat-rain">--</div>
+      </div>
+
+      <div class="point-stat">
+        <div class="point-stat-label">Nuvole</div>
+        <div class="point-stat-value" id="stat-cloud">--</div>
+      </div>
+
+      <div class="point-stat">
+        <div class="point-stat-label">Vento</div>
+        <div class="point-stat-value" id="stat-wind">--</div>
+      </div>
+
+      <div class="point-stat">
+        <div class="point-stat-label">Direzione</div>
+        <div class="point-stat-value" id="stat-wdir">--</div>
+      </div>
+
+      <div class="point-stat">
+        <div class="point-stat-label">Pressione</div>
+        <div class="point-stat-value" id="stat-press">--</div>
+      </div>
+
+      <div class="point-stat">
+        <div class="point-stat-label">Umidita</div>
+        <div class="point-stat-value" id="stat-rh">--</div>
+      </div>
     </div>
-  </sezione>
+  </section>
 
   <footer id="bottom-bar" class="glass">
-    <button class="time-btn" id="step-prev" type="button" title="Passo precedente">â€¹</button>
-    <button class="time-btn" id="play-btn" type="button" title="Avvia animazione">â–¶</button>
-    <input id="time-slider" type="range" min="0" max="0" value="0" step="1" />
+    <button
+      class="time-btn"
+      id="step-prev"
+      type="button"
+      title="Passo precedente"
+    >
+      PREV
+    </button>
+
+    <button
+      class="time-btn"
+      id="play-btn"
+      type="button"
+      title="Avvia animazione"
+    >
+      PLAY
+    </button>
+
+    <input
+      id="time-slider"
+      type="range"
+      min="0"
+      max="0"
+      value="0"
+      step="1"
+    >
+
     <div id="time-copy">
       <div id="time-label">--</div>
       <div id="time-offset">--</div>
     </div>
-    <select id="speed-select" title="Velocità animazione">
-      <option value="1200">1Ã—</option>
-      <option value="700">2Ã—</option>
-      <option value="380">4Ã—</option>
-    </seleziona>
-    <button class="time-btn" id="step-next" type="button" title="Passo successivo">â€º</button>
+
+    <select id="speed-select" title="Velocita animazione">
+      <option value="1200">1x</option>
+      <option value="700">2x</option>
+      <option value="380">4x</option>
+    </select>
+
+    <button
+      class="time-btn"
+      id="step-next"
+      type="button"
+      title="Passo successivo"
+    >
+      NEXT
+    </button>
   </footer>
 
-  <div id="loading">Elaborazione datiâ€¦</div>
+  <div id="loading">Elaborazione dati...</div>
 
   <script>
-    "Usa rigorosamente";
-
-    /* =========================================================
-       PALETTE CARTOGRAFICHE
-       ========================================================= */
+    "use strict";
 
     const TEMP_STOPS = [
-      { v: -35, c: [72, 43, 135], a: 0,93 },
-      { v: -26, c: [154, 44, 150], a: 0,93 },
-      { v: -18, c: [180, 45, 187], a: 0,93 },
-      { v: -10, c: [42, 91, 190], a: 0,92 },
-      { v: -2, c: [64, 184, 224], a: 0,91 },
-      { v: 6, c: [47, 207, 154], a: 0,90 },
-      { v: 14, c: [75, 167, 92], a: 0,90 },
-      { v: 18, c: [151, 211, 82], a: 0,91 },
-      { v: 22, c: [244, 224, 75], a: 0,92 },
-      { v: 26, c: [251, 190, 51], a: 0,92 },
-      { v: 30, c: [239, 145, 30], a: 0,93 },
-      { v: 34, c: [244, 89, 48], a: 0,94 },
-      { v: 38, c: [235, 55, 72], a: 0,95 },
-      { v: 42, c: [211, 55, 139], a: 0,96 },
-      { v: 46, c: [188, 47, 126], a: 0,97 }
+      { v: -35, c: [72, 43, 135], a: 0.93 },
+      { v: -26, c: [154, 44, 150], a: 0.93 },
+      { v: -18, c: [180, 45, 187], a: 0.93 },
+      { v: -10, c: [42, 91, 190], a: 0.92 },
+      { v: -2, c: [64, 184, 224], a: 0.91 },
+      { v: 6, c: [47, 207, 154], a: 0.90 },
+      { v: 14, c: [75, 167, 92], a: 0.90 },
+      { v: 18, c: [151, 211, 82], a: 0.91 },
+      { v: 22, c: [244, 224, 75], a: 0.92 },
+      { v: 26, c: [251, 190, 51], a: 0.92 },
+      { v: 30, c: [239, 145, 30], a: 0.93 },
+      { v: 34, c: [244, 89, 48], a: 0.94 },
+      { v: 38, c: [235, 55, 72], a: 0.95 },
+      { v: 42, c: [211, 55, 139], a: 0.96 },
+      { v: 46, c: [188, 47, 126], a: 0.97 }
     ];
 
     const WIND_STOPS = [
-      { v: 0,0, c: [44, 109, 180], a: 0,82 },
-      { v: 1.0, c: [59, 170, 211], a: 0,84 },
-      { v: 2.0, c: [66, 196, 207], a: 0,85 },
-      { v: 3,5, c: [58, 176, 142], a: 0,86 },
-      { v: 5.0, c: [94, 180, 95], a: 0,87 },
-      { v: 7.0, c: [210, 216, 78], a: 0,89 },
+      { v: 0.0, c: [44, 109, 180], a: 0.82 },
+      { v: 1.0, c: [59, 170, 211], a: 0.84 },
+      { v: 2.0, c: [66, 196, 207], a: 0.85 },
+      { v: 3.5, c: [58, 176, 142], a: 0.86 },
+      { v: 5.0, c: [94, 180, 95], a: 0.87 },
+      { v: 7.0, c: [210, 216, 78], a: 0.89 },
       { v: 10.0, c: [247, 224, 93], a: 0.91 },
-      { v: 12,5, c: [243, 203, 111], a: 0,92 },
+      { v: 12.5, c: [243, 203, 111], a: 0.92 },
       { v: 15.0, c: [237, 159, 91], a: 0.93 },
       { v: 20.0, c: [224, 91, 74], a: 0.94 },
       { v: 25.0, c: [194, 54, 88], a: 0.95 },
       { v: 35.0, c: [142, 42, 112], a: 0.96 },
-      { v: 50,0, c: [100, 48, 91], a: 0,97 }
+      { v: 50.0, c: [100, 48, 91], a: 0.97 }
     ];
 
     const RAIN_STOPS = [
-      { v: 0,00, c: [255, 255, 255], a: 0,00 },
-      { v: 0,10, c: [151, 224, 255], a: 0,56 },
-      { v: 0,25, c: [87, 190, 244], a: 0,69 },
-      { v: 0,50, c: [45, 131, 218], a: 0,80 },
+      { v: 0.00, c: [255, 255, 255], a: 0.00 },
+      { v: 0.10, c: [151, 224, 255], a: 0.56 },
+      { v: 0.25, c: [87, 190, 244], a: 0.69 },
+      { v: 0.50, c: [45, 131, 218], a: 0.80 },
       { v: 1.00, c: [38, 80, 181], a: 0.87 },
       { v: 2.00, c: [37, 163, 111], a: 0.89 },
       { v: 5.00, c: [221, 225, 70], a: 0.92 },
       { v: 10.0, c: [246, 173, 64], a: 0.94 },
       { v: 20.0, c: [224, 75, 70], a: 0.96 },
       { v: 40.0, c: [163, 45, 137], a: 0.98 },
-      { v: 50,0, c: [108, 43, 105], a: 0,99 }
+      { v: 50.0, c: [108, 43, 105], a: 0.99 }
     ];
 
     const CLOUD_STOPS = [
-      { v: 0, c: [255, 255, 255], a: 0,00 },
-      { v: 10, c: [250, 251, 252], a: 0,10 },
-      { v: 30, c: [236, 239, 242], a: 0,27 },
-      { v: 55, c: [218, 223, 229], a: 0,43 },
-      { v: 75, c: [196, 203, 212], a: 0,57 },
-      { v: 100, c: [169, 178, 190], a: 0,69 }
+      { v: 0, c: [255, 255, 255], a: 0.00 },
+      { v: 10, c: [250, 251, 252], a: 0.10 },
+      { v: 30, c: [236, 239, 242], a: 0.27 },
+      { v: 55, c: [218, 223, 229], a: 0.43 },
+      { v: 75, c: [196, 203, 212], a: 0.57 },
+      { v: 100, c: [169, 178, 190], a: 0.69 }
     ];
 
     const RH_STOPS = [
-      { v: 5, c: [249, 250, 249], a: 0,34 },
-      { v: 15, c: [226, 246, 218], a: 0,66 },
-      { v: 30, c: [174, 235, 181], a: 0,75 },
-      { v: 45, c: [103, 218, 172], a: 0,81 },
-      { v: 60, c: [76, 195, 195], a: 0,85 },
-      { v: 75, c: [78, 153, 210], a: 0,89 },
-      { v: 90, c: [84, 104, 188], a: 0,93 },
-      { v: 100, c: [83, 65, 157], a: 0,95 }
+      { v: 5, c: [249, 250, 249], a: 0.34 },
+      { v: 15, c: [226, 246, 218], a: 0.66 },
+      { v: 30, c: [174, 235, 181], a: 0.75 },
+      { v: 45, c: [103, 218, 172], a: 0.81 },
+      { v: 60, c: [76, 195, 195], a: 0.85 },
+      { v: 75, c: [78, 153, 210], a: 0.89 },
+      { v: 90, c: [84, 104, 188], a: 0.93 },
+      { v: 100, c: [83, 65, 157], a: 0.95 }
     ];
 
     const PRESS_STOPS = [
-      { v: 950, c: [106, 196, 222], a: 0,55 },
-      { v: 970, c: [151, 211, 226], a: 0,54 },
-      { v: 990, c: [208, 224, 230], a: 0,50 },
-      { v: 1004, c: [235, 239, 240], a: 0,46 },
-      { v: 1014, c: [247, 244, 241], a: 0,43 },
-      { v: 1024, c: [247, 226, 226], a: 0,50 },
-      { v: 1032, c: [243, 196, 203], a: 0,57 },
-      { v: 1040, c: [229, 147, 161], a: 0,64 }
+      { v: 950, c: [106, 196, 222], a: 0.55 },
+      { v: 970, c: [151, 211, 226], a: 0.54 },
+      { v: 990, c: [208, 224, 230], a: 0.50 },
+      { v: 1004, c: [235, 239, 240], a: 0.46 },
+      { v: 1014, c: [247, 244, 241], a: 0.43 },
+      { v: 1024, c: [247, 226, 226], a: 0.50 },
+      { v: 1032, c: [243, 196, 203], a: 0.57 },
+      { v: 1040, c: [229, 147, 161], a: 0.64 }
     ];
 
     const LAYER_INFO = {
-      combinato: {
-        etichetta: "Precipitazioni + nuvolositÃ ",
+      combined: {
+        label: "Precipitazioni + nuvolosita",
         legendLabel: "Precipitazioni",
-        unità: "mm",
-        decimali: 1,
-        fermate: RAIN_STOPS,
-        tick: [0.1, 0.5, 1, 2, 5, 10, 20, 40, 50],
-        opacità: 1.0,
-        rilievo: 0,12
+        unit: "mm",
+        decimals: 1,
+        stops: RAIN_STOPS,
+        ticks: [0.1, 0.5, 1, 2, 5, 10, 20, 40, 50],
+        opacity: 1,
+        relief: 0.12
       },
-      vento: {
-        etichetta: "Vento 10 m",
+
+      wind: {
+        label: "Vento 10 m",
         legendLabel: "Vento",
-        unità: "m/s",
-        decimali: 1,
-        fermate: WIND_STOPS,
-        tacche: [0, 1, 2, 3.5, 5, 7, 10, 12.5, 15, 20, 25, 35, 50],
-        opacità: 0,94,
-        rilievo: 0,13
+        unit: "m/s",
+        decimals: 1,
+        stops: WIND_STOPS,
+        ticks: [0, 1, 2, 3.5, 5, 7, 10, 12.5, 15, 20, 25, 35, 50],
+        opacity: 0.94,
+        relief: 0.13
       },
+
       temp: {
-        etichetta: "Temperatura 2 m",
+        label: "Temperatura 2 m",
         legendLabel: "Temperatura",
-        unità: "°C",
-        decimali: 1,
-        fermate: TEMP_STOPS,
-        tick: [-35, -26, -18, -10, -2, 6, 14, 18, 22, 26, 30, 34, 38, 42, 46],
-        opacità: 0,96,
-        rilievo: 0,16
+        unit: "\u00B0C",
+        decimals: 1,
+        stops: TEMP_STOPS,
+        ticks: [-35, -26, -18, -10, -2, 6, 14, 18, 22, 26, 30, 34, 38, 42, 46],
+        opacity: 0.96,
+        relief: 0.16
       },
-      premere: {
-        etichetta: "Pressione",
+
+      press: {
+        label: "Pressione",
         legendLabel: "Pressione",
-        unità: "hPa",
-        decimali: 0,
-        fermate: PREMI_STOP,
-        tick: [950, 960, 970, 980, 990, 1000, 1010, 1020, 1030, 1040],
-        opacità: 0,74,
-        rilievo: 0,08
+        unit: "hPa",
+        decimals: 0,
+        stops: PRESS_STOPS,
+        ticks: [950, 960, 970, 980, 990, 1000, 1010, 1020, 1030, 1040],
+        opacity: 0.74,
+        relief: 0.08
       },
+
       rh: {
-        label: "UmiditÃ relativa",
-        legendLabel: "UmiditÃ ",
-        unità: "%",
-        decimali: 0,
-        fermate: RH_STOPS,
-        tacche: [5, 15, 25, 35, 45, 55, 65, 75, 85, 95, 100],
-        opacità: 0,91,
-        rilievo: 0,14
+        label: "Umidita relativa",
+        legendLabel: "Umidita",
+        unit: "%",
+        decimals: 0,
+        stops: RH_STOPS,
+        ticks: [5, 15, 25, 35, 45, 55, 65, 75, 85, 95, 100],
+        opacity: 0.91,
+        relief: 0.14
       }
     };
 
-    /* =========================================================
-       STATO
-       ========================================================= */
-
-    lascia mappare;
-    lascia currentData = null;
-    lascia currentIndex = 0;
-    lascia catalogo = [];
-    lascia activeLayer = "combined";
-    lascia showGraticule = true;
-    lascia showRelief = vero;
-    lascia isPlaying = falso;
-    lascia playbackDelay = 1200;
-    lascia playTimer = null;
-    lascia loadSequence = 0;
-    lascia clickMarker = null;
-    lascia locationMarker = null;
+    let map;
+    let currentData = null;
+    let currentIndex = 0;
+    let catalog = [];
+    let activeLayer = "combined";
+    let showGraticule = true;
+    let showRelief = true;
+    let isPlaying = false;
+    let playbackDelay = 1200;
+    let playTimer = null;
+    let loadSequence = 0;
+    let clickMarker = null;
+    let locationMarker = null;
     let sliderDebounce = null;
 
     const dataCache = new Map();
     const CACHE_LIMIT = 7;
 
     const renderCanvas = document.createElement("canvas");
-    const renderCtx = renderCanvas.getContext("2d", { willReadFrequently: true });
+
+    const renderCtx = renderCanvas.getContext(
+      "2d",
+      { willReadFrequently: true }
+    );
 
     const windCanvas = document.getElementById("wind-canvas");
     const windCtx = windCanvas.getContext("2d", { alpha: true });
-    lascia windRenderFrame = null;
 
-    /* =========================================================
-       UTILITÃ€
-       ========================================================= */
+    let windRenderFrame = null;
 
-    funzione clamp(valore, min, max) {
-      restituisci Math.max(min, Math.min(max, valore));
+    function clamp(value, min, max) {
+      return Math.max(min, Math.min(max, value));
     }
 
-    funzione getGrid(campo) {
-      se (!campo) restituisci null;
-      restituisci field.data || field;
-    }
-
-    funzione getPressureGrid(data = currentData) {
-      se (!data) restituisci null;
-      restituisci getGrid(data.press_hpa || data.press);
-    }
-
-    funzione rgbaCss(colore, alfa = 1) {
-      restituisci `rgba(${Math.round(color[0])}, ${Math.round(color[1])}, ${Math.round(color[2])}, ${alpha})`;
-    }
-
-    funzione getStopColor(valore, arresti) {
-      se (!Number.isFinite(value)) restituisce [0, 0, 0, 0];
-
-      se (valore <= arresti[0].v) {
-        restituisci [...stops[0].c, stops[0].a ?? 0.90];
+    function getGrid(field) {
+      if (!field) {
+        return null;
       }
 
-      per (sia i = 0; i < stops.length - 1; i++) {
+      return field.data || field;
+    }
+
+    function getPressureGrid(data = currentData) {
+      if (!data) {
+        return null;
+      }
+
+      return getGrid(data.press_hpa || data.press);
+    }
+
+    function rgbaCss(color, alpha = 1) {
+      return (
+        "rgba(" +
+        Math.round(color[0]) + "," +
+        Math.round(color[1]) + "," +
+        Math.round(color[2]) + "," +
+        alpha +
+        ")"
+      );
+    }
+
+    function getStopColor(value, stops) {
+      if (!Number.isFinite(value)) {
+        return [0, 0, 0, 0];
+      }
+
+      if (value <= stops[0].v) {
+        return [
+          stops[0].c[0],
+          stops[0].c[1],
+          stops[0].c[2],
+          stops[0].a ?? 0.90
+        ];
+      }
+
+      for (let i = 0; i < stops.length - 1; i++) {
         const a = stops[i];
         const b = stops[i + 1];
 
-        if (valore >= av && valore <= bv) {
-          const t = (valore - av) / Math.max(bv - av, 1e-9);
-          const alphaA = aa ?? 0.90;
-          const alphaB = ba ?? 0.90;
+        if (value >= a.v && value <= b.v) {
+          const t =
+            (value - a.v) /
+            Math.max(b.v - a.v, 1e-9);
 
-          ritorno [
-            ac[0] * (1 - t) + bc[0] * t,
-            ac[1] * (1 - t) + bc[1] * t,
-            ac[2] * (1 - t) + bc[2] * t,
+          const alphaA = a.a ?? 0.90;
+          const alphaB = b.a ?? 0.90;
+
+          return [
+            a.c[0] * (1 - t) + b.c[0] * t,
+            a.c[1] * (1 - t) + b.c[1] * t,
+            a.c[2] * (1 - t) + b.c[2] * t,
             alphaA * (1 - t) + alphaB * t
           ];
         }
       }
 
       const last = stops[stops.length - 1];
-      restituisci [...last.c, last.a ?? 0.90];
+
+      return [
+        last.c[0],
+        last.c[1],
+        last.c[2],
+        last.a ?? 0.90
+      ];
     }
 
-    funzione alphaComposite(in basso, in alto) {
+    function alphaComposite(bottom, top) {
       const bottomA = clamp(bottom[3], 0, 1);
       const topA = clamp(top[3], 0, 1);
       const outA = topA + bottomA * (1 - topA);
 
-      se (outA <= 0,0001) restituisci [0, 0, 0, 0];
+      if (outA <= 0.0001) {
+        return [0, 0, 0, 0];
+      }
 
-      ritorno [
-        (top[0] * topA + bottom[0] * bottomA * (1 - topA)) / outA,
-        (top[1] * topA + bottom[1] * bottomA * (1 - topA)) / outA,
-        (top[2] * topA + bottom[2] * bottomA * (1 - topA)) / outA,
-        fuori
+      return [
+        (
+          top[0] * topA +
+          bottom[0] * bottomA * (1 - topA)
+        ) / outA,
+
+        (
+          top[1] * topA +
+          bottom[1] * bottomA * (1 - topA)
+        ) / outA,
+
+        (
+          top[2] * topA +
+          bottom[2] * bottomA * (1 - topA)
+        ) / outA,
+
+        outA
       ];
     }
 
-    funzione getNearest(arrayLike, gx, gy, nx, ny) {
+    function getBilinear(arrayLike, gx, gy, nx, ny) {
       const array = getGrid(arrayLike);
-      se (!array) restituisci NaN;
 
-      const x = clamp(Math.round(gx), 0, nx - 1);
-      const y = clamp(Math.round(gy), 0, ny - 1);
-      restituisci Numero(array[y * nx + x]);
-    }
+      if (!array || nx < 2 || ny < 2) {
+        return NaN;
+      }
 
-    funzione getBilineare(arrayLike, gx, gy, nx, ny) {
-      const array = getGrid(arrayLike);
-      if (!array || nx < 2 || ny < 2) return NaN;
-
-      lascia x = Math.floor(gx);
+      let x = Math.floor(gx);
       let y = Math.floor(gy);
 
       x = clamp(x, 0, nx - 2);
@@ -1118,140 +1348,239 @@
       const q01 = Number(array[i00 + nx]);
       const q11 = Number(array[i00 + nx + 1]);
 
-      se (![q00, q10, q01, q11].ogni(Numero.ÈFinito)) restituisce NaN;
+      if (![q00, q10, q01, q11].every(Number.isFinite)) {
+        return NaN;
+      }
 
-      restituisci q00 * ​​(1 - fx) * (1 - fy) +
-             q10 * fx * (1 - fy) +
-             q01 * (1 - fx) * fy +
-             q11 * fx * fy;
+      return (
+        q00 * (1 - fx) * (1 - fy) +
+        q10 * fx * (1 - fy) +
+        q01 * (1 - fx) * fy +
+        q11 * fx * fy
+      );
     }
 
-    funzione windDirectionDegrees(u, v) {
-      se (!Number.isFinite(u) || !Number.isFinite(v)) restituisci NaN;
-      restituisci (Math.atan2(u, v) * 180 / Math.PI + 180 + 360) % 360;
+    function windDirectionDegrees(u, v) {
+      if (!Number.isFinite(u) || !Number.isFinite(v)) {
+        return NaN;
+      }
+
+      return (
+        Math.atan2(u, v) * 180 / Math.PI +
+        180 +
+        360
+      ) % 360;
     }
 
-    funzione compassFromGrades(gradi) {
-      se (!Number.isFinite(gradi)) restituisci "--";
-      direzioni const = ["N", "NNE", "NE", "ENE", "E", "ESE", "SE", "SSE", "S", "SSW", "SW", "WSW", "W", "WNW", "NW", "NNW"];
-      restituisci direzioni[Math.round(gradi / 22.5) % 16];
+    function compassFromDegrees(degrees) {
+      if (!Number.isFinite(degrees)) {
+        return "--";
+      }
+
+      const directions = [
+        "N",
+        "NNE",
+        "NE",
+        "ENE",
+        "E",
+        "ESE",
+        "SE",
+        "SSE",
+        "S",
+        "SSW",
+        "SW",
+        "WSW",
+        "W",
+        "WNW",
+        "NW",
+        "NNW"
+      ];
+
+      return directions[
+        Math.round(degrees / 22.5) % 16
+      ];
     }
 
-    funzione formatValue(valore, decimali, unità) {
-      se (!Number.isFinite(value)) restituisci "--";
-      restituisci `${value.toFixed(decimals)} ${unit}`;
+    function formatValue(value, decimals, unit) {
+      if (!Number.isFinite(value)) {
+        return "--";
+      }
+
+      return value.toFixed(decimals) + " " + unit;
     }
 
-    funzione formatWindDirection(gradi) {
-      se (!Number.isFinite(gradi)) restituisci "--";
-      restituisci `${Math.round(degrees)}° ${compassFromDegrees(degrees)}`;
+    function formatWindDirection(degrees) {
+      if (!Number.isFinite(degrees)) {
+        return "--";
+      }
+
+      return (
+        Math.round(degrees) +
+        "\u00B0 " +
+        compassFromDegrees(degrees)
+      );
     }
 
-    funzione normalizzaLongitudine(valore) {
-      sia la longitudine = valore;
-      mentre (longitudine > 180) longitudine -= 360;
-      mentre (longitudine < -180) longitudine += 360;
-      restituisci la longitudine;
-    }
+    function normalizeLongitude(value) {
+      let longitude = value;
 
-    /* =========================================================
-       MAPPA E LAYER
-       ========================================================= */
+      while (longitude > 180) {
+        longitude -= 360;
+      }
+
+      while (longitude < -180) {
+        longitude += 360;
+      }
+
+      return longitude;
+    }
 
     window.addEventListener("load", initializeApp);
 
-    funzione asincrona initializeApp() {
-      ridimensionaWindCanvas();
+    async function initializeApp() {
+      if (typeof maplibregl === "undefined") {
+        document.body.innerHTML =
+          "<div style='padding:20px;font-family:sans-serif'>" +
+          "<strong>Errore:</strong> MapLibre non e stato caricato." +
+          "</div>";
 
-      window.addEventListener("resize", () => {
-        ridimensionaWindCanvas();
-        se (mappa) {
+        return;
+      }
+
+      if (typeof d3 === "undefined") {
+        document.body.innerHTML =
+          "<div style='padding:20px;font-family:sans-serif'>" +
+          "<strong>Errore:</strong> D3 non e stato caricato." +
+          "</div>";
+
+        return;
+      }
+
+      resizeWindCanvas();
+
+      window.addEventListener("resize", function () {
+        resizeWindCanvas();
+
+        if (map) {
           map.resize();
           scheduleWindRender();
         }
       });
 
-      se (window.visualViewport) {
-        window.visualViewport.addEventListener("resize", () => {
-          ridimensionaWindCanvas();
-          se (mappa) {
-            map.resize();
-            scheduleWindRender();
+      if (window.visualViewport) {
+        window.visualViewport.addEventListener(
+          "resize",
+          function () {
+            resizeWindCanvas();
+
+            if (map) {
+              map.resize();
+              scheduleWindRender();
+            }
           }
-        });
+        );
       }
 
-      mappa = nuova mappalibregl.Mappa({
-        contenitore: "mappa",
-        limiti: [[5.4, 34.2], [19.8, 48.3]],
-        minZoom: 3,5,
+      map = new maplibregl.Map({
+        container: "map",
+
+        bounds: [
+          [5.4, 34.2],
+          [19.8, 48.3]
+        ],
+
+        minZoom: 3.5,
         maxZoom: 10.8,
-        trascinaRota: falso,
+        dragRotate: false,
         pitchWithRotate: false,
-        touchPitch: falso,
-        antialias: falso,
-        controllo attribuzione: vero,
-        stile: {
-          versione: 8,
-          glifi: "https://fonts.openmaptiles.org/{fontstack}/{range}.pbf",
-          fonti: {
+        touchPitch: false,
+        antialias: false,
+        attributionControl: true,
+
+        style: {
+          version: 8,
+
+          glyphs:
+            "https://fonts.openmaptiles.org/{fontstack}/{range}.pbf",
+
+          sources: {
             "carto-light": {
-              tipo: "raster",
-              tessere: [
+              type: "raster",
+
+              tiles: [
                 "https://a.basemaps.cartocdn.com/light_nolabels/{z}/{x}/{y}.png",
                 "https://b.basemaps.cartocdn.com/light_nolabels/{z}/{x}/{y}.png",
                 "https://c.basemaps.cartocdn.com/light_nolabels/{z}/{x}/{y}.png",
                 "https://d.basemaps.cartocdn.com/light_nolabels/{z}/{x}/{y}.png"
               ],
+
               tileSize: 256,
-              Attribuzione: "© CARTO © Collaboratori di OpenStreetMap"
+
+              attribution:
+                "CARTO - OpenStreetMap contributors"
             },
+
             "carto-labels": {
-              tipo: "raster",
-              tessere: [
+              type: "raster",
+
+              tiles: [
                 "https://a.basemaps.cartocdn.com/light_only_labels/{z}/{x}/{y}.png",
                 "https://b.basemaps.cartocdn.com/light_only_labels/{z}/{x}/{y}.png",
                 "https://c.basemaps.cartocdn.com/light_only_labels/{z}/{x}/{y}.png",
                 "https://d.basemaps.cartocdn.com/light_only_labels/{z}/{x}/{y}.png"
               ],
+
               tileSize: 256
             },
+
             "hillshade": {
-              tipo: "raster",
-              tessere: [
+              type: "raster",
+
+              tiles: [
                 "https://services.arcgisonline.com/ArcGIS/rest/services/Elevation/World_Hillshade/MapServer/tile/{z}/{y}/{x}"
               ],
+
               tileSize: 256,
-              Attribuzione: "World Hillshade © Esri"
+
+              attribution:
+                "World Hillshade - Esri"
             }
           },
-          strati: [
+
+          layers: [
             {
               id: "background",
-              tipo: "sfondo",
-              paint: { "background-color": "#edf1f5" }
+              type: "background",
+
+              paint: {
+                "background-color": "#edf1f5"
+              }
             },
+
             {
               id: "base-map",
-              tipo: "raster",
-              fonte: "carto-light",
-              colore: {
-                "opacità raster": 0,98,
-                "saturazione raster": -0,10,
-                "contrasto raster": 0,05,
+              type: "raster",
+              source: "carto-light",
+
+              paint: {
+                "raster-opacity": 0.98,
+                "raster-saturation": -0.10,
+                "raster-contrast": 0.05,
                 "raster-brightness-min": 0.16,
                 "raster-brightness-max": 1
               }
             },
+
             {
               id: "hillshade-base",
-              tipo: "raster",
-              fonte: "hillshade",
-              colore: {
+              type: "raster",
+              source: "hillshade",
+
+              paint: {
                 "raster-opacity": 0.16,
-                "saturazione raster": -1,
-                "contrasto raster": 0,33,
-                "raster-brightness-min": 0,24,
+                "raster-saturation": -1,
+                "raster-contrast": 0.33,
+                "raster-brightness-min": 0.24,
                 "raster-brightness-max": 0.93
               }
             }
@@ -1259,81 +1588,139 @@
         }
       });
 
-      map.addControl(new maplibregl.NavigationControl({ showCompass: false }), "in basso a destra");
+      map.addControl(
+        new maplibregl.NavigationControl({
+          showCompass: false
+        }),
+        "bottom-right"
+      );
 
-      map.on("load", async () => {
+      map.on("load", async function () {
         addMapSourcesAndLayers();
         bindMapEvents();
-        bindUIEvents();
+        bindUiEvents();
         updateLegend();
         updateButtons();
-        attendi il caricamento del catalogo();
+
+        await loadCatalog();
       });
     }
 
-    funzione addMapSourcesAndLayers() {
+    function addMapSourcesAndLayers() {
       map.addSource("weather-source", {
-        tipo: "immagine",
-        url: "dati:immagine/gif;base64,R0lGODlhAQABAAD/ACwAAAAAAQABAAACADs=",
-        coordinate: [[5, 50], [20, 50], [20, 30], [5, 30]]
+        type: "image",
+
+        url:
+          "data:image/gif;base64," +
+          "R0lGODlhAQABAAD/ACwAAAAAAQABAAACADs=",
+
+        coordinates: [
+          [5, 50],
+          [20, 50],
+          [20, 30],
+          [5, 30]
+        ]
       });
 
       map.addLayer({
         id: "weather-layer",
-        tipo: "raster",
-        fonte: "fonte meteo",
-        colore: {
-          "opacità raster": 1,
-          "raster-resampling": "lineare",
+        type: "raster",
+        source: "weather-source",
+
+        paint: {
+          "raster-opacity": 1,
+          "raster-resampling": "linear",
           "raster-fade-duration": 0
         }
       });
 
       map.addLayer({
         id: "hillshade-over-weather",
-        tipo: "raster",
-        fonte: "hillshade",
-        colore: {
-          "opacità raster": 0,12,
-          "saturazione raster": -1,
-          "contrasto raster": 0,43,
+        type: "raster",
+        source: "hillshade",
+
+        paint: {
+          "raster-opacity": 0.12,
+          "raster-saturation": -1,
+          "raster-contrast": 0.43,
           "raster-brightness-min": 0.20,
           "raster-brightness-max": 0.94
         }
       });
 
-      map.addSource("griticule-source", {
-        tipo: "geojson",
-        dati: buildGraticuleGeoJSON()
+      map.addSource("graticule-source", {
+        type: "geojson",
+        data: buildGraticuleGeoJSON()
       });
 
       map.addLayer({
         id: "graticule-lines",
-        tipo: "linea",
-        fonte: "griticule-source",
-        colore: {
-          "line-color": "rgba(22, 32, 43, 0.52)",
-          "line-width": ["interpolate", ["linear"], ["zoom"], 4, 0.65, 8, 1.05],
-          "line-opacity": ["interpolate", ["linear"], ["zoom"], 4, 0.48, 8, 0.34]
+        type: "line",
+        source: "graticule-source",
+
+        paint: {
+          "line-color": "rgba(22,32,43,0.52)",
+
+          "line-width": [
+            "interpolate",
+            ["linear"],
+            ["zoom"],
+            4,
+            0.65,
+            8,
+            1.05
+          ],
+
+          "line-opacity": [
+            "interpolate",
+            ["linear"],
+            ["zoom"],
+            4,
+            0.48,
+            8,
+            0.34
+          ]
         }
       });
 
       map.addLayer({
         id: "graticule-labels",
-        tipo: "simbolo",
-        fonte: "griticule-source",
-        disposizione: {
-          "posizionamento dei simboli": "linea",
-          "symbol-spacing": ["interpolate", ["linear"], ["zoom"], 4, 300, 8, 560],
-          "text-field": [get", "label"],
+        type: "symbol",
+        source: "graticule-source",
+
+        layout: {
+          "symbol-placement": "line",
+
+          "symbol-spacing": [
+            "interpolate",
+            ["linear"],
+            ["zoom"],
+            4,
+            300,
+            8,
+            560
+          ],
+
+          "text-field": ["get", "label"],
           "text-font": ["Open Sans Bold"],
-          "text-size": ["interpolate", ["linear"], ["zoom"], 4, 10, 8, 12],
-          "allineamento-rotazione-testo": "mappa",
-          "allineamento-passo-testo": "mappa",
-          "testo-mantieni-verticale": vero,
+
+          "text-size": [
+            "interpolate",
+            ["linear"],
+            ["zoom"],
+            4,
+            10,
+            8,
+            12
+          ],
+
+          "text-rotation-alignment": "map",
+          "text-pitch-alignment": "map",
+          "text-keep-upright": true,
           "text-allow-overlap": false
         },
-        colore: {
+
+        paint: {
           "text-color": "#111827",
           "text-halo-color": "rgba(255,255,255,0.94)",
           "text-halo-width": 1.7,
@@ -1342,75 +1729,166 @@
       });
 
       map.addSource("italy-regions", {
-        tipo: "geojson",
-        dati: "https://raw.githubusercontent.com/openpolis/geojson-italy/master/geojson/limits_IT_regions.geojson"
+        type: "geojson",
+
+        data:
+          "https://raw.githubusercontent.com/openpolis/" +
+          "geojson-italy/master/geojson/limits_IT_regions.geojson"
       });
 
       map.addLayer({
         id: "region-borders",
-        tipo: "linea",
-        fonte: "italy-regions",
-        colore: {
-          "line-color": "rgba(24, 31, 39, 0.68)",
-          "line-width": ["interpolate", ["linear"], ["zoom"], 4, 0.55, 8, 1.20],
+        type: "line",
+        source: "italy-regions",
+
+        paint: {
+          "line-color": "rgba(24,31,39,0.68)",
+
+          "line-width": [
+            "interpolate",
+            ["linear"],
+            ["zoom"],
+            4,
+            0.55,
+            8,
+            1.20
+          ],
+
           "line-opacity": 0.72
         }
       });
 
       map.addSource("isobars-source", {
-        tipo: "geojson",
-        dati: { tipo: "FeatureCollection", caratteristiche: [] }
+        type: "geojson",
+
+        data: {
+          type: "FeatureCollection",
+          features: []
+        }
       });
 
       map.addSource("pressure-centers-source", {
-        tipo: "geojson",
-        dati: { tipo: "FeatureCollection", caratteristiche: [] }
+        type: "geojson",
+
+        data: {
+          type: "FeatureCollection",
+          features: []
+        }
       });
 
       map.addLayer({
         id: "isobars-minor",
-        tipo: "linea",
-        fonte: "isobars-source",
-        filtro: ["==", ["get", "major"], false],
-        layout: { "visibilità": "nessuna" },
-        colore: {
-          "line-color": "rgba(42, 45, 50, 0.62)",
-          "line-width": ["interpolate", ["linear"], ["zoom"], 4, 0.55, 8, 0.90],
+        type: "line",
+        source: "isobars-source",
+
+        filter: [
+          "==",
+          ["get", "major"],
+          false
+        ],
+
+        layout: {
+          visibility: "none"
+        },
+
+        paint: {
+          "line-color": "rgba(42,45,50,0.62)",
+
+          "line-width": [
+            "interpolate",
+            ["linear"],
+            ["zoom"],
+            4,
+            0.55,
+            8,
+            0.90
+          ],
+
           "line-opacity": 0.72
         }
       });
 
       map.addLayer({
         id: "isobars-major",
-        tipo: "linea",
-        fonte: "isobars-source",
-        filtro: ["==", ["get", "major"], true],
-        layout: { "visibilità": "nessuna" },
-        colore: {
-          "line-color": "rgba(28, 31, 35, 0.82)",
-          "line-width": ["interpolate", ["linear"], ["zoom"], 4, 1.30, 8, 2.05],
+        type: "line",
+        source: "isobars-source",
+
+        filter: [
+          "==",
+          ["get", "major"],
+          true
+        ],
+
+        layout: {
+          visibility: "none"
+        },
+
+        paint: {
+          "line-color": "rgba(28,31,35,0.82)",
+
+          "line-width": [
+            "interpolate",
+            ["linear"],
+            ["zoom"],
+            4,
+            1.30,
+            8,
+            2.05
+          ],
+
           "line-opacity": 0.88
         }
       });
 
       map.addLayer({
         id: "isobars-labels",
-        tipo: "simbolo",
-        fonte: "isobars-source",
-        filtro: ["==", ["get", "major"], true],
-        disposizione: {
-          "visibilità": "nessuna",
-          "posizionamento dei simboli": "linea",
-          "symbol-spacing": ["interpolate", ["linear"], ["zoom"], 4, 340, 8, 520],
-          "campo-di-testo": ["in-stringa", ["ottieni", "valore"]],
+        type: "symbol",
+        source: "isobars-source",
+
+        filter: [
+          "==",
+          ["get", "major"],
+          true
+        ],
+
+        layout: {
+          visibility: "none",
+          "symbol-placement": "line",
+
+          "symbol-spacing": [
+            "interpolate",
+            ["linear"],
+            ["zoom"],
+            4,
+            340,
+            8,
+            520
+          ],
+
+          "text-field": [
+            "to-string",
+            ["get", "value"]
+          ],
+
           "text-font": ["Open Sans Bold"],
-          "text-size": ["interpolate", ["linear"], ["zoom"], 4, 12, 8, 15],
-          "allineamento-rotazione-testo": "mappa",
-          "allineamento-passo-testo": "mappa",
-          "testo-mantieni-verticale": vero,
+
+          "text-size": [
+            "interpolate",
+            ["linear"],
+            ["zoom"],
+            4,
+            12,
+            8,
+            15
+          ],
+
+          "text-rotation-alignment": "map",
+          "text-pitch-alignment": "map",
+          "text-keep-upright": true,
           "text-padding": 6
         },
-        colore: {
+
+        paint: {
           "text-color": "#111214",
           "text-halo-color": "rgba(255,255,255,0.96)",
           "text-halo-width": 2.2,
@@ -1420,19 +1898,40 @@
 
       map.addLayer({
         id: "pressure-center-symbols",
-        tipo: "simbolo",
-        fonte: "pressure-centers-source",
-        disposizione: {
-          "visibilità": "nessuna",
-          "text-field": [get", "type"],
+        type: "symbol",
+        source: "pressure-centers-source",
+
+        layout: {
+          visibility: "none",
+          "text-field": ["get", "type"],
           "text-font": ["Open Sans Bold"],
-          "text-size": ["interpolate", ["linear"], ["zoom"], 4, 28, 8, 42],
+
+          "text-size": [
+            "interpolate",
+            ["linear"],
+            ["zoom"],
+            4,
+            28,
+            8,
+            42
+          ],
+
           "text-allow-overlap": false,
           "text-ignore-placement": false,
           "text-padding": 18
         },
-        colore: {
-          "text-color": ["match", ["get", "type"], "H", "#b91c1c", "L", "#1d4ed8", "#111827"],
+
+        paint: {
+          "text-color": [
+            "match",
+            ["get", "type"],
+            "H",
+            "#b91c1c",
+            "L",
+            "#1d4ed8",
+            "#111827"
+          ],
+
           "text-halo-color": "rgba(255,255,255,0.96)",
           "text-halo-width": 3.2,
           "text-halo-blur": 0.4
@@ -1440,314 +1939,726 @@
       });
 
       map.addLayer({
-        id: "valori-del-centro-di-pressione",
-        tipo: "simbolo",
-        fonte: "pressure-centers-source",
-        disposizione: {
-          "visibilità": "nessuna",
-          "campo-di-testo": ["concat", ["to-string", ["get", "valore"]], " hPa"],
+        id: "pressure-center-values",
+        type: "symbol",
+        source: "pressure-centers-source",
+
+        layout: {
+          visibility: "none",
+
+          "text-field": [
+            "concat",
+            ["to-string", ["get", "value"]],
+            " hPa"
+          ],
+
           "text-font": ["Open Sans Bold"],
-          "text-size": ["interpolate", ["linear"], ["zoom"], 4, 10, 8, 13],
+
+          "text-size": [
+            "interpolate",
+            ["linear"],
+            ["zoom"],
+            4,
+            10,
+            8,
+            13
+          ],
+
           "text-offset": [0, 1.55],
           "text-allow-overlap": false,
           "text-ignore-placement": false
         },
-        colore: {
+
+        paint: {
           "text-color": "#20242a",
           "text-halo-color": "rgba(255,255,255,0.96)",
-          "text-halo-width": 2.0
+          "text-halo-width": 2
         }
       });
 
       map.addLayer({
         id: "labels-layer",
-        tipo: "raster",
-        fonte: "carto-labels",
-        colore: {
-          "opacità raster": 0,98,
-          "contrasto raster": 0,12
+        type: "raster",
+        source: "carto-labels",
+
+        paint: {
+          "raster-opacity": 0.98,
+          "raster-contrast": 0.12
         }
       });
     }
 
-    funzione bindMapEvents() {
+    function bindMapEvents() {
       map.on("click", handleMapClick);
       map.on("mousemove", handleMapHover);
 
-      map.on("move", scheduleWindRender);
-      map.on("zoom", scheduleWindRender);
+      map.on("movestart", function () {
+        clearWindCanvas();
+      });
+
+      map.on("zoomstart", function () {
+        clearWindCanvas();
+      });
+
       map.on("moveend", scheduleWindRender);
       map.on("zoomend", scheduleWindRender);
     }
 
-    funzione buildGraticuleGeoJSON() {
-      const caratteristiche = [];
+    function buildGraticuleGeoJSON() {
+      const features = [];
 
-      per (sia longitudine = -10; longitudine <= 35; longitudine += 2,5) {
+      for (
+        let longitude = -10;
+        longitude <= 35;
+        longitude += 2.5
+      ) {
         const coordinates = [];
-        per (sia latitudine = 25; latitudine <= 55; latitudine += 0,25) {
-          coordinates.push([longitudine, latitudine]);
+
+        for (
+          let latitude = 25;
+          latitude <= 55;
+          latitude += 0.25
+        ) {
+          coordinates.push([
+            longitude,
+            latitude
+          ]);
         }
 
-        caratteristiche.push({
-          tipo: "Funzionalità",
-          geometria: { tipo: "LineString", coordinate },
-          proprietà: { etichetta: `${Math.abs(longitudine).toFixed(1)}°${longitudine < 0 ? "O" : "E"}` }
+        features.push({
+          type: "Feature",
+
+          geometry: {
+            type: "LineString",
+            coordinates: coordinates
+          },
+
+          properties: {
+            label:
+              Math.abs(longitude).toFixed(1) +
+              "\u00B0" +
+              (longitude < 0 ? "W" : "E")
+          }
         });
       }
 
-      per (sia latitudine = 25; latitudine <= 55; latitudine += 2,5) {
+      for (
+        let latitude = 25;
+        latitude <= 55;
+        latitude += 2.5
+      ) {
         const coordinates = [];
-        per (sia longitudine = -10; longitudine <= 35; longitudine += 0,25) {
-          coordinates.push([longitudine, latitudine]);
+
+        for (
+          let longitude = -10;
+          longitude <= 35;
+          longitude += 0.25
+        ) {
+          coordinates.push([
+            longitude,
+            latitude
+          ]);
         }
 
-        caratteristiche.push({
-          tipo: "Funzionalità",
-          geometria: { tipo: "LineString", coordinate },
-          proprietà: { etichetta: `${Math.abs(latitude).toFixed(1)}°${latitude < 0 ? "S" : "N"}` }
+        features.push({
+          type: "Feature",
+
+          geometry: {
+            type: "LineString",
+            coordinates: coordinates
+          },
+
+          properties: {
+            label:
+              Math.abs(latitude).toFixed(1) +
+              "\u00B0" +
+              (latitude < 0 ? "S" : "N")
+          }
         });
       }
 
-      restituisci { tipo: "FeatureCollection", caratteristiche };
+      return {
+        type: "FeatureCollection",
+        features: features
+      };
     }
 
-    /* =========================================================
-       CARICAMENTO DATI
-       ========================================================= */
+    async function loadCatalog() {
+      setLoading(true, "Caricamento catalogo...");
 
-    funzione asincrona loadCatalog() {
-      setLoading(true, "Caricamento catalogoâ€¦");
+      try {
+        const response = await fetch(
+          "data_weather/catalog.json?t=" + Date.now(),
+          { cache: "no-store" }
+        );
 
-      Tentativo {
-        const response = await fetch(`data_weather/catalog.json?t=${Date.now()}`, { cache: "no-store" });
-        if (!response.ok) throw new Error(`Catalogo non disponibile: HTTP ${response.status}`);
-
-        catalogo = attendi risposta.json();
-        se (!Array.isArray(catalog) || catalog.length === 0) {
-          lanciare un nuovo Error("Il catalogo non contiene step previsionali.");
+        if (!response.ok) {
+          throw new Error(
+            "Catalogo non disponibile: HTTP " +
+            response.status
+          );
         }
 
-        const slider = document.getElementById("time-slider");
-        slider.max = String(catalog.length - 1);
+        catalog = await response.json();
 
-        currentIndex = findNearestCatalogIndex();
-        slider.value = String(currentIndex);
+        if (
+          !Array.isArray(catalog) ||
+          catalog.length === 0
+        ) {
+          throw new Error(
+            "Il catalogo non contiene step previsionali."
+          );
+        }
 
-        attendi loadStep(currentIndex);
+        const slider =
+          document.getElementById("time-slider");
+
+        slider.max =
+          String(catalog.length - 1);
+
+        currentIndex =
+          findNearestCatalogIndex();
+
+        slider.value =
+          String(currentIndex);
+
+        await loadStep(currentIndex);
+
         prefetchStep(currentIndex + 1);
         prefetchStep(currentIndex - 1);
-      } catch (errore) {
-        console.error(errore);
-        setLoading(true, "Errore nel caricamento dei dati");
+      } catch (error) {
+        console.error(error);
+
+        setLoading(
+          true,
+          "Errore nel caricamento dei dati"
+        );
       }
     }
 
-    funzione parseCatalogDate(item) {
-      se (!elemento) restituisci null;
+    function parseCatalogDate(item) {
+      if (!item) {
+        return null;
+      }
 
       const directCandidates = [
-        elemento.valid_time,
-        elemento valido,
-        elemento.data e ora,
-        elemento.data_ora,
-        elemento.tempo,
-        timestamp dell'elemento
+        item.valid_time,
+        item.valid,
+        item.datetime,
+        item.date_time,
+        item.time,
+        item.timestamp
       ];
 
-      per (candidato costante di directCandidates) {
-        se (!candidato) continua;
-        const parsed = new Date(candidate);
-        se (!Number.isNaN(parsed.getTime())) restituisce parsed;
+      for (const candidate of directCandidates) {
+        if (!candidate) {
+          continue;
+        }
+
+        const parsed =
+          new Date(candidate);
+
+        if (!Number.isNaN(parsed.getTime())) {
+          return parsed;
+        }
       }
 
-      const label = String(item.label || "").trim();
-      const match = label.match(/(\d{1,2})[\/\-.](\d{1,2})(?:[\/\-.](\d{2,4}))?\s+(\d{1,2}):(\d{2})/);
-      se (!corrispondenza) restituisci null;
+      const label =
+        String(item.label || "").trim();
+
+      const match = label.match(
+        /(\d{1,2})[\/\-.](\d{1,2})(?:[\/\-.](\d{2,4}))?\s+(\d{1,2}):(\d{2})/
+      );
+
+      if (!match) {
+        return null;
+      }
 
       const now = new Date();
-      const giorno = Numero(corrispondenza[1]);
-      const mese = Numero(corrispondenza[2]) - 1;
-      const explicitYear = match[3] ? Number(match[3].length === 2 ? `20${match[3]}` : match[3]) : null;
-      const ora = Numero(match[4]);
-      const minuto = Numero(corrispondenza[5]);
+      const day = Number(match[1]);
+      const month = Number(match[2]) - 1;
 
-      se (explicitYear) restituisci nuovo Date(explicitYear, mese, giorno, ora, minuto, 0);
+      const explicitYear = match[3]
+        ? Number(
+            match[3].length === 2
+              ? "20" + match[3]
+              : match[3]
+          )
+        : null;
 
-      candidati costanti = [
-        nuovo Date(now.getFullYear() - 1, mese, giorno, ora, minuto, 0),
-        nuovo Date(now.getFullYear(), mese, giorno, ora, minuto, 0),
-        nuovo Date(now.getFullYear() + 1, mese, giorno, ora, minuto, 0)
+      const hour = Number(match[4]);
+      const minute = Number(match[5]);
+
+      if (explicitYear) {
+        return new Date(
+          explicitYear,
+          month,
+          day,
+          hour,
+          minute,
+          0
+        );
+      }
+
+      const candidates = [
+        new Date(
+          now.getFullYear() - 1,
+          month,
+          day,
+          hour,
+          minute,
+          0
+        ),
+
+        new Date(
+          now.getFullYear(),
+          month,
+          day,
+          hour,
+          minute,
+          0
+        ),
+
+        new Date(
+          now.getFullYear() + 1,
+          month,
+          day,
+          hour,
+          minute,
+          0
+        )
       ];
 
-      candidates.sort((a, b) => Math.abs(a - now) - Math.abs(b - now));
-      restituisci candidati[0];
+      candidates.sort(function (a, b) {
+        return (
+          Math.abs(a - now) -
+          Math.abs(b - now)
+        );
+      });
+
+      return candidates[0];
     }
 
-    funzione trovaIndiceCatalogoPiùVicino() {
+    function findNearestCatalogIndex() {
       const now = new Date();
-      lascia bestIndex = 0;
-      sia bestDistance = Infinito;
 
-      catalogo.perogni((elemento, indice) => {
-        const date = parseCatalogDate(item);
-        se (!data) restituisci;
-        const distanza = Math.abs(data - ora);
-        se (distanza < distanza migliore) {
-          distanza migliore = distanza;
-          bestIndex = indice;
+      let bestIndex = 0;
+      let bestDistance = Infinity;
+
+      catalog.forEach(function (item, index) {
+        const date =
+          parseCatalogDate(item);
+
+        if (!date) {
+          return;
+        }
+
+        const distance =
+          Math.abs(date - now);
+
+        if (distance < bestDistance) {
+          bestDistance = distance;
+          bestIndex = index;
         }
       });
 
-      restituisci bestIndex;
+      return bestIndex;
     }
 
-    funzione getRunLabel(indice) {
-      const item = catalogo[indice] || {};
-      restituisci item.run || item.model_run || item.init || item.init_time || item.base_time || item.cycle || "n/d";
+    function getRunLabel(index) {
+      const item = catalog[index] || {};
+
+      return (
+        item.run ||
+        item.model_run ||
+        item.init ||
+        item.init_time ||
+        item.base_time ||
+        item.cycle ||
+        "n/d"
+      );
     }
 
-    funzione formatCatalogLabel(indice) {
-      const item = catalogo[indice];
+    function formatCatalogLabel(index) {
+      const item = catalog[index];
       const date = parseCatalogDate(item);
-      se (!data) restituisci item?.label || "--";
 
-      const oggi = nuovo Date();
-      const todayStart = new Date(today.getFullYear(), today.getMonth(), today.getDate());
-      const targetStart = new Date(date.getFullYear(), date.getMonth(), date.getDate());
-      const dayDifference = Math.round((targetStart - todayStart) / 86400000);
+      if (!date) {
+        return item?.label || "--";
+      }
 
-      lascia dayLabel;
-      se (dayDifference === 0) dayLabel = "Oggi";
-      altrimenti se (dayDifference === 1) dayLabel = "Domani";
-      altrimenti se (dayDifference === -1) dayLabel = "Ieri";
-      altrimenti dayLabel = date.toLocaleDateString("it-IT", { weekday: "short", day: "2-digit", month: "2-digit" });
+      const today = new Date();
 
-      const time = date.toLocaleTimeString("it-IT", { hour: "2-digit", minute: "2-digit" });
-      restituisci `${dayLabel} · ${time}`;
+      const todayStart = new Date(
+        today.getFullYear(),
+        today.getMonth(),
+        today.getDate()
+      );
+
+      const targetStart = new Date(
+        date.getFullYear(),
+        date.getMonth(),
+        date.getDate()
+      );
+
+      const dayDifference =
+        Math.round(
+          (targetStart - todayStart) /
+          86400000
+        );
+
+      let dayLabel;
+
+      if (dayDifference === 0) {
+        dayLabel = "Oggi";
+      } else if (dayDifference === 1) {
+        dayLabel = "Domani";
+      } else if (dayDifference === -1) {
+        dayLabel = "Ieri";
+      } else {
+        dayLabel =
+          date.toLocaleDateString(
+            "it-IT",
+            {
+              weekday: "short",
+              day: "2-digit",
+              month: "2-digit"
+            }
+          );
+      }
+
+      const time =
+        date.toLocaleTimeString(
+          "it-IT",
+          {
+            hour: "2-digit",
+            minute: "2-digit"
+          }
+        );
+
+      return dayLabel + " - " + time;
     }
 
-    funzione updateTimeUi(indice) {
-      const rawLabel = catalog[index]?.label || "--";
-      const firstDate = parseCatalogDate(catalog[0]);
-      const date = parseCatalogDate(catalog[index]);
+    function updateTimeUi(index) {
+      const rawLabel =
+        catalog[index]?.label || "--";
 
-      document.getElementById("valid-time").textContent = `validitÃ ${rawLabel}`;
-      document.getElementById("model-run").textContent = `esegui ${getRunLabel(index)}`;
-      document.getElementById("time-label").textContent = formatCatalogLabel(index);
+      const firstDate =
+        parseCatalogDate(catalog[0]);
 
-      se (firstDate && date) {
-        const hours = Math.round((date - firstDate) / 3600000);
-        document.getElementById("time-offset").textContent = `${hours >= 0 ? "+" : ""}${hours} h`;
-      } altro {
-        document.getElementById("time-offset").textContent = `step ${index + 1}/${catalog.length}`;
+      const date =
+        parseCatalogDate(catalog[index]);
+
+      document.getElementById(
+        "valid-time"
+      ).textContent =
+        "validita " + rawLabel;
+
+      document.getElementById(
+        "model-run"
+      ).textContent =
+        "run " + getRunLabel(index);
+
+      document.getElementById(
+        "time-label"
+      ).textContent =
+        formatCatalogLabel(index);
+
+      if (firstDate && date) {
+        const hours =
+          Math.round(
+            (date - firstDate) /
+            3600000
+          );
+
+        document.getElementById(
+          "time-offset"
+        ).textContent =
+          (hours >= 0 ? "+" : "") +
+          hours +
+          " h";
+      } else {
+        document.getElementById(
+          "time-offset"
+        ).textContent =
+          "step " +
+          (index + 1) +
+          "/" +
+          catalog.length;
       }
     }
 
-    funzione touchCache(indice, dati) {
-      se (dataCache.has(index)) dataCache.delete(index);
+    function touchCache(index, data) {
+      if (dataCache.has(index)) {
+        dataCache.delete(index);
+      }
+
       dataCache.set(index, data);
 
-      mentre (dataCache.size > CACHE_LIMIT) {
-        const oldestKey = dataCache.keys().next().value;
+      while (
+        dataCache.size > CACHE_LIMIT
+      ) {
+        const oldestKey =
+          dataCache.keys().next().value;
+
         dataCache.delete(oldestKey);
       }
     }
 
-    funzione asincrona fetchAndPrepareStep(index, buildPressure = true) {
-      const item = catalogo[indice];
-      if (!item?.file) throw new Error(`File mancante per lo step ${index}`);
+    async function fetchAndPrepareStep(
+      index,
+      buildPressure = true
+    ) {
+      const item = catalog[index];
 
-      const response = await fetch(`data_weather/${item.file}`, { cache: "force-cache" });
-      se (!response.ok) genera un nuovo Error(`Errore HTTP ${response.status} per ${item.file}`);
+      if (!item?.file) {
+        throw new Error(
+          "File mancante per lo step " +
+          index
+        );
+      }
 
-      const data = await response.json();
-      prepareData(data, buildPressure);
-      restituire i dati;
+      const response = await fetch(
+        "data_weather/" + item.file,
+        { cache: "force-cache" }
+      );
+
+      if (!response.ok) {
+        throw new Error(
+          "Errore HTTP " +
+          response.status +
+          " per " +
+          item.file
+        );
+      }
+
+      const data =
+        await response.json();
+
+      prepareData(
+        data,
+        buildPressure
+      );
+
+      return data;
     }
 
-    funzione asincrona prefetchStep(index) {
-      se (!catalog[index] || dataCache.has(index)) restituisci;
+    async function prefetchStep(index) {
+      if (
+        !catalog[index] ||
+        dataCache.has(index)
+      ) {
+        return;
+      }
 
-      Tentativo {
-        const data = await fetchAndPrepareStep(index, false);
-        touchCache(indice, dati);
-      } catch (errore) {
-        console.warn("Precaricamento non riuscito:", indice, errore);
+      try {
+        const data =
+          await fetchAndPrepareStep(
+            index,
+            false
+          );
+
+        touchCache(index, data);
+      } catch (error) {
+        console.warn(
+          "Prefetch non riuscito:",
+          index,
+          error
+        );
       }
     }
 
-    funzione prepareData(data, buildPressure = true) {
-      if (!data?.meta) lancia new Error("Metadati griglia assenti.");
+    function prepareData(
+      data,
+      buildPressure = true
+    ) {
+      if (!data?.meta) {
+        throw new Error(
+          "Metadati griglia assenti."
+        );
+      }
 
       const meta = data.meta;
-      const expectedLength = meta.nx * meta.ny;
-      const temp = getGrid(data.temp);
-      const humidity = getGrid(data.rh);
-      const u = getGrid(data.wind_u);
-      const v = getGrid(data.wind_v);
-      const pressure = getGrid(data.press);
 
-      se (pressione && pressione.lunghezza === lunghezza prevista) {
-        sia il rappresentante = NaN;
-        per (sia i = 0; i < pressure.length; i += Math.max(1, Math.floor(pressure.length / 40))) {
-          const value = Number(pressure[i]);
-          se (Numero.èFinito(valore)) {
-            rappresentativo = valore;
-            rottura;
+      const expectedLength =
+        meta.nx * meta.ny;
+
+      const temp =
+        getGrid(data.temp);
+
+      const humidity =
+        getGrid(data.rh);
+
+      const u =
+        getGrid(data.wind_u);
+
+      const v =
+        getGrid(data.wind_v);
+
+      const pressure =
+        getGrid(data.press);
+
+      if (
+        pressure &&
+        pressure.length === expectedLength
+      ) {
+        let representative = NaN;
+
+        const sampleStep = Math.max(
+          1,
+          Math.floor(
+            pressure.length / 40
+          )
+        );
+
+        for (
+          let i = 0;
+          i < pressure.length;
+          i += sampleStep
+        ) {
+          const value =
+            Number(pressure[i]);
+
+          if (Number.isFinite(value)) {
+            representative = value;
+            break;
           }
         }
 
-        se (Number.isFinite(representative) && representative > 2000) {
-          const converted = new Float32Array(expectedLength);
-          per (sia i = 0; i < lunghezza prevista; i++) convertito[i] = Numero(pressione[i]) / 100;
-          data.press_hpa = convertito;
-        } altro {
-          dati_press_hpa = pressione;
+        if (
+          Number.isFinite(representative) &&
+          representative > 2000
+        ) {
+          const converted =
+            new Float32Array(
+              expectedLength
+            );
+
+          for (
+            let i = 0;
+            i < expectedLength;
+            i++
+          ) {
+            converted[i] =
+              Number(pressure[i]) /
+              100;
+          }
+
+          data.press_hpa = converted;
+        } else {
+          data.press_hpa = pressure;
         }
       }
 
-      se (temp && umidità && u && v && lunghezza_temperatura === lunghezza_prevista) {
-        const feelsLike = new Float32Array(expectedLength);
+      if (
+        temp &&
+        humidity &&
+        u &&
+        v &&
+        temp.length === expectedLength
+      ) {
+        const feelsLike =
+          new Float32Array(
+            expectedLength
+          );
 
-        per (sia i = 0; i < lunghezza prevista; i++) {
-          const temperatura = Numero(temp[i]);
-          const rh = clamp(Number(humidity[i]), 0, 100);
-          const windSpeed ​​= Math.sqrt(Number(u[i]) ** 2 + Number(v[i]) ** 2);
-          const pressione di vapore = (rh / 100) * 6,105 * Math.exp((17,27 * temperatura) / (237,7 + temperatura));
-          FeelLike[i] = temperatura + 0,33 * vapourPressure - 0,70 * windSpeed ​​- 4,0;
+        for (
+          let i = 0;
+          i < expectedLength;
+          i++
+        ) {
+          const temperature =
+            Number(temp[i]);
+
+          const rh = clamp(
+            Number(humidity[i]),
+            0,
+            100
+          );
+
+          const windSpeed =
+            Math.sqrt(
+              Number(u[i]) ** 2 +
+              Number(v[i]) ** 2
+            );
+
+          const vapourPressure =
+            (rh / 100) *
+            6.105 *
+            Math.exp(
+              (17.27 * temperature) /
+              (237.7 + temperature)
+            );
+
+          feelsLike[i] =
+            temperature +
+            0.33 * vapourPressure -
+            0.70 * windSpeed -
+            4;
         }
 
-        data_feels_like = feelsLike;
+        data.feels_like =
+          feelsLike;
       }
 
-      se (buildPressure) buildPressureProducts(data);
+      if (buildPressure) {
+        buildPressureProducts(data);
+      }
     }
 
-    funzione asincrona loadStep(index) {
-      se (!catalog[indice]) restituisci;
+    async function loadStep(index) {
+      if (!catalog[index]) {
+        return;
+      }
 
-      const sequence = ++loadSequence;
-      currentIndex = indice;
-      document.getElementById("time-slider").value = String(index);
-      updateTimeUi(indice);
-      setLoading(true, "Elaborazione datiâ€¦");
+      const sequence =
+        ++loadSequence;
 
-      Tentativo {
-        lascia i dati;
+      currentIndex = index;
 
-        se (dataCache.has(index)) {
-          dati = dataCache.get(indice);
-          touchCache(indice, dati);
-          se (!data.isobarGeoJSON && getPressureGrid(data)) buildPressureProducts(data);
-        } altro {
-          dati = attendi fetchAndPrepareStep(indice, vero);
-          touchCache(indice, dati);
+      document.getElementById(
+        "time-slider"
+      ).value =
+        String(index);
+
+      updateTimeUi(index);
+
+      setLoading(
+        true,
+        "Elaborazione dati..."
+      );
+
+      try {
+        let data;
+
+        if (dataCache.has(index)) {
+          data =
+            dataCache.get(index);
+
+          touchCache(index, data);
+
+          if (
+            !data.isobarGeoJSON &&
+            getPressureGrid(data)
+          ) {
+            buildPressureProducts(data);
+          }
+        } else {
+          data =
+            await fetchAndPrepareStep(
+              index,
+              true
+            );
+
+          touchCache(index, data);
         }
 
-        se (sequenza !== loadSequence) restituisci;
+        if (sequence !== loadSequence) {
+          return;
+        }
 
-        dati correnti = dati;
+        currentData = data;
+
         updateLayerAvailability();
         renderWeatherField();
         updatePressureOverlays();
@@ -1757,117 +2668,418 @@
 
         prefetchStep(index + 1);
         prefetchStep(index - 1);
-      } catch (errore) {
-        console.error("Errore caricamento step:", errore);
-        setLoading(true, "Errore nel caricamento dello step");
-        ritorno;
+      } catch (error) {
+        console.error(
+          "Errore caricamento step:",
+          error
+        );
+
+        setLoading(
+          true,
+          "Errore nel caricamento dello step"
+        );
+
+        return;
       }
 
-      se (sequenza === loadSequence) impostaLoading(false);
+      if (sequence === loadSequence) {
+        setLoading(false);
+      }
     }
 
-    /* =========================================================
-       RENDERING RASTER
-       ========================================================= */
+    function hasLayerData(layer) {
+      if (!currentData) {
+        return true;
+      }
 
-    funzione hasLayerData(layer) {
-      se (!currentData) restituisce vero;
+      if (layer === "combined") {
+        return Boolean(
+          currentData.rain ||
+          currentData.cloud
+        );
+      }
 
-      se (layer === "combined") restituisce Boolean(currentData.rain && currentData.cloud);
-      se (layer === "wind") restituisce Boolean(currentData.wind_u && currentData.wind_v);
-      se (layer === "press") restituisce Boolean(getPressureGrid(currentData));
-      restituisci Boolean(currentData[layer]);
+      if (layer === "wind") {
+        return Boolean(
+          currentData.wind_u &&
+          currentData.wind_v
+        );
+      }
+
+      if (layer === "press") {
+        return Boolean(
+          getPressureGrid(currentData)
+        );
+      }
+
+      return Boolean(
+        currentData[layer]
+      );
     }
 
-    funzione updateLayerAvailability() {
-      Object.keys(LAYER_INFO).forEach((layer) => {
-        const button = document.getElementById(`btn-${layer}`);
-        se (pulsante) pulsante.classList.toggle("disabilitato", !hasLayerData(layer));
+    function updateLayerAvailability() {
+      Object.keys(
+        LAYER_INFO
+      ).forEach(function (layer) {
+        const button =
+          document.getElementById(
+            "btn-" + layer
+          );
+
+        if (button) {
+          button.classList.toggle(
+            "disabled",
+            !hasLayerData(layer)
+          );
+        }
       });
 
-      se (!hasLayerData(activeLayer)) {
-        const fallback = Object.keys(LAYER_INFO).find(hasLayerData);
-        se (fallback) activeLayer = fallback;
+      if (!hasLayerData(activeLayer)) {
+        const fallback =
+          Object.keys(
+            LAYER_INFO
+          ).find(hasLayerData);
+
+        if (fallback) {
+          activeLayer = fallback;
+        }
       }
     }
 
-    funzione renderWeatherField() {
-      se (!currentData || !map?.getSource("weather-source")) restituisci;
+    function renderWeatherField() {
+      if (
+        !currentData ||
+        !map ||
+        !map.getSource("weather-source")
+      ) {
+        return;
+      }
 
-      const meta = currentData.meta;
-      const layerInfo = LAYER_INFO[activeLayer];
+      const meta =
+        currentData.meta;
 
-      renderCanvas.width = meta.nx;
-      renderCanvas.height = meta.ny;
+      const layerInfo =
+        LAYER_INFO[activeLayer];
 
-      const image = renderCtx.createImageData(meta.nx, meta.ny);
-      const pixels = image.data;
+      renderCanvas.width =
+        meta.nx;
 
-      const halfDx = meta.dx / 2;
-      const halfDy = meta.dy / 2;
-      const topLatitude = meta.la1 + halfDy;
-      const bottomLatitude = meta.la1 - (meta.ny - 1) * meta.dy - halfDy;
-      const leftLongitude = normalizeLongitude(meta.lo1 - halfDx);
-      const rightLongitude = normalizeLongitude(meta.lo1 + (meta.nx - 1) * meta.dx + halfDx);
+      renderCanvas.height =
+        meta.ny;
 
-      const mercatorTop = Math.log(Math.tan(Math.PI / 4 + (topLatitude * Math.PI / 180) / 2));
-      const mercatorBottom = Math.log(Math.tan(Math.PI / 4 + (bottomLatitude * Math.PI / 180) / 2));
+      const image =
+        renderCtx.createImageData(
+          meta.nx,
+          meta.ny
+        );
 
-      per (lascia outputY = 0; outputY < meta.ny; outputY++) {
-        const fy = outputY / Math.max(meta.ny - 1, 1);
-        const mercatorY = mercatorTop + fy * (mercatorBottom - mercatorTop);
-        const latitudine = (2 * Math.atan(Math.exp(mercatorY)) - Math.PI / 2) * 180 / Math.PI;
-        const gridY = (meta.la1 - latitudine) / meta.dy;
+      const pixels =
+        image.data;
 
-        per (lascia outputX = 0; outputX < meta.nx; outputX++) {
-          const index = (outputY * meta.nx + outputX) * 4;
-          lascia colore = [0, 0, 0, 0];
+      const halfDx =
+        meta.dx / 2;
 
-          se (activeLayer === "combined") {
-            const cloud = getBilinear(currentData.cloud, outputX, gridY, meta.nx, meta.ny);
-            const rain = getBilinear(currentData.rain, outputX, gridY, meta.nx, meta.ny);
+      const halfDy =
+        meta.dy / 2;
 
-            const cloudColor = Number.isFinite(cloud) && cloud >= 4
-              ? getStopColor(cloud, CLOUD_STOPS)
-              : [0, 0, 0, 0];
+      const topLatitude =
+        meta.la1 + halfDy;
 
-            const rainColor = Number.isFinite(rain) && rain >= 0.06
-              ? getStopColor(rain, RAIN_STOPS)
-              : [0, 0, 0, 0];
+      const bottomLatitude =
+        meta.la1 -
+        (meta.ny - 1) *
+        meta.dy -
+        halfDy;
 
-            colore = alphaComposite(colorenuvola, colorepioggia);
-          } altrimenti se (activeLayer === "wind") {
-            const u = getBilinear(currentData.wind_u, outputX, gridY, meta.nx, meta.ny);
-            const v = getBilinear(currentData.wind_v, outputX, gridY, meta.nx, meta.ny);
-            const speed = Math.sqrt(u * u + v * v);
-            colore = getStopColor(velocità, FERMATE_VENTO);
-          } altrimenti se (activeLayer === "press") {
-            const pressure = getBilinear(getPressureGrid(), outputX, gridY, meta.nx, meta.ny);
-            colore = getStopColor(pressione, PRESS_STOPS);
-          } altro {
-            const value = getBilinear(currentData[activeLayer], outputX, gridY, meta.nx, meta.ny);
-            colore = getStopColor(valore, layerInfo.stops);
+      const leftLongitude =
+        normalizeLongitude(
+          meta.lo1 - halfDx
+        );
+
+      const rightLongitude =
+        normalizeLongitude(
+          meta.lo1 +
+          (meta.nx - 1) *
+          meta.dx +
+          halfDx
+        );
+
+      const mercatorTop =
+        Math.log(
+          Math.tan(
+            Math.PI / 4 +
+            (
+              topLatitude *
+              Math.PI /
+              180
+            ) / 2
+          )
+        );
+
+      const mercatorBottom =
+        Math.log(
+          Math.tan(
+            Math.PI / 4 +
+            (
+              bottomLatitude *
+              Math.PI /
+              180
+            ) / 2
+          )
+        );
+
+      for (
+        let outputY = 0;
+        outputY < meta.ny;
+        outputY++
+      ) {
+        const fy =
+          outputY /
+          Math.max(
+            meta.ny - 1,
+            1
+          );
+
+        const mercatorY =
+          mercatorTop +
+          fy *
+          (
+            mercatorBottom -
+            mercatorTop
+          );
+
+        const latitude =
+          (
+            2 *
+            Math.atan(
+              Math.exp(mercatorY)
+            ) -
+            Math.PI / 2
+          ) *
+          180 /
+          Math.PI;
+
+        const gridY =
+          (
+            meta.la1 -
+            latitude
+          ) /
+          meta.dy;
+
+        for (
+          let outputX = 0;
+          outputX < meta.nx;
+          outputX++
+        ) {
+          const pixelIndex =
+            (
+              outputY *
+              meta.nx +
+              outputX
+            ) *
+            4;
+
+          let color =
+            [0, 0, 0, 0];
+
+          if (activeLayer === "combined") {
+            const cloud =
+              currentData.cloud
+                ? getBilinear(
+                    currentData.cloud,
+                    outputX,
+                    gridY,
+                    meta.nx,
+                    meta.ny
+                  )
+                : NaN;
+
+            const rain =
+              currentData.rain
+                ? getBilinear(
+                    currentData.rain,
+                    outputX,
+                    gridY,
+                    meta.nx,
+                    meta.ny
+                  )
+                : NaN;
+
+            const cloudColor =
+              Number.isFinite(cloud) &&
+              cloud >= 4
+                ? getStopColor(
+                    cloud,
+                    CLOUD_STOPS
+                  )
+                : [0, 0, 0, 0];
+
+            const rainColor =
+              Number.isFinite(rain) &&
+              rain >= 0.06
+                ? getStopColor(
+                    rain,
+                    RAIN_STOPS
+                  )
+                : [0, 0, 0, 0];
+
+            color =
+              alphaComposite(
+                cloudColor,
+                rainColor
+              );
+          } else if (
+            activeLayer === "wind"
+          ) {
+            const u =
+              getBilinear(
+                currentData.wind_u,
+                outputX,
+                gridY,
+                meta.nx,
+                meta.ny
+              );
+
+            const v =
+              getBilinear(
+                currentData.wind_v,
+                outputX,
+                gridY,
+                meta.nx,
+                meta.ny
+              );
+
+            const speed =
+              Math.sqrt(
+                u * u +
+                v * v
+              );
+
+            color =
+              getStopColor(
+                speed,
+                WIND_STOPS
+              );
+          } else if (
+            activeLayer === "press"
+          ) {
+            const pressure =
+              getBilinear(
+                getPressureGrid(),
+                outputX,
+                gridY,
+                meta.nx,
+                meta.ny
+              );
+
+            color =
+              getStopColor(
+                pressure,
+                PRESS_STOPS
+              );
+          } else {
+            const value =
+              getBilinear(
+                currentData[activeLayer],
+                outputX,
+                gridY,
+                meta.nx,
+                meta.ny
+              );
+
+            color =
+              getStopColor(
+                value,
+                layerInfo.stops
+              );
           }
 
-          pixels[index] = Math.round(clamp(color[0], 0, 255));
-          pixels[index + 1] = Math.round(clamp(color[1], 0, 255));
-          pixels[index + 2] = Math.round(clamp(color[2], 0, 255));
-          pixels[index + 3] = Math.round(clamp(color[3] * 255, 0, 255));
+          pixels[pixelIndex] =
+            Math.round(
+              clamp(
+                color[0],
+                0,
+                255
+              )
+            );
+
+          pixels[pixelIndex + 1] =
+            Math.round(
+              clamp(
+                color[1],
+                0,
+                255
+              )
+            );
+
+          pixels[pixelIndex + 2] =
+            Math.round(
+              clamp(
+                color[2],
+                0,
+                255
+              )
+            );
+
+          pixels[pixelIndex + 3] =
+            Math.round(
+              clamp(
+                color[3] * 255,
+                0,
+                255
+              )
+            );
         }
       }
 
-      renderCtx.putImageData(immagine, 0, 0);
+      renderCtx.putImageData(
+        image,
+        0,
+        0
+      );
 
-      map.setPaintProperty("weather-layer", "raster-opacity", layerInfo.opacity);
-      map.setPaintProperty("hillshade-over-weather", "raster-opacity", showRelief ? layerInfo.relief : 0);
+      map.setPaintProperty(
+        "weather-layer",
+        "raster-opacity",
+        layerInfo.opacity
+      );
 
-      map.getSource("weather-source").updateImage({
-        url: renderCanvas.toDataURL("image/png"),
-        coordinate: [
-          [longitudine sinistra, latitudine superiore],
-          [Longitudine destra, Latitudine superiore],
-          [Longitudine destra, Latitudine in basso],
-          [Longitudine sinistra, Latitudine in basso]
+      map.setPaintProperty(
+        "hillshade-over-weather",
+        "raster-opacity",
+        showRelief
+          ? layerInfo.relief
+          : 0
+      );
+
+      map.getSource(
+        "weather-source"
+      ).updateImage({
+        url:
+          renderCanvas.toDataURL(
+            "image/png"
+          ),
+
+        coordinates: [
+          [
+            leftLongitude,
+            topLatitude
+          ],
+
+          [
+            rightLongitude,
+            topLatitude
+          ],
+
+          [
+            rightLongitude,
+            bottomLatitude
+          ],
+
+          [
+            leftLongitude,
+            bottomLatitude
+          ]
         ]
       });
 
@@ -1876,319 +3088,1048 @@
       scheduleWindRender();
     }
 
-    /* =========================================================
-       ISOBRE E CENTRI H/L
-       ========================================================= */
-
-    funzione buildPressureProducts(data) {
+    function buildPressureProducts(data) {
       const meta = data.meta;
-      const pressure = getPressureGrid(data);
-      se (!pressione) restituisci;
+      const pressure =
+        getPressureGrid(data);
 
-      const finiteValues ​​= [];
-      per (sia i = 0; i < pressure.length; i += Math.max(1, Math.floor(pressure.length / 1500))) {
-        const value = Number(pressure[i]);
-        se (Number.isFinite(value)) finiteValues.push(value);
+      if (!pressure) {
+        return;
       }
 
-      const observedMin = finiteValues.length ? Math.min(...finiteValues) : 950;
-      const observedMax = finiteValues.length ? Math.max(...finiteValues) : 1040;
-      const thresholdMin = Math.floor(Math.max(940, observedMin - 2) / 2) * 2;
-      const thresholdMax = Math.ceil(Math.min(1060, observedMax + 2) / 2) * 2;
-      const thresholds = d3.range(thresholdMin, thresholdMax + 0.1, 2);
+      const finiteValues = [];
 
-      const contours = d3.contours()
-        .size([meta.nx, meta.ny])
-        .soglie(soglie)(pressione);
+      const sampleStep = Math.max(
+        1,
+        Math.floor(
+          pressure.length / 1500
+        )
+      );
 
-      const caratteristiche = [];
+      for (
+        let i = 0;
+        i < pressure.length;
+        i += sampleStep
+      ) {
+        const value =
+          Number(pressure[i]);
 
-      per (contorno costante dei contorni) {
-        const valore = Numero(valorecontorno);
-        const major = Math.round(value) % 4 === 0;
+        if (Number.isFinite(value)) {
+          finiteValues.push(value);
+        }
+      }
 
-        per (poligono costante di coordinate di contorno) {
-          per (anello costante di poligono) {
-            se (!ring || ring.length < 4) continua;
+      const observedMin =
+        finiteValues.length
+          ? Math.min(...finiteValues)
+          : 950;
 
-            const coordinates = ring.map((point) => [
-              meta.lo1 + point[0] * meta.dx,
-              meta.la1 - point[1] * meta.dy
-            ]);
+      const observedMax =
+        finiteValues.length
+          ? Math.max(...finiteValues)
+          : 1040;
 
-            caratteristiche.push({
-              tipo: "Funzionalità",
-              geometria: { tipo: "LineString", coordinate },
-              proprietà: { valore: Math.round(valore), maggiore }
+      const thresholdMin =
+        Math.floor(
+          Math.max(
+            940,
+            observedMin - 2
+          ) / 2
+        ) * 2;
+
+      const thresholdMax =
+        Math.ceil(
+          Math.min(
+            1060,
+            observedMax + 2
+          ) / 2
+        ) * 2;
+
+      const thresholds =
+        d3.range(
+          thresholdMin,
+          thresholdMax + 0.1,
+          2
+        );
+
+      const contours =
+        d3.contours()
+          .size([
+            meta.nx,
+            meta.ny
+          ])
+          .thresholds(thresholds)(
+            pressure
+          );
+
+      const features = [];
+
+      for (const contour of contours) {
+        const value =
+          Number(contour.value);
+
+        const major =
+          Math.round(value) %
+          4 === 0;
+
+        for (
+          const polygon of
+          contour.coordinates
+        ) {
+          for (
+            const ring of polygon
+          ) {
+            if (
+              !ring ||
+              ring.length < 4
+            ) {
+              continue;
+            }
+
+            const coordinates =
+              ring.map(function (point) {
+                return [
+                  meta.lo1 +
+                  point[0] *
+                  meta.dx,
+
+                  meta.la1 -
+                  point[1] *
+                  meta.dy
+                ];
+              });
+
+            features.push({
+              type: "Feature",
+
+              geometry: {
+                type: "LineString",
+                coordinates: coordinates
+              },
+
+              properties: {
+                value:
+                  Math.round(value),
+
+                major: major
+              }
             });
           }
         }
       }
 
-      data.isobarGeoJSON = { type: "FeatureCollection", features };
-      data.pressureCentersGeoJSON = detectPressureCenters(data);
+      data.isobarGeoJSON = {
+        type: "FeatureCollection",
+        features: features
+      };
+
+      data.pressureCentersGeoJSON =
+        detectPressureCenters(data);
     }
 
-    funzione rilevaCentriPressione(dati) {
+    function detectPressureCenters(data) {
       const meta = data.meta;
-      const pressure = getPressureGrid(data);
-      se (!pressione) restituisci { tipo: "FeatureCollection", caratteristiche: [] };
 
-      const dimensione min = Math.min(meta.nx, meta.ny);
-      const searchRadius = clamp(Math.round(minDimension * 0.035), 10, 34);
-      const candidateStep = clamp(Math.round(searchRadius * 0.55), 6, 16);
-      const probeStep = clamp(Math.round(searchRadius / 5), 2, 6);
+      const pressure =
+        getPressureGrid(data);
+
+      if (!pressure) {
+        return {
+          type: "FeatureCollection",
+          features: []
+        };
+      }
+
+      const minDimension =
+        Math.min(
+          meta.nx,
+          meta.ny
+        );
+
+      const searchRadius =
+        clamp(
+          Math.round(
+            minDimension * 0.035
+          ),
+          10,
+          34
+        );
+
+      const candidateStep =
+        clamp(
+          Math.round(
+            searchRadius * 0.55
+          ),
+          6,
+          16
+        );
+
+      const probeStep =
+        clamp(
+          Math.round(
+            searchRadius / 5
+          ),
+          2,
+          6
+        );
+
       const candidates = [];
 
-      for (let y = searchRadius; y < meta.ny - searchRadius; y += candidateStep) {
-        per (sia x = searchRadius; x < meta.nx - searchRadius; x += candidateStep) {
-          const centro = Numero(pressione[y * meta.nx + x]);
-          se (!Number.isFinite(center)) continua;
+      for (
+        let y = searchRadius;
+        y < meta.ny - searchRadius;
+        y += candidateStep
+      ) {
+        for (
+          let x = searchRadius;
+          x < meta.nx - searchRadius;
+          x += candidateStep
+        ) {
+          const center =
+            Number(
+              pressure[
+                y * meta.nx + x
+              ]
+            );
 
-          sia localMin = Infinito;
-          sia localMax = -Infinity;
-          sia la somma = 0;
-          lascia count = 0;
+          if (!Number.isFinite(center)) {
+            continue;
+          }
 
-          per (sia yy = -searchRadius; yy <= searchRadius; yy += probeStep) {
-            per (sia xx = -searchRadius; xx <= searchRadius; xx += probeStep) {
-              se (xx * xx + yy * yy > searchRadius * searchRadius) continua;
-              const valore = Numero(pressione[(y + yy) * meta.nx + (x + xx)]);
-              se (!Number.isFinite(value)) continua;
+          let localMin = Infinity;
+          let localMax = -Infinity;
+          let sum = 0;
+          let count = 0;
 
-              localMin = Math.min(localMin, valore);
-              localMax = Math.max(localMax, valore);
-              somma += valore;
-              conteggio++;
+          for (
+            let yy = -searchRadius;
+            yy <= searchRadius;
+            yy += probeStep
+          ) {
+            for (
+              let xx = -searchRadius;
+              xx <= searchRadius;
+              xx += probeStep
+            ) {
+              if (
+                xx * xx +
+                yy * yy >
+                searchRadius *
+                searchRadius
+              ) {
+                continue;
+              }
+
+              const value =
+                Number(
+                  pressure[
+                    (y + yy) *
+                    meta.nx +
+                    (x + xx)
+                  ]
+                );
+
+              if (!Number.isFinite(value)) {
+                continue;
+              }
+
+              localMin =
+                Math.min(
+                  localMin,
+                  value
+                );
+
+              localMax =
+                Math.max(
+                  localMax,
+                  value
+                );
+
+              sum += value;
+              count++;
             }
           }
 
-          se (!count) continua;
-          costante media = somma / conteggio;
-          const highProminence = centro - media;
-          const lowProminence = media - centro;
-          costante tolleranza = 0,15;
-
-          se (centro >= localMax - tolleranza && centro >= 1014 && altaProminenza >= 0,55) {
-            candidates.push({ x, y, value: center, type: "H", strength: highProminence + (center - 1014) * 0.05 });
+          if (!count) {
+            continue;
           }
 
-          se (centro <= localMin + tolleranza && centro <= 1014 && bassaProminenza >= 0,55) {
-            candidates.push({ x, y, value: center, type: "L", strength: lowProminence + (1014 - center) * 0.05 });
+          const mean =
+            sum / count;
+
+          const highProminence =
+            center - mean;
+
+          const lowProminence =
+            mean - center;
+
+          const tolerance =
+            0.15;
+
+          if (
+            center >=
+              localMax -
+              tolerance &&
+            center >= 1014 &&
+            highProminence >= 0.55
+          ) {
+            candidates.push({
+              x: x,
+              y: y,
+              value: center,
+              type: "H",
+
+              strength:
+                highProminence +
+                (
+                  center -
+                  1014
+                ) *
+                0.05
+            });
+          }
+
+          if (
+            center <=
+              localMin +
+              tolerance &&
+            center <= 1014 &&
+            lowProminence >= 0.55
+          ) {
+            candidates.push({
+              x: x,
+              y: y,
+              value: center,
+              type: "L",
+
+              strength:
+                lowProminence +
+                (
+                  1014 -
+                  center
+                ) *
+                0.05
+            });
           }
         }
       }
 
-      const globalHigh = findGlobalPressureExtreme(pressione, meta, "H");
-      const globalLow = findGlobalPressureExtreme(pressure, meta, "L");
-      se (globalHigh) candidati.push(globalHigh);
-      se (globalLow) candidati.push(globalLow);
+      const globalHigh =
+        findGlobalPressureExtreme(
+          pressure,
+          meta,
+          "H"
+        );
 
-      candidates.sort((a, b) => b.strength - a.strength);
+      const globalLow =
+        findGlobalPressureExtreme(
+          pressure,
+          meta,
+          "L"
+        );
+
+      if (globalHigh) {
+        candidates.push(globalHigh);
+      }
+
+      if (globalLow) {
+        candidates.push(globalLow);
+      }
+
+      candidates.sort(function (a, b) {
+        return b.strength - a.strength;
+      });
 
       const accepted = [];
-      const minimumDistance = clamp(Math.round(minDimension * 0.16), 42, 125);
 
-      per (const candidato di candidati) {
-        const tooClose = accepted.some((other) => {
-          const dx = candidate.x - other.x;
-          const dy = candidate.y - other.y;
-          restituisci Math.hypot(dx, dy) < minimumDistance;
-        });
+      const minimumDistance =
+        clamp(
+          Math.round(
+            minDimension * 0.16
+          ),
+          42,
+          125
+        );
 
-        se (!troppoVicino) accettato.push(candidato);
-        se (accepted.length >= 8) interrompi;
+      for (
+        const candidate of candidates
+      ) {
+        const tooClose =
+          accepted.some(function (other) {
+            const dx =
+              candidate.x -
+              other.x;
+
+            const dy =
+              candidate.y -
+              other.y;
+
+            return (
+              Math.hypot(dx, dy) <
+              minimumDistance
+            );
+          });
+
+        if (!tooClose) {
+          accepted.push(candidate);
+        }
+
+        if (accepted.length >= 8) {
+          break;
+        }
       }
 
-      const features = accepted.map((center) => ({
-        tipo: "Funzionalità",
-        geometria: {
-          tipo: "Punto",
-          coordinate: [
-            meta.lo1 + center.x * meta.dx,
-            meta.la1 - center.y * meta.dy
-          ]
-        },
-        proprietà: {
-          tipo: tipo centro,
-          valore: Math.round(center.value)
-        }
-      }));
+      const features =
+        accepted.map(function (center) {
+          return {
+            type: "Feature",
 
-      restituisci { tipo: "FeatureCollection", caratteristiche };
+            geometry: {
+              type: "Point",
+
+              coordinates: [
+                meta.lo1 +
+                center.x *
+                meta.dx,
+
+                meta.la1 -
+                center.y *
+                meta.dy
+              ]
+            },
+
+            properties: {
+              type: center.type,
+              value:
+                Math.round(
+                  center.value
+                )
+            }
+          };
+        });
+
+      return {
+        type: "FeatureCollection",
+        features: features
+      };
     }
 
-    funzione trovaPressioneGlobaleEstrema(pressione, meta, tipo) {
-      lascia bestValue = tipo === "H" ? -Infinity : Infinity;
-      lascia bestX = -1;
-      lascia bestY = -1;
-      const marginX = Math.max(3, Math.round(meta.nx * 0.025));
-      const marginY = Math.max(3, Math.round(meta.ny * 0.025));
+    function findGlobalPressureExtreme(
+      pressure,
+      meta,
+      type
+    ) {
+      let bestValue =
+        type === "H"
+          ? -Infinity
+          : Infinity;
 
-      for (let y = margineY; y < meta.ny - margineY; y++) {
-        per (sia x = margineX; x < meta.nx - margineX; x++) {
-          const valore = Numero(pressione[y * meta.nx + x]);
-          se (!Number.isFinite(value)) continua;
+      let bestX = -1;
+      let bestY = -1;
 
-          se ((tipo === "H" e valore > migliorValore) || (tipo === "L" e valore < migliorValore)) {
-            migliorValore = valore;
+      const marginX =
+        Math.max(
+          3,
+          Math.round(
+            meta.nx * 0.025
+          )
+        );
+
+      const marginY =
+        Math.max(
+          3,
+          Math.round(
+            meta.ny * 0.025
+          )
+        );
+
+      for (
+        let y = marginY;
+        y < meta.ny - marginY;
+        y++
+      ) {
+        for (
+          let x = marginX;
+          x < meta.nx - marginX;
+          x++
+        ) {
+          const value =
+            Number(
+              pressure[
+                y * meta.nx + x
+              ]
+            );
+
+          if (!Number.isFinite(value)) {
+            continue;
+          }
+
+          if (
+            (
+              type === "H" &&
+              value > bestValue
+            ) ||
+            (
+              type === "L" &&
+              value < bestValue
+            )
+          ) {
+            bestValue = value;
             bestX = x;
             bestY = y;
           }
         }
       }
 
-      se (bestX < 0) restituisci null;
-      se (tipo === "H" e migliorValore < 1015) restituisci null;
-      se (tipo === "L" e bestValue > 1013) restituisci null;
+      if (bestX < 0) {
+        return null;
+      }
 
-      ritorno {
+      if (
+        type === "H" &&
+        bestValue < 1015
+      ) {
+        return null;
+      }
+
+      if (
+        type === "L" &&
+        bestValue > 1013
+      ) {
+        return null;
+      }
+
+      return {
         x: bestX,
         y: bestY,
-        valore: migliorValore,
-        tipo,
-        forza: 1,2 + Math.abs(bestValue - 1014) * 0,05
+        value: bestValue,
+        type: type,
+
+        strength:
+          1.2 +
+          Math.abs(
+            bestValue -
+            1014
+          ) *
+          0.05
       };
     }
 
-    funzione updatePressureOverlays() {
-      se (!map?.getSource("isobars-source")) restituisci;
-
-      const visible = activeLayer === "press";
-      const visibilità = visibile ? "visibile" : "nessuno";
-
-      per (const layerId di [
-        "isobari minori",
-        "isobari maggiori",
-        "etichette isobare",
-        "simboli del centro di pressione",
-        "valori del centro di pressione"
-      ]) {
-        se (map.getLayer(layerId)) map.setLayoutProperty(layerId, "visibilità", visibilità);
+    function updatePressureOverlays() {
+      if (
+        !map ||
+        !map.getSource(
+          "isobars-source"
+        )
+      ) {
+        return;
       }
 
-      se (!visibile || !dati correnti) restituisci;
+      const visible =
+        activeLayer === "press";
 
-      se (!currentData.isobarGeoJSON) creaProdottiPressione(currentData);
+      const visibility =
+        visible
+          ? "visible"
+          : "none";
 
-      map.getSource("isobars-source").setData(
-        currentData.isobarGeoJSON || { type: "FeatureCollection", features: [] }
+      const pressureLayers = [
+        "isobars-minor",
+        "isobars-major",
+        "isobars-labels",
+        "pressure-center-symbols",
+        "pressure-center-values"
+      ];
+
+      for (
+        const layerId of pressureLayers
+      ) {
+        if (map.getLayer(layerId)) {
+          map.setLayoutProperty(
+            layerId,
+            "visibility",
+            visibility
+          );
+        }
+      }
+
+      if (
+        !visible ||
+        !currentData
+      ) {
+        return;
+      }
+
+      if (
+        !currentData.isobarGeoJSON
+      ) {
+        buildPressureProducts(
+          currentData
+        );
+      }
+
+      map.getSource(
+        "isobars-source"
+      ).setData(
+        currentData.isobarGeoJSON ||
+        {
+          type: "FeatureCollection",
+          features: []
+        }
       );
 
-      map.getSource("pressure-centers-source").setData(
-        currentData.pressureCentersGeoJSON || { type: "FeatureCollection", features: [] }
+      map.getSource(
+        "pressure-centers-source"
+      ).setData(
+        currentData
+          .pressureCentersGeoJSON ||
+        {
+          type: "FeatureCollection",
+          features: []
+        }
       );
     }
 
-    /* =========================================================
-       FRECCE DEL VENTO DINAMICHE
-       ========================================================= */
+    function resizeWindCanvas() {
+      const mobile =
+        window
+          .matchMedia(
+            "(pointer: coarse)"
+          )
+          .matches ||
+        window.innerWidth <= 920;
 
-    funzione resizeWindCanvas() {
-      const mobile = window.matchMedia("(pointer: coarse)").matches || window.innerWidth <= 920;
-      const devicePixelRatio = Math.min(window.devicePixelRatio || 1, mobile ? 2.2 : 2);
+      const dpr =
+        Math.min(
+          window.devicePixelRatio || 1,
+          mobile ? 2.2 : 2
+        );
 
-      windCanvas.width = Math.round(window.innerWidth * devicePixelRatio);
-      windCanvas.height = Math.round(window.innerHeight * devicePixelRatio);
-      windCanvas.style.width = `${window.innerWidth}px`;
-      windCanvas.style.height = `${window.innerHeight}px`;
-      windCtx.setTransform(devicePixelRatio, 0, 0, devicePixelRatio, 0, 0);
+      windCanvas.width =
+        Math.round(
+          window.innerWidth *
+          dpr
+        );
+
+      windCanvas.height =
+        Math.round(
+          window.innerHeight *
+          dpr
+        );
+
+      windCanvas.style.width =
+        window.innerWidth + "px";
+
+      windCanvas.style.height =
+        window.innerHeight + "px";
+
+      windCtx.setTransform(
+        dpr,
+        0,
+        0,
+        dpr,
+        0,
+        0
+      );
     }
 
-    funzione clearWindCanvas() {
-      windCtx.clearRect(0, 0, window.innerWidth, window.innerHeight);
+    function clearWindCanvas() {
+      windCtx.clearRect(
+        0,
+        0,
+        window.innerWidth,
+        window.innerHeight
+      );
     }
 
-    funzione scheduleWindRender() {
-      se (windRenderFrame) restituisci;
+    function scheduleWindRender() {
+      if (windRenderFrame) {
+        return;
+      }
 
-      windRenderFrame = requestAnimationFrame(() => {
-        windRenderFrame = null;
-        renderWindArrows();
-      });
+      windRenderFrame =
+        requestAnimationFrame(
+          function () {
+            windRenderFrame = null;
+            renderWindArrows();
+          }
+        );
     }
 
-    funzione renderWindArrows() {
+    function renderWindArrows() {
       clearWindCanvas();
 
-      se (activeLayer !== "wind" || !currentData?.wind_u || !currentData?.wind_v || !map) restituisci;
+      if (
+        activeLayer !== "wind" ||
+        !currentData?.wind_u ||
+        !currentData?.wind_v ||
+        !map
+      ) {
+        return;
+      }
 
-      const meta = currentData.meta;
-      const zoom = map.getZoom();
-      const mobile = window.matchMedia("(pointer: coarse)").matches || window.innerWidth <= 920;
+      const meta =
+        currentData.meta;
 
-      const spacing = clamp((mobile ? 74 : 86) - (zoom - 4) * (mobile ? 7.5 : 8.5), mobile ? 38 : 42, mobile ? 72 : 84);
-      const zoomScale = clamp(0.84 + (zoom - 4) * 0.065, 0.82, 1.28);
-      const topMargin = mobile ? 66 : 82;
-      const bottomMargin = mobile ? 80 : 95;
-      const xOffset = (Math.round(map.getCenter().lng * 11) % spaziatura + spaziatura) % spaziatura;
-      const yOffset = (Math.round(map.getCenter().lat * 13) % spaziatura + spaziatura) % spaziatura;
+      const zoom =
+        map.getZoom();
+
+      const mobile =
+        window
+          .matchMedia(
+            "(pointer: coarse)"
+          )
+          .matches ||
+        window.innerWidth <= 920;
+
+      const spacing =
+        clamp(
+          (
+            mobile
+              ? 74
+              : 86
+          ) -
+          (
+            zoom -
+            4
+          ) *
+          (
+            mobile
+              ? 7.5
+              : 8.5
+          ),
+
+          mobile
+            ? 38
+            : 42,
+
+          mobile
+            ? 72
+            : 84
+        );
+
+      const zoomScale =
+        clamp(
+          0.84 +
+          (
+            zoom -
+            4
+          ) *
+          0.065,
+          0.82,
+          1.28
+        );
+
+      const topMargin =
+        mobile
+          ? 66
+          : 82;
+
+      const bottomMargin =
+        mobile
+          ? 80
+          : 95;
+
+      const xOffset =
+        (
+          Math.round(
+            map.getCenter().lng *
+            11
+          ) %
+          spacing +
+          spacing
+        ) %
+        spacing;
+
+      const yOffset =
+        (
+          Math.round(
+            map.getCenter().lat *
+            13
+          ) %
+          spacing +
+          spacing
+        ) %
+        spacing;
 
       windCtx.save();
-      windCtx.globalCompositeOperation = "source-over";
-      windCtx.lineCap = "round";
-      windCtx.lineJoin = "round";
 
-      for (let screenY = topMargin - yOffset; screenY < window.innerHeight - bottomMargin; screenY += spaziatura) {
-        per (lascia screenX = 20 - xOffset; screenX < window.innerWidth - 18; screenX += spaziatura) {
-          const lngLat = map.unproject([screenX, screenY]);
-          const gx = (lngLat.lng - meta.lo1) / meta.dx;
-          const gy = (meta.la1 - lngLat.lat) / meta.dy;
+      windCtx.globalCompositeOperation =
+        "source-over";
 
-          if (gx < 0 || gy < 0 || gx >= meta.nx - 1 || gy >= meta.ny - 1) continua;
+      windCtx.lineCap =
+        "round";
 
-          const u = getBilinear(currentData.wind_u, gx, gy, meta.nx, meta.ny);
-          const v = getBilinear(currentData.wind_v, gx, gy, meta.nx, meta.ny);
-          const speed = Math.sqrt(u * u + v * v);
+      windCtx.lineJoin =
+        "round";
 
-          se (!Number.isFinite(speed) || speed < 0.35) continua;
+      for (
+        let screenY =
+          topMargin -
+          yOffset;
+
+        screenY <
+          window.innerHeight -
+          bottomMargin;
+
+        screenY += spacing
+      ) {
+        for (
+          let screenX =
+            20 -
+            xOffset;
+
+          screenX <
+            window.innerWidth -
+            18;
+
+          screenX += spacing
+        ) {
+          const lngLat =
+            map.unproject([
+              screenX,
+              screenY
+            ]);
+
+          const gx =
+            (
+              lngLat.lng -
+              meta.lo1
+            ) /
+            meta.dx;
+
+          const gy =
+            (
+              meta.la1 -
+              lngLat.lat
+            ) /
+            meta.dy;
+
+          if (
+            gx < 0 ||
+            gy < 0 ||
+            gx >= meta.nx - 1 ||
+            gy >= meta.ny - 1
+          ) {
+            continue;
+          }
+
+          const u =
+            getBilinear(
+              currentData.wind_u,
+              gx,
+              gy,
+              meta.nx,
+              meta.ny
+            );
+
+          const v =
+            getBilinear(
+              currentData.wind_v,
+              gx,
+              gy,
+              meta.nx,
+              meta.ny
+            );
+
+          const speed =
+            Math.sqrt(
+              u * u +
+              v * v
+            );
+
+          if (
+            !Number.isFinite(speed) ||
+            speed < 0.35
+          ) {
+            continue;
+          }
 
           const directionX = u;
           const directionY = -v;
-          const magnitude = Math.hypot(directionX, directionY) || 1;
-          const unitX = directionX / magnitudo;
-          const unitY = directionY / magnitudo;
 
-          const lunghezza = clamp((13 + velocità * 2.05) * zoomScale, mobile ? 14 : 16, mobile ? 40 : 47);
-          const startX = screenX - unitX * length * 0.44;
-          const startY = screenY - unitY * length * 0.44;
-          const endX = screenX + unitX * length * 0.56;
-          const endY = screenY + unitY * length * 0.56;
+          const magnitude =
+            Math.hypot(
+              directionX,
+              directionY
+            ) || 1;
 
-          const width = clamp((0.95 + speed * 0.045) * zoomScale, 1.0, mobile ? 2.15 : 2.55);
-          const head = clamp((4.4 + speed * 0.10) * zoomScale, 5.0, mobile ? 8.2 : 9.2);
-          const color = getArrowColor(speed);
+          const unitX =
+            directionX /
+            magnitude;
 
-          disegnaFrecciaAvento(inizioX, inizioY, fineX, fineY, colore, larghezza, testa);
+          const unitY =
+            directionY /
+            magnitude;
+
+          const length =
+            clamp(
+              (
+                13 +
+                speed *
+                2.05
+              ) *
+              zoomScale,
+
+              mobile
+                ? 14
+                : 16,
+
+              mobile
+                ? 40
+                : 47
+            );
+
+          const startX =
+            screenX -
+            unitX *
+            length *
+            0.44;
+
+          const startY =
+            screenY -
+            unitY *
+            length *
+            0.44;
+
+          const endX =
+            screenX +
+            unitX *
+            length *
+            0.56;
+
+          const endY =
+            screenY +
+            unitY *
+            length *
+            0.56;
+
+          const width =
+            clamp(
+              (
+                0.95 +
+                speed *
+                0.045
+              ) *
+              zoomScale,
+              1,
+              mobile
+                ? 2.15
+                : 2.55
+            );
+
+          const head =
+            clamp(
+              (
+                4.4 +
+                speed *
+                0.10
+              ) *
+              zoomScale,
+              5,
+              mobile
+                ? 8.2
+                : 9.2
+            );
+
+          const color =
+            getArrowColor(speed);
+
+          drawWindArrow(
+            startX,
+            startY,
+            endX,
+            endY,
+            color,
+            width,
+            head
+          );
         }
       }
 
       windCtx.restore();
     }
 
-    funzione getArrowColor(speedMs) {
-      se (speedMs < 3) restituisci "rgba(31, 41, 55, 0.78)";
-      se (speedMs < 7) restituisci "rgba(22, 72, 101, 0.84)";
-      se (speedMs < 12) restituisci "rgba(32, 90, 68, 0.88)";
-      se (speedMs < 20) restituisci "rgba(122, 72, 22, 0.92)";
-      restituisci "rgba(124, 29, 29, 0.95)";
+    function getArrowColor(speedMs) {
+      if (speedMs < 3) {
+        return "rgba(31,41,55,0.78)";
+      }
+
+      if (speedMs < 7) {
+        return "rgba(22,72,101,0.84)";
+      }
+
+      if (speedMs < 12) {
+        return "rgba(32,90,68,0.88)";
+      }
+
+      if (speedMs < 20) {
+        return "rgba(122,72,22,0.92)";
+      }
+
+      return "rgba(124,29,29,0.95)";
     }
 
-    funzione disegnaFrecciaAspirale(x1, y1, x2, y2, colore, larghezza, dimensionetesta) {
-      const angle = Math.atan2(y2 - y1, x2 - x1);
+    function drawWindArrow(
+      x1,
+      y1,
+      x2,
+      y2,
+      color,
+      width,
+      headSize
+    ) {
+      const angle =
+        Math.atan2(
+          y2 - y1,
+          x2 - x1
+        );
 
-      windCtx.strokeStyle = "rgba(255,255,255,0.80)";
-      windCtx.fillStyle = "rgba(255,255,255,0.80)";
-      windCtx.lineWidth = larghezza + 2.2;
-      disegnaPercorsoArrow(x1, y1, x2, y2, angolo, dimensionetesta + 1.1);
+      windCtx.strokeStyle =
+        "rgba(255,255,255,0.80)";
 
-      windCtx.strokeStyle = colore;
-      windCtx.fillStyle = color;
-      windCtx.lineWidth = larghezza;
-      disegnaPercorsoArrow(x1, y1, x2, y2, angolo, dimensionetesta);
+      windCtx.fillStyle =
+        "rgba(255,255,255,0.80)";
+
+      windCtx.lineWidth =
+        width + 2.2;
+
+      drawArrowPath(
+        x1,
+        y1,
+        x2,
+        y2,
+        angle,
+        headSize + 1.1
+      );
+
+      windCtx.strokeStyle =
+        color;
+
+      windCtx.fillStyle =
+        color;
+
+      windCtx.lineWidth =
+        width;
+
+      drawArrowPath(
+        x1,
+        y1,
+        x2,
+        y2,
+        angle,
+        headSize
+      );
     }
 
-    funzione disegnaPercorsoArretraccia(x1, y1, x2, y2, angolo, dimensionetesta) {
+    function drawArrowPath(
+      x1,
+      y1,
+      x2,
+      y2,
+      angle,
+      headSize
+    ) {
       windCtx.beginPath();
       windCtx.moveTo(x1, y1);
       windCtx.lineTo(x2, y2);
@@ -2196,389 +4137,1211 @@
 
       windCtx.beginPath();
       windCtx.moveTo(x2, y2);
+
       windCtx.lineTo(
-        x2 - Math.cos(angolo - Math.PI / 7) * headSize,
-        y2 - Math.sin(angolo - Math.PI / 7) * headSize
+        x2 -
+        Math.cos(
+          angle -
+          Math.PI / 7
+        ) *
+        headSize,
+
+        y2 -
+        Math.sin(
+          angle -
+          Math.PI / 7
+        ) *
+        headSize
       );
+
       windCtx.lineTo(
-        x2 - Math.cos(angolo + Math.PI / 7) * headSize,
-        y2 - Math.sin(angolo + Math.PI / 7) * headSize
+        x2 -
+        Math.cos(
+          angle +
+          Math.PI / 7
+        ) *
+        headSize,
+
+        y2 -
+        Math.sin(
+          angle +
+          Math.PI / 7
+        ) *
+        headSize
       );
+
       windCtx.closePath();
       windCtx.fill();
     }
 
-    /* =========================================================
-       LETTURA PUNTUALE
-       ========================================================= */
-
-    funzione getLayerValue(layer, gx, gy) {
-      se (!currentData) restituisci NaN;
-      const meta = currentData.meta;
-
-      se (strato === "combinato") {
-        restituisci getBilinear(currentData.rain, gx, gy, meta.nx, meta.ny);
+    function getLayerValue(
+      layer,
+      gx,
+      gy
+    ) {
+      if (!currentData) {
+        return NaN;
       }
 
-      se (strato === "vento") {
-        const u = getBilinear(currentData.wind_u, gx, gy, meta.nx, meta.ny);
-        const v = getBilinear(currentData.wind_v, gx, gy, meta.nx, meta.ny);
-        restituisci Math.sqrt(u * u + v * v);
+      const meta =
+        currentData.meta;
+
+      if (layer === "combined") {
+        if (!currentData.rain) {
+          return NaN;
+        }
+
+        return getBilinear(
+          currentData.rain,
+          gx,
+          gy,
+          meta.nx,
+          meta.ny
+        );
       }
 
-      se (layer === "press") {
-        restituisci getBilinear(getPressureGrid(), gx, gy, meta.nx, meta.ny);
+      if (layer === "wind") {
+        const u =
+          getBilinear(
+            currentData.wind_u,
+            gx,
+            gy,
+            meta.nx,
+            meta.ny
+          );
+
+        const v =
+          getBilinear(
+            currentData.wind_v,
+            gx,
+            gy,
+            meta.nx,
+            meta.ny
+          );
+
+        return Math.sqrt(
+          u * u +
+          v * v
+        );
       }
 
-      restituisci getBilinear(currentData[layer], gx, gy, meta.nx, meta.ny);
+      if (layer === "press") {
+        return getBilinear(
+          getPressureGrid(),
+          gx,
+          gy,
+          meta.nx,
+          meta.ny
+        );
+      }
+
+      if (!currentData[layer]) {
+        return NaN;
+      }
+
+      return getBilinear(
+        currentData[layer],
+        gx,
+        gy,
+        meta.nx,
+        meta.ny
+      );
     }
 
-    funzione getWindComponents(gx, gy) {
-      se (!currentData?.wind_u || !currentData?.wind_v) restituisci { u: NaN, v: NaN };
-      const meta = currentData.meta;
+    function getWindComponents(
+      gx,
+      gy
+    ) {
+      if (
+        !currentData?.wind_u ||
+        !currentData?.wind_v
+      ) {
+        return {
+          u: NaN,
+          v: NaN
+        };
+      }
 
-      ritorno {
-        u: getBilinear(currentData.wind_u, gx, gy, meta.nx, meta.ny),
-        v: getBilinear(currentData.wind_v, gx, gy, meta.nx, meta.ny)
+      const meta =
+        currentData.meta;
+
+      return {
+        u: getBilinear(
+          currentData.wind_u,
+          gx,
+          gy,
+          meta.nx,
+          meta.ny
+        ),
+
+        v: getBilinear(
+          currentData.wind_v,
+          gx,
+          gy,
+          meta.nx,
+          meta.ny
+        )
       };
     }
 
-    funzione getPointValues(gx, gy) {
-      const wind = getWindComponents(gx, gy);
-      const direction = windDirectionDegrees(wind.u, wind.v);
+    function getPointValues(
+      gx,
+      gy
+    ) {
+      const wind =
+        getWindComponents(
+          gx,
+          gy
+        );
 
-      ritorno {
-        temp: getLayerValue("temp", gx, gy),
-        sembra: currentData?.feels_like
-          ? getBilinear(currentData.feels_like, gx, gy, currentData.meta.nx, currentData.meta.ny)
-          : NaN,
-        pioggia: dati correnti?. pioggia
-          ? getBilinear(currentData.rain, gx, gy, currentData.meta.nx, currentData.meta.ny)
-          : NaN,
-        cloud: currentData?.cloud
-          ? getBilinear(currentData.cloud, gx, gy, currentData.meta.nx, currentData.meta.ny)
-          : NaN,
-        vento: Math.sqrt(vento.u * vento.u + vento.v * vento.v),
-        direzione,
-        premere: getLayerValue("press", gx, gy),
-        rh: getLayerValue("rh", gx, gy)
+      const direction =
+        windDirectionDegrees(
+          wind.u,
+          wind.v
+        );
+
+      return {
+        temp:
+          getLayerValue(
+            "temp",
+            gx,
+            gy
+          ),
+
+        feels:
+          currentData?.feels_like
+            ? getBilinear(
+                currentData.feels_like,
+                gx,
+                gy,
+                currentData.meta.nx,
+                currentData.meta.ny
+              )
+            : NaN,
+
+        rain:
+          currentData?.rain
+            ? getBilinear(
+                currentData.rain,
+                gx,
+                gy,
+                currentData.meta.nx,
+                currentData.meta.ny
+              )
+            : NaN,
+
+        cloud:
+          currentData?.cloud
+            ? getBilinear(
+                currentData.cloud,
+                gx,
+                gy,
+                currentData.meta.nx,
+                currentData.meta.ny
+              )
+            : NaN,
+
+        wind:
+          Math.sqrt(
+            wind.u * wind.u +
+            wind.v * wind.v
+          ),
+
+        direction: direction,
+
+        press:
+          getLayerValue(
+            "press",
+            gx,
+            gy
+          ),
+
+        rh:
+          getLayerValue(
+            "rh",
+            gx,
+            gy
+          )
       };
     }
 
-    funzione handleMapClick(evento) {
-      se (!currentData) restituisci;
+    function handleMapClick(event) {
+      if (!currentData) {
+        return;
+      }
 
-      const meta = currentData.meta;
-      const gx = (event.lngLat.lng - meta.lo1) / meta.dx;
-      const gy = (meta.la1 - event.lngLat.lat) / meta.dy;
+      const meta =
+        currentData.meta;
 
-      if (gx < 0 || gy < 0 || gx >= meta.nx - 1 || gy >= meta.ny - 1) return;
+      const gx =
+        (
+          event.lngLat.lng -
+          meta.lo1
+        ) /
+        meta.dx;
 
-      showPointCard(event.lngLat.lng, event.lngLat.lat, gx, gy);
-      placeClickMarker(event.lngLat.lng, event.lngLat.lat);
+      const gy =
+        (
+          meta.la1 -
+          event.lngLat.lat
+        ) /
+        meta.dy;
+
+      if (
+        gx < 0 ||
+        gy < 0 ||
+        gx >= meta.nx - 1 ||
+        gy >= meta.ny - 1
+      ) {
+        return;
+      }
+
+      showPointCard(
+        event.lngLat.lng,
+        event.lngLat.lat,
+        gx,
+        gy
+      );
+
+      placeClickMarker(
+        event.lngLat.lng,
+        event.lngLat.lat
+      );
     }
 
-    funzione handleMapHover(evento) {
-      se (!currentData || window.matchMedia("(pointer: coarse)").matches) restituisce;
+    function handleMapHover(event) {
+      if (
+        !currentData ||
+        window
+          .matchMedia(
+            "(pointer: coarse)"
+          )
+          .matches
+      ) {
+        return;
+      }
 
-      const meta = currentData.meta;
-      const gx = (event.lngLat.lng - meta.lo1) / meta.dx;
-      const gy = (meta.la1 - event.lngLat.lat) / meta.dy;
+      const meta =
+        currentData.meta;
 
-      map.getCanvas().style.cursor = (gx >= 0 && gy >= 0 && gx < meta.nx - 1 && gy < meta.ny - 1)
-        ? "mirino"
-        : "preda";
+      const gx =
+        (
+          event.lngLat.lng -
+          meta.lo1
+        ) /
+        meta.dx;
+
+      const gy =
+        (
+          meta.la1 -
+          event.lngLat.lat
+        ) /
+        meta.dy;
+
+      map.getCanvas().style.cursor =
+        (
+          gx >= 0 &&
+          gy >= 0 &&
+          gx < meta.nx - 1 &&
+          gy < meta.ny - 1
+        )
+          ? "crosshair"
+          : "grab";
     }
 
-    funzione showPointCard(longitudine, latitudine, gx, gy) {
-      const layerInfo = LAYER_INFO[activeLayer];
-      const mainValue = getLayerValue(activeLayer, gx, gy);
-      const values ​​= getPointValues(gx, gy);
+    function showPointCard(
+      longitude,
+      latitude,
+      gx,
+      gy
+    ) {
+      const layerInfo =
+        LAYER_INFO[activeLayer];
 
-      document.getElementById("point-card").classList.add("active");
-      document.getElementById("point-card").dataset.longitude = String(longitude);
-      document.getElementById("point-card").dataset.latitude = String(latitude);
-      document.getElementById("point-label").textContent = layerInfo.label;
-      document.getElementById("point-value").textContent = Number.isFinite(mainValue)
-        ? mainValue.toFixed(layerInfo.decimals)
-        : "--";
-      document.getElementById("point-unit").textContent = layerInfo.unit;
-      document.getElementById("point-coords").textContent = `${latitude.toFixed(3)}Â° N Â· ${longitude.toFixed(3)}Â° E`;
-      document.getElementById("point-sampling").textContent = "Interpolazione bilineare sulla griglia del modello";
+      const mainValue =
+        getLayerValue(
+          activeLayer,
+          gx,
+          gy
+        );
 
-      document.getElementById("stat-temp").textContent = formatValue(values.temp, 1, "°C");
-      document.getElementById("stat-feels").textContent = formatValue(values.feels, 1, "°C");
-      document.getElementById("stat-rain").textContent = formatValue(values.rain, 1, "mm");
-      document.getElementById("stat-cloud").textContent = formatValue(values.cloud, 0, "%");
-      document.getElementById("stat-wind").textContent = formatValue(values.wind, 1, "m/s");
-      document.getElementById("stat-wdir").textContent = formatWindDirection(values.direction);
-      document.getElementById("stat-press").textContent = formatValue(values.press, 0, "hPa");
-      document.getElementById("stat-rh").textContent = formatValue(values.rh, 0, "%");
+      const values =
+        getPointValues(
+          gx,
+          gy
+        );
+
+      const card =
+        document.getElementById(
+          "point-card"
+        );
+
+      card.classList.add("active");
+
+      card.dataset.longitude =
+        String(longitude);
+
+      card.dataset.latitude =
+        String(latitude);
+
+      document.getElementById(
+        "point-label"
+      ).textContent =
+        layerInfo.label;
+
+      document.getElementById(
+        "point-value"
+      ).textContent =
+        Number.isFinite(mainValue)
+          ? mainValue.toFixed(
+              layerInfo.decimals
+            )
+          : "--";
+
+      document.getElementById(
+        "point-unit"
+      ).textContent =
+        layerInfo.unit;
+
+      document.getElementById(
+        "point-coords"
+      ).textContent =
+        latitude.toFixed(3) +
+        "\u00B0 N - " +
+        longitude.toFixed(3) +
+        "\u00B0 E";
+
+      document.getElementById(
+        "point-sampling"
+      ).textContent =
+        "Interpolazione bilineare sulla griglia del modello";
+
+      document.getElementById(
+        "stat-temp"
+      ).textContent =
+        formatValue(
+          values.temp,
+          1,
+          "\u00B0C"
+        );
+
+      document.getElementById(
+        "stat-feels"
+      ).textContent =
+        formatValue(
+          values.feels,
+          1,
+          "\u00B0C"
+        );
+
+      document.getElementById(
+        "stat-rain"
+      ).textContent =
+        formatValue(
+          values.rain,
+          1,
+          "mm"
+        );
+
+      document.getElementById(
+        "stat-cloud"
+      ).textContent =
+        formatValue(
+          values.cloud,
+          0,
+          "%"
+        );
+
+      document.getElementById(
+        "stat-wind"
+      ).textContent =
+        formatValue(
+          values.wind,
+          1,
+          "m/s"
+        );
+
+      document.getElementById(
+        "stat-wdir"
+      ).textContent =
+        formatWindDirection(
+          values.direction
+        );
+
+      document.getElementById(
+        "stat-press"
+      ).textContent =
+        formatValue(
+          values.press,
+          0,
+          "hPa"
+        );
+
+      document.getElementById(
+        "stat-rh"
+      ).textContent =
+        formatValue(
+          values.rh,
+          0,
+          "%"
+        );
     }
 
-    funzione refreshPointCardIfOpen() {
-      const card = document.getElementById("point-card");
-      se (!card.classList.contains("active") || !currentData) restituisci;
+    function refreshPointCardIfOpen() {
+      const card =
+        document.getElementById(
+          "point-card"
+        );
 
-      const longitudine = Number(card.dataset.longitudine);
-      const latitudine = Number(card.dataset.latitudine);
-      se (!Number.isFinite(longitudine) || !Number.isFinite(latitudine)) restituisci;
+      if (
+        !card.classList.contains(
+          "active"
+        ) ||
+        !currentData
+      ) {
+        return;
+      }
 
-      const meta = currentData.meta;
-      const gx = (longitudine - meta.lo1) / meta.dx;
-      const gy = (meta.la1 - latitudine) / meta.dy;
+      const longitude =
+        Number(
+          card.dataset.longitude
+        );
 
-      if (gx >= 0 && gy >= 0 && gx < meta.nx - 1 && gy < meta.ny - 1) {
-        showPointCard(longitudine, latitudine, gx, gy);
+      const latitude =
+        Number(
+          card.dataset.latitude
+        );
+
+      if (
+        !Number.isFinite(longitude) ||
+        !Number.isFinite(latitude)
+      ) {
+        return;
+      }
+
+      const meta =
+        currentData.meta;
+
+      const gx =
+        (
+          longitude -
+          meta.lo1
+        ) /
+        meta.dx;
+
+      const gy =
+        (
+          meta.la1 -
+          latitude
+        ) /
+        meta.dy;
+
+      if (
+        gx >= 0 &&
+        gy >= 0 &&
+        gx < meta.nx - 1 &&
+        gy < meta.ny - 1
+      ) {
+        showPointCard(
+          longitude,
+          latitude,
+          gx,
+          gy
+        );
       }
     }
 
-    funzione placeClickMarker(longitudine, latitudine) {
-      se (clickMarker) clickMarker.remove();
+    function placeClickMarker(
+      longitude,
+      latitude
+    ) {
+      if (clickMarker) {
+        clickMarker.remove();
+      }
 
-      const element = document.createElement("div");
-      elemento.stile.larghezza = "18px";
-      elemento.stile.altezza = "18px";
-      elemento.stileRaggioDelConfine = "50%";
-      elemento.stile.sfondo = "#0b84ff";
-      element.style.border = "4px solid rgba(255,255,255,0.96)";
-      element.style.boxShadow = "0 3px 12px rgba(15,23,42,0.32)";
+      const element =
+        document.createElement(
+          "div"
+        );
 
-      clickMarker = nuovo maplibregl.Marker({ elemento, ancoraggio: "centro" })
-        .setLngLat([longitudine, latitudine])
-        .addTo(map);
+      element.style.width =
+        "18px";
+
+      element.style.height =
+        "18px";
+
+      element.style.borderRadius =
+        "50%";
+
+      element.style.background =
+        "#0b84ff";
+
+      element.style.border =
+        "4px solid rgba(255,255,255,0.96)";
+
+      element.style.boxShadow =
+        "0 3px 12px rgba(15,23,42,0.32)";
+
+      clickMarker =
+        new maplibregl.Marker({
+          element: element,
+          anchor: "center"
+        })
+          .setLngLat([
+            longitude,
+            latitude
+          ])
+          .addTo(map);
     }
 
-    /* =========================================================
-       LEGENDA E UI
-       ========================================================= */
+    function updateLegend() {
+      const info =
+        LAYER_INFO[activeLayer];
 
-    funzione updateLegend() {
-      const info = LAYER_INFO[activeLayer];
-      const legend = document.getElementById("legend");
-      const stops = info.stops;
-      const minValue = stops[0].v;
-      const maxValue = stops[stops.length - 1].v;
+      const legend =
+        document.getElementById(
+          "legend"
+        );
 
-      document.getElementById("legend-title").textContent = info.legendLabel;
-      document.getElementById("legend-unit").textContent = info.unit;
-      legend.classList.toggle("cloud-composite", activeLayer === "combined");
+      const stops =
+        info.stops;
 
-      const gradientStops = stops.map((stop) => {
-        const percentage = ((stop.v - minValue) / Math.max(maxValue - minValue, 1e-9)) * 100;
-        const alpha = Math.max(stop.a ?? 1, activeLayer === "combined" && stop.v === 0 ? 0 : 0.95);
-        restituisci `${rgbaCss(stop.c, alpha)} ${percentage.toFixed(2)}%`;
-      });
+      const minValue =
+        stops[0].v;
 
-      document.getElementById("legend-gradient").style.background =
-        `linear-gradient(to top, ${gradientStops.join(", ")})`;
+      const maxValue =
+        stops[
+          stops.length - 1
+        ].v;
 
-      const ticksContainer = document.getElementById("legend-ticks");
+      document.getElementById(
+        "legend-title"
+      ).textContent =
+        info.legendLabel;
+
+      document.getElementById(
+        "legend-unit"
+      ).textContent =
+        info.unit;
+
+      legend.classList.toggle(
+        "cloud-composite",
+        activeLayer === "combined"
+      );
+
+      const gradientStops =
+        stops.map(function (stop) {
+          const percentage =
+            (
+              (
+                stop.v -
+                minValue
+              ) /
+              Math.max(
+                maxValue -
+                minValue,
+                1e-9
+              )
+            ) *
+            100;
+
+          const alpha =
+            Math.max(
+              stop.a ?? 1,
+              (
+                activeLayer ===
+                  "combined" &&
+                stop.v === 0
+              )
+                ? 0
+                : 0.95
+            );
+
+          return (
+            rgbaCss(
+              stop.c,
+              alpha
+            ) +
+            " " +
+            percentage.toFixed(2) +
+            "%"
+          );
+        });
+
+      document.getElementById(
+        "legend-gradient"
+      ).style.background =
+        "linear-gradient(to top," +
+        gradientStops.join(",") +
+        ")";
+
+      const ticksContainer =
+        document.getElementById(
+          "legend-ticks"
+        );
+
       ticksContainer.innerHTML = "";
 
-      per (tick costante di info.ticks) {
-        const percentage = ((tick - minValue) / Math.max(maxValue - minValue, 1e-9)) * 100;
-        const element = document.createElement("span");
-        element.className = "legend-tick";
-        element.style.bottom = `${clamp(percentage, 0, 100)}%`;
-        elemento.testo = Stringa(segno di spunta);
-        ticksContainer.appendChild(element);
+      for (const tick of info.ticks) {
+        const percentage =
+          (
+            (
+              tick -
+              minValue
+            ) /
+            Math.max(
+              maxValue -
+              minValue,
+              1e-9
+            )
+          ) *
+          100;
+
+        const element =
+          document.createElement(
+            "span"
+          );
+
+        element.className =
+          "legend-tick";
+
+        element.style.bottom =
+          clamp(
+            percentage,
+            0,
+            100
+          ) +
+          "%";
+
+        element.textContent =
+          String(tick);
+
+        ticksContainer.appendChild(
+          element
+        );
       }
     }
 
-    funzione updateButtons() {
-      document.querySelectorAll(".layer-btn").forEach((button) => {
-        button.classList.toggle("active", button.dataset.layer === activeLayer);
-      });
+    function updateButtons() {
+      document
+        .querySelectorAll(
+          ".layer-btn"
+        )
+        .forEach(function (button) {
+          button.classList.toggle(
+            "active",
+            button.dataset.layer ===
+              activeLayer
+          );
+        });
 
-      document.getElementById("btn-graticule").classList.toggle("active", showGraticule);
-      document.getElementById("btn-relief").classList.toggle("active", showRelief);
+      document.getElementById(
+        "btn-graticule"
+      ).classList.toggle(
+        "active",
+        showGraticule
+      );
+
+      document.getElementById(
+        "btn-relief"
+      ).classList.toggle(
+        "active",
+        showRelief
+      );
     }
 
-    funzione bindUiEvents() {
-      document.getElementById("menu-toggle").addEventListener("click", () => {
-        document.getElementById("drawer").classList.toggle("closed");
-      });
+    function bindUiEvents() {
+      document.getElementById(
+        "menu-toggle"
+      ).addEventListener(
+        "click",
+        function () {
+          document.getElementById(
+            "drawer"
+          ).classList.toggle(
+            "closed"
+          );
+        }
+      );
 
-      document.getElementById("clean-toggle").addEventListener("click", toggleCleanMode);
-      document.getElementById("gps-button").addEventListener("click", getMyWeather);
-      document.getElementById("gps-top").addEventListener("click", getMyWeather);
-      document.getElementById("point-close").addEventListener("click", closePointCard);
+      document.getElementById(
+        "clean-toggle"
+      ).addEventListener(
+        "click",
+        toggleCleanMode
+      );
 
-      document.querySelectorAll(".layer-btn").forEach((button) => {
-        button.addEventListener("click", () => selectLayer(button.dataset.layer));
-      });
+      document.getElementById(
+        "gps-button"
+      ).addEventListener(
+        "click",
+        getMyWeather
+      );
 
-      document.getElementById("btn-graticule").addEventListener("click", () => {
-        showGraticule = !showGraticule;
-        const visibility = showGraticule ? "visibile" : "nessuno";
-        map.setLayoutProperty("graticule-lines", "visibility", visibility);
-        map.setLayoutProperty("graticule-labels", "visibility", visibility);
-        updateButtons();
-      });
+      document.getElementById(
+        "gps-top"
+      ).addEventListener(
+        "click",
+        getMyWeather
+      );
 
-      document.getElementById("btn-relief").addEventListener("click", () => {
-        showRelief = !showRelief;
-        map.setPaintProperty("hillshade-base", "raster-opacity", showRelief ? 0.16 : 0);
-        map.setPaintProperty("hillshade-over-weather", "raster-opacity", showRelief ? LAYER_INFO[activeLayer].relief : 0);
-        updateButtons();
-      });
+      document.getElementById(
+        "point-close"
+      ).addEventListener(
+        "click",
+        closePointCard
+      );
 
-      const slider = document.getElementById("time-slider");
-      slider.addEventListener("input", () => {
-        const index = Number(slider.value);
-        updateTimeUi(indice);
-        clearTimeout(sliderDebounce);
-        sliderDebounce = setTimeout(() => loadStep(index), 160);
-      });
+      document
+        .querySelectorAll(
+          ".layer-btn"
+        )
+        .forEach(function (button) {
+          button.addEventListener(
+            "click",
+            function () {
+              selectLayer(
+                button.dataset.layer
+              );
+            }
+          );
+        });
 
-      slider.addEventListener("cambia", () => {
-        clearTimeout(sliderDebounce);
-        loadStep(Number(slider.value));
-      });
+      document.getElementById(
+        "btn-graticule"
+      ).addEventListener(
+        "click",
+        function () {
+          showGraticule =
+            !showGraticule;
 
-      document.getElementById("step-prev").addEventListener("click", () => stepTimeline(-1));
-      document.getElementById("step-next").addEventListener("click", () => stepTimeline(1));
-      document.getElementById("play-btn").addEventListener("click", togglePlayback);
-      document.getElementById("speed-select").addEventListener("change", (event) => {
-        playbackDelay = Number(event.target.value) || 1200;
-        se (è in riproduzione) pianifica il prossimo passo di riproduzione();
-      });
+          const visibility =
+            showGraticule
+              ? "visible"
+              : "none";
+
+          map.setLayoutProperty(
+            "graticule-lines",
+            "visibility",
+            visibility
+          );
+
+          map.setLayoutProperty(
+            "graticule-labels",
+            "visibility",
+            visibility
+          );
+
+          updateButtons();
+        }
+      );
+
+      document.getElementById(
+        "btn-relief"
+      ).addEventListener(
+        "click",
+        function () {
+          showRelief =
+            !showRelief;
+
+          map.setPaintProperty(
+            "hillshade-base",
+            "raster-opacity",
+            showRelief
+              ? 0.16
+              : 0
+          );
+
+          map.setPaintProperty(
+            "hillshade-over-weather",
+            "raster-opacity",
+            showRelief
+              ? LAYER_INFO[
+                  activeLayer
+                ].relief
+              : 0
+          );
+
+          updateButtons();
+        }
+      );
+
+      const slider =
+        document.getElementById(
+          "time-slider"
+        );
+
+      slider.addEventListener(
+        "input",
+        function () {
+          const index =
+            Number(
+              slider.value
+            );
+
+          updateTimeUi(index);
+
+          clearTimeout(
+            sliderDebounce
+          );
+
+          sliderDebounce =
+            setTimeout(
+              function () {
+                loadStep(index);
+              },
+              160
+            );
+        }
+      );
+
+      slider.addEventListener(
+        "change",
+        function () {
+          clearTimeout(
+            sliderDebounce
+          );
+
+          loadStep(
+            Number(
+              slider.value
+            )
+          );
+        }
+      );
+
+      document.getElementById(
+        "step-prev"
+      ).addEventListener(
+        "click",
+        function () {
+          stepTimeline(-1);
+        }
+      );
+
+      document.getElementById(
+        "step-next"
+      ).addEventListener(
+        "click",
+        function () {
+          stepTimeline(1);
+        }
+      );
+
+      document.getElementById(
+        "play-btn"
+      ).addEventListener(
+        "click",
+        togglePlayback
+      );
+
+      document.getElementById(
+        "speed-select"
+      ).addEventListener(
+        "change",
+        function (event) {
+          playbackDelay =
+            Number(
+              event.target.value
+            ) || 1200;
+
+          if (isPlaying) {
+            scheduleNextPlaybackStep();
+          }
+        }
+      );
     }
 
-    funzione selezionaLayer(layer) {
-      se (!LAYER_INFO[layer] || !hasLayerData(layer)) restituisci;
+    function selectLayer(layer) {
+      if (
+        !LAYER_INFO[layer] ||
+        !hasLayerData(layer)
+      ) {
+        return;
+      }
 
       activeLayer = layer;
+
       renderWeatherField();
       updateButtons();
       updateLegend();
       refreshPointCardIfOpen();
 
-      se (window.matchMedia("(pointer: coarse)").matches || window.innerWidth <= 920) {
-        document.getElementById("drawer").classList.add("closed");
+      if (
+        window
+          .matchMedia(
+            "(pointer: coarse)"
+          )
+          .matches ||
+        window.innerWidth <= 920
+      ) {
+        document.getElementById(
+          "drawer"
+        ).classList.add(
+          "closed"
+        );
       }
     }
 
-    funzione toggleCleanMode() {
-      document.body.classList.toggle("clean-mode");
-      document.getElementById("drawer").classList.add("closed");
+    function toggleCleanMode() {
+      document.body.classList.toggle(
+        "clean-mode"
+      );
 
-      setTimeout(() => {
-        map.resize();
-        scheduleWindRender();
-      }, 80);
+      document.getElementById(
+        "drawer"
+      ).classList.add(
+        "closed"
+      );
+
+      setTimeout(
+        function () {
+          map.resize();
+          scheduleWindRender();
+        },
+        80
+      );
     }
 
-    funzione closePointCard() {
-      document.getElementById("point-card").classList.remove("active");
-      se (clickMarker) {
+    function closePointCard() {
+      document.getElementById(
+        "point-card"
+      ).classList.remove(
+        "active"
+      );
+
+      if (clickMarker) {
         clickMarker.remove();
         clickMarker = null;
       }
     }
 
-    function setLoading(active, text = "Elaborazione datiâ€¦") {
-      const loading = document.getElementById("loading");
-      caricamento.testo = testo;
-      loading.classList.toggle("active", active);
+    function setLoading(
+      active,
+      text = "Elaborazione dati..."
+    ) {
+      const loading =
+        document.getElementById(
+          "loading"
+        );
+
+      loading.textContent = text;
+
+      loading.classList.toggle(
+        "active",
+        active
+      );
     }
 
-    /* =========================================================
-       CRONOLOGIA
-       ========================================================= */
-
-    funzione stepTimeline(delta) {
-      se (!catalogo.lunghezza) restituisci;
-      const nextIndex = clamp(currentIndex + delta, 0, catalog.length - 1);
-      se (nextIndex !== currentIndex) caricaPasso(nextIndex);
-    }
-
-    funzione togglePlayback() {
-      isPlaying = !isPlaying;
-      document.getElementById("play-btn").textContent = isPlaying ? "â…¡" : "â–¶";
-
-      se (è in riproduzione) pianifica il prossimo passo di riproduzione (40);
-      altrimenti cancellaTimeout(playTimer);
-    }
-
-    funzione scheduleNextPlaybackStep(delay = playbackDelay) {
-      clearTimeout(playTimer);
-      se (!isPlaying) restituisci;
-
-      playTimer = setTimeout(async () => {
-        const nextIndex = (currentIndex + 1) % catalog.length;
-        attendi loadStep(nextIndex);
-        pianificaPassoRiproduzioneProssimo();
-      }, ritardo);
-    }
-
-    /* =========================================================
-       Geolocalizzazione
-       ========================================================= */
-
-    funzione getMyWeather() {
-      se (!navigator.geolocation) {
-        alert("Geolocalizzazione non supportata dal browser.");
-        ritorno;
+    function stepTimeline(delta) {
+      if (!catalog.length) {
+        return;
       }
 
-      setLoading(true, "Ricerca posizioneâ€¦");
+      const nextIndex =
+        clamp(
+          currentIndex + delta,
+          0,
+          catalog.length - 1
+        );
+
+      if (
+        nextIndex !== currentIndex
+      ) {
+        loadStep(nextIndex);
+      }
+    }
+
+    function togglePlayback() {
+      isPlaying =
+        !isPlaying;
+
+      document.getElementById(
+        "play-btn"
+      ).textContent =
+        isPlaying
+          ? "STOP"
+          : "PLAY";
+
+      if (isPlaying) {
+        scheduleNextPlaybackStep(40);
+      } else {
+        clearTimeout(playTimer);
+      }
+    }
+
+    function scheduleNextPlaybackStep(
+      delay = playbackDelay
+    ) {
+      clearTimeout(playTimer);
+
+      if (!isPlaying) {
+        return;
+      }
+
+      playTimer =
+        setTimeout(
+          async function () {
+            const nextIndex =
+              (
+                currentIndex + 1
+              ) %
+              catalog.length;
+
+            await loadStep(
+              nextIndex
+            );
+
+            scheduleNextPlaybackStep();
+          },
+          delay
+        );
+    }
+
+    function getMyWeather() {
+      if (!navigator.geolocation) {
+        alert(
+          "Geolocalizzazione non supportata dal browser."
+        );
+
+        return;
+      }
+
+      setLoading(
+        true,
+        "Ricerca posizione..."
+      );
 
       navigator.geolocation.getCurrentPosition(
-        (posizione) => {
+        function (position) {
           setLoading(false);
 
-          const longitudine = posizione.coordinate.longitudine;
-          const latitudine = posizione.coordinate.latitudine;
+          const longitude =
+            position.coords.longitude;
+
+          const latitude =
+            position.coords.latitude;
 
           map.flyTo({
-            centro: [longitudine, latitudine],
-            zoom: Math.max(map.getZoom(), 8.2),
-            durata: 900
+            center: [
+              longitude,
+              latitude
+            ],
+
+            zoom:
+              Math.max(
+                map.getZoom(),
+                8.2
+              ),
+
+            duration: 900
           });
 
-          placeLocationMarker(longitudine, latitudine);
+          placeLocationMarker(
+            longitude,
+            latitude
+          );
 
-          se (dati correnti) {
-            const meta = currentData.meta;
-            const gx = (longitudine - meta.lo1) / meta.dx;
-            const gy = (meta.la1 - latitudine) / meta.dy;
+          if (currentData) {
+            const meta =
+              currentData.meta;
 
-            if (gx >= 0 && gy >= 0 && gx < meta.nx - 1 && gy < meta.ny - 1) {
-              showPointCard(longitudine, latitudine, gx, gy);
+            const gx =
+              (
+                longitude -
+                meta.lo1
+              ) /
+              meta.dx;
+
+            const gy =
+              (
+                meta.la1 -
+                latitude
+              ) /
+              meta.dy;
+
+            if (
+              gx >= 0 &&
+              gy >= 0 &&
+              gx < meta.nx - 1 &&
+              gy < meta.ny - 1
+            ) {
+              showPointCard(
+                longitude,
+                latitude,
+                gx,
+                gy
+              );
             }
           }
 
-          document.getElementById("drawer").classList.add("closed");
+          document.getElementById(
+            "drawer"
+          ).classList.add(
+            "closed"
+          );
         },
-        (errore) => {
-          console.warn(errore);
+
+        function (error) {
+          console.warn(error);
+
           setLoading(false);
-          alert("Posizione non disponibile o permesso GPS negato.");
+
+          alert(
+            "Posizione non disponibile o permesso GPS negato."
+          );
         },
+
         {
           enableHighAccuracy: false,
           timeout: 8000,
-          età massima: 300000
+          maximumAge: 300000
         }
       );
     }
 
-    funzione placeLocationMarker(longitudine, latitudine) {
-      se (locationMarker) locationMarker.remove();
+    function placeLocationMarker(
+      longitude,
+      latitude
+    ) {
+      if (locationMarker) {
+        locationMarker.remove();
+      }
 
-      const element = document.createElement("div");
-      elemento.stile.larghezza = "24px";
-      elemento.stile.altezza = "24px";
-      elemento.stileRaggioDelConfine = "50%";
-      elemento.stile.sfondo = "#1689ff";
-      element.style.border = "5px solid rgba(255,255,255,0.96)";
-      element.style.boxShadow = "0 0 0 2px rgba(22,137,255,0.36), 0 4px 14px rgba(15,23,42,0.32)";
+      const element =
+        document.createElement(
+          "div"
+        );
 
-      locationMarker = nuovo maplibregl.Marker({ elemento, ancoraggio: "centro" })
-        .setLngLat([longitudine, latitudine])
-        .addTo(map);
+      element.style.width =
+        "24px";
+
+      element.style.height =
+        "24px";
+
+      element.style.borderRadius =
+        "50%";
+
+      element.style.background =
+        "#1689ff";
+
+      element.style.border =
+        "5px solid rgba(255,255,255,0.96)";
+
+      element.style.boxShadow =
+        "0 0 0 2px rgba(22,137,255,0.36)," +
+        "0 4px 14px rgba(15,23,42,0.32)";
+
+      locationMarker =
+        new maplibregl.Marker({
+          element: element,
+          anchor: "center"
+        })
+          .setLngLat([
+            longitude,
+            latitude
+          ])
+          .addTo(map);
     }
   </script>
 </body>
