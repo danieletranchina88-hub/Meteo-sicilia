@@ -7,91 +7,82 @@
     <link rel="stylesheet" href="https://unpkg.com/maplibre-gl@3.6.2/dist/maplibre-gl.css">
     <script src="https://unpkg.com/maplibre-gl@3.6.2/dist/maplibre-gl.js"></script>
     <style>
-        :root { --ink: #111820; --accent: #0a69d8; --paper: rgba(255, 255, 255, 0.9); }
-        body { margin: 0; font-family: system-ui, sans-serif; background: #eef2f5; overflow: hidden; }
+        :root { --ink: #111820; --accent: #0a69d8; --glass: rgba(255, 255, 255, 0.85); }
+        * { box-sizing: border-box; }
+        body, html { margin: 0; width: 100%; height: 100%; font-family: 'Inter', sans-serif; background: #eef2f5; overflow: hidden; }
         #map { position: fixed; inset: 0; z-index: 1; }
-        .glass { background: var(--paper); backdrop-filter: blur(12px); border: 1px solid rgba(0,0,0,0.1); }
-        #ui-layer { position: fixed; inset: 0; z-index: 100; pointer-events: none; padding: 20px; display: flex; flex-direction: column; justify-content: space-between; }
-        .panel { pointer-events: auto; padding: 16px; border-radius: 16px; box-shadow: 0 8px 24px rgba(0,0,0,0.1); }
-        #bottomBar { display: flex; align-items: center; gap: 15px; justify-content: center; }
-        .btn { padding: 8px 16px; border-radius: 8px; border: none; background: #eee; cursor: pointer; font-weight: 600; }
-        .btn:hover { background: #ddd; }
-        #loading { position: fixed; top: 20px; right: 20px; padding: 10px 20px; border-radius: 8px; background: var(--ink); color: #fff; display: none; }
+        
+        /* Glassmorphism Pro */
+        .glass { background: var(--glass); backdrop-filter: blur(15px); border: 1px solid rgba(255,255,255,0.3); border-radius: 16px; box-shadow: 0 8px 32px rgba(0,0,0,0.1); }
+
+        /* Header */
+        #topbar { position: fixed; top: 20px; left: 20px; right: 20px; z-index: 1000; padding: 15px 20px; display: flex; justify-content: space-between; align-items: center; }
+        
+        /* Menu Laterale */
+        #drawer { position: fixed; top: 90px; right: 20px; width: 280px; z-index: 900; padding: 20px; transition: transform 0.3s ease; transform: translateX(120%); }
+        #drawer.open { transform: translateX(0); }
+        
+        /* Bottoni */
+        .btn { cursor: pointer; padding: 10px 15px; border-radius: 8px; border: none; background: #f0f0f0; font-weight: 600; transition: 0.2s; }
+        .btn:hover { background: #e0e0e0; }
+        .btn.active { background: var(--accent); color: white; }
+        .layer-btn { display: block; width: 100%; text-align: left; margin-bottom: 8px; padding: 12px; }
+
+        /* Footer */
+        #bottomBar { position: fixed; bottom: 20px; left: 20px; right: 20px; z-index: 1000; padding: 15px; display: flex; justify-content: space-between; align-items: center; }
     </style>
 </head>
 <body>
 
     <div id="map"></div>
-    <div id="loading" class="glass">Caricamento...</div>
 
-    <div id="ui-layer">
-        <header class="panel glass">
+    <header id="topbar" class="glass">
+        <div>
             <h1 style="margin:0; font-size:18px;">Italia MeteoHub Pro</h1>
-            <div id="status">Inizializzazione...</div>
-        </header>
+            <div id="status" style="font-size:12px; color:gray;">Caricamento dati...</div>
+        </div>
+        <button class="btn" id="menuToggle">MENU</button>
+    </header>
 
-        <footer id="bottomBar" class="panel glass">
-            <button class="btn" id="prevBtn">&larr;</button>
-            <div id="timeLabel">--:--</div>
-            <button class="btn" id="nextBtn">&rarr;</button>
-        </footer>
-    </div>
+    <aside id="drawer" class="glass">
+        <h3>Layer</h3>
+        <button class="btn layer-btn active" data-layer="precip">Precipitazioni</button>
+        <button class="btn layer-btn" data-layer="temp">Temperatura</button>
+        <button class="btn layer-btn" data-layer="wind">Vento</button>
+        <button class="btn layer-btn" data-layer="press">Pressione</button>
+    </aside>
+
+    <footer id="bottomBar" class="glass">
+        <button class="btn" id="prevBtn">&larr; Prec</button>
+        <div id="timeLabel">--/-- --:--</div>
+        <button class="btn" id="nextBtn">Succ &rarr;</button>
+    </footer>
 
     <script>
-        let catalog = [];
-        let currentIndex = 0;
-        let currentData = null;
-
         const map = new maplibregl.Map({
             container: 'map',
             style: 'https://basemaps.cartocdn.com/gl/positron-gl-style/style.json',
-            center: [13.5, 37.5],
-            zoom: 6
+            center: [13.5, 37.5], zoom: 6
         });
 
-        async function init() {
-            try {
-                // 1. Carica il catalogo generato dal tuo script Python
-                const response = await fetch('data_weather/catalog.json');
-                catalog = await response.json();
-                renderStep(0);
-            } catch (e) {
-                document.getElementById('status').innerText = "Errore caricamento catalogo";
-            }
-        }
+        // Toggle Menu
+        document.getElementById('menuToggle').onclick = () => {
+            document.getElementById('drawer').classList.toggle('open');
+        };
 
-        async function renderStep(index) {
-            if (index < 0 || index >= catalog.length) return;
-            currentIndex = index;
-            
-            document.getElementById('loading').style.display = 'block';
-            document.getElementById('status').innerText = "Caricamento dati...";
+        // Logic Layer Selection
+        document.querySelectorAll('.layer-btn').forEach(btn => {
+            btn.onclick = (e) => {
+                document.querySelectorAll('.layer-btn').forEach(b => b.classList.remove('active'));
+                e.target.classList.add('active');
+                console.log("Cambiato layer a:", e.target.getAttribute('data-layer'));
+                // Qui chiamerai la tua funzione di aggiornamento dati
+            };
+        });
 
-            try {
-                // 2. Carica lo step specifico (file_X.json)
-                const res = await fetch(`data_weather/${catalog[index].file}`);
-                currentData = await res.json();
-                
-                // Aggiorna UI
-                document.getElementById('timeLabel').innerText = catalog[index].label;
-                document.getElementById('status').innerText = `Run valida: ${currentData.meta.refTime}`;
-
-                // --- QUI INSERISCI LA LOGICA DI RENDERING ---
-                // Esempio: currentData.temp contiene l'array flat.
-                // Usa currentData.meta.nx e ny per ricostruire la griglia se serve.
-                console.log("Dati caricati:", currentData);
-
-            } catch (e) {
-                console.error(e);
-            } finally {
-                document.getElementById('loading').style.display = 'none';
-            }
-        }
-
-        document.getElementById('prevBtn').onclick = () => renderStep(currentIndex - 1);
-        document.getElementById('nextBtn').onclick = () => renderStep(currentIndex + 1);
-
-        map.on('load', init);
+        map.on('load', () => {
+            document.getElementById('status').innerText = "Sistema operativo.";
+        });
     </script>
 </body>
 </html>
