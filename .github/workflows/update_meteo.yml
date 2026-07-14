@@ -2,7 +2,8 @@ name: Update Meteo Data
 
 on:
   schedule:
-    - cron: '0 0,6,12,18 * * *'
+    - cron: '35 1,13 * * *'
+    - cron: '20 3,15 * * *'
   workflow_dispatch:
 
 concurrency:
@@ -12,6 +13,7 @@ concurrency:
 jobs:
   build:
     runs-on: ubuntu-latest
+    timeout-minutes: 75
     permissions:
       contents: write
 
@@ -24,31 +26,31 @@ jobs:
       - name: Setup Python
         uses: actions/setup-python@v5
         with:
-          python-version: '3.9'
+          python-version: '3.12'
           cache: 'pip'
 
       - name: Install system deps
         run: |
           sudo apt-get update
-          sudo apt-get install -y libeccodes-dev libnetcdf-dev
+          sudo apt-get install -y --no-install-recommends libeccodes-dev libnetcdf-dev
 
       - name: Install Python dependencies
         run: |
           python -m pip install --upgrade pip
-          pip install requests xarray numpy cfgrib scipy netCDF4
+          python -m pip install -r requirements.txt
 
-      - name: Run Data Processor
+      - name: Run data processor
         run: python scripts/process_data.py
 
-      - name: Commit and Push
+      - name: Commit and push
         run: |
-          git config --global user.name "MeteoBot"
-          git config --global user.email "bot@meteo.it"
+          git config user.name "MeteoBot"
+          git config user.email "bot@meteo.local"
           git add data_weather/
           if git diff --staged --quiet; then
             echo "Nessuna modifica."
             exit 0
           fi
-          git commit -m "Aggiornamento dati meteo 3D"
-          git pull --no-rebase
+          git commit -m "Aggiorna dati ICON-2I"
+          git pull --rebase --autostash
           git push
