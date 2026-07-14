@@ -3,8 +3,8 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
-  <meta name="theme-color" content="#eef2f5">
-  <title>Italia MeteoHub Pro</title>
+  <meta name="theme-color" content="#08111d">
+  <title>Meteo Sicilia · ICON-2I</title>
 
   <link rel="stylesheet" href="https://unpkg.com/maplibre-gl@3.6.2/dist/maplibre-gl.css">
   <script src="https://unpkg.com/maplibre-gl@3.6.2/dist/maplibre-gl.js"></script>
@@ -261,6 +261,13 @@
       color:#fff;
       background:linear-gradient(135deg,#178b4f,#25b966);
       border-color:rgba(13,103,55,.28)
+    }
+
+    #dataCredit{
+      margin:10px 6px 2px;
+      color:var(--muted);
+      font-size:9px;
+      line-height:1.35
     }
 
     #timeDiagnostic{
@@ -751,6 +758,124 @@
         display:none
       }
     }
+
+    /* Codex visual system: meteo operativo, scuro, leggibile. */
+    :root{
+      --ink:#f4f7fb;
+      --muted:#afc1d4;
+      --paper:rgba(13,24,37,.91);
+      --line:rgba(185,210,236,.18);
+      --accent:#f6c85f;
+      --shadow:0 18px 48px rgba(0,0,0,.36)
+    }
+
+    html,
+    body,
+    #map{
+      background:#08111d;
+      color:var(--ink)
+    }
+
+    .glass{
+      background:var(--paper);
+      border-color:var(--line);
+      box-shadow:var(--shadow);
+      backdrop-filter:blur(18px) saturate(125%);
+      -webkit-backdrop-filter:blur(18px) saturate(125%)
+    }
+
+    #brandMark{
+      color:#08111d;
+      background:linear-gradient(145deg,#f6c85f,#f09f3e);
+      box-shadow:0 10px 22px rgba(246,200,95,.25)
+    }
+
+    #brandTitle,
+    .menuBtn,
+    .iconBtn,
+    .timeBtn,
+    #legendTitle,
+    #valueMain{
+      color:var(--ink)
+    }
+
+    #brandMeta,
+    .sectionTitle,
+    #legendUnit,
+    #legendNote,
+    #timeDiagnostic,
+    #timeOffset,
+    #valueSub,
+    #pointMeta{
+      color:var(--muted)
+    }
+
+    .iconBtn,
+    .menuBtn,
+    .timeBtn{
+      background:rgba(185,210,236,.075);
+      border-color:rgba(185,210,236,.15)
+    }
+
+    .iconBtn:hover,
+    .menuBtn:hover,
+    .timeBtn:hover{
+      background:rgba(185,210,236,.13)
+    }
+
+    .menuBtn.active,
+    .timeBtn.active,
+    .layer.active{
+      color:#08111d;
+      background:linear-gradient(135deg,#f6c85f,#ffd98a);
+      border-color:rgba(246,200,95,.70)
+    }
+
+    .dot{
+      background:rgba(175,193,212,.45)
+    }
+
+    .active .dot{
+      background:#08111d
+    }
+
+    .separator{
+      background:rgba(185,210,236,.13)
+    }
+
+    #legendGradient{
+      border:1px solid rgba(244,247,251,.18)
+    }
+
+    #loading{
+      color:var(--ink);
+      background:rgba(8,17,29,.88);
+      border:1px solid var(--line)
+    }
+
+    input[type="range"]{
+      accent-color:#f6c85f
+    }
+
+    button:focus-visible,
+    input:focus-visible,
+    select:focus-visible{
+      outline:2px solid #f6c85f;
+      outline-offset:2px
+    }
+
+    .maplibregl-ctrl-attrib{
+      color:#c6d4e3!important;
+      background:rgba(8,17,29,.72)!important
+    }
+
+    @media (prefers-reduced-motion:reduce){
+      *,*::before,*::after{
+        animation-duration:.001ms!important;
+        transition-duration:.001ms!important;
+        scroll-behavior:auto!important
+      }
+    }
   </style>
 </head>
 
@@ -761,10 +886,10 @@
 
   <header id="topbar" class="glass">
     <div id="brand">
-      <div id="brandMark">MH</div>
+      <div id="brandMark">MS</div>
 
       <div id="brandCopy">
-        <div id="brandTitle">Italia MeteoHub Pro</div>
+        <div id="brandTitle">Meteo Sicilia</div>
 
         <div id="brandMeta">
           ICON-2I ·
@@ -817,13 +942,13 @@
     <div class="separator"></div>
     <div class="sectionTitle">Vento</div>
 
-    <button class="menuBtn option active" id="arrowsBtn" type="button">
-      <span>Frecce dinamiche</span>
+    <button class="menuBtn option" id="arrowsBtn" type="button">
+      <span>Vettori vento</span>
       <span class="dot"></span>
     </button>
 
     <button class="menuBtn option" id="particlesBtn" type="button">
-      <span>Particelle colorate</span>
+      <span>Flusso particellare</span>
       <span class="dot"></span>
     </button>
 
@@ -836,10 +961,15 @@
     </button>
 
     <button class="menuBtn option active" id="reliefBtn" type="button">
-      <span>Rilievo</span>
+      <span>Rilievo marcato</span>
       <span class="dot"></span>
     </button>
 
+
+    <button class="menuBtn option" id="modelBtn" type="button">
+      <span>Risoluzione modello</span>
+      <span class="dot"></span>
+    </button>
     <div id="timeDiagnostic">
       Orario: in attesa dei dati.
     </div>
@@ -855,7 +985,7 @@
     </div>
 
     <div id="legendNote">
-      Nuvole: bianco / grigio
+      Nuvole: grigio freddo, precipitazione in mm
     </div>
   </section>
 
@@ -954,7 +1084,7 @@
       Il campo "hour" viene usato solo come forecast +h.
     */
     const TZ = "Europe/Rome";
-    const CATALOG_LABEL_ZONE = "LOCAL";
+    const CATALOG_LABEL_ZONE = "UTC";
 
     const TEMP = [
       [-35, [72, 43, 135]],
@@ -1036,6 +1166,20 @@
       [1.35, [211, 132, 145], 0.85]
     ];
 
+
+    const PRESS_ABS = [
+      [980, [70, 107, 132], 0.20],
+      [988, [86, 128, 154], 0.22],
+      [996, [120, 157, 174], 0.24],
+      [1004, [166, 188, 190], 0.24],
+      [1012, [214, 209, 189], 0.23],
+      [1020, [220, 184, 164], 0.24],
+      [1028, [204, 142, 145], 0.25],
+      [1036, [166, 102, 130], 0.26],
+      [1044, [116, 72, 111], 0.27]
+    ];
+
+    const PRESS_TICKS = [980, 988, 996, 1004, 1012, 1020, 1028, 1036, 1044];
     const PARTICLE_COLORS = [
       [0, [45, 125, 210]],
       [3, [30, 185, 220]],
@@ -1112,7 +1256,8 @@
 
     let showGrid = true;
     let showRelief = true;
-    let showArrows = true;
+    let modelNative = false;
+    let showArrows = false;
     let showParticles = false;
 
     let play = false;
@@ -1135,7 +1280,7 @@
     let pressureStats = null;
 
     const cache = new Map();
-    const CACHE_MAX = 6;
+    const CACHE_MAX = 3;
 
     const renderCanvas = document.createElement("canvas");
 
@@ -1334,6 +1479,26 @@
       );
     }
 
+
+    function nearest(field, gx, gy, nx, ny) {
+      const values = grid(field);
+
+      if (!values || nx < 1 || ny < 1) {
+        return NaN;
+      }
+
+      const x = clamp(Math.round(gx), 0, nx - 1);
+      const y = clamp(Math.round(gy), 0, ny - 1);
+      const value = Number(values[y * nx + x]);
+
+      return Number.isFinite(value) ? value : NaN;
+    }
+
+    function sampleField(field, gx, gy, nx, ny) {
+      return modelNative
+        ? nearest(field, gx, gy, nx, ny)
+        : bilinear(field, gx, gy, nx, ny);
+    }
     function quantile(values, probability) {
       const position =
         (values.length - 1) *
@@ -1541,11 +1706,13 @@
 
       const leadRaw =
         meta.forecast_hour ??
+        meta.leadHours ??
         meta.forecast_offset ??
         meta.step_hour ??
         meta.fhour ??
         meta.hour ??
         item.forecast_hour ??
+        item.leadHours ??
         item.forecast_offset ??
         item.step_hour ??
         item.fhour ??
@@ -1556,16 +1723,17 @@
           ? Number(leadRaw)
           : null;
 
-      const labelValid =
-        parseCatalogLabel(item.label);
-
       const technicalValid =
         firstDate([
+          meta.validTime,
           meta.valid_time,
           meta.valid_datetime,
           meta.forecast_time,
+          meta.refTime,
+          stepData?.validTime,
           stepData?.valid_time,
           stepData?.forecast_time,
+          item.validTime,
           item.valid_time,
           item.valid_datetime,
           item.forecast_time,
@@ -1574,48 +1742,42 @@
 
       const technicalRun =
         firstDate([
+          meta.runTime,
           meta.run_time,
           meta.init_time,
           meta.base_time,
           meta.reference_time,
+          stepData?.runTime,
           stepData?.run_time,
           stepData?.reference_time,
+          item.runTime,
           item.run_time,
           item.init_time,
           item.base_time,
           item.reference_time
         ]);
 
-      /*
-        Priorità alla label del catalogo.
-        Nel tuo catalog.json non c'è un valid_time tecnico completo.
-        Quindi non spostiamo l'orario di 2 ore.
-      */
-      const valid =
-        labelValid ||
-        technicalValid;
+      const labelValid =
+        parseCatalogLabel(item.label);
 
-      const catalogRun =
+      const valid =
+        technicalValid ||
+        labelValid;
+
+      const derivedRun =
         valid && lead != null
-          ? new Date(
-              valid.getTime() -
-              lead * 3600000
-            )
+          ? new Date(valid.getTime() - lead * 3600000)
           : null;
 
-      let run =
-        catalogRun ||
-        technicalRun;
+      const run =
+        technicalRun ||
+        derivedRun;
 
       const source =
-        labelValid
-          ? (
-              lead != null
-                ? "catalog label locale + hour"
-                : "catalog label locale"
-            )
-          : technicalValid
-            ? "metadati tecnici"
+        technicalValid
+          ? "metadati UTC"
+          : labelValid
+            ? "catalogo UTC"
             : "non determinata";
 
       return {
@@ -1754,9 +1916,9 @@
                 type: "raster",
 
                 tiles: [
-                  "https://a.basemaps.cartocdn.com/light_nolabels/{z}/{x}/{y}@2x.png",
-                  "https://b.basemaps.cartocdn.com/light_nolabels/{z}/{x}/{y}@2x.png",
-                  "https://c.basemaps.cartocdn.com/light_nolabels/{z}/{x}/{y}@2x.png"
+                  "https://a.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}@2x.png?v=ms-dark-3",
+                  "https://b.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}@2x.png?v=ms-dark-3",
+                  "https://c.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}@2x.png?v=ms-dark-3"
                 ],
 
                 tileSize: 256,
@@ -1769,8 +1931,8 @@
                 type: "raster",
 
                 tiles: [
-                  "https://a.basemaps.cartocdn.com/light_only_labels/{z}/{x}/{y}@2x.png",
-                  "https://b.basemaps.cartocdn.com/light_only_labels/{z}/{x}/{y}@2x.png"
+                  "https://a.basemaps.cartocdn.com/dark_only_labels/{z}/{x}/{y}@2x.png?v=ms-dark-3",
+                  "https://b.basemaps.cartocdn.com/dark_only_labels/{z}/{x}/{y}@2x.png?v=ms-dark-3"
                 ],
 
                 tileSize: 256
@@ -1794,7 +1956,7 @@
 
                 paint: {
                   "background-color":
-                    "#eef2f5"
+                    "#07111d"
                 }
               },
 
@@ -1804,9 +1966,11 @@
                 source: "base",
 
                 paint: {
-                  "raster-opacity": 0.99,
-                  "raster-saturation": -0.08,
-                  "raster-contrast": 0.06
+                  "raster-opacity": 1,
+                  "raster-saturation": -0.22,
+                  "raster-contrast": 0.34,
+                  "raster-brightness-min": 0.08,
+                  "raster-brightness-max": 0.58
                 }
               },
 
@@ -1816,9 +1980,11 @@
                 source: "hill",
 
                 paint: {
-                  "raster-opacity": 0.15,
+                  "raster-opacity": 0.62,
                   "raster-saturation": -1,
-                  "raster-contrast": 0.34
+                  "raster-contrast": 1.05,
+                  "raster-brightness-min": 0.10,
+                  "raster-brightness-max": 0.82
                 }
               }
             ]
@@ -1907,9 +2073,11 @@
         source: "hill",
 
         paint: {
-          "raster-opacity": 0.10,
+          "raster-opacity": 0.34,
           "raster-saturation": -1,
-          "raster-contrast": 0.42
+          "raster-contrast": 1.12,
+          "raster-brightness-min": 0.12,
+          "raster-brightness-max": 0.84
         }
       });
 
@@ -1928,7 +2096,7 @@
 
         paint: {
           "line-color":
-            "rgba(21,31,42,.48)",
+            "rgba(210,226,242,.54)",
 
           "line-width": [
             "interpolate",
@@ -1940,7 +2108,7 @@
             1.05
           ],
 
-          "line-opacity": 0.42
+          "line-opacity": 0.58
         }
       });
 
@@ -1970,9 +2138,9 @@
         },
 
         paint: {
-          "text-color": "#111827",
+          "text-color": "#dce8f4",
           "text-halo-color":
-            "rgba(255,255,255,.95)",
+            "rgba(4,10,18,.92)",
           "text-halo-width": 1.7
         }
       });
@@ -2501,9 +2669,9 @@
             await fetch(
               `data_weather/${
                 catalog[selectedIndex].file
-              }`,
+              }?v=${encodeURIComponent(catalog[selectedIndex].validTime || catalog[selectedIndex].runTime || catalog[selectedIndex].label || catalog[selectedIndex].hour || "step")}`,
               {
-                cache: "force-cache"
+                cache: "no-cache"
               }
             );
 
@@ -2562,11 +2730,29 @@
 
         setLoading(
           true,
-          "Errore nello step"
+          `Errore nello step: ${error?.message || "dettaglio non disponibile"}`
         );
       }
     }
 
+
+    function coerceGridArray(value, length) {
+      const source = grid(value);
+
+      if (!source || source.length !== length) {
+        return null;
+      }
+
+      const out = new Float32Array(length);
+
+      for (let i = 0; i < length; i++) {
+        const raw = source[i];
+        const numeric = raw === null ? NaN : Number(raw);
+        out[i] = Number.isFinite(numeric) ? numeric : NaN;
+      }
+
+      return out;
+    }
     function prepare(stepData) {
       if (!stepData?.meta) {
         throw new Error(
@@ -2579,6 +2765,23 @@
 
       const length =
         meta.nx * meta.ny;
+
+      stepData.temp = coerceGridArray(stepData.temp, length) || stepData.temp;
+      stepData.rain = coerceGridArray(stepData.rain, length) || stepData.rain;
+      stepData.rh = coerceGridArray(stepData.rh, length) || stepData.rh;
+      stepData.cloud = coerceGridArray(stepData.cloud, length) || stepData.cloud;
+
+      if (stepData.wind_u?.data) {
+        stepData.wind_u.data = coerceGridArray(stepData.wind_u, length) || stepData.wind_u.data;
+      }
+
+      if (stepData.wind_v?.data) {
+        stepData.wind_v.data = coerceGridArray(stepData.wind_v, length) || stepData.wind_v.data;
+      }
+
+      if (stepData.press) {
+        stepData.press = coerceGridArray(stepData.press, length) || stepData.press;
+      }
 
       const pressure =
         grid(stepData.press);
@@ -2706,88 +2909,34 @@
       const pressure =
         pressureGrid(stepData);
 
+      stepData.pressureScale = PRESS_ABS;
+      stepData.pressureTicks = PRESS_TICKS;
+      stepData.pressureStats = null;
+
       if (!pressure) {
-        stepData.pressureScale = [];
         return;
       }
 
-      const values = [];
+      let min = Infinity;
+      let max = -Infinity;
+      let count = 0;
 
       const step =
-        Math.max(
-          1,
-          Math.floor(
-            pressure.length / 12000
-          )
-        );
+        Math.max(1, Math.floor(pressure.length / 12000));
 
-      for (
-        let i = 0;
-        i < pressure.length;
-        i += step
-      ) {
-        const value =
-          Number(pressure[i]);
+      for (let i = 0; i < pressure.length; i += step) {
+        const value = Number(pressure[i]);
 
-        if (
-          Number.isFinite(value) &&
-          value > 850 &&
-          value < 1150
-        ) {
-          values.push(value);
+        if (Number.isFinite(value) && value > 850 && value < 1150) {
+          min = Math.min(min, value);
+          max = Math.max(max, value);
+          count++;
         }
       }
 
-      values.sort(
-        (first, second) =>
-          first - second
-      );
-
-      if (values.length < 5) {
-        return;
+      if (count) {
+        stepData.pressureStats = { min, max };
       }
-
-      const median =
-        quantile(values, 0.5);
-
-      const halfRange =
-        Math.max(
-          (
-            quantile(values, 0.92) -
-            quantile(values, 0.08)
-          ) / 2,
-          1.2
-        );
-
-      stepData.pressureScale =
-        PRESS_N.map(stop => [
-          median +
-          stop[0] * halfRange,
-          stop[1],
-          stop[2]
-        ]);
-
-      stepData.pressureTicks =
-        [
-          -1.35,
-          -0.9,
-          -0.45,
-          0,
-          0.45,
-          0.9,
-          1.35
-        ].map(
-          value =>
-            median +
-            value * halfRange
-        );
-
-      stepData.pressureStats = {
-        min: values[0],
-        max: values.at(-1),
-        median,
-        half: halfRange
-      };
     }
 
     function makePressureProducts(stepData) {
@@ -3522,7 +3671,7 @@
           if (layer === "combined") {
             const cloud =
               data.cloud
-                ? bilinear(
+                ? sampleField(
                     data.cloud,
                     gx,
                     gy,
@@ -3533,7 +3682,7 @@
 
             const rain =
               data.rain
-                ? bilinear(
+                ? sampleField(
                     data.rain,
                     gx,
                     gy,
@@ -3567,7 +3716,7 @@
               );
           } else if (layer === "wind") {
             const u =
-              bilinear(
+              sampleField(
                 data.wind_u,
                 gx,
                 gy,
@@ -3576,7 +3725,7 @@
               );
 
             const v =
-              bilinear(
+              sampleField(
                 data.wind_v,
                 gx,
                 gy,
@@ -3592,7 +3741,7 @@
           } else if (layer === "press") {
             color =
               colorAt(
-                bilinear(
+                sampleField(
                   pressureGrid(),
                   gx,
                   gy,
@@ -3604,7 +3753,7 @@
           } else {
             color =
               colorAt(
-                bilinear(
+                sampleField(
                   data[layer],
                   gx,
                   gy,
@@ -5319,7 +5468,7 @@
             "hillBase",
             "raster-opacity",
             showRelief
-              ? 0.15
+              ? 0.42
               : 0
           );
 
@@ -5327,19 +5476,35 @@
             "hillWeather",
             "raster-opacity",
             showRelief
-              ? INFO[layer].relief
+              ? Math.max(INFO[layer].relief, 0.22)
               : 0
           );
 
           updateButtons();
         };
 
+
+      $("modelBtn").onclick =
+        () => {
+          modelNative = !modelNative;
+
+          map.setPaintProperty(
+            "weatherLayer",
+            "raster-resampling",
+            modelNative ? "nearest" : "linear"
+          );
+
+          scheduleRender(true);
+          refreshPoint();
+          updateButtons();
+        };
       $("arrowsBtn").onclick =
         () => {
-          showArrows =
-            !showArrows;
+          showArrows = !showArrows;
 
           if (showArrows) {
+            showParticles = false;
+            stopParticles();
             drawArrows();
           } else {
             clearArrows();
@@ -5350,10 +5515,11 @@
 
       $("particlesBtn").onclick =
         () => {
-          showParticles =
-            !showParticles;
+          showParticles = !showParticles;
 
           if (showParticles) {
+            showArrows = false;
+            clearArrows();
             resetParticles();
           } else {
             stopParticles();
