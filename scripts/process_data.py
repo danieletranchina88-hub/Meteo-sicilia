@@ -5,7 +5,7 @@ import json
 import os
 import sys
 import shutil
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 
 # --- CONFIGURAZIONE ---
 DATASET_ID = "ICON_2I_SURFACE_PRESSURE_LEVELS"
@@ -51,8 +51,8 @@ def get_latest_run_files():
     if not runs:
         return None, []
     latest_key = sorted(runs.keys())[-1]
-    run_dt = datetime.strptime(latest_key, "%Y-%m-%d %H:%M")
-    return run_dt, runs[latest_key][:48]
+    run_dt = datetime.strptime(latest_key, "%Y-%m-%d %H:%M").replace(tzinfo=timezone.utc)
+    return run_dt, sorted(runs[latest_key])
 
 
 def calculate_rh_numpy(temp_k, dew_k):
@@ -66,7 +66,7 @@ def calculate_rh_numpy(temp_k, dew_k):
         denominator = np.exp((a * T) / (b + T))
         rh = 100 * (numerator / denominator)
 
-    return np.nan_to_num(np.clip(rh, 0, 100))
+    return np.clip(rh, 0, 100)
 
 
 def extract_raw_grid(ds, mask, var_names):
@@ -105,7 +105,7 @@ def try_open_cloud_dataset(grib_path):
 
 
 def normalize_cloud_to_percent(cloud_arr):
-    c = np.nan_to_num(cloud_arr)
+    c = np.asarray(cloud_arr, dtype=float)
     if c.size == 0:
         return c
 
@@ -136,6 +136,37 @@ def downsample_1d(arr1d, f):
     return arr1d[::f]
 
 
+
+def select_step(ds, step_value, index=0):
+    """Select a forecast step by value, falling back to positional index only when needed."""
+    if ds is None or 'step' not in ds.sizes:
+        return ds
+    try:
+        return ds.sel(step=step_value)
+    except Exception:
+        if ds.sizes.get('step', 1) > 1:
+            return ds.isel(step=index)
+        return ds
+
+
+def finite_or_none(arr, shape=None):
+    if arr is None:
+        return None
+    out = np.asarray(arr, dtype=float)
+    if shape is not None and out.shape != shape:
+        return None
+    return out
+
+
+def clean_for_json(arr, decimals):
+    rounded = np.round(np.asarray(arr, dtype=float), decimals).flatten()
+    return [None if not np.isfinite(float(v)) else float(v) for v in rounded]
+
+
+def iso_z(dt):
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    return dt.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 def process_data():
     run_dt, file_list = get_latest_run_files()
     if not file_list:
@@ -232,8 +263,8 @@ def process_data():
                 v_key = next((k for k in ['v10', 'v'] if k in cut_w), None)
                 if not u_key or not v_key: continue
 
-                u_val = np.nan_to_num(cut_w[u_key].values)
-                v_val = np.nan_to_num(cut_w[v_key].values)
+                u_val = np.asarray(cut_w[u_key].values, dtype=float)
+                v_val = np.asarray(cut_w[v_key].values, dtype=float)
 
                 lat = cut_w.latitude.values
                 lon = cut_w.longitude.values
@@ -254,11 +285,11 @@ def process_data():
                 la2 = la1 - (ny - 1) * dy
 
                 # 1) TEMP e RH
-                temp_c = np.zeros_like(u_val)
-                rh_val = np.zeros_like(u_val)
+                temp_c = np.full_like(u_val, np.nan, dtype=float)
+                rh_val = np.full_like(u_val, np.nan, dtype=float)
 
                 if ds_thermo is not None:
-                    dt_step = ds_thermo.isel(step=i) if ds_thermo.sizes.get('step', 1) > 1 else ds_thermo
+                    dt_step = select_step(ds_thermo, raw_step, i)
                     dt_step = dt_step.sortby('latitude', ascending=False).sortby('longitude', ascending=True)
 
                     t_raw = extract_raw_grid(dt_step, mask, ['t2m', 't'])
@@ -277,48 +308,48 @@ def process_data():
                 feels_like = np.copy(temp_c)
                 try:
                     if real_dem is not None and ds_hsurf is not None:
-                        dh_step = ds_hsurf.isel(step=i) if ds_hsurf.sizes.get('step', 1) > 1 else ds_hsurf
+                        dh_step = select_step(ds_hsurf, raw_step, i)
                         dh_step = dh_step.sortby('latitude', ascending=False).sortby('longitude', ascending=True)
                         h_model = extract_raw_grid(dh_step, mask, ['gh'])
                         if h_model is not None:
                             if f > 1: h_model = downsample_2d(h_model, f)
                             h_real = real_dem.interp(latitude=cut_w.latitude, longitude=cut_w.longitude).elevation.values
                             if h_real.shape == u_val.shape:
-                                feels_like = temp_c + (h_model - np.nan_to_num(h_real)) * LAPSE_RATE
+                                feels_like = temp_c + (h_model - np.where(np.isfinite(h_real), h_real, h_model)) * LAPSE_RATE
                 except Exception:
                     pass # Se fallisce, feels_like rimane uguale a temp_c
 
                 # 2) PRESSIONE
-                press = np.zeros_like(u_val)
+                press = np.full_like(u_val, np.nan, dtype=float)
                 if ds_press is not None:
-                    dp_step = ds_press.isel(step=i) if ds_press.sizes.get('step', 1) > 1 else ds_press
+                    dp_step = select_step(ds_press, raw_step, i)
                     dp_step = dp_step.sortby('latitude', ascending=False).sortby('longitude', ascending=True)
 
                     p_raw = extract_raw_grid(dp_step, mask, ['pmsl', 'prmsl', 'msl'])
                     if p_raw is not None and p_raw.ndim == 2:
                         if f > 1: p_raw = downsample_2d(p_raw, f)
                         if p_raw.shape == u_val.shape:
-                            p_clean = np.nan_to_num(p_raw)
-                            press = (p_clean / 100.0) if np.max(p_clean) > 80000 else p_clean
+                            p_raw = np.asarray(p_raw, dtype=float)
+                            press = (p_raw / 100.0) if np.nanmax(p_raw) > 80000 else p_raw
 
-                if np.max(press) < 800: press.fill(1013.0)
+                # Non inventare pressione standard: se manca resta null nel JSON.
 
                 # 3) PIOGGIA
-                rain = np.zeros_like(u_val)
+                rain = np.full_like(u_val, np.nan, dtype=float)
                 if ds_rain is not None:
-                    dr_step = ds_rain.isel(step=i) if ds_rain.sizes.get('step', 1) > 1 else ds_rain
+                    dr_step = select_step(ds_rain, raw_step, i)
                     dr_step = dr_step.sortby('latitude', ascending=False).sortby('longitude', ascending=True)
 
                     r_raw = extract_raw_grid(dr_step, mask, ['tp', 'tot_prec'])
                     if r_raw is not None and r_raw.ndim == 2:
                         if f > 1: r_raw = downsample_2d(r_raw, f)
                         if r_raw.shape == u_val.shape:
-                            rain = np.nan_to_num(r_raw)
+                            rain = np.asarray(r_raw, dtype=float)
 
                 # 4) NUVOLOSITÀ
-                cloud = np.zeros_like(u_val)
+                cloud = np.full_like(u_val, np.nan, dtype=float)
                 if ds_cloud is not None:
-                    dc_step = ds_cloud.isel(step=i) if ds_cloud.sizes.get('step', 1) > 1 else ds_cloud
+                    dc_step = select_step(ds_cloud, raw_step, i)
                     dc_step = dc_step.sortby('latitude', ascending=False).sortby('longitude', ascending=True)
 
                     c_raw = extract_raw_grid(dc_step, mask, ['tcc', 'tcdc', 'clct', 'cc', 'tcc_total', 'totalCloudCover'])
@@ -329,32 +360,32 @@ def process_data():
 
                 # EXPORT JSON
                 valid_dt = run_dt + timedelta(hours=step_hours)
-                iso_date = valid_dt.strftime("%Y-%m-%dT%H:%M:%S.000Z")
+                iso_date = iso_z(valid_dt)
 
                 header = {
                     "nx": nx, "ny": ny, "lo1": lo1, "la1": la1, "lo2": lo2, "la2": la2,
-                    "dx": dx, "dy": dy, "refTime": iso_date
+                    "dx": dx, "dy": dy, "runTime": iso_z(run_dt), "validTime": iso_date, "refTime": iso_date, "leadHours": step_hours
                 }
 
                 step_data = {
                     "meta": header,
                     "wind_u": { "header": {**header, "parameterCategory": 2, "parameterNumber": 2}, "data": np.round(u_val, 1).flatten().tolist() },
                     "wind_v": { "header": {**header, "parameterCategory": 2, "parameterNumber": 3}, "data": np.round(v_val, 1).flatten().tolist() },
-                    "temp": np.round(temp_c, 1).flatten().tolist(),
-                    "feels_like": np.round(feels_like, 1).flatten().tolist(), # Inserito qui!
-                    "rain": np.round(rain, 2).flatten().tolist(),
-                    "press": np.round(press, 1).flatten().tolist(),
-                    "rh": np.round(rh_val, 0).flatten().tolist(),
-                    "cloud": np.round(cloud, 0).flatten().tolist()
+                    "temp": clean_for_json(temp_c, 1),
+                    "feels_like": clean_for_json(feels_like, 1),
+                    "rain": clean_for_json(rain, 2),
+                    "press": clean_for_json(press, 1),
+                    "rh": clean_for_json(rh_val, 0),
+                    "cloud": clean_for_json(cloud, 0)
                 }
 
                 out_name = f"step_{step_hours}.json"
                 # FIX 3: Minificazione del file
                 with open(f"{TEMP_DIR}/{out_name}", 'w') as jf:
-                    json.dump(step_data, jf, separators=(',', ':'))
+                    json.dump(step_data, jf, separators=(',', ':'), allow_nan=False)
 
                 if not any(x['hour'] == step_hours for x in catalog):
-                    catalog.append({ "file": out_name, "label": f"{valid_dt.strftime('%d/%m %H:00')}", "hour": step_hours })
+                    catalog.append({ "file": out_name, "label": f"{valid_dt.strftime('%d/%m %H:00')} UTC", "hour": step_hours, "runTime": iso_z(run_dt), "validTime": iso_date, "leadHours": step_hours })
 
             except Exception as e:
                 print(f"!", end="", flush=True)
@@ -368,7 +399,7 @@ def process_data():
     if catalog:
         catalog.sort(key=lambda x: x['hour'])
         with open(f"{TEMP_DIR}/catalog.json", 'w') as f:
-            json.dump(catalog, f, separators=(',', ':'))
+            json.dump(catalog, f, separators=(',', ':'), allow_nan=False)
 
         if os.path.exists(FINAL_DIR): shutil.rmtree(FINAL_DIR)
         shutil.move(TEMP_DIR, FINAL_DIR)
