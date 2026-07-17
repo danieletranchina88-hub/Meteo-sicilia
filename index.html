@@ -26,9 +26,7 @@
       -webkit-tap-highlight-color:transparent;
     }
 
-    html,
-    body,
-    #map {
+    html,body,#map {
       width:100%;
       height:100%;
       margin:0;
@@ -42,14 +40,8 @@
       overscroll-behavior:none;
     }
 
-    button,
-    input {
-      font:inherit;
-    }
-
-    button {
-      touch-action:manipulation;
-    }
+    button,input { font:inherit; }
+    button { touch-action:manipulation; }
 
     .glass {
       background:var(--panel);
@@ -59,7 +51,6 @@
       -webkit-backdrop-filter:blur(10px) saturate(125%);
     }
 
-    /* La mappa riceve i tocchi */
     #map {
       position:fixed;
       inset:0;
@@ -68,9 +59,8 @@
       overscroll-behavior:none;
     }
 
-    /* Solo questi canvas non ricevono i tocchi */
-    #particles,
-    #vectors {
+    /* Importante: non usare la regola generica canvas */
+    #particles,#vectors {
       position:fixed;
       inset:0;
       width:100%;
@@ -96,10 +86,7 @@
       padding:0 12px;
     }
 
-    #clean {
-      left:50%;
-      transform:translateX(-50%);
-    }
+    #clean { left:50%;transform:translateX(-50%); }
 
     #controls {
       right:9px;
@@ -162,8 +149,7 @@
       text-transform:uppercase;
     }
 
-    .option,
-    .gps {
+    .option,.gps {
       width:100%;
       min-height:41px;
       margin:5px 0;
@@ -602,6 +588,7 @@ function colour(v,stops,step=false){
 
   for(let i=0;i<stops.length-1;i++){
     let a=stops[i],b=stops[i+1];
+
     if(v<=b.v){
       let t=(v-a.v)/(b.v-a.v);
       return[
@@ -649,10 +636,7 @@ function field(k,x,y){
 }
 
 function uv(x,y){
-  return{
-    u:sample(data.wind_u,x,y),
-    v:sample(data.wind_v,x,y)
-  };
+  return {u:sample(data.wind_u,x,y),v:sample(data.wind_v,x,y)};
 }
 
 function windDir(u,v){
@@ -713,6 +697,7 @@ function setupMap(){
           tileSize:256,
           attribution:"© CARTO © OpenStreetMap"
         },
+
         labels:{
           type:"raster",
           tiles:[
@@ -721,6 +706,7 @@ function setupMap(){
           ],
           tileSize:256
         },
+
         relief:{
           type:"raster",
           tiles:[
@@ -729,10 +715,31 @@ function setupMap(){
           tileSize:256
         }
       },
+
       layers:[
         {id:"bg",type:"background",paint:{"background-color":"#050a12"}},
-        {id:"base",type:"raster",source:"base",paint:{"raster-opacity":.75,"raster-saturation":-.5,"raster-contrast":.18}},
-        {id:"relief",type:"raster",source:"relief",paint:{"raster-opacity":.24,"raster-saturation":-1,"raster-contrast":.35}}
+
+        {
+          id:"base",
+          type:"raster",
+          source:"base",
+          paint:{
+            "raster-opacity":.75,
+            "raster-saturation":-.5,
+            "raster-contrast":.18
+          }
+        },
+
+        {
+          id:"relief",
+          type:"raster",
+          source:"relief",
+          paint:{
+            "raster-opacity":.24,
+            "raster-saturation":-1,
+            "raster-contrast":.35
+          }
+        }
       ]
     }
   });
@@ -756,14 +763,32 @@ function setupMap(){
       id:"weather",
       type:"raster",
       source:"weather",
-      paint:{"raster-opacity":.92,"raster-resampling":"linear","raster-fade-duration":0}
+      paint:{
+        "raster-opacity":.80,
+        "raster-resampling":"linear",
+        "raster-fade-duration":0
+      }
+    });
+
+    /* Rilievi sopra i colori meteo */
+    map.addLayer({
+      id:"terrain-detail",
+      type:"raster",
+      source:"relief",
+      paint:{
+        "raster-opacity":.48,
+        "raster-saturation":-1,
+        "raster-contrast":.72,
+        "raster-brightness-min":.08,
+        "raster-brightness-max":.82
+      }
     });
 
     map.addLayer({
       id:"labels",
       type:"raster",
       source:"labels",
-      paint:{"raster-opacity":.58}
+      paint:{"raster-opacity":.82}
     });
 
     map.addSource("iso",{type:"geojson",data:{type:"FeatureCollection",features:[]}});
@@ -944,7 +969,6 @@ function updateTime(){
 
   if(d&&f)valid.textContent+=` · +${Math.round((d-f)/36e5)}h`;
 }
-
 function renderWeather(){
   if(!data||!map.getSource("weather"))return;
 
@@ -982,7 +1006,19 @@ function renderWeather(){
   }
 
   rctx.putImageData(im,0,0);
+
+  const overlayOpacity={
+    temp:.80,
+    feels:.80,
+    wind:.73,
+    rain:.84,
+    cloud:.62,
+    rh:.74,
+    press:.66
+  };
+
   map.setPaintProperty("weather","raster-resampling",raw?"nearest":"linear");
+  map.setPaintProperty("weather","raster-opacity",overlayOpacity[layer]??.80);
 
   map.getSource("weather").updateImage({
     url:raster.toDataURL("image/png"),
@@ -1232,7 +1268,7 @@ function flowFrame(t){
       k<105?"rgba(255,80,80,1)":"rgba(230,95,255,1)";
 
     let width=k<25?1.25:k<55?1.8:k<80?2.4:3;
-    let z=buckets[color+"|"+width]??=[];
+    let z=buckets[color+"|"+width]??[];
     z.push([a.x,a.y,b.x,b.y]);
     buckets[color+"|"+width]=z;
   }
@@ -1260,6 +1296,7 @@ function arrow(a,b,c,d,col,w,h){
   vctx.strokeStyle="rgba(255,255,255,.42)";
   vctx.fillStyle="rgba(255,255,255,.42)";
   vctx.lineWidth=w+1;
+
   vctx.beginPath();
   vctx.moveTo(a,b);
   vctx.lineTo(c,d);
@@ -1274,6 +1311,7 @@ function arrow(a,b,c,d,col,w,h){
   vctx.strokeStyle=col;
   vctx.fillStyle=col;
   vctx.lineWidth=w;
+
   vctx.beginPath();
   vctx.moveTo(a,b);
   vctx.lineTo(c,d);
