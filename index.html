@@ -1,2525 +1,929 @@
-<!DOCTYPE html>
+<!doctype html>
 <html lang="it">
 <head>
-  <title>Italia MeteoHub Pro - Mobile Synoptic Viewer</title>
-  <meta charset="utf-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
-
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+  <meta name="theme-color" content="#050a12">
+  <title>Italia MeteoHub</title>
+  <link rel="stylesheet" href="https://unpkg.com/maplibre-gl@3.6.2/dist/maplibre-gl.css">
   <script src="https://unpkg.com/maplibre-gl@3.6.2/dist/maplibre-gl.js"></script>
-  <link href="https://unpkg.com/maplibre-gl@3.6.2/dist/maplibre-gl.css" rel="stylesheet" />
   <script src="https://d3js.org/d3.v7.min.js"></script>
-
   <style>
-    :root {
-      --bg: #04070c;
-      --panel: rgba(8, 12, 18, 0.84);
-      --panel-strong: rgba(6, 9, 14, 0.96);
-      --stroke: rgba(255,255,255,0.12);
-      --stroke-strong: rgba(0,180,255,0.42);
-      --text: #f4f7fb;
-      --muted: #9aa8b8;
-      --accent: #008cff;
-      --accent2: #00eaff;
-      --green: #25b85d;
-      --radius: 16px;
-      --shadow: 0 18px 55px rgba(0,0,0,0.56);
-    }
-
-    * {
-      box-sizing: border-box;
-      -webkit-tap-highlight-color: transparent;
-    }
-
-    html,
-    body {
-      margin: 0;
-      width: 100%;
-      height: 100%;
-      background: var(--bg);
-      font-family: "Segoe UI", Roboto, system-ui, -apple-system, BlinkMacSystemFont, sans-serif;
-      color: var(--text);
-      overflow: hidden;
-      overscroll-behavior: none;
-      -webkit-font-smoothing: antialiased;
-    }
-
-    #map {
-      position: fixed;
-      inset: 0;
-      width: 100vw;
-      height: 100dvh;
-      background: var(--bg);
-      z-index: 1;
-    }
-
-    #particle-canvas,
-    #vector-canvas {
-      position: fixed;
-      inset: 0;
-      width: 100vw;
-      height: 100dvh;
-      pointer-events: none;
-      image-rendering: auto;
-    }
-
-    #particle-canvas { z-index: 10; }
-    #vector-canvas { z-index: 11; }
-
-    .glass {
-      background: var(--panel);
-      border: 1px solid var(--stroke);
-      box-shadow: var(--shadow);
-      backdrop-filter: blur(18px) saturate(125%);
-      -webkit-backdrop-filter: blur(18px) saturate(125%);
-    }
-
-    #clean-toggle,
-    #controls-toggle {
-      position: fixed;
-      top: 14px;
-      z-index: 6500;
-      border: 1px solid rgba(255,255,255,0.15);
-      background: rgba(8,12,18,0.78);
-      color: #fff;
-      border-radius: 999px;
-      padding: 8px 13px;
-      font-size: 11px;
-      font-weight: 900;
-      letter-spacing: 0.04em;
-      cursor: pointer;
-      backdrop-filter: blur(14px);
-      -webkit-backdrop-filter: blur(14px);
-    }
-
-    #clean-toggle {
-      left: 50%;
-      transform: translateX(-50%);
-    }
-
-    #controls-toggle {
-      right: 14px;
-      display: none;
-    }
-
-    #gps-overlay {
-      position: fixed;
-      top: 14px;
-      left: 50%;
-      transform: translate(-50%, -130%);
-      width: min(760px, calc(100vw - 28px));
-      background: var(--panel-strong);
-      backdrop-filter: blur(22px) saturate(130%);
-      -webkit-backdrop-filter: blur(22px) saturate(130%);
-      z-index: 6000;
-      display: grid;
-      grid-template-columns: repeat(6, 1fr);
-      gap: 8px;
-      border: 1px solid var(--stroke-strong);
-      transition: transform 0.32s ease;
-      padding: 34px 14px 14px;
-      box-shadow: 0 22px 60px rgba(0,0,0,0.62);
-      border-radius: 20px;
-    }
-
-    #gps-overlay.active {
-      transform: translate(-50%, 0);
-    }
-
-    .gps-stat {
-      min-width: 0;
-      text-align: center;
-      padding: 9px 6px;
-      background: rgba(255,255,255,0.045);
-      border: 1px solid rgba(255,255,255,0.08);
-      border-radius: 13px;
-    }
-
-    .gps-stat div:first-child {
-      font-size: 0.62rem;
-      color: var(--muted);
-      text-transform: uppercase;
-      font-weight: 900;
-      letter-spacing: 0.06em;
-      margin-bottom: 4px;
-    }
-
-    .gps-stat div:last-child {
-      font-size: 1.08rem;
-      font-weight: 950;
-      color: #fff;
-      white-space: nowrap;
-    }
-
-    #close-gps {
-      position: absolute;
-      right: 15px;
-      top: 9px;
-      cursor: pointer;
-      color: var(--muted);
-      font-size: 1.35rem;
-      line-height: 1;
-    }
-
-    #top-left {
-      position: fixed;
-      top: 15px;
-      left: 18px;
-      z-index: 5000;
-      display: flex;
-      flex-direction: column;
-      gap: 10px;
-      pointer-events: none;
-      max-width: min(500px, calc(100vw - 36px));
-    }
-
-    #model-info {
-      padding: 12px 14px;
-      border-radius: var(--radius);
-      width: 420px;
-      max-width: calc(100vw - 36px);
-    }
-
-    #model-title {
-      display: flex;
-      align-items: center;
-      gap: 8px;
-      font-size: 15px;
-      font-weight: 950;
-      color: #fff;
-      text-transform: uppercase;
-      letter-spacing: 0.08em;
-    }
-
-    #model-title span {
-      padding: 3px 7px;
-      border-radius: 999px;
-      color: #001521;
-      background: linear-gradient(135deg, var(--accent2), #7dfcff);
-      font-size: 10px;
-      letter-spacing: 0.04em;
-    }
-
-    #meta-grid {
-      margin-top: 10px;
-      display: grid;
-      grid-template-columns: repeat(2, minmax(0, 1fr));
-      gap: 7px;
-    }
-
-    .meta-item {
-      padding: 7px 8px;
-      border-radius: 10px;
-      background: rgba(255,255,255,0.045);
-      border: 1px solid rgba(255,255,255,0.07);
-      min-width: 0;
-    }
-
-    .meta-label {
-      font-size: 8.5px;
-      color: var(--muted);
-      text-transform: uppercase;
-      font-weight: 950;
-      letter-spacing: 0.08em;
-      margin-bottom: 2px;
-    }
-
-    .meta-value {
-      font-size: 11.5px;
-      color: #fff;
-      font-weight: 850;
-      white-space: nowrap;
-      overflow: hidden;
-      text-overflow: ellipsis;
-      font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
-    }
-
-    #scientific-note {
-      margin-top: 9px;
-      font-size: 10px;
-      line-height: 1.35;
-      color: #9fb1c6;
-      font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
-    }
-
-    #hover-box {
-      display: none;
-      width: fit-content;
-      min-width: 230px;
-      padding: 10px 12px;
-      border-radius: var(--radius);
-      font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
-      font-size: 12px;
-      color: #dce8f7;
-    }
-
-    #hover-box.active {
-      display: block;
-    }
-
-    #info-box {
-      display: none;
-      width: 340px;
-      max-width: calc(100vw - 36px);
-      padding: 12px 14px;
-      border-radius: var(--radius);
-    }
-
-    #info-box.active {
-      display: block;
-    }
-
-    #readout-name {
-      font-size: 11px;
-      color: var(--muted);
-      text-transform: uppercase;
-      font-weight: 850;
-      letter-spacing: 0.08em;
-      margin-bottom: 4px;
-    }
-
-    #val-row {
-      display: flex;
-      align-items: flex-end;
-      gap: 6px;
-    }
-
-    #val-display {
-      font-size: 3.05rem;
-      font-weight: 950;
-      color: #fff;
-      line-height: 0.9;
-      font-variant-numeric: tabular-nums;
-    }
-
-    #unit-display {
-      font-size: 1.05rem;
-      color: #d4dbe4;
-      font-weight: 850;
-      padding-bottom: 4px;
-    }
-
-    #coord-display,
-    #sampling-display {
-      margin-top: 6px;
-      font-size: 10.5px;
-      color: var(--muted);
-      font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
-    }
-
-    #details-grid {
-      margin-top: 12px;
-      display: grid;
-      grid-template-columns: 1fr 1fr;
-      gap: 7px;
-    }
-
-    .detail-card {
-      padding: 8px 9px;
-      border-radius: 11px;
-      background: rgba(255,255,255,0.055);
-      border: 1px solid rgba(255,255,255,0.075);
-    }
-
-    .detail-label {
-      font-size: 9px;
-      text-transform: uppercase;
-      letter-spacing: 0.08em;
-      color: var(--muted);
-      font-weight: 900;
-      margin-bottom: 2px;
-    }
-
-    .detail-value {
-      font-size: 14px;
-      color: #fff;
-      font-weight: 950;
-      font-variant-numeric: tabular-nums;
-    }
-
-    #ui-container {
-      position: fixed;
-      top: 14px;
-      right: 14px;
-      z-index: 5000;
-      display: flex;
-      flex-direction: column;
-      gap: 10px;
-      pointer-events: auto;
-      width: 235px;
-      max-height: calc(100dvh - 108px);
-      overflow-y: auto;
-      scrollbar-width: none;
-      transition: transform 0.28s ease, opacity 0.28s ease;
-    }
-
-    #ui-container::-webkit-scrollbar {
-      display: none;
-    }
-
-    .panel {
-      padding: 10px;
-      border-radius: var(--radius);
-    }
-
-    .panel-title {
-      color: var(--muted);
-      font-size: 10px;
-      font-weight: 950;
-      text-transform: uppercase;
-      letter-spacing: 0.09em;
-      margin: 2px 4px 8px;
-    }
-
-    .toggle {
-      width: 100%;
-      display: flex;
-      align-items: center;
-      justify-content: space-between;
-      gap: 10px;
-      padding: 10px 10px;
-      margin: 5px 0;
-      background: rgba(255,255,255,0.045);
-      border-radius: 11px;
-      cursor: pointer;
-      font-weight: 850;
-      font-size: 12px;
-      color: #c9d2de;
-      border: 1px solid transparent;
-      transition: transform 0.15s ease, background 0.15s ease, border-color 0.15s ease, color 0.15s ease, opacity 0.15s ease;
-      user-select: none;
-    }
-
-    .toggle:hover {
-      transform: translateY(-1px);
-      background: rgba(255,255,255,0.075);
-      border-color: rgba(255,255,255,0.12);
-    }
-
-    .toggle.active {
-      background: linear-gradient(135deg, rgba(0,119,255,0.96), rgba(0,190,255,0.78));
-      border-color: rgba(122,218,255,0.55);
-      color: #fff;
-      box-shadow: 0 8px 20px rgba(0,119,255,0.18);
-    }
-
-    .toggle.disabled {
-      opacity: 0.38;
-      cursor: not-allowed;
-      pointer-events: none;
-    }
-
-    .toggle .dot {
-      width: 8px;
-      height: 8px;
-      border-radius: 50%;
-      background: rgba(255,255,255,0.28);
-      box-shadow: 0 0 0 3px rgba(255,255,255,0.04);
-      flex: 0 0 auto;
-    }
-
-    .toggle.active .dot {
-      background: #fff;
-      box-shadow: 0 0 0 4px rgba(255,255,255,0.18);
-    }
-
-    .gps-btn {
-      width: 100%;
-      padding: 13px 14px;
-      border-radius: 14px;
-      font-size: 13px;
-      background: linear-gradient(135deg, #1baa56, #2bd86d);
-      color: white;
-      cursor: pointer;
-      font-weight: 950;
-      border: 1px solid rgba(255,255,255,0.15);
-      box-shadow: 0 12px 30px rgba(36,180,92,0.22);
-    }
-
-    #legend-card {
-      position: fixed;
-      left: 18px;
-      bottom: 96px;
-      z-index: 5000;
-      width: 350px;
-      max-width: calc(100vw - 36px);
-      padding: 11px 12px 10px;
-      border-radius: var(--radius);
-      pointer-events: none;
-    }
-
-    #legend-head {
-      display: flex;
-      align-items: center;
-      justify-content: space-between;
-      margin-bottom: 8px;
-    }
-
-    #legend-title {
-      font-size: 11px;
-      font-weight: 950;
-      color: #fff;
-      text-transform: uppercase;
-      letter-spacing: 0.07em;
-    }
-
-    #legend-unit {
-      font-size: 11px;
-      color: var(--muted);
-      font-weight: 850;
-    }
-
-    #legend-gradient {
-      height: 12px;
-      border-radius: 999px;
-      overflow: hidden;
-      border: 1px solid rgba(255,255,255,0.16);
-      background: linear-gradient(to right, #333, #eee);
-    }
-
-    #legend-ticks {
-      margin-top: 7px;
-      display: flex;
-      justify-content: space-between;
-      gap: 4px;
-      color: var(--muted);
-      font-size: 10px;
-      font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
-    }
-
-    #bottom-bar {
-      position: fixed;
-      left: 14px;
-      right: 14px;
-      bottom: 12px;
-      min-height: 68px;
-      padding: 12px 14px;
-      display: flex;
-      align-items: center;
-      gap: 14px;
-      border-radius: 20px;
-      z-index: 5000;
-    }
-
-    #play-btn {
-      width: 44px;
-      height: 44px;
-      flex: 0 0 auto;
-      border-radius: 999px;
-      border: 1px solid rgba(255,255,255,0.18);
-      background: rgba(255,255,255,0.08);
-      color: white;
-      font-size: 1.45rem;
-      cursor: pointer;
-      display: grid;
-      place-items: center;
-    }
-
-    #play-btn:hover {
-      background: rgba(255,255,255,0.15);
-    }
-
-    input[type=range] {
-      flex-grow: 1;
-      accent-color: var(--accent);
-      cursor: pointer;
-      min-width: 80px;
-    }
-
-    #time-label {
-      color: white;
-      font-weight: 900;
-      margin-left: 0;
-      font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
-      min-width: 150px;
-      text-align: right;
-      font-size: 13px;
-    }
-
-    #speed-controls {
-      display: flex;
-      gap: 5px;
-    }
-
-    .speed-btn {
-      border: 1px solid rgba(255,255,255,0.14);
-      background: rgba(255,255,255,0.07);
-      color: #cfd8e3;
-      border-radius: 999px;
-      padding: 6px 8px;
-      font-size: 10px;
-      font-weight: 900;
-      cursor: pointer;
-    }
-
-    .speed-btn.active {
-      color: #001521;
-      background: #7dfcff;
-      border-color: rgba(125,252,255,0.55);
-    }
-
-    #loading-indicator {
-      display: none;
-      position: fixed;
-      top: 50%;
-      left: 50%;
-      transform: translate(-50%, -50%);
-      background: rgba(5, 8, 12, 0.94);
-      border: 1px solid rgba(0,170,255,0.55);
-      color: white;
-      padding: 15px 22px;
-      border-radius: 14px;
-      font-weight: 900;
-      z-index: 9999;
-      box-shadow: 0 18px 50px rgba(0,0,0,0.5);
-    }
-
-    #loading-indicator.active {
-      display: block;
-    }
-
-    body.clean-mode #ui-container,
-    body.clean-mode #legend-card,
-    body.clean-mode #top-left,
-    body.clean-mode #controls-toggle {
-      display: none !important;
-    }
-
-    body.clean-mode #bottom-bar {
-      left: 8px;
-      right: 8px;
-      width: auto;
-      transform: none;
-    }
-
-    body.mobile-ui #controls-toggle {
-      display: block;
-      top: calc(env(safe-area-inset-top, 0px) + 8px);
-      right: 10px;
-      padding: 7px 11px;
-      font-size: 9px;
-      border-radius: 999px;
-    }
-
-    body.mobile-ui #clean-toggle {
-      top: calc(env(safe-area-inset-top, 0px) + 8px);
-      left: 50%;
-      transform: translateX(-50%);
-      padding: 7px 11px;
-      font-size: 9px;
-      border-radius: 999px;
-    }
-
-    body.mobile-ui #top-left {
-      top: calc(env(safe-area-inset-top, 0px) + 8px);
-      left: 8px;
-      max-width: 176px;
-      gap: 6px;
-    }
-
-    body.mobile-ui #model-info {
-      width: 176px;
-      padding: 8px 9px;
-      border-radius: 13px;
-      background: rgba(7, 10, 15, 0.82);
-    }
-
-    body.mobile-ui #model-title {
-      font-size: 11px;
-      line-height: 1.05;
-      gap: 5px;
-      letter-spacing: 0.05em;
-    }
-
-    body.mobile-ui #model-title span {
-      font-size: 7px;
-      padding: 2px 5px;
-    }
-
-    body.mobile-ui #meta-grid {
-      margin-top: 6px;
-      display: grid;
-      grid-template-columns: 1fr 1fr;
-      gap: 4px;
-    }
-
-    body.mobile-ui .meta-item {
-      padding: 5px 5px;
-      border-radius: 8px;
-    }
-
-    body.mobile-ui .meta-label {
-      font-size: 6.5px;
-      letter-spacing: 0.05em;
-    }
-
-    body.mobile-ui .meta-value {
-      font-size: 8.7px;
-    }
-
-    body.mobile-ui #scientific-note {
-      display: none;
-    }
-
-    body.mobile-ui #hover-box {
-      display: none !important;
-    }
-
-    body.mobile-ui #info-box {
-      position: fixed;
-      left: 8px;
-      right: 8px;
-      bottom: calc(env(safe-area-inset-bottom, 0px) + 67px);
-      width: auto;
-      max-width: none;
-      max-height: 36dvh;
-      overflow-y: auto;
-      padding: 9px 10px;
-      border-radius: 15px;
-      pointer-events: auto;
-      background: rgba(7, 10, 15, 0.88);
-    }
-
-    body.mobile-ui #readout-name {
-      font-size: 9px;
-    }
-
-    body.mobile-ui #val-display {
-      font-size: 2.1rem;
-    }
-
-    body.mobile-ui #unit-display {
-      font-size: 0.85rem;
-    }
-
-    body.mobile-ui #coord-display,
-    body.mobile-ui #sampling-display {
-      font-size: 8.5px;
-      margin-top: 4px;
-    }
-
-    body.mobile-ui #details-grid {
-      margin-top: 8px;
-      grid-template-columns: repeat(4, 1fr);
-      gap: 5px;
-    }
-
-    body.mobile-ui .detail-card {
-      padding: 5px 5px;
-      border-radius: 8px;
-    }
-
-    body.mobile-ui .detail-label {
-      font-size: 6.5px;
-      letter-spacing: 0.04em;
-    }
-
-    body.mobile-ui .detail-value {
-      font-size: 9.5px;
-    }
-
-    body.mobile-ui #ui-container {
-      position: fixed;
-      left: 8px;
-      right: 8px;
-      bottom: calc(env(safe-area-inset-bottom, 0px) + 67px);
-      top: auto;
-      width: auto;
-      max-height: 54dvh;
-      display: grid;
-      grid-template-columns: 1fr;
-      gap: 7px;
-      overflow-y: auto;
-      transform: translateY(calc(100% + 85px));
-      opacity: 0;
-      pointer-events: none;
-      transition: transform 0.25s ease, opacity 0.25s ease;
-    }
-
-    body.mobile-ui.controls-open #ui-container {
-      transform: translateY(0);
-      opacity: 1;
-      pointer-events: auto;
-    }
-
-    body.mobile-ui .panel {
-      padding: 8px;
-      border-radius: 15px;
-      background: rgba(7, 10, 15, 0.90);
-    }
-
-    body.mobile-ui .panel-title {
-      font-size: 8px;
-      margin: 1px 4px 6px;
-    }
-
-    body.mobile-ui .toggle {
-      min-height: 36px;
-      padding: 8px 9px;
-      margin: 4px 0;
-      font-size: 11px;
-      border-radius: 10px;
-    }
-
-    body.mobile-ui .gps-btn {
-      padding: 10px 12px;
-      font-size: 12px;
-      border-radius: 12px;
-    }
-
-    body.mobile-ui #legend-card {
-      left: 8px;
-      bottom: calc(env(safe-area-inset-bottom, 0px) + 67px);
-      width: min(225px, calc(100vw - 16px));
-      padding: 8px 9px;
-      border-radius: 14px;
-      background: rgba(7, 10, 15, 0.86);
-    }
-
-    body.mobile-ui.controls-open #legend-card {
-      display: none;
-    }
-
-    body.mobile-ui #legend-title,
-    body.mobile-ui #legend-unit {
-      font-size: 9px;
-    }
-
-    body.mobile-ui #legend-gradient {
-      height: 9px;
-    }
-
-    body.mobile-ui #legend-ticks {
-      margin-top: 5px;
-      font-size: 7.5px;
-    }
-
-    body.mobile-ui #bottom-bar {
-      left: 8px;
-      right: 8px;
-      bottom: calc(env(safe-area-inset-bottom, 0px) + 6px);
-      min-height: 53px;
-      padding: 8px 10px;
-      gap: 8px;
-      border-radius: 16px;
-      background: rgba(7, 10, 15, 0.88);
-    }
-
-    body.mobile-ui #play-btn {
-      width: 35px;
-      height: 35px;
-      font-size: 1.05rem;
-    }
-
-    body.mobile-ui input[type=range] {
-      min-width: 80px;
-    }
-
-    body.mobile-ui #speed-controls {
-      display: none;
-    }
-
-    body.mobile-ui #time-label {
-      min-width: 70px;
-      font-size: 9.5px;
-    }
-
-    body.mobile-ui #gps-overlay {
-      top: calc(env(safe-area-inset-top, 0px) + 8px);
-      width: calc(100vw - 16px);
-      grid-template-columns: repeat(2, 1fr);
-      padding: 32px 10px 10px;
-      border-radius: 16px;
-    }
-
-    body.mobile-ui .gps-stat {
-      padding: 7px 5px;
-    }
-
-    body.mobile-ui .gps-stat div:first-child {
-      font-size: 7px;
-    }
-
-    body.mobile-ui .gps-stat div:last-child {
-      font-size: 0.95rem;
-    }
+    :root{--bg:#050a12;--panel:rgba(7,13,22,.88);--stroke:rgba(154,224,255,.16);--text:#f4f8ff;--muted:#9aacbf;--blue:#078bea;--cyan:#42dff8;--radius:16px;--safe-top:env(safe-area-inset-top,0px);--safe-bottom:env(safe-area-inset-bottom,0px)}
+    *{box-sizing:border-box;-webkit-tap-highlight-color:transparent}html,body,#map{width:100%;height:100%;margin:0}body{overflow:hidden;background:var(--bg);font-family:Inter,system-ui,-apple-system,"Segoe UI",sans-serif;color:var(--text);overscroll-behavior:none}button,input{font:inherit}button{touch-action:manipulation}.glass{background:var(--panel);border:1px solid var(--stroke);box-shadow:0 12px 32px rgba(0,0,0,.38);backdrop-filter:blur(10px) saturate(125%);-webkit-backdrop-filter:blur(10px) saturate(125%)}
+    #map{position:fixed;inset:0;background:var(--bg)}canvas{position:fixed;inset:0;width:100%;height:100%;pointer-events:none}#particles{z-index:10}#vectors{z-index:11}.top-btn{position:fixed;z-index:50;top:calc(var(--safe-top) + 9px);height:36px;border-radius:999px;border:1px solid var(--stroke);color:white;font-size:10px;font-weight:900;letter-spacing:.06em;background:rgba(5,13,23,.91);padding:0 12px}.top-btn:active{transform:scale(.96)}#clean{left:50%;transform:translateX(-50%)}#controls{right:9px;background:linear-gradient(135deg,#0677d9,#00aee8);border-color:rgba(178,240,255,.5)}
+    #brand{position:fixed;z-index:45;top:calc(var(--safe-top) + 9px);left:9px;width:120px;min-height:36px;border-radius:12px;padding:10px;font-size:9px;font-weight:950;letter-spacing:.06em;white-space:nowrap}.desktop-info{display:none}
+    #side{position:fixed;z-index:48;left:9px;right:9px;bottom:calc(var(--safe-bottom) + 68px);max-height:min(57dvh,510px);overflow:auto;display:grid;gap:7px;transform:translateY(calc(100% + 84px));opacity:0;pointer-events:none;transition:transform .24s ease,opacity .24s ease;scrollbar-width:none}#side.open{transform:translateY(0);opacity:1;pointer-events:auto}#side::-webkit-scrollbar{display:none}.panel{padding:9px;border-radius:15px}.panel h2{font-size:8px;letter-spacing:.1em;color:var(--muted);margin:2px 5px 7px;text-transform:uppercase}.option,.gps{width:100%;min-height:41px;margin:5px 0;padding:9px 11px;border:1px solid transparent;border-radius:11px;background:rgba(255,255,255,.055);color:#dbe6f3;display:flex;justify-content:space-between;align-items:center;text-align:left;font-size:11.5px;font-weight:800}.option .dot{height:8px;width:8px;border-radius:50%;background:rgba(255,255,255,.26)}.option.active{color:#fff;background:linear-gradient(135deg,#0879dd,#00abe9);border-color:rgba(166,237,255,.48);box-shadow:0 6px 15px rgba(0,133,225,.18)}.option.active .dot{background:#fff;box-shadow:0 0 0 4px rgba(255,255,255,.17)}.option.disabled{opacity:.38;pointer-events:none}.gps{justify-content:center;background:linear-gradient(135deg,#159a58,#35d777);color:white;border-color:rgba(255,255,255,.16);font-size:12px}
+    #legend{position:fixed;z-index:40;left:9px;bottom:calc(var(--safe-bottom) + 69px);width:min(242px,calc(100vw - 18px));padding:9px 10px;border-radius:13px;pointer-events:none}.legend-head{display:flex;justify-content:space-between;gap:8px;font-size:9px;font-weight:900}.legend-head span:last-child{color:var(--muted)}#gradient{height:10px;border:1px solid rgba(255,255,255,.15);border-radius:99px;margin-top:7px}#ticks{display:flex;justify-content:space-between;gap:2px;font:7px ui-monospace,monospace;color:#c5d2df;margin-top:5px}
+    #bar{position:fixed;z-index:45;left:7px;right:7px;bottom:calc(var(--safe-bottom) + 6px);height:55px;border-radius:17px;padding:8px 10px;display:flex;gap:9px;align-items:center;background:rgba(5,10,17,.93)}#play{width:38px;height:38px;flex:none;border:0;border-radius:50%;color:white;background:linear-gradient(135deg,#087fe5,#00afea);font-size:15px}#slider{min-width:60px;flex:1;accent-color:#16bde9}#time{width:86px;text-align:right;font:10px ui-monospace,monospace;font-weight:800;color:#e7f6ff}.speed{display:none}
+    #readout{position:fixed;z-index:44;left:9px;right:9px;bottom:calc(var(--safe-bottom) + 68px);display:none;max-height:38dvh;overflow:auto;padding:11px;border-radius:15px}.readout-name{font-size:9px;letter-spacing:.08em;text-transform:uppercase;color:var(--muted);font-weight:900}.value{font-size:34px;line-height:1;margin-top:4px;font-weight:950}.value small{font-size:14px;color:#cddae8}.coords{font:9px ui-monospace,monospace;color:var(--muted);margin-top:6px}.details{display:grid;grid-template-columns:repeat(2,1fr);gap:6px;margin-top:9px}.detail{padding:7px;border:1px solid rgba(255,255,255,.07);border-radius:9px;background:rgba(255,255,255,.05)}.detail b{display:block;font-size:7px;color:var(--muted);letter-spacing:.05em;text-transform:uppercase}.detail span{font-size:11px;font-weight:850}
+    #gps-card{position:fixed;z-index:70;left:9px;right:9px;top:calc(var(--safe-top) + 9px);padding:34px 10px 10px;border-radius:16px;display:none;grid-template-columns:repeat(2,1fr);gap:6px}.gps-close{position:absolute;right:12px;top:7px;border:0;background:none;color:#aebfd0;font-size:22px}.stat{padding:7px;border-radius:9px;background:rgba(255,255,255,.05);text-align:center}.stat b{display:block;color:var(--muted);font-size:7px;text-transform:uppercase}.stat span{font-size:14px;font-weight:950}.loading{position:fixed;z-index:99;left:50%;top:50%;transform:translate(-50%,-50%);display:none;padding:12px 16px;border-radius:13px;font-weight:850;background:#07111d;border:1px solid rgba(0,190,255,.5)}.loading.show{display:block}
+    .maplibregl-ctrl-bottom-right{right:8px!important;bottom:calc(var(--safe-bottom) + 72px)!important}.maplibregl-ctrl-group{border-radius:12px!important;overflow:hidden;border:1px solid var(--stroke)!important;box-shadow:0 8px 24px rgba(0,0,0,.35)!important}.maplibregl-ctrl-group button{width:34px!important;height:34px!important;background-color:rgba(8,12,19,.92)!important}.clean #side,.clean #legend,.clean #brand,.clean #controls{display:none}.clean #bar{opacity:.72}
+    @media(min-width:921px){#brand{width:330px;padding:12px;font-size:13px}.desktop-info{display:block;font-size:10px;color:var(--muted);margin-top:7px}.top-btn{top:14px}.top-btn#controls{right:14px}.top-btn#clean{left:auto;right:105px;transform:none}#side{left:auto;right:14px;top:14px;bottom:95px;width:245px;max-height:none;transform:none;opacity:1;pointer-events:auto}#legend{left:18px;bottom:95px;width:340px}#bar{left:14px;right:14px;bottom:12px;height:66px}#time{width:155px;font-size:12px}.speed{display:flex;gap:4px}.speed button{border:1px solid var(--stroke);border-radius:99px;background:rgba(255,255,255,.07);color:#d7e3ee;padding:5px 8px;font-size:10px;font-weight:800}.speed button.active{background:#72eafa;color:#00202c}.details{grid-template-columns:repeat(4,1fr)}#readout{left:18px;right:auto;bottom:95px;width:390px}.maplibregl-ctrl-bottom-right{bottom:100px!important;right:14px!important}}
   </style>
 </head>
-
 <body>
-  <button id="clean-toggle" onclick="toggleCleanMode()">SOLO MAPPA</button>
-  <button id="controls-toggle" onclick="toggleControlsPanel()">CONTROLLI</button>
+  <div id="map"></div><canvas id="particles"></canvas><canvas id="vectors"></canvas>
+  <div id="brand" class="glass">ITALIA METEOHUB<div class="desktop-info">ICON-2I · Dati modellistici · <span id="run">Run n/d</span><br><span id="valid">Validità --</span></div></div>
+  <button id="clean" class="top-btn" onclick="toggleClean()">SOLO MAPPA</button>
+  <button id="controls" class="top-btn" onclick="toggleControls()">CONTROLLI</button>
 
-  <div id="gps-overlay">
-    <div id="close-gps" onclick="toggleGpsPanel(false)">×</div>
-    <div class="gps-stat"><div>Temp.</div><div id="gps-t">--</div></div>
-    <div class="gps-stat"><div>Percepita</div><div id="gps-tf">--</div></div>
-    <div class="gps-stat"><div>Pioggia</div><div id="gps-r">--</div></div>
-    <div class="gps-stat"><div>Vento</div><div id="gps-w">--</div></div>
-    <div class="gps-stat"><div>Direzione</div><div id="gps-wd">--</div></div>
-    <div class="gps-stat"><div>Pressione</div><div id="gps-p">--</div></div>
-  </div>
-
-  <div id="top-left">
-    <div id="model-info" class="glass">
-      <div id="model-title">ITALIA METEOHUB <span>SYNOPTIC</span></div>
-
-      <div id="meta-grid">
-        <div class="meta-item">
-          <div class="meta-label">Modello</div>
-          <div class="meta-value">ICON-2I</div>
-        </div>
-        <div class="meta-item">
-          <div class="meta-label">Run</div>
-          <div class="meta-value" id="model-run">n/d</div>
-        </div>
-        <div class="meta-item">
-          <div class="meta-label">Validità</div>
-          <div class="meta-value" id="valid-time">--</div>
-        </div>
-        <div class="meta-item">
-          <div class="meta-label">Step</div>
-          <div class="meta-value" id="forecast-offset">--</div>
-        </div>
-        <div class="meta-item">
-          <div class="meta-label">Variabile</div>
-          <div class="meta-value" id="active-layer-label">Temperatura</div>
-        </div>
-        <div class="meta-item">
-          <div class="meta-label">Unità / sampling</div>
-          <div class="meta-value"><span id="field-unit">°C</span> · <span id="sampling-mode">bilinear</span></div>
-        </div>
-      </div>
-
-      <div id="scientific-note">
-        Dati modellistici numerici. Lettura puntuale tramite <span id="scientific-sampling">interpolazione bilineare</span>. Non sostituisce bollettini o avvisi ufficiali.
-      </div>
-    </div>
-
-    <div id="hover-box" class="glass">Passa sulla mappa per leggere il valore</div>
-
-    <div id="info-box" class="glass">
-      <div id="readout-name">Valore puntuale</div>
-      <div id="val-row">
-        <div id="val-display">--</div>
-        <div id="unit-display">--</div>
-      </div>
-      <div id="coord-display">--</div>
-      <div id="sampling-display">--</div>
-
-      <div id="details-grid">
-        <div class="detail-card"><div class="detail-label">Temp. 2 m</div><div class="detail-value" id="detail-temp">--</div></div>
-        <div class="detail-card"><div class="detail-label">Percepita</div><div class="detail-value" id="detail-feels">--</div></div>
-        <div class="detail-card"><div class="detail-label">Precipit.</div><div class="detail-value" id="detail-rain">--</div></div>
-        <div class="detail-card"><div class="detail-label">Vento 10 m</div><div class="detail-value" id="detail-wind">--</div></div>
-        <div class="detail-card"><div class="detail-label">Dir. vento</div><div class="detail-value" id="detail-wdir">--</div></div>
-        <div class="detail-card"><div class="detail-label">Press. suolo</div><div class="detail-value" id="detail-press">--</div></div>
-        <div class="detail-card"><div class="detail-label">Umidità</div><div class="detail-value" id="detail-rh">--</div></div>
-        <div class="detail-card"><div class="detail-label">Nuvolosità</div><div class="detail-value" id="detail-cloud">--</div></div>
-      </div>
-    </div>
-  </div>
-
-  <div id="loading-indicator">Elaborazione dati…</div>
-
-  <div id="ui-container">
+  <section id="side">
+    <div class="panel glass"><button class="gps" onclick="myWeather()">📍 Il mio meteo</button></div>
     <div class="panel glass">
-      <button class="gps-btn" onclick="getMyWeather()">📍 Il mio meteo</button>
+      <h2>Campi modellistici</h2>
+      <button class="option active" data-layer="temp" onclick="setLayer('temp')">Temperatura 2 m <i class="dot"></i></button>
+      <button class="option" data-layer="feels" onclick="setLayer('feels')">Temperatura percepita <i class="dot"></i></button>
+      <button class="option" data-layer="wind" onclick="setLayer('wind')">Vento a 10 m <i class="dot"></i></button>
+      <button class="option" data-layer="rain" onclick="setLayer('rain')">Precipitazioni <i class="dot"></i></button>
+      <button class="option" data-layer="cloud" onclick="setLayer('cloud')">Nuvolosità <i class="dot"></i></button>
+      <button class="option" data-layer="rh" onclick="setLayer('rh')">Umidità relativa <i class="dot"></i></button>
+      <button class="option" data-layer="press" onclick="setLayer('press')">Pressione al suolo <i class="dot"></i></button>
     </div>
-
     <div class="panel glass">
-      <div class="panel-title">Campi modellistici</div>
-      <div class="toggle active" id="btn-temp" onclick="toggleLayer('temp')"><span>Temperatura 2 m</span><span class="dot"></span></div>
-      <div class="toggle" id="btn-feels" onclick="toggleLayer('feels')"><span>Temp. percepita</span><span class="dot"></span></div>
-      <div class="toggle" id="btn-wind" onclick="toggleLayer('wind')"><span>Vento 10 m</span><span class="dot"></span></div>
-      <div class="toggle" id="btn-rain" onclick="toggleLayer('rain')"><span>Precipitazioni</span><span class="dot"></span></div>
-      <div class="toggle" id="btn-cloud" onclick="toggleLayer('cloud')"><span>Nuvolosità</span><span class="dot"></span></div>
-      <div class="toggle" id="btn-rh" onclick="toggleLayer('rh')"><span>Umidità relativa</span><span class="dot"></span></div>
-      <div class="toggle" id="btn-press" onclick="toggleLayer('press')"><span>Pressione suolo</span><span class="dot"></span></div>
+      <h2>Overlay sinottici</h2>
+      <button id="flow" class="option" onclick="toggleParticles()">Streamline vento <i class="dot"></i></button>
+      <button id="vectors-btn" class="option" onclick="toggleVectors()">Vettori vento <i class="dot"></i></button>
+      <button id="iso" class="option" onclick="toggleIsobars()">Isobare + alta/bassa <i class="dot"></i></button>
+      <button id="grid" class="option" onclick="toggleGrid()">Griglia raw <i class="dot"></i></button>
     </div>
+  </section>
 
-    <div class="panel glass">
-      <div class="panel-title">Overlay sinottici</div>
-      <div class="toggle" id="btn-flow" onclick="toggleParticles()"><span>Streamline vento</span><span class="dot"></span></div>
-      <div class="toggle" id="btn-vectors" onclick="toggleWindVectors()"><span>Vettori vento</span><span class="dot"></span></div>
-      <div class="toggle" id="btn-iso" onclick="toggleIsobars()"><span>Isobare + A/B</span><span class="dot"></span></div>
-      <div class="toggle" id="btn-raw" onclick="toggleRawGrid()"><span>Griglia raw</span><span class="dot"></span></div>
+  <section id="legend" class="glass">
+    <div class="legend-head"><span id="legend-name">Temperatura 2 m</span><span id="legend-unit">°C</span></div>
+    <div id="gradient"></div><div id="ticks"></div>
+  </section>
+
+  <section id="readout" class="glass">
+    <div class="readout-name" id="r-name">Valore puntuale</div>
+    <div class="value"><span id="r-value">--</span> <small id="r-unit">--</small></div>
+    <div id="r-coords" class="coords">--</div>
+    <div class="details">
+      <div class="detail"><b>Temperatura</b><span id="d-temp">--</span></div>
+      <div class="detail"><b>Percepita</b><span id="d-feels">--</span></div>
+      <div class="detail"><b>Pioggia</b><span id="d-rain">--</span></div>
+      <div class="detail"><b>Vento</b><span id="d-wind">--</span></div>
+      <div class="detail"><b>Direzione</b><span id="d-dir">--</span></div>
+      <div class="detail"><b>Umidità</b><span id="d-rh">--</span></div>
+      <div class="detail"><b>Nuvolosità</b><span id="d-cloud">--</span></div>
+      <div class="detail"><b>Pressione</b><span id="d-press">--</span></div>
     </div>
-  </div>
+  </section>
 
-  <div id="legend-card" class="glass">
-    <div id="legend-head">
-      <div id="legend-title">Temperatura</div>
-      <div id="legend-unit">°C</div>
+  <section id="gps-card" class="glass">
+    <button class="gps-close" onclick="closeGps()">×</button>
+    <div class="stat"><b>Temp.</b><span id="g-temp">--</span></div>
+    <div class="stat"><b>Percepita</b><span id="g-feels">--</span></div>
+    <div class="stat"><b>Pioggia</b><span id="g-rain">--</span></div>
+    <div class="stat"><b>Vento</b><span id="g-wind">--</span></div>
+    <div class="stat"><b>Direzione</b><span id="g-dir">--</span></div>
+    <div class="stat"><b>Pressione</b><span id="g-press">--</span></div>
+  </section>
+
+  <section id="bar" class="glass">
+    <button id="play" onclick="togglePlay()">▶</button>
+    <input id="slider" type="range" min="0" max="0" value="0">
+    <div class="speed">
+      <button class="active" onclick="speed(1150,this)">1×</button>
+      <button onclick="speed(650,this)">2×</button>
+      <button onclick="speed(350,this)">4×</button>
     </div>
-    <div id="legend-gradient"></div>
-    <div id="legend-ticks"></div>
-  </div>
+    <div id="time">--</div>
+  </section>
 
-  <div id="map"></div>
-  <canvas id="particle-canvas"></canvas>
-  <canvas id="vector-canvas"></canvas>
-
-  <div id="bottom-bar" class="glass">
-    <button id="play-btn" onclick="togglePlay()">►</button>
-    <input type="range" id="time-slider" min="0" max="0" value="0">
-    <div id="speed-controls">
-      <button class="speed-btn active" id="speed-1" onclick="setPlaybackSpeed(1)">1x</button>
-      <button class="speed-btn" id="speed-2" onclick="setPlaybackSpeed(2)">2x</button>
-      <button class="speed-btn" id="speed-4" onclick="setPlaybackSpeed(4)">4x</button>
-    </div>
-    <div id="time-label">--</div>
-  </div>
+  <div id="loading" class="loading">Elaborazione dati…</div>
 
 <script>
-  const WIND_BG_STOPS = [
-    {v:0, c:[28,34,44], a:0.58},
-    {v:10, c:[0,100,165], a:0.70},
-    {v:25, c:[0,180,150], a:0.78},
-    {v:45, c:[210,205,40], a:0.84},
-    {v:70, c:[220,125,0], a:0.88},
-    {v:100, c:[180,0,42], a:0.92},
-    {v:130, c:[115,0,150], a:0.96}
-  ];
+const TEMP_STOPS=[
+  {v:-75,c:[31,235,243]},{v:-65,c:[37,210,233]},{v:-55,c:[42,160,185]},
+  {v:-45,c:[49,112,143]},{v:-35,c:[59,57,103]},{v:-30,c:[115,62,141]},
+  {v:-26,c:[157,56,150]},{v:-22,c:[202,47,201]},{v:-18,c:[101,76,222]},
+  {v:-14,c:[70,101,210]},{v:-10,c:[80,142,224]},{v:-6,c:[100,181,232]},
+  {v:-2,c:[153,223,238]},{v:2,c:[35,237,148]},{v:6,c:[49,198,151]},
+  {v:10,c:[69,157,110]},{v:14,c:[111,183,81]},{v:18,c:[207,237,131]},
+  {v:22,c:[255,244,104]},{v:26,c:[255,205,62]},{v:30,c:[255,157,43]},
+  {v:33,c:[255,105,54]},{v:36,c:[243,65,83]},{v:39,c:[224,52,128]},
+  {v:42,c:[239,65,194]},{v:46,c:[164,41,96]}
+];
 
-  const TEMP_STOPS = [
-    {v:-15, c:[45,0,75]},
-    {v:-10, c:[8,81,156]},
-    {v:-5, c:[49,130,189]},
-    {v:0, c:[107,174,214]},
-    {v:5, c:[189,215,231]},
-    {v:10, c:[239,243,255]},
-    {v:15, c:[254,224,139]},
-    {v:20, c:[253,174,97]},
-    {v:25, c:[244,109,67]},
-    {v:30, c:[215,48,39]},
-    {v:35, c:[165,0,38]},
-    {v:40, c:[103,0,31]}
-  ];
+const WIND=[{v:0,c:[30,37,48],a:.55},{v:10,c:[0,100,165]},{v:25,c:[0,180,150]},{v:45,c:[210,205,40]},{v:70,c:[220,125,0]},{v:100,c:[180,0,42]},{v:130,c:[115,0,150]}];
+const RAIN=[{v:0,c:[0,0,0],a:0},{v:.1,c:[125,205,255],a:.58},{v:1,c:[50,150,255]},{v:2,c:[0,85,220]},{v:5,c:[0,170,100]},{v:10,c:[255,230,0]},{v:20,c:[255,125,0]},{v:40,c:[225,0,75]},{v:80,c:[160,0,210]}];
+const CLOUD=[{v:0,c:[255,255,255],a:0},{v:15,c:[185,195,210],a:.28},{v:50,c:[155,165,185],a:.55},{v:85,c:[120,130,155],a:.75},{v:100,c:[90,100,125],a:.86}];
+const RH=[{v:0,c:[150,78,36]},{v:35,c:[190,170,72]},{v:65,c:[72,170,175]},{v:85,c:[55,100,190]},{v:100,c:[70,42,155]}];
+const PRESS=[{v:980,c:[0,85,150]},{v:995,c:[70,145,190]},{v:1013,c:[220,220,220]},{v:1025,c:[215,155,70]},{v:1040,c:[155,80,35]}];
 
-  const RAIN_STOPS = [
-    {v:0, c:[0,0,0], a:0},
-    {v:0.1, c:[125,205,255], a:0.58},
-    {v:1, c:[50,150,255], a:0.74},
-    {v:2, c:[0,85,220], a:0.84},
-    {v:5, c:[0,170,100], a:0.88},
-    {v:10, c:[255,230,0], a:0.92},
-    {v:20, c:[255,125,0], a:0.95},
-    {v:40, c:[225,0,75], a:0.98},
-    {v:80, c:[160,0,210], a:1}
-  ];
+const INFO={
+  temp:{label:"Temperatura 2 m",unit:"°C",stops:TEMP_STOPS,dec:1,step:true,ticks:[-20,-10,0,10,18,22,26,30,33,36,39,42,46]},
+  feels:{label:"Temperatura percepita",unit:"°C",stops:TEMP_STOPS,dec:1,step:true,ticks:[-20,-10,0,10,18,22,26,30,33,36,39,42,46]},
+  wind:{label:"Vento a 10 m",unit:"km/h",stops:WIND,dec:0,ticks:[0,10,25,45,70,100,130]},
+  rain:{label:"Precipitazioni",unit:"mm",stops:RAIN,dec:1,ticks:[.1,1,5,10,20,40,80]},
+  cloud:{label:"Nuvolosità",unit:"%",stops:CLOUD,dec:0,ticks:[0,25,50,75,100]},
+  rh:{label:"Umidità relativa",unit:"%",stops:RH,dec:0,ticks:[0,40,60,80,100]},
+  press:{label:"Pressione al suolo",unit:"hPa",stops:PRESS,dec:0,ticks:[980,995,1013,1025,1040]}
+};
 
-  const CLOUD_STOPS = [
-    {v:0, c:[255,255,255], a:0},
-    {v:15, c:[185,195,210], a:0.28},
-    {v:50, c:[155,165,185], a:0.55},
-    {v:85, c:[120,130,155], a:0.75},
-    {v:100, c:[90,100,125], a:0.86}
-  ];
+let map,catalog=[],data,current=0,layer="temp",playing=false,delay=1150,raw=false,showFlow=false,showVectors=false,showIso=false,loadId=0,raf=null,last=0,particles=[];
+const cache=new Map(),LIMIT=5;
+const raster=document.createElement("canvas"),rctx=raster.getContext("2d");
+const pc=document.getElementById("particles"),pctx=pc.getContext("2d");
+const vc=document.getElementById("vectors"),vctx=vc.getContext("2d");
 
-  const RH_STOPS = [
-    {v:0, c:[150,78,36], a:0.78},
-    {v:35, c:[190,170,72], a:0.78},
-    {v:65, c:[72,170,175], a:0.82},
-    {v:85, c:[55,100,190], a:0.88},
-    {v:100, c:[70,42,155], a:0.92}
-  ];
+const clamp=(v,a,b)=>Math.max(a,Math.min(b,v));
+const grid=x=>x?.data||x;
+const rgba=(c,a=1)=>`rgba(${c[0]},${c[1]},${c[2]},${a})`;
 
-  const PRESS_STOPS = [
-    {v:980, c:[0,85,150], a:0.62},
-    {v:995, c:[70,145,190], a:0.66},
-    {v:1013, c:[220,220,220], a:0.54},
-    {v:1025, c:[215,155,70], a:0.62},
-    {v:1040, c:[155,80,35], a:0.68}
-  ];
+function colour(v,stops,step=false){
+  if(!Number.isFinite(v))return[0,0,0,0];
 
-  const LAYER_INFO = {
-    temp: {label:"Temperatura 2 m", unit:"°C", stops:TEMP_STOPS, decimals:1, ticks:[-10,0,10,20,30,40]},
-    feels: {label:"Temperatura percepita", unit:"°C", stops:TEMP_STOPS, decimals:1, ticks:[-10,0,10,20,30,40]},
-    wind: {label:"Vento 10 m", unit:"km/h", stops:WIND_BG_STOPS, decimals:0, ticks:[0,10,25,45,70,100,130]},
-    rain: {label:"Precipitazioni", unit:"mm", stops:RAIN_STOPS, decimals:1, ticks:[0.1,1,5,10,20,40,80]},
-    cloud: {label:"Nuvolosità", unit:"%", stops:CLOUD_STOPS, decimals:0, ticks:[0,25,50,75,100]},
-    rh: {label:"Umidità relativa", unit:"%", stops:RH_STOPS, decimals:0, ticks:[0,40,60,80,100]},
-    press: {label:"Pressione al suolo", unit:"hPa", stops:PRESS_STOPS, decimals:0, ticks:[980,995,1013,1025,1040]}
-  };
-
-  const LAYER_VISUALS = {
-    temp: {weatherOpacity:0.90, reliefOpacity:0.15},
-    feels: {weatherOpacity:0.90, reliefOpacity:0.15},
-    wind: {weatherOpacity:0.86, reliefOpacity:0.12},
-    rain: {weatherOpacity:0.95, reliefOpacity:0.07},
-    cloud: {weatherOpacity:0.80, reliefOpacity:0.08},
-    rh: {weatherOpacity:0.85, reliefOpacity:0.13},
-    press: {weatherOpacity:0.70, reliefOpacity:0.18}
-  };
-
-  const PARTICLE_VISUAL = {
-    baseMultiplier: 7200,
-    minSpeedMs: 0.45,
-    targetFps: 30,
-    fade: 0.88,
-    minLife: 55,
-    maxLife: 130
-  };
-
-  function getGrid(field) {
-    if (!field) return null;
-    return field.data || field;
-  }
-
-  function clamp(v, min, max) {
-    return Math.max(min, Math.min(max, v));
-  }
-
-  function rgbToCss(c, a = 1) {
-    return `rgba(${Math.round(c[0])}, ${Math.round(c[1])}, ${Math.round(c[2])}, ${a})`;
-  }
-
-  function getStopColor(val, stops) {
-    if (val == null || Number.isNaN(val)) return [0,0,0,0];
-
-    if (val <= stops[0].v) {
-      return [...stops[0].c, (stops[0].a ?? 0.86)];
+  if(step){
+    let s=stops[0];
+    for(const x of stops){
+      if(v>=x.v)s=x;
+      else break;
     }
+    return[...s.c,s.a??.92];
+  }
 
-    for (let i = 0; i < stops.length - 1; i++) {
-      if (val >= stops[i].v && val <= stops[i + 1].v) {
-        const t = (val - stops[i].v) / (stops[i + 1].v - stops[i].v);
-        const a1 = stops[i].a ?? 0.86;
-        const a2 = stops[i + 1].a ?? 0.86;
+  if(v<=stops[0].v)return[...stops[0].c,stops[0].a??.86];
 
-        return [
-          (stops[i].c[0] * (1 - t) + stops[i + 1].c[0] * t) | 0,
-          (stops[i].c[1] * (1 - t) + stops[i + 1].c[1] * t) | 0,
-          (stops[i].c[2] * (1 - t) + stops[i + 1].c[2] * t) | 0,
-          a1 * (1 - t) + a2 * t
-        ];
-      }
+  for(let i=0;i<stops.length-1;i++){
+    let a=stops[i],b=stops[i+1];
+    if(v<=b.v){
+      let t=(v-a.v)/(b.v-a.v);
+      return[
+        a.c[0]*(1-t)+b.c[0]*t,
+        a.c[1]*(1-t)+b.c[1]*t,
+        a.c[2]*(1-t)+b.c[2]*t,
+        (a.a??.86)*(1-t)+(b.a??.86)*t
+      ];
     }
-
-    return [...stops[stops.length - 1].c, (stops[stops.length - 1].a ?? 0.86)];
   }
+  return[...stops.at(-1).c,stops.at(-1).a??.86];
+}
 
-  function getNearest(arr, gx, gy, nx, ny) {
-    arr = getGrid(arr);
-    if (!arr) return NaN;
+function bilinear(a,x,y,nx,ny){
+  a=grid(a);
+  if(!a)return NaN;
+  let px=clamp(x,0,nx-1),py=clamp(y,0,ny-1);
+  let ix=clamp(Math.floor(px),0,nx-2),iy=clamp(Math.floor(py),0,ny-2);
+  let fx=px-ix,fy=py-iy,i=iy*nx+ix;
+  return a[i]*(1-fx)*(1-fy)+a[i+1]*fx*(1-fy)+a[i+nx]*(1-fx)*fy+a[i+nx+1]*fx*fy;
+}
 
-    const x = clamp(Math.round(gx), 0, nx - 1);
-    const y = clamp(Math.round(gy), 0, ny - 1);
+function nearest(a,x,y,nx,ny){
+  a=grid(a);
+  return a?.[clamp(Math.round(y),0,ny-1)*nx+clamp(Math.round(x),0,nx-1)]??NaN;
+}
 
-    return arr[y * nx + x];
+function sample(a,x,y){
+  let m=data.meta;
+  return(raw?nearest:bilinear)(a,x,y,m.nx,m.ny);
+}
+
+function field(k,x,y){
+  if(!data)return NaN;
+  if(k==="wind"){
+    let u=sample(data.wind_u,x,y),v=sample(data.wind_v,x,y);
+    return Math.hypot(u,v)*3.6;
   }
+  return sample(data[k==="feels"?"feels_like":k],x,y);
+}
 
-  function getBilinear(arr, gx, gy, nx, ny) {
-    arr = getGrid(arr);
-    if (!arr) return NaN;
+function uv(x,y){return{u:sample(data.wind_u,x,y),v:sample(data.wind_v,x,y)}}
+function windDir(u,v){return(Number.isFinite(u)&&Number.isFinite(v))?(Math.atan2(u,v)*180/Math.PI+540)%360:NaN}
+function compass(d){return Number.isFinite(d)?["N","NNE","NE","ENE","E","ESE","SE","SSE","S","SSW","SW","WSW","W","WNW","NW","NNW"][Math.round(d/22.5)%16]:"--"}
+function fmt(v,n,u){return Number.isFinite(v)?`${v.toFixed(n)} ${u}`:"--"}
 
-    let x = Math.floor(gx);
-    let y = Math.floor(gy);
-
-    x = clamp(x, 0, nx - 2);
-    y = clamp(y, 0, ny - 2);
-
-    const fx = gx - x;
-    const fy = gy - y;
-    const i00 = y * nx + x;
-
-    return arr[i00] * (1 - fx) * (1 - fy) +
-           arr[i00 + 1] * fx * (1 - fy) +
-           arr[i00 + nx] * (1 - fx) * fy +
-           arr[i00 + nx + 1] * fx * fy;
+function resize(){
+  let dpr=Math.min(devicePixelRatio||1,innerWidth<921?1.5:2);
+  for(const[c,x]of[[pc,pctx],[vc,vctx]]){
+    c.width=innerWidth*dpr;
+    c.height=innerHeight*dpr;
+    x.setTransform(dpr,0,0,dpr,0,0);
   }
+  particles=[];
+  drawVectors();
+}
 
-  let map;
-  let currentData = null;
-  let catalog = [];
-  let isPlaying = false;
-  let activeLayer = "temp";
-  let showIsobars = false;
-  let showParticles = false;
-  let showWindVectors = false;
-  let showRawGrid = false;
-  let isMapMoving = false;
-  let playbackDelay = 1150;
+window.addEventListener("resize",()=>{
+  resize();
+  setTimeout(()=>map?.resize(),80);
+});
 
-  const dataCache = new Map();
-  const CACHE_LIMIT = 8;
-
-  const offscreenCanvas = document.createElement("canvas");
-  const offscreenCtx = offscreenCanvas.getContext("2d", { willReadFrequently: true });
-
-  const pCanvas = document.getElementById("particle-canvas");
-  const pCtx = pCanvas.getContext("2d", { alpha: true });
-
-  const vCanvas = document.getElementById("vector-canvas");
-  const vCtx = vCanvas.getContext("2d", { alpha: true });
-
-  let particles = [];
-  let particleTarget = 1600;
-  let animFrame = null;
-  let lastParticleFrame = 0;
-  let lastParticleTime = performance.now();
-
-  window.addEventListener("load", async () => {
-    evaluateMobileUI();
-    resizeCanvas();
-
-    window.addEventListener("resize", () => {
-      evaluateMobileUI();
-      resizeCanvas();
-      particles.forEach(p => p.age = 999);
-
-      setTimeout(() => {
-        if (map) {
-          map.resize();
-          renderWindVectors();
+function setupMap(){
+  map=new maplibregl.Map({
+    container:"map",
+    bounds:[[6,35],[19.5,47.5]],
+    dragRotate:false,
+    pitchWithRotate:false,
+    antialias:false,
+    style:{
+      version:8,
+      sources:{
+        base:{
+          type:"raster",
+          tiles:[
+            "https://a.basemaps.cartocdn.com/dark_nolabels/{z}/{x}/{y}.png",
+            "https://b.basemaps.cartocdn.com/dark_nolabels/{z}/{x}/{y}.png",
+            "https://c.basemaps.cartocdn.com/dark_nolabels/{z}/{x}/{y}.png"
+          ],
+          tileSize:256,
+          attribution:"© CARTO © OpenStreetMap"
+        },
+        labels:{
+          type:"raster",
+          tiles:[
+            "https://a.basemaps.cartocdn.com/dark_only_labels/{z}/{x}/{y}.png",
+            "https://b.basemaps.cartocdn.com/dark_only_labels/{z}/{x}/{y}.png"
+          ],
+          tileSize:256
+        },
+        relief:{
+          type:"raster",
+          tiles:[
+            "https://services.arcgisonline.com/ArcGIS/rest/services/Elevation/World_Hillshade/MapServer/tile/{z}/{y}/{x}"
+          ],
+          tileSize:256
         }
-      }, 120);
-    });
-
-    if (window.visualViewport) {
-      window.visualViewport.addEventListener("resize", () => {
-        setTimeout(() => {
-          evaluateMobileUI();
-          resizeCanvas();
-
-          if (map) {
-            map.resize();
-            renderWindVectors();
-            particles.forEach(p => p.age = 999);
-          }
-        }, 120);
-      });
+      },
+      layers:[
+        {id:"bg",type:"background",paint:{"background-color":"#050a12"}},
+        {id:"base",type:"raster",source:"base",paint:{"raster-opacity":.75,"raster-saturation":-.5,"raster-contrast":.18}},
+        {id:"relief",type:"raster",source:"relief",paint:{"raster-opacity":.24,"raster-saturation":-1,"raster-contrast":.35}}
+      ]
     }
-
-    map = new maplibregl.Map({
-      container: "map",
-      bounds: [[6.0, 35.0], [19.5, 47.5]],
-      dragRotate: false,
-      pitchWithRotate: false,
-      antialias: false,
-      attributionControl: true,
-      style: {
-        version: 8,
-        sources: {
-          "carto-dark": {
-            type: "raster",
-            tiles: [
-              "https://a.basemaps.cartocdn.com/dark_nolabels/{z}/{x}/{y}.png",
-              "https://b.basemaps.cartocdn.com/dark_nolabels/{z}/{x}/{y}.png",
-              "https://c.basemaps.cartocdn.com/dark_nolabels/{z}/{x}/{y}.png",
-              "https://d.basemaps.cartocdn.com/dark_nolabels/{z}/{x}/{y}.png"
-            ],
-            tileSize: 256,
-            attribution: "© CARTO © OpenStreetMap contributors"
-          },
-          "carto-labels": {
-            type: "raster",
-            tiles: [
-              "https://a.basemaps.cartocdn.com/dark_only_labels/{z}/{x}/{y}.png",
-              "https://b.basemaps.cartocdn.com/dark_only_labels/{z}/{x}/{y}.png",
-              "https://c.basemaps.cartocdn.com/dark_only_labels/{z}/{x}/{y}.png",
-              "https://d.basemaps.cartocdn.com/dark_only_labels/{z}/{x}/{y}.png"
-            ],
-            tileSize: 256
-          },
-          "world-hillshade": {
-            type: "raster",
-            tiles: [
-              "https://services.arcgisonline.com/ArcGIS/rest/services/Elevation/World_Hillshade/MapServer/tile/{z}/{y}/{x}"
-            ],
-            tileSize: 256,
-            attribution: "World Hillshade © Esri"
-          }
-        },
-        layers: [
-          {
-            id: "background",
-            type: "background",
-            paint: { "background-color": "#04070c" }
-          },
-          {
-            id: "carto-dark-layer",
-            type: "raster",
-            source: "carto-dark",
-            paint: {
-              "raster-opacity": 0.78,
-              "raster-saturation": -0.45,
-              "raster-contrast": 0.20,
-              "raster-brightness-min": 0,
-              "raster-brightness-max": 0.56
-            }
-          },
-          {
-            id: "relief-base",
-            type: "raster",
-            source: "world-hillshade",
-            paint: {
-              "raster-opacity": 0.50,
-              "raster-contrast": 0.38,
-              "raster-brightness-min": 0.02,
-              "raster-brightness-max": 0.70,
-              "raster-saturation": -1
-            }
-          }
-        ]
-      }
-    });
-
-    map.addControl(new maplibregl.NavigationControl({ visualizePitch: false }), "bottom-right");
-
-    map.on("load", async () => {
-      map.addSource("weather-source", {
-        type: "image",
-        url: "data:image/gif;base64,R0lGODlhAQABAAD/ACwAAAAAAQABAAACADs=",
-        coordinates: [[0,0], [0,0], [0,0], [0,0]]
-      });
-
-      map.addLayer({
-        id: "weather-layer",
-        type: "raster",
-        source: "weather-source",
-        paint: {
-          "raster-opacity": 0.90,
-          "raster-resampling": "linear",
-          "raster-fade-duration": 0
-        }
-      });
-
-      map.addLayer({
-        id: "relief-over-weather",
-        type: "raster",
-        source: "world-hillshade",
-        paint: {
-          "raster-opacity": 0.15,
-          "raster-contrast": 0.48,
-          "raster-brightness-min": 0.08,
-          "raster-brightness-max": 0.72,
-          "raster-saturation": -1
-        }
-      });
-
-      map.addLayer({
-        id: "carto-labels-layer",
-        type: "raster",
-        source: "carto-labels",
-        paint: { "raster-opacity": 0.54 }
-      });
-
-      map.addSource("italy-borders", {
-        type: "geojson",
-        data: "https://raw.githubusercontent.com/openpolis/geojson-italy/master/geojson/limits_IT_regions.geojson"
-      });
-
-      map.addLayer({
-        id: "borders-layer",
-        type: "line",
-        source: "italy-borders",
-        paint: {
-          "line-color": "#ffffff",
-          "line-width": ["interpolate", ["linear"], ["zoom"], 4, 0.38, 8, 0.95],
-          "line-opacity": 0.28
-        }
-      });
-
-      map.addSource("isobars-source", {
-        type: "geojson",
-        data: { type: "FeatureCollection", features: [] }
-      });
-
-      map.addSource("centers-source", {
-        type: "geojson",
-        data: { type: "FeatureCollection", features: [] }
-      });
-
-      map.addLayer({
-        id: "isobars-line",
-        type: "line",
-        source: "isobars-source",
-        layout: { "visibility": "none" },
-        paint: {
-          "line-color": "#f4f7fb",
-          "line-width": ["case", ["==", ["%", ["to-number", ["get", "value"]], 4], 0], 1.55, 0.68],
-          "line-opacity": ["case", ["==", ["%", ["to-number", ["get", "value"]], 4], 0], 0.86, 0.42]
-        }
-      });
-
-      map.addLayer({
-        id: "isobars-label",
-        type: "symbol",
-        source: "isobars-source",
-        layout: {
-          "visibility": "none",
-          "symbol-placement": "line",
-          "text-field": ["concat", ["to-string", ["get", "value"]], " hPa"],
-          "text-font": ["Open Sans Bold", "Arial Unicode MS Bold"],
-          "text-size": 11,
-          "text-padding": 8
-        },
-        paint: {
-          "text-color": "#ffffff",
-          "text-halo-color": "rgba(0,0,0,0.88)",
-          "text-halo-width": 1.6
-        }
-      });
-
-      map.addLayer({
-        id: "centers-label",
-        type: "symbol",
-        source: "centers-source",
-        layout: {
-          "visibility": "none",
-          "text-field": ["get", "label"],
-          "text-font": ["Open Sans Bold", "Arial Unicode MS Bold"],
-          "text-size": ["interpolate", ["linear"], ["zoom"], 4, 25, 8, 38],
-          "text-allow-overlap": false,
-          "text-ignore-placement": false
-        },
-        paint: {
-          "text-color": ["match", ["get", "type"], "H", "#ff5555", "L", "#48a2ff", "#ffffff"],
-          "text-halo-color": "rgba(0,0,0,0.78)",
-          "text-halo-width": 2.7
-        }
-      });
-
-      map.on("movestart", () => {
-        isMapMoving = true;
-        particles.forEach(p => p.age = 999);
-        clearVectorCanvas();
-      });
-
-      map.on("move", () => {
-        pCtx.clearRect(0, 0, window.innerWidth, window.innerHeight);
-        clearVectorCanvas();
-      });
-
-      map.on("moveend", () => {
-        isMapMoving = false;
-        particles.forEach(p => p.age = 999);
-        renderWindVectors();
-      });
-
-      map.on("click", handleMapClick);
-      map.on("mousemove", handleMapHover);
-      map.on("mouseout", () => document.getElementById("hover-box").classList.remove("active"));
-
-      updateLegend();
-      await loadCatalog();
-
-      setTimeout(() => {
-        map.resize();
-        renderWindVectors();
-      }, 250);
-    });
   });
 
-  function evaluateMobileUI() {
-    const isTouch = window.matchMedia("(pointer: coarse)").matches;
-    const smallScreen = window.innerWidth <= 920 || window.innerHeight <= 760;
-    const mobile = isTouch || smallScreen;
+  map.addControl(new maplibregl.NavigationControl({visualizePitch:false}),"bottom-right");
 
-    document.body.classList.toggle("mobile-ui", mobile);
-
-    if (!mobile) {
-      document.body.classList.remove("controls-open");
-    }
-
-    setTimeout(() => {
-      if (map) {
-        map.resize();
-        renderWindVectors();
-        particles.forEach(p => p.age = 999);
-      }
-    }, 120);
-  }
-
-  function resizeCanvas() {
-    const mobile = document.body.classList.contains("mobile-ui") || window.innerWidth <= 760;
-    const dpr = Math.min(window.devicePixelRatio || 1, mobile ? 2.6 : 2);
-
-    pCanvas.width = Math.round(window.innerWidth * dpr);
-    pCanvas.height = Math.round(window.innerHeight * dpr);
-    pCanvas.style.width = window.innerWidth + "px";
-    pCanvas.style.height = window.innerHeight + "px";
-    pCtx.setTransform(dpr, 0, 0, dpr, 0, 0);
-
-    vCanvas.width = Math.round(window.innerWidth * dpr);
-    vCanvas.height = Math.round(window.innerHeight * dpr);
-    vCanvas.style.width = window.innerWidth + "px";
-    vCanvas.style.height = window.innerHeight + "px";
-    vCtx.setTransform(dpr, 0, 0, dpr, 0, 0);
-
-    const area = window.innerWidth * window.innerHeight;
-
-    if (mobile) {
-      particleTarget = Math.round(clamp(area / 360, 900, 1850));
-    } else {
-      particleTarget = Math.round(clamp(area / 720, 1200, 2600));
-    }
-  }
-
-  function parseCatalogDate(item) {
-    if (!item || !item.label) return null;
-
-    const p = item.label.split(" ");
-    if (p.length < 2) return null;
-
-    const d = p[0].split("/");
-    const t = p[1].split(":");
-    const now = new Date();
-
-    return new Date(
-      now.getFullYear(),
-      parseInt(d[1]) - 1,
-      parseInt(d[0]),
-      parseInt(t[0]),
-      parseInt(t[1] || "0"),
-      0
-    );
-  }
-
-  function getRunLabel(i) {
-    const item = catalog[i] || {};
-    return item.run || item.model_run || item.init || item.init_time || item.base_time || item.cycle || "n/d";
-  }
-
-  function formatCatalogLabel(i) {
-    const item = catalog[i];
-    const dt = parseCatalogDate(item);
-
-    if (!dt) return item?.label || "--";
-
-    const now = new Date();
-    const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
-    const target = new Date(dt.getFullYear(), dt.getMonth(), dt.getDate());
-    const dayDiff = Math.round((target - today) / 86400000);
-
-    let dayLabel = "Oggi";
-    if (dayDiff === 1) dayLabel = "Domani";
-    else if (dayDiff === -1) dayLabel = "Ieri";
-    else if (dayDiff !== 0) {
-      dayLabel = dt.toLocaleDateString("it-IT", { weekday: "short", day: "2-digit", month: "2-digit" });
-    }
-
-    const time = dt.toLocaleTimeString("it-IT", { hour: "2-digit", minute: "2-digit" });
-    return `${dayLabel} · ${time}`;
-  }
-
-  function updateTimeUI(i) {
-    const label = catalog[i]?.label || "--";
-    document.getElementById("valid-time").innerText = label;
-    document.getElementById("time-label").innerText = formatCatalogLabel(i);
-    document.getElementById("model-run").innerText = getRunLabel(i);
-
-    const firstDt = parseCatalogDate(catalog[0]);
-    const dt = parseCatalogDate(catalog[i]);
-
-    if (firstDt && dt) {
-      const hours = Math.round((dt - firstDt) / 3600000);
-      document.getElementById("forecast-offset").innerText = hours >= 0 ? `+${hours}h` : `${hours}h`;
-    } else {
-      document.getElementById("forecast-offset").innerText = "--";
-    }
-  }
-
-  async function loadCatalog() {
-    try {
-      const r = await fetch("data_weather/catalog.json?t=" + Date.now());
-      catalog = await r.json();
-
-      const s = document.getElementById("time-slider");
-      s.max = Math.max(catalog.length - 1, 0);
-      s.oninput = (e) => loadStep(parseInt(e.target.value));
-
-      if (catalog.length > 0) {
-        let bestIdx = 0;
-        let minDiff = Infinity;
-        const now = new Date();
-
-        catalog.forEach((item, idx) => {
-          const dt = parseCatalogDate(item);
-          if (!dt) return;
-          const diff = Math.abs(now - dt);
-          if (diff < minDiff) {
-            minDiff = diff;
-            bestIdx = idx;
-          }
-        });
-
-        s.value = bestIdx;
-        await loadStep(bestIdx);
-
-        prefetchStep(bestIdx + 1);
-        prefetchStep(bestIdx - 1);
-      }
-    } catch(e) {
-      console.error("Errore caricamento catalogo:", e);
-      document.getElementById("loading-indicator").innerText = "Errore caricamento dati";
-      document.getElementById("loading-indicator").classList.add("active");
-    }
-  }
-
-  function touchCache(i, data) {
-    if (dataCache.has(i)) dataCache.delete(i);
-    dataCache.set(i, data);
-
-    while (dataCache.size > CACHE_LIMIT) {
-      const firstKey = dataCache.keys().next().value;
-      dataCache.delete(firstKey);
-    }
-  }
-
-  async function prefetchStep(i) {
-    if (!catalog[i] || dataCache.has(i)) return;
-
-    try {
-      const data = await fetchAndPrepareStep(i, false);
-      touchCache(i, data);
-    } catch(e) {
-      console.warn("Prefetch non riuscito:", i, e);
-    }
-  }
-
-  async function fetchAndPrepareStep(i, buildContours = true) {
-    const r = await fetch("data_weather/" + catalog[i].file);
-    const data = await r.json();
-    prepareData(data, buildContours);
-    return data;
-  }
-
-  function prepareData(data, buildContours = true) {
-    const m = data.meta;
-    const temp = getGrid(data.temp);
-    const rh = getGrid(data.rh);
-    const wu = getGrid(data.wind_u);
-    const wv = getGrid(data.wind_v);
-
-    if (temp && rh && wu && wv) {
-      const len = m.nx * m.ny;
-      data.feels_like = new Float32Array(len);
-
-      for (let j = 0; j < len; j++) {
-        const T = temp[j];
-        const RH = clamp(rh[j], 0, 100);
-        const v = Math.sqrt(wu[j] * wu[j] + wv[j] * wv[j]);
-        const e = (RH / 100.0) * 6.105 * Math.exp((17.27 * T) / (237.7 + T));
-        data.feels_like[j] = T + 0.33 * e - 0.70 * v - 4.00;
-      }
-    }
-
-    if (buildContours) {
-      buildPressureProducts(data);
-    }
-  }
-
-  function buildPressureProducts(data) {
-    const m = data.meta;
-    const press = getGrid(data.press);
-    if (!press) return;
-
-    const contours = d3.contours()
-      .size([m.nx, m.ny])
-      .thresholds(d3.range(960, 1052, 2))(press);
-
-    const features = contours.map(c => {
-      const mappedCoords = c.coordinates.map(polygon =>
-        polygon.map(ring =>
-          ring.map(pt => [
-            m.lo1 + pt[0] * m.dx,
-            m.la1 - pt[1] * m.dy
-          ])
-        )
-      );
-
-      return {
-        type: "Feature",
-        geometry: { type: c.type, coordinates: mappedCoords },
-        properties: { value: c.value }
-      };
+  map.on("load",async()=>{
+    map.addSource("weather",{
+      type:"image",
+      url:"data:image/gif;base64,R0lGODlhAQABAAD/ACwAAAAAAQABAAACADs=",
+      coordinates:[[0,0],[0,0],[0,0],[0,0]]
     });
 
-    data.isoGeoJSON = { type: "FeatureCollection", features };
-    data.centersGeoJSON = detectPressureCenters(data);
-  }
+    map.addLayer({
+      id:"weather",
+      type:"raster",
+      source:"weather",
+      paint:{"raster-opacity":.92,"raster-resampling":"linear","raster-fade-duration":0}
+    });
 
-  function detectPressureCenters(data) {
-    const m = data.meta;
-    const press = getGrid(data.press);
-    if (!press) return { type: "FeatureCollection", features: [] };
+    map.addLayer({id:"labels",type:"raster",source:"labels",paint:{"raster-opacity":.58}});
 
-    const candidates = [];
-    const step = 36;
-    const radius = 28;
+    map.addSource("iso",{type:"geojson",data:{type:"FeatureCollection",features:[]}});
+    map.addSource("centres",{type:"geojson",data:{type:"FeatureCollection",features:[]}});
 
-    for (let y = radius; y < m.ny - radius; y += step) {
-      for (let x = radius; x < m.nx - radius; x += step) {
-        const val = press[y * m.nx + x];
-        let isMax = true;
-        let isMin = true;
+    map.addLayer({
+      id:"iso-line",
+      type:"line",
+      source:"iso",
+      layout:{visibility:"none"},
+      paint:{"line-color":"#fff","line-width":1.1,"line-opacity":.7}
+    });
 
-        for (let yy = -radius; yy <= radius; yy += 7) {
-          for (let xx = -radius; xx <= radius; xx += 7) {
-            if (xx === 0 && yy === 0) continue;
-            const vv = press[(y + yy) * m.nx + (x + xx)];
-            if (vv > val) isMax = false;
-            if (vv < val) isMin = false;
-            if (!isMax && !isMin) break;
-          }
-          if (!isMax && !isMin) break;
-        }
-
-        if (isMax && val >= 1017) candidates.push({ x, y, val, type: "H", score: val });
-        if (isMin && val <= 1011) candidates.push({ x, y, val, type: "L", score: -val });
-      }
-    }
-
-    candidates.sort((a, b) => b.score - a.score);
-
-    const accepted = [];
-    const minDist = 95;
-
-    for (const c of candidates) {
-      const tooClose = accepted.some(a => {
-        const dx = a.x - c.x;
-        const dy = a.y - c.y;
-        return Math.sqrt(dx * dx + dy * dy) < minDist;
-      });
-      if (!tooClose) accepted.push(c);
-      if (accepted.length >= 8) break;
-    }
-
-    const features = accepted.map(c => ({
-      type: "Feature",
-      geometry: {
-        type: "Point",
-        coordinates: [m.lo1 + c.x * m.dx, m.la1 - c.y * m.dy]
+    map.addLayer({
+      id:"iso-label",
+      type:"symbol",
+      source:"iso",
+      layout:{
+        visibility:"none",
+        "symbol-placement":"line",
+        "text-field":["concat",["to-string",["get","value"]]," hPa"],
+        "text-size":10
       },
-      properties: {
-        type: c.type,
-        label: c.type === "H" ? "A" : "B",
-        value: Math.round(c.val)
-      }
-    }));
-
-    return { type: "FeatureCollection", features };
-  }
-
-  async function loadStep(i) {
-    if (!catalog[i]) return;
-
-    document.getElementById("loading-indicator").classList.add("active");
-
-    try {
-      if (dataCache.has(i)) {
-        currentData = dataCache.get(i);
-        touchCache(i, currentData);
-        if (!currentData.isoGeoJSON && currentData.press) buildPressureProducts(currentData);
-      } else {
-        currentData = await fetchAndPrepareStep(i, true);
-        touchCache(i, currentData);
-      }
-
-      updateTimeUI(i);
-      updateGPULayer();
-      updateIsobars();
-      updateBtns();
-      updateLegend();
-      renderWindVectors();
-      particles.forEach(p => p.age = 999);
-
-      prefetchStep(i + 1);
-      prefetchStep(i - 1);
-    } catch(e) {
-      console.error("Errore caricamento step:", e);
-    }
-
-    document.getElementById("loading-indicator").classList.remove("active");
-  }
-
-  function hasLayerData(layer) {
-    if (!currentData) return true;
-    if (layer === "feels") return !!currentData.feels_like;
-    if (layer === "wind") return !!currentData.wind_u && !!currentData.wind_v;
-    return !!currentData[layer];
-  }
-
-  function updateGPULayer() {
-    if (!currentData || !map || !map.getSource("weather-source")) return;
-
-    const m = currentData.meta;
-    const info = LAYER_INFO[activeLayer];
-    if (!hasLayerData(activeLayer)) return;
-
-    offscreenCanvas.width = m.nx;
-    offscreenCanvas.height = m.ny;
-
-    const imgData = offscreenCtx.createImageData(m.nx, m.ny);
-    const d = imgData.data;
-
-    const dx2 = m.dx / 2;
-    const dy2 = m.dy / 2;
-
-    const topLat = m.la1 + dy2;
-    const bottomLat = (m.la1 - (m.ny - 1) * m.dy) - dy2;
-    const left = m.lo1 - dx2;
-    const right = m.lo1 + (m.nx - 1) * m.dx + dx2;
-
-    const y1 = Math.log(Math.tan(Math.PI / 4 + (topLat * Math.PI / 180) / 2));
-    const y2 = Math.log(Math.tan(Math.PI / 4 + (bottomLat * Math.PI / 180) / 2));
-
-    for (let y = 0; y < m.ny; y++) {
-      const fy = y / Math.max(m.ny - 1, 1);
-      const mercY = y1 + fy * (y2 - y1);
-      const lat = (2 * Math.atan(Math.exp(mercY)) - Math.PI / 2) * 180 / Math.PI;
-      const gy = (m.la1 - lat) / m.dy;
-
-      for (let x = 0; x < m.nx; x++) {
-        let val;
-
-        if (activeLayer === "wind") {
-          const u = getBilinear(currentData.wind_u, x, gy, m.nx, m.ny);
-          const v = getBilinear(currentData.wind_v, x, gy, m.nx, m.ny);
-          val = Math.sqrt(u * u + v * v) * 3.6;
-        } else {
-          const key = activeLayer === "feels" ? "feels_like" : activeLayer;
-          val = getBilinear(currentData[key], x, gy, m.nx, m.ny);
-        }
-
-        const p0 = (y * m.nx + x) * 4;
-
-        if (!Number.isFinite(val) || (activeLayer === "cloud" && val < 5) || (activeLayer === "rain" && val < 0.08)) {
-          d[p0] = 0;
-          d[p0 + 1] = 0;
-          d[p0 + 2] = 0;
-          d[p0 + 3] = 0;
-          continue;
-        }
-
-        const col = getStopColor(val, info.stops);
-        d[p0] = col[0];
-        d[p0 + 1] = col[1];
-        d[p0 + 2] = col[2];
-        d[p0 + 3] = Math.round(col[3] * 255);
-      }
-    }
-
-    offscreenCtx.putImageData(imgData, 0, 0);
-
-    map.setPaintProperty("weather-layer", "raster-resampling", showRawGrid ? "nearest" : "linear");
-
-    const visual = LAYER_VISUALS[activeLayer] || LAYER_VISUALS.temp;
-    map.setPaintProperty("weather-layer", "raster-opacity", visual.weatherOpacity);
-
-    if (map.getLayer("relief-over-weather")) {
-      map.setPaintProperty("relief-over-weather", "raster-opacity", visual.reliefOpacity);
-    }
-
-    map.getSource("weather-source").updateImage({
-      url: offscreenCanvas.toDataURL("image/png"),
-      coordinates: [
-        [left, topLat],
-        [right, topLat],
-        [right, bottomLat],
-        [left, bottomLat]
-      ]
+      paint:{"text-color":"#fff","text-halo-color":"#000","text-halo-width":1.5}
     });
 
-    document.getElementById("active-layer-label").innerText = info.label;
-    document.getElementById("field-unit").innerText = info.unit;
-    document.getElementById("sampling-mode").innerText = showRawGrid ? "nearest" : "bilinear";
-    document.getElementById("scientific-sampling").innerText = showRawGrid ? "cella modello più vicina" : "interpolazione bilineare";
-  }
-
-  function getLayerValue(layer, gx, gy) {
-    if (!currentData) return NaN;
-
-    const m = currentData.meta;
-    const sampler = showRawGrid ? getNearest : getBilinear;
-
-    if (layer === "wind") {
-      const u = sampler(currentData.wind_u, gx, gy, m.nx, m.ny);
-      const v = sampler(currentData.wind_v, gx, gy, m.nx, m.ny);
-      return Math.sqrt(u * u + v * v) * 3.6;
-    }
-
-    const key = layer === "feels" ? "feels_like" : layer;
-    return sampler(currentData[key], gx, gy, m.nx, m.ny);
-  }
-
-  function getWindUV(gx, gy) {
-    if (!currentData || !currentData.wind_u || !currentData.wind_v) return {u:NaN, v:NaN};
-
-    const m = currentData.meta;
-    const sampler = showRawGrid ? getNearest : getBilinear;
-
-    return {
-      u: sampler(currentData.wind_u, gx, gy, m.nx, m.ny),
-      v: sampler(currentData.wind_v, gx, gy, m.nx, m.ny)
-    };
-  }
-
-  function windDirectionDegrees(u, v) {
-    if (!Number.isFinite(u) || !Number.isFinite(v)) return NaN;
-    return (Math.atan2(u, v) * 180 / Math.PI + 180 + 360) % 360;
-  }
-
-  function compassFromDegrees(deg) {
-    if (!Number.isFinite(deg)) return "--";
-    const dirs = ["N","NNE","NE","ENE","E","ESE","SE","SSE","S","SSW","SW","WSW","W","WNW","NW","NNW"];
-    const idx = Math.round(deg / 22.5) % 16;
-    return dirs[idx];
-  }
-
-  function getAllPointValues(gx, gy) {
-    const uv = getWindUV(gx, gy);
-    const wdir = windDirectionDegrees(uv.u, uv.v);
-
-    return {
-      temp: getLayerValue("temp", gx, gy),
-      feels: getLayerValue("feels", gx, gy),
-      rain: getLayerValue("rain", gx, gy),
-      wind: getLayerValue("wind", gx, gy),
-      wdir,
-      rh: getLayerValue("rh", gx, gy),
-      cloud: getLayerValue("cloud", gx, gy),
-      press: getLayerValue("press", gx, gy)
-    };
-  }
-
-  function fmt(value, decimals, unit) {
-    if (!Number.isFinite(value)) return "--";
-    return `${value.toFixed(decimals)} ${unit}`;
-  }
-
-  function fmtWindDir(deg) {
-    if (!Number.isFinite(deg)) return "--";
-    return `${Math.round(deg)}° ${compassFromDegrees(deg)}`;
-  }
-
-  function handleMapClick(e) {
-    if (!currentData) return;
-
-    const m = currentData.meta;
-    const gx = (e.lngLat.lng - m.lo1) / m.dx;
-    const gy = (m.la1 - e.lngLat.lat) / m.dy;
-
-    if (gx >= 0 && gy >= 0 && gx < m.nx && gy < m.ny) {
-      const val = getLayerValue(activeLayer, gx, gy);
-      const info = LAYER_INFO[activeLayer];
-      const all = getAllPointValues(gx, gy);
-
-      document.getElementById("info-box").classList.add("active");
-      document.getElementById("readout-name").innerText = info.label;
-      document.getElementById("val-display").innerText = Number.isFinite(val) ? val.toFixed(info.decimals) : "--";
-      document.getElementById("unit-display").innerText = info.unit;
-      document.getElementById("coord-display").innerText = `${e.lngLat.lat.toFixed(3)}°, ${e.lngLat.lng.toFixed(3)}°`;
-      document.getElementById("sampling-display").innerText = showRawGrid ? "Sampling: cella modello più vicina" : "Sampling: interpolazione bilineare";
-
-      document.getElementById("detail-temp").innerText = fmt(all.temp, 1, "°C");
-      document.getElementById("detail-feels").innerText = fmt(all.feels, 1, "°C");
-      document.getElementById("detail-rain").innerText = fmt(all.rain, 1, "mm");
-      document.getElementById("detail-wind").innerText = fmt(all.wind, 0, "km/h");
-      document.getElementById("detail-wdir").innerText = fmtWindDir(all.wdir);
-      document.getElementById("detail-rh").innerText = fmt(all.rh, 0, "%");
-      document.getElementById("detail-cloud").innerText = fmt(all.cloud, 0, "%");
-      document.getElementById("detail-press").innerText = fmt(all.press, 0, "hPa");
-    }
-  }
-
-  function handleMapHover(e) {
-    if (!currentData || document.body.classList.contains("mobile-ui") || document.body.classList.contains("clean-mode")) return;
-
-    const m = currentData.meta;
-    const gx = (e.lngLat.lng - m.lo1) / m.dx;
-    const gy = (m.la1 - e.lngLat.lat) / m.dy;
-
-    if (gx >= 0 && gy >= 0 && gx < m.nx && gy < m.ny) {
-      const info = LAYER_INFO[activeLayer];
-      const val = getLayerValue(activeLayer, gx, gy);
-      const all = getAllPointValues(gx, gy);
-
-      let text = Number.isFinite(val)
-        ? `${info.label}: ${val.toFixed(info.decimals)} ${info.unit}`
-        : `${info.label}: --`;
-
-      if (activeLayer === "wind") {
-        text += ` · da ${fmtWindDir(all.wdir)}`;
+    map.addLayer({
+      id:"centres-label",
+      type:"symbol",
+      source:"centres",
+      layout:{visibility:"none","text-field":["get","label"],"text-size":32},
+      paint:{
+        "text-color":["match",["get","kind"],"A","#ff5656","B","#55aaff","#fff"],
+        "text-halo-color":"#000",
+        "text-halo-width":2.5
       }
+    });
 
-      const box = document.getElementById("hover-box");
-      box.innerText = text;
-      box.classList.add("active");
-    }
-  }
+    map.on("click",readPoint);
+    map.on("move",()=>{
+      pctx.clearRect(0,0,innerWidth,innerHeight);
+      vctx.clearRect(0,0,innerWidth,innerHeight);
+    });
+    map.on("moveend",()=>{
+      particles=[];
+      drawVectors();
+    });
 
-  function initParticles() {
-    particles = [];
+    await loadCatalog();
+  });
+}
 
-    for (let i = 0; i < particleTarget; i++) {
-      particles.push(makeParticle(true));
-    }
+function catalogDate(x){
+  let m=x?.label?.match(/(\d{1,2})\/(\d{1,2})\s+(\d{1,2}):(\d{2})/);
+  if(!m)return null;
+  let n=new Date;
+  return new Date(n.getFullYear(),m[2]-1,m[1],m[3],m[4]);
+}
 
-    if (animFrame) cancelAnimationFrame(animFrame);
+function label(i){
+  let d=catalogDate(catalog[i]),n=new Date;
+  if(!d)return catalog[i]?.label||"--";
 
-    lastParticleTime = performance.now();
-    lastParticleFrame = 0;
-    animateParticles();
-  }
+  let day=d.toDateString()===n.toDateString()?"Oggi":
+    d.toDateString()===new Date(n-864e5).toDateString()?"Ieri":
+    d.toLocaleDateString("it-IT",{weekday:"short",day:"2-digit",month:"2-digit"});
 
-  function makeParticle(randomAge = false) {
-    const p = {
-      lng: 0,
-      lat: 0,
-      age: 999,
-      maxAge: PARTICLE_VISUAL.minLife + Math.random() * (PARTICLE_VISUAL.maxLife - PARTICLE_VISUAL.minLife)
-    };
+  return `${day} · ${d.toLocaleTimeString("it-IT",{hour:"2-digit",minute:"2-digit"})}`;
+}
 
-    respawnParticle(p, randomAge);
-    return p;
-  }
+async function loadCatalog(){
+  try{
+    let r=await fetch(`data_weather/catalog.json?t=${Date.now()}`);
+    catalog=await r.json();
 
-  function respawnParticle(p, randomAge = false) {
-    if (!currentData || !map) return;
+    slider.max=Math.max(0,catalog.length-1);
+    slider.oninput=e=>loadStep(+e.target.value);
 
-    const m = currentData.meta;
-    const b = map.getBounds();
-
-    const west = Math.max(b.getWest(), m.lo1);
-    const east = Math.min(b.getEast(), m.lo1 + m.nx * m.dx);
-    const south = Math.max(b.getSouth(), m.la1 - m.ny * m.dy);
-    const north = Math.min(b.getNorth(), m.la1);
-
-    p.lng = west + Math.random() * Math.max(east - west, 0.1);
-    p.lat = south + Math.random() * Math.max(north - south, 0.1);
-    p.age = randomAge ? Math.random() * p.maxAge : 0;
-    p.maxAge = PARTICLE_VISUAL.minLife + Math.random() * (PARTICLE_VISUAL.maxLife - PARTICLE_VISUAL.minLife);
-  }
-
-  function getParticleStyle(speedKmh) {
-    if (activeLayer !== "wind") {
-      const color =
-        speedKmh < 20 ? "rgba(210,235,255,0.58)" :
-        speedKmh < 45 ? "rgba(170,235,255,0.72)" :
-        speedKmh < 75 ? "rgba(120,245,255,0.86)" :
-        "rgba(255,255,255,0.94)";
-
-      const width =
-        speedKmh < 20 ? 1.15 :
-        speedKmh < 45 ? 1.55 :
-        speedKmh < 75 ? 2.1 :
-        2.7;
-
-      return { color, width };
-    }
-
-    let color;
-
-    if (speedKmh < 10) color = "rgba(150,210,255,0.72)";
-    else if (speedKmh < 25) color = "rgba(85,235,255,0.82)";
-    else if (speedKmh < 40) color = "rgba(85,255,205,0.90)";
-    else if (speedKmh < 60) color = "rgba(245,255,95,0.96)";
-    else if (speedKmh < 80) color = "rgba(255,185,55,0.98)";
-    else if (speedKmh < 105) color = "rgba(255,80,80,1)";
-    else color = "rgba(230,95,255,1)";
-
-    const width =
-      speedKmh < 15 ? 1.35 :
-      speedKmh < 35 ? 1.75 :
-      speedKmh < 55 ? 2.25 :
-      speedKmh < 80 ? 2.85 :
-      speedKmh < 105 ? 3.45 : 4.2;
-
-    return { color, width };
-  }
-
-  function getZoomParticleMultiplier() {
-    const z = map.getZoom();
-    return clamp(Math.pow(2, 6 - z), 0.22, 3.8);
-  }
-
-  function animateParticles(ts = performance.now()) {
-    if (!showParticles || !currentData || !currentData.wind_u || !currentData.wind_v) {
-      pCtx.clearRect(0, 0, window.innerWidth, window.innerHeight);
-      return;
-    }
-
-    const frameInterval = 1000 / PARTICLE_VISUAL.targetFps;
-
-    if (ts - lastParticleFrame < frameInterval) {
-      animFrame = requestAnimationFrame(animateParticles);
-      return;
-    }
-
-    const dt = clamp((ts - lastParticleTime) / 1000, 0.01, 0.08);
-
-    lastParticleTime = ts;
-    lastParticleFrame = ts;
-
-    if (particles.length !== particleTarget) {
-      if (particles.length < particleTarget) {
-        while (particles.length < particleTarget) particles.push(makeParticle(true));
-      } else {
-        particles.length = particleTarget;
+    let best=0,min=Infinity;
+    catalog.forEach((x,i)=>{
+      let d=catalogDate(x);
+      if(d&&Math.abs(Date.now()-d)<min){
+        min=Math.abs(Date.now()-d);
+        best=i;
       }
+    });
+
+    slider.value=best;
+    await loadStep(best);
+  }catch(e){
+    console.error(e);
+    toast("Errore caricamento catalogo");
+  }
+}
+
+async function loadStep(i){
+  if(!catalog[i])return;
+
+  let id=++loadId;
+  loading.classList.add("show");
+
+  try{
+    let x=cache.get(i);
+
+    if(!x){
+      let r=await fetch(`data_weather/${catalog[i].file}`);
+      if(!r.ok)throw Error("Dati non disponibili");
+
+      x=await r.json();
+      prepare(x);
+      cache.set(i,x);
+
+      while(cache.size>LIMIT)cache.delete(cache.keys().next().value);
     }
 
-    if (isMapMoving) {
-      pCtx.clearRect(0, 0, window.innerWidth, window.innerHeight);
-      animFrame = requestAnimationFrame(animateParticles);
-      return;
+    if(id!==loadId)return;
+
+    data=x;
+    current=i;
+    updateTime();
+    renderWeather();
+    updateIso();
+    buttons();
+    legend();
+    drawVectors();
+    particles=[];
+
+    prefetch(i+1);
+    prefetch(i-1);
+  }catch(e){
+    console.error(e);
+    toast("Errore caricamento dati");
+  }finally{
+    if(id===loadId)loading.classList.remove("show");
+  }
+}
+
+function prefetch(i){
+  if(!catalog[i]||cache.has(i))return;
+
+  fetch(`data_weather/${catalog[i].file}`)
+    .then(r=>r.json())
+    .then(x=>{
+      prepare(x);
+      cache.set(i,x);
+      while(cache.size>LIMIT)cache.delete(cache.keys().next().value);
+    })
+    .catch(()=>{});
+}
+
+function prepare(x){
+  let m=x.meta,t=grid(x.temp),h=grid(x.rh),u=grid(x.wind_u),v=grid(x.wind_v);
+
+  if(t&&h&&u&&v){
+    x.feels_like=new Float32Array(m.nx*m.ny);
+
+    for(let i=0;i<x.feels_like.length;i++){
+      let e=clamp(h[i],0,100)/100*6.105*Math.exp(17.27*t[i]/(237.7+t[i]));
+      x.feels_like[i]=t[i]+.33*e-.7*Math.hypot(u[i],v[i])-4;
     }
+  }
+}
 
-    pCtx.save();
-    pCtx.globalCompositeOperation = "destination-in";
-    pCtx.fillStyle = `rgba(0,0,0,${PARTICLE_VISUAL.fade})`;
-    pCtx.fillRect(0, 0, window.innerWidth, window.innerHeight);
+function updateTime(){
+  let x=catalog[current],d=catalogDate(x),f=catalogDate(catalog[0]);
 
-    pCtx.globalCompositeOperation = "lighter";
-    pCtx.lineCap = "round";
-    pCtx.lineJoin = "round";
+  time.textContent=label(current);
+  valid.textContent=`Validità ${x.label||"--"}`;
+  run.textContent=`Run ${x.run||x.model_run||x.init||"n/d"}`;
 
-    const m = currentData.meta;
-    const zoomMultiplier = getZoomParticleMultiplier();
-    const visualMultiplier = PARTICLE_VISUAL.baseMultiplier * zoomMultiplier;
-    const buckets = {};
+  if(d&&f)valid.textContent+=` · +${Math.round((d-f)/36e5)}h`;
+}
 
-    for (const p of particles) {
-      if (p.age > p.maxAge) respawnParticle(p);
+function renderWeather(){
+  if(!data||!map.getSource("weather"))return;
 
-      const gx = (p.lng - m.lo1) / m.dx;
-      const gy = (m.la1 - p.lat) / m.dy;
+  let m=data.meta,info=INFO[layer];
+  raster.width=m.nx;
+  raster.height=m.ny;
 
-      if (gx >= 0 && gy >= 0 && gx < m.nx - 1 && gy < m.ny - 1) {
-        const u = getBilinear(currentData.wind_u, gx, gy, m.nx, m.ny);
-        const v = getBilinear(currentData.wind_v, gx, gy, m.nx, m.ny);
+  let im=rctx.createImageData(m.nx,m.ny),out=im.data;
+  let top=m.la1+m.dy/2;
+  let bottom=m.la1-(m.ny-1)*m.dy-m.dy/2;
+  let left=m.lo1-m.dx/2;
+  let right=m.lo1+(m.nx-1)*m.dx+m.dx/2;
+  let yTop=Math.log(Math.tan(Math.PI/4+top*Math.PI/360));
+  let yBottom=Math.log(Math.tan(Math.PI/4+bottom*Math.PI/360));
 
-        const speedMs = Math.sqrt(u * u + v * v);
-        const speedKmh = speedMs * 3.6;
+  for(let y=0;y<m.ny;y++){
+    let lat=(2*Math.atan(Math.exp(yTop+y/(m.ny-1)*(yBottom-yTop)))-Math.PI/2)*180/Math.PI;
+    let gy=(m.la1-lat)/m.dy;
 
-        if (speedMs > PARTICLE_VISUAL.minSpeedMs) {
-          const startPx = map.project([p.lng, p.lat]);
+    for(let x=0;x<m.nx;x++){
+      let v=field(layer,x,gy),p=(y*m.nx+x)*4;
 
-          const cosLat = Math.max(Math.cos(p.lat * Math.PI / 180), 0.25);
-          const dxMeters = u * dt * visualMultiplier;
-          const dyMeters = v * dt * visualMultiplier;
+      if(!Number.isFinite(v)||(layer==="rain"&&v<.08)||(layer==="cloud"&&v<5))continue;
 
-          p.lng += dxMeters / (111320 * cosLat);
-          p.lat += dyMeters / 111320;
+      let c=colour(v,info.stops,info.step);
+      out[p]=c[0];
+      out[p+1]=c[1];
+      out[p+2]=c[2];
+      out[p+3]=Math.round(c[3]*255);
+    }
+  }
 
-          const endPx = map.project([p.lng, p.lat]);
+  rctx.putImageData(im,0,0);
+  map.setPaintProperty("weather","raster-resampling",raw?"nearest":"linear");
 
-          const dxPx = endPx.x - startPx.x;
-          const dyPx = endPx.y - startPx.y;
-          const distPx = Math.sqrt(dxPx * dxPx + dyPx * dyPx);
+  map.getSource("weather").updateImage({
+    url:raster.toDataURL("image/png"),
+    coordinates:[[left,top],[right,top],[right,bottom],[left,bottom]]
+  });
+}
 
-          if (distPx > 0.25) {
-            const style = getParticleStyle(speedKmh);
-            const widthKey = Math.round(style.width * 10) / 10;
-            const key = style.color + "|" + widthKey;
+function legend(){
+  let x=INFO[layer],s=x.stops,min=s[0].v,max=s.at(-1).v;
 
-            if (!buckets[key]) buckets[key] = [];
-            buckets[key].push([startPx.x, startPx.y, endPx.x, endPx.y]);
-          }
+  legendName.textContent=x.label;
+  legendUnit.textContent=x.unit;
 
-          p.age += 1 + clamp(speedKmh / 120, 0, 1.2);
-        } else {
-          p.age = p.maxAge + 1;
+  let p=[];
+
+  if(x.step){
+    s.forEach((q,i)=>{
+      let a=(q.v-min)/(max-min)*100;
+      let b=((s[i+1]?.v??max)-min)/(max-min)*100;
+      let c=rgba(q.c,1);
+      p.push(`${c} ${a}%`,`${c} ${b}%`);
+    });
+  }else{
+    p=s.map(q=>`${rgba(q.c,Math.max(q.a??1,.94))} ${((q.v-min)/(max-min)*100)}%`);
+  }
+
+  gradient.style.background=`linear-gradient(to right,${p.join(",")})`;
+  ticks.innerHTML=x.ticks.map(v=>`<span>${v}</span>`).join("");
+}
+
+function buttons(){
+  document.querySelectorAll("[data-layer]").forEach(b=>b.classList.toggle("active",b.dataset.layer===layer));
+  flow.classList.toggle("active",showFlow);
+  vectorsBtn.classList.toggle("active",showVectors);
+  iso.classList.toggle("active",showIso);
+  rawButton.classList.toggle("active",raw);
+}
+
+function setLayer(x){
+  layer=x;
+
+  if(x==="wind"){
+    showFlow=true;
+    showVectors=true;
+    startFlow();
+  }
+
+  if(x==="press")showIso=true;
+
+  renderWeather();
+  updateIso();
+  buttons();
+  legend();
+  drawVectors();
+  closeControls();
+}
+
+function contours(){
+  if(data.iso)return;
+
+  let m=data.meta,p=grid(data.press);
+
+  if(!p){
+    data.iso={type:"FeatureCollection",features:[]};
+    return;
+  }
+
+  let c=d3.contours()
+    .size([m.nx,m.ny])
+    .thresholds(d3.range(960,1052,2))(p);
+
+  data.iso={
+    type:"FeatureCollection",
+    features:c.map(q=>({
+      type:"Feature",
+      properties:{value:q.value},
+      geometry:{
+        type:q.type,
+        coordinates:q.coordinates.map(a=>a.map(b=>b.map(z=>[
+          m.lo1+z[0]*m.dx,
+          m.la1-z[1]*m.dy
+        ])))
+      }
+    }))
+  };
+
+  let candidates=[];
+
+  for(let y=25;y<m.ny-25;y+=30){
+    for(let x=25;x<m.nx-25;x+=30){
+      let v=p[y*m.nx+x],hi=true,lo=true;
+
+      for(let yy=-20;yy<=20;yy+=10){
+        for(let xx=-20;xx<=20;xx+=10){
+          let z=p[(y+yy)*m.nx+x+xx];
+          if(z>v)hi=false;
+          if(z<v)lo=false;
         }
-      } else {
-        p.age = p.maxAge + 1;
-      }
-    }
-
-    for (const key in buckets) {
-      const [color, width] = key.split("|");
-      pCtx.beginPath();
-      pCtx.strokeStyle = color;
-      pCtx.lineWidth = Number(width);
-
-      for (const line of buckets[key]) {
-        pCtx.moveTo(line[0], line[1]);
-        pCtx.lineTo(line[2], line[3]);
       }
 
-      pCtx.stroke();
+      if(hi&&v>=1017)candidates.push({x,y,v,kind:"A"});
+      if(lo&&v<=1011)candidates.push({x,y,v,kind:"B"});
+    }
+  }
+
+  candidates.sort((a,b)=>Math.abs(b.v-1013)-Math.abs(a.v-1013));
+
+  let ok=[];
+  for(let q of candidates){
+    if(!ok.some(z=>Math.hypot(q.x-z.x,q.y-z.y)<90))ok.push(q);
+    if(ok.length===8)break;
+  }
+
+  data.centres={
+    type:"FeatureCollection",
+    features:ok.map(q=>({
+      type:"Feature",
+      properties:{kind:q.kind,label:q.kind},
+      geometry:{type:"Point",coordinates:[m.lo1+q.x*m.dx,m.la1-q.y*m.dy]}
+    }))
+  };
+}
+
+function updateIso(){
+  if(!map||!data)return;
+
+  let v=showIso?"visible":"none";
+  ["iso-line","iso-label","centres-label"].forEach(x=>map.setLayoutProperty(x,"visibility",v));
+
+  if(showIso){
+    contours();
+    map.getSource("iso").setData(data.iso);
+    map.getSource("centres").setData(data.centres);
+  }
+}
+
+function toggleIsobars(){
+  showIso=!showIso;
+  updateIso();
+  buttons();
+  closeControls();
+}
+
+function toggleGrid(){
+  raw=!raw;
+  renderWeather();
+  buttons();
+  closeControls();
+}
+
+function makeParticle(){
+  let b=map.getBounds(),m=data.meta;
+  let w=Math.max(b.getWest(),m.lo1),e=Math.min(b.getEast(),m.lo1+m.nx*m.dx);
+  let s=Math.max(b.getSouth(),m.la1-m.ny*m.dy),n=Math.min(b.getNorth(),m.la1);
+
+  return{lng:w+Math.random()*(e-w),lat:s+Math.random()*(n-s),age:Math.random()*80,life:48+Math.random()*60};
+}
+
+function startFlow(){
+  if(!raf&&showFlow)raf=requestAnimationFrame(flowFrame);
+}
+
+function toggleParticles(){
+  showFlow=!showFlow;
+
+  if(showFlow)startFlow();
+  else{
+    cancelAnimationFrame(raf);
+    raf=null;
+    pctx.clearRect(0,0,innerWidth,innerHeight);
+  }
+
+  buttons();
+  closeControls();
+}
+
+function flowFrame(t){
+  if(!showFlow||!data){
+    raf=null;
+    return;
+  }
+
+  if(t-last<1000/24){
+    raf=requestAnimationFrame(flowFrame);
+    return;
+  }
+
+  let dt=clamp((t-last||.03)/1000,.01,.07);
+  last=t;
+
+  let target=clamp(Math.round(innerWidth*innerHeight/1200),280,650);
+
+  while(particles.length<target)particles.push(makeParticle());
+  particles.length=target;
+
+  pctx.globalCompositeOperation="destination-in";
+  pctx.fillStyle="rgba(0,0,0,.84)";
+  pctx.fillRect(0,0,innerWidth,innerHeight);
+
+  pctx.globalCompositeOperation="lighter";
+  pctx.lineCap="round";
+
+  let buckets={};
+
+  for(let p of particles){
+    if(++p.age>p.life){
+      Object.assign(p,makeParticle());
+      continue;
     }
 
-    pCtx.restore();
-    animFrame = requestAnimationFrame(animateParticles);
-  }
+    let m=data.meta;
+    let x=(p.lng-m.lo1)/m.dx;
+    let y=(m.la1-p.lat)/m.dy;
+    let u=sample(data.wind_u,x,y),v=sample(data.wind_v,x,y);
+    let k=Math.hypot(u,v)*3.6;
 
-  function clearVectorCanvas() {
-    vCtx.clearRect(0, 0, window.innerWidth, window.innerHeight);
-  }
-
-  function getVectorColor(speedKmh) {
-    if (speedKmh < 10) return "rgba(32,38,48,0.82)";
-    if (speedKmh < 25) return "rgba(25,65,105,0.88)";
-    if (speedKmh < 40) return "rgba(10,105,135,0.92)";
-    if (speedKmh < 60) return "rgba(10,125,95,0.95)";
-    if (speedKmh < 80) return "rgba(150,115,20,0.98)";
-    if (speedKmh < 100) return "rgba(185,75,25,1)";
-    return "rgba(170,35,35,1)";
-  }
-
-  function drawArrow(x1, y1, x2, y2, color, width, headSize) {
-    const angle = Math.atan2(y2 - y1, x2 - x1);
-
-    vCtx.strokeStyle = "rgba(255,255,255,0.42)";
-    vCtx.fillStyle = "rgba(255,255,255,0.42)";
-    vCtx.lineWidth = width + 1.25;
-
-    vCtx.beginPath();
-    vCtx.moveTo(x1, y1);
-    vCtx.lineTo(x2, y2);
-    vCtx.stroke();
-
-    vCtx.beginPath();
-    vCtx.moveTo(x2, y2);
-    vCtx.lineTo(
-      x2 - Math.cos(angle - Math.PI / 7) * headSize,
-      y2 - Math.sin(angle - Math.PI / 7) * headSize
-    );
-    vCtx.lineTo(
-      x2 - Math.cos(angle + Math.PI / 7) * headSize,
-      y2 - Math.sin(angle + Math.PI / 7) * headSize
-    );
-    vCtx.closePath();
-    vCtx.fill();
-
-    vCtx.strokeStyle = color;
-    vCtx.fillStyle = color;
-    vCtx.lineWidth = width;
-
-    vCtx.beginPath();
-    vCtx.moveTo(x1, y1);
-    vCtx.lineTo(x2, y2);
-    vCtx.stroke();
-
-    vCtx.beginPath();
-    vCtx.moveTo(x2, y2);
-    vCtx.lineTo(
-      x2 - Math.cos(angle - Math.PI / 7) * headSize,
-      y2 - Math.sin(angle - Math.PI / 7) * headSize
-    );
-    vCtx.lineTo(
-      x2 - Math.cos(angle + Math.PI / 7) * headSize,
-      y2 - Math.sin(angle + Math.PI / 7) * headSize
-    );
-    vCtx.closePath();
-    vCtx.fill();
-  }
-
-  function renderWindVectors() {
-    clearVectorCanvas();
-
-    if (!showWindVectors || !currentData || !currentData.wind_u || !currentData.wind_v || !map) return;
-
-    const m = currentData.meta;
-    const mobile = document.body.classList.contains("mobile-ui") || window.innerWidth <= 760;
-
-    const spacing = mobile ? 64 : 78;
-    const arrowMin = mobile ? 16 : 18;
-    const arrowMax = mobile ? 39 : 46;
-
-    vCtx.save();
-    vCtx.globalCompositeOperation = "source-over";
-    vCtx.lineCap = "round";
-    vCtx.lineJoin = "round";
-
-    for (let sy = 54; sy < window.innerHeight - 54; sy += spacing) {
-      for (let sx = 34; sx < window.innerWidth - 34; sx += spacing) {
-        const ll = map.unproject([sx, sy]);
-        const gx = (ll.lng - m.lo1) / m.dx;
-        const gy = (m.la1 - ll.lat) / m.dy;
-
-        if (gx < 0 || gy < 0 || gx >= m.nx - 1 || gy >= m.ny - 1) continue;
-
-        const u = getBilinear(currentData.wind_u, gx, gy, m.nx, m.ny);
-        const v = getBilinear(currentData.wind_v, gx, gy, m.nx, m.ny);
-
-        const speedMs = Math.sqrt(u * u + v * v);
-        const speedKmh = speedMs * 3.6;
-
-        if (!Number.isFinite(speedKmh) || speedKmh < 1.5) continue;
-
-        const len = clamp(13 + speedKmh * 0.38, arrowMin, arrowMax);
-
-        const dx = u;
-        const dy = -v;
-        const norm = Math.sqrt(dx * dx + dy * dy) || 1;
-
-        const ux = dx / norm;
-        const uy = dy / norm;
-
-        const x1 = sx - ux * len * 0.43;
-        const y1 = sy - uy * len * 0.43;
-        const x2 = sx + ux * len * 0.57;
-        const y2 = sy + uy * len * 0.57;
-
-        const color = activeLayer === "wind"
-          ? getVectorColor(speedKmh)
-          : "rgba(36,42,52,0.82)";
-
-        const width = clamp(0.95 + speedKmh * 0.010, 1.05, mobile ? 2.05 : 2.35);
-        const headSize = clamp(4.2 + speedKmh * 0.035, 5.2, mobile ? 7.8 : 8.5);
-
-        drawArrow(x1, y1, x2, y2, color, width, headSize);
-      }
+    if(!Number.isFinite(k)||k<2){
+      p.age=p.life;
+      continue;
     }
 
-    vCtx.restore();
+    let a=map.project([p.lng,p.lat]);
+    let mult=5900*clamp(2**(6-map.getZoom()),.25,3);
+
+    p.lng+=u*dt*mult/(111320*Math.max(Math.cos(p.lat*Math.PI/180),.25));
+    p.lat+=v*dt*mult/111320;
+
+    let b=map.project([p.lng,p.lat]);
+
+    if(Math.hypot(a.x-b.x,a.y-b.y)<.2)continue;
+
+    let color=k<10?"rgba(150,210,255,.72)":
+      k<25?"rgba(85,235,255,.82)":
+      k<40?"rgba(85,255,205,.9)":
+      k<60?"rgba(245,255,95,.94)":
+      k<80?"rgba(255,185,55,.97)":
+      k<105?"rgba(255,80,80,1)":"rgba(230,95,255,1)";
+
+    let width=k<25?1.25:k<55?1.8:k<80?2.4:3;
+    let z=buckets[color+"|"+width]??=[];
+    z.push([a.x,a.y,b.x,b.y]);
+    buckets[color+"|"+width]=z;
   }
 
-  function updateIsobars() {
-    if (!currentData || !map || !map.getSource("isobars-source")) return;
+  for(let k in buckets){
+    let[color,w]=k.split("|");
+    pctx.beginPath();
+    pctx.strokeStyle=color;
+    pctx.lineWidth=+w;
 
-    const vis = showIsobars ? "visible" : "none";
+    for(let l of buckets[k]){
+      pctx.moveTo(l[0],l[1]);
+      pctx.lineTo(l[2],l[3]);
+    }
 
-    map.setLayoutProperty("isobars-line", "visibility", vis);
-    map.setLayoutProperty("isobars-label", "visibility", vis);
-    map.setLayoutProperty("centers-label", "visibility", vis);
+    pctx.stroke();
+  }
 
-    if (showIsobars) {
-      if (!currentData.isoGeoJSON) buildPressureProducts(currentData);
+  raf=requestAnimationFrame(flowFrame);
+}
 
-      map.getSource("isobars-source").setData(
-        currentData.isoGeoJSON || { type: "FeatureCollection", features: [] }
-      );
+function arrow(a,b,c,d,col,w,h){
+  let q=Math.atan2(d-b,c-a);
 
-      map.getSource("centers-source").setData(
-        currentData.centersGeoJSON || { type: "FeatureCollection", features: [] }
+  vctx.strokeStyle="rgba(255,255,255,.42)";
+  vctx.fillStyle="rgba(255,255,255,.42)";
+  vctx.lineWidth=w+1;
+  vctx.beginPath();
+  vctx.moveTo(a,b);
+  vctx.lineTo(c,d);
+  vctx.stroke();
+
+  vctx.beginPath();
+  vctx.moveTo(c,d);
+  vctx.lineTo(c-Math.cos(q-.45)*h,d-Math.sin(q-.45)*h);
+  vctx.lineTo(c-Math.cos(q+.45)*h,d-Math.sin(q+.45)*h);
+  vctx.fill();
+
+  vctx.strokeStyle=col;
+  vctx.fillStyle=col;
+  vctx.lineWidth=w;
+  vctx.beginPath();
+  vctx.moveTo(a,b);
+  vctx.lineTo(c,d);
+  vctx.stroke();
+
+  vctx.beginPath();
+  vctx.moveTo(c,d);
+  vctx.lineTo(c-Math.cos(q-.45)*h,d-Math.sin(q-.45)*h);
+  vctx.lineTo(c-Math.cos(q+.45)*h,d-Math.sin(q+.45)*h);
+  vctx.fill();
+}
+
+function drawVectors(){
+  vctx.clearRect(0,0,innerWidth,innerHeight);
+  if(!showVectors||!data||!map)return;
+
+  let spacing=innerWidth<921?66:80,m=data.meta;
+
+  for(let sy=55;sy<innerHeight-55;sy+=spacing){
+    for(let sx=35;sx<innerWidth-35;sx+=spacing){
+      let ll=map.unproject([sx,sy]);
+      let x=(ll.lng-m.lo1)/m.dx;
+      let y=(m.la1-ll.lat)/m.dy;
+      let u=sample(data.wind_u,x,y),v=sample(data.wind_v,x,y);
+      let k=Math.hypot(u,v)*3.6;
+
+      if(!Number.isFinite(k)||k<2)continue;
+
+      let len=clamp(13+k*.36,16,42),n=Math.hypot(u,v)||1;
+      let dx=u/n,dy=-v/n;
+
+      let col=k<25?"rgba(35,120,160,.9)":
+        k<60?"rgba(25,165,115,.95)":
+        k<80?"rgba(205,155,35,.98)":"rgba(210,55,55,1)";
+
+      arrow(
+        sx-dx*len*.43,sy-dy*len*.43,
+        sx+dx*len*.57,sy+dy*len*.57,
+        col,clamp(1+k*.01,1,2.2),clamp(5+k*.03,5,8)
       );
     }
   }
+}
 
-  function updateLegend() {
-    const info = LAYER_INFO[activeLayer];
-    if (!info) return;
+function toggleVectors(){
+  showVectors=!showVectors;
+  drawVectors();
+  buttons();
+  closeControls();
+}
 
-    document.getElementById("legend-title").innerText = info.label;
-    document.getElementById("legend-unit").innerText = info.unit;
-    document.getElementById("active-layer-label").innerText = info.label;
-    document.getElementById("field-unit").innerText = info.unit;
+function readPoint(e){
+  if(!data)return;
 
-    const stops = info.stops;
-    const min = stops[0].v;
-    const max = stops[stops.length - 1].v;
+  let m=data.meta,x=(e.lngLat.lng-m.lo1)/m.dx,y=(m.la1-e.lngLat.lat)/m.dy;
+  if(x<0||y<0||x>=m.nx||y>=m.ny)return;
 
-    const parts = stops.map(s => {
-      const pct = ((s.v - min) / (max - min)) * 100;
-      const alpha = s.a ?? 1;
-      return `${rgbToCss(s.c, Math.max(alpha, 0.95))} ${pct.toFixed(1)}%`;
+  let i=INFO[layer],v=field(layer,x,y),w=uv(x,y),d=windDir(w.u,w.v);
+
+  readout.style.display="block";
+  rName.textContent=i.label;
+  rValue.textContent=Number.isFinite(v)?v.toFixed(i.dec):"--";
+  rUnit.textContent=i.unit;
+  rCoords.textContent=`${e.lngLat.lat.toFixed(3)}°, ${e.lngLat.lng.toFixed(3)}° · ${raw?"cella modello":"interpolazione bilineare"}`;
+
+  dTemp.textContent=fmt(field("temp",x,y),1,"°C");
+  dFeels.textContent=fmt(field("feels",x,y),1,"°C");
+  dRain.textContent=fmt(field("rain",x,y),1,"mm");
+  dWind.textContent=fmt(field("wind",x,y),0,"km/h");
+  dDir.textContent=Number.isFinite(d)?`${Math.round(d)}° ${compass(d)}`:"--";
+  dRh.textContent=fmt(field("rh",x,y),0,"%");
+  dCloud.textContent=fmt(field("cloud",x,y),0,"%");
+  dPress.textContent=fmt(field("press",x,y),0,"hPa");
+}
+
+function toggleControls(){side.classList.toggle("open")}
+function closeControls(){if(innerWidth<921)side.classList.remove("open")}
+
+function toggleClean(){
+  document.body.classList.toggle("clean");
+  clean.textContent=document.body.classList.contains("clean")?"MOSTRA UI":"SOLO MAPPA";
+}
+
+function speed(x,b){
+  delay=x;
+  document.querySelectorAll(".speed button").forEach(q=>q.classList.remove("active"));
+  b.classList.add("active");
+}
+
+function togglePlay(){
+  playing=!playing;
+  play.textContent=playing?"❚❚":"▶";
+  if(playing)loop();
+}
+
+async function loop(){
+  if(!playing)return;
+  slider.value=(+slider.value+1)%catalog.length;
+  await loadStep(+slider.value);
+  setTimeout(loop,delay);
+}
+
+function closeGps(){gpsCard.style.display="none"}
+
+function myWeather(){
+  if(!navigator.geolocation)return toast("GPS non supportato");
+
+  navigator.geolocation.getCurrentPosition(p=>{
+    let{lng,lat}=p.coords;
+
+    map.flyTo({
+      center:[lng,lat],
+      zoom:Math.max(8.8,map.getZoom()),
+      duration:800
     });
 
-    document.getElementById("legend-gradient").style.background =
-      `linear-gradient(to right, ${parts.join(",")})`;
+    if(!data)return;
 
-    const ticks = info.ticks || [];
-    document.getElementById("legend-ticks").innerHTML = ticks.map(v => `<span>${v}</span>`).join("");
-  }
+    let m=data.meta,x=(lng-m.lo1)/m.dx,y=(m.la1-lat)/m.dy;
 
-  window.toggleGpsPanel = (show) => {
-    const el = document.getElementById("gps-overlay");
-    if (show) el.classList.add("active");
-    else el.classList.remove("active");
-  };
+    if(x<0||y<0||x>=m.nx||y>=m.ny)return toast("Posizione fuori dall’area del modello");
 
-  window.getMyWeather = () => {
-    if (!navigator.geolocation) {
-      alert("GPS non supportato dal browser.");
-      return;
-    }
+    let w=uv(x,y),d=windDir(w.u,w.v);
 
-    navigator.geolocation.getCurrentPosition((pos) => {
-      const lng = pos.coords.longitude;
-      const lat = pos.coords.latitude;
+    gpsCard.style.display="grid";
+    gTemp.textContent=fmt(field("temp",x,y),1,"°");
+    gFeels.textContent=fmt(field("feels",x,y),1,"°");
+    gRain.textContent=fmt(field("rain",x,y),1,"mm");
+    gWind.textContent=fmt(field("wind",x,y),0,"km/h");
+    gDir.textContent=Number.isFinite(d)?`${Math.round(d)}° ${compass(d)}`:"--";
+    gPress.textContent=fmt(field("press",x,y),0,"hPa");
+  },()=>toast("Permesso GPS negato"),{
+    enableHighAccuracy:false,
+    timeout:7000,
+    maximumAge:300000
+  });
+}
 
-      map.flyTo({
-        center: [lng, lat],
-        zoom: Math.max(map.getZoom(), 8.8),
-        duration: 900
-      });
+function toast(x){
+  loading.textContent=x;
+  loading.classList.add("show");
 
-      toggleGpsPanel(true);
+  setTimeout(()=>{
+    loading.textContent="Elaborazione dati…";
+    loading.classList.remove("show");
+  },2200);
+}
 
-      if (!currentData) return;
+document.addEventListener("visibilitychange",()=>{
+  if(document.hidden){
+    cancelAnimationFrame(raf);
+    raf=null;
+  }else startFlow();
+});
 
-      const m = currentData.meta;
-      const gx = (lng - m.lo1) / m.dx;
-      const gy = (m.la1 - lat) / m.dy;
+const $=id=>document.getElementById(id);
+const slider=$("slider"),loading=$("loading"),time=$("time"),valid=$("valid"),run=$("run");
+const legendName=$("legend-name"),legendUnit=$("legend-unit"),gradient=$("gradient"),ticks=$("ticks");
+const side=$("side"),flow=$("flow"),vectorsBtn=$("vectors-btn"),iso=$("iso"),rawButton=$("grid");
+const readout=$("readout"),rName=$("r-name"),rValue=$("r-value"),rUnit=$("r-unit"),rCoords=$("r-coords");
+const dTemp=$("d-temp"),dFeels=$("d-feels"),dRain=$("d-rain"),dWind=$("d-wind"),dDir=$("d-dir"),dRh=$("d-rh"),dCloud=$("d-cloud"),dPress=$("d-press");
+const gpsCard=$("gps-card"),gTemp=$("g-temp"),gFeels=$("g-feels"),gRain=$("g-rain"),gWind=$("g-wind"),gDir=$("g-dir"),gPress=$("g-press");
+const play=$("play"),clean=$("clean");
 
-      if (gx >= 0 && gy >= 0 && gx < m.nx && gy < m.ny) {
-        const all = getAllPointValues(gx, gy);
-
-        document.getElementById("gps-t").innerText = fmt(all.temp, 1, "°");
-        document.getElementById("gps-tf").innerText = fmt(all.feels, 1, "°");
-        document.getElementById("gps-r").innerText = fmt(all.rain, 1, "mm");
-        document.getElementById("gps-w").innerText = fmt(all.wind, 0, "km/h");
-        document.getElementById("gps-wd").innerText = fmtWindDir(all.wdir);
-        document.getElementById("gps-p").innerText = fmt(all.press, 0, "hPa");
-      } else {
-        document.getElementById("gps-t").innerText = "Fuori";
-        document.getElementById("gps-tf").innerText = "Area";
-        document.getElementById("gps-r").innerText = "--";
-        document.getElementById("gps-w").innerText = "--";
-        document.getElementById("gps-wd").innerText = "--";
-        document.getElementById("gps-p").innerText = "--";
-      }
-    }, () => {
-      alert("Permesso GPS negato o non disponibile.");
-    }, {
-      enableHighAccuracy: false,
-      timeout: 7000,
-      maximumAge: 300000
-    });
-  };
-
-  function autoCloseControls() {
-    if (document.body.classList.contains("mobile-ui")) {
-      document.body.classList.remove("controls-open");
-    }
-  }
-
-  window.toggleLayer = (layer) => {
-    if (!LAYER_INFO[layer]) return;
-
-    if (currentData && !hasLayerData(layer)) {
-      alert("Dato non disponibile per questo step.");
-      return;
-    }
-
-    activeLayer = layer;
-
-    if (layer === "wind") {
-      if (!showParticles) {
-        showParticles = true;
-        initParticles();
-      }
-      if (!showWindVectors) {
-        showWindVectors = true;
-        renderWindVectors();
-      }
-    }
-
-    if (layer === "press" && !showIsobars) {
-      showIsobars = true;
-      updateIsobars();
-    }
-
-    updateGPULayer();
-    updateBtns();
-    updateLegend();
-    renderWindVectors();
-    autoCloseControls();
-  };
-
-  window.toggleParticles = () => {
-    showParticles = !showParticles;
-
-    if (showParticles) {
-      initParticles();
-    } else {
-      pCtx.clearRect(0, 0, window.innerWidth, window.innerHeight);
-      if (animFrame) cancelAnimationFrame(animFrame);
-    }
-
-    updateBtns();
-    autoCloseControls();
-  };
-
-  window.toggleWindVectors = () => {
-    showWindVectors = !showWindVectors;
-
-    if (showWindVectors) renderWindVectors();
-    else clearVectorCanvas();
-
-    updateBtns();
-    autoCloseControls();
-  };
-
-  window.toggleIsobars = () => {
-    showIsobars = !showIsobars;
-    updateIsobars();
-    updateBtns();
-    autoCloseControls();
-  };
-
-  window.toggleRawGrid = () => {
-    showRawGrid = !showRawGrid;
-
-    if (map && map.getLayer("weather-layer")) {
-      map.setPaintProperty("weather-layer", "raster-resampling", showRawGrid ? "nearest" : "linear");
-    }
-
-    document.getElementById("sampling-mode").innerText = showRawGrid ? "nearest" : "bilinear";
-    document.getElementById("scientific-sampling").innerText = showRawGrid ? "cella modello più vicina" : "interpolazione bilineare";
-
-    updateBtns();
-    renderWindVectors();
-    autoCloseControls();
-  };
-
-  window.toggleControlsPanel = () => {
-    if (document.body.classList.contains("mobile-ui")) {
-      document.body.classList.toggle("controls-open");
-    }
-  };
-
-  window.toggleCleanMode = () => {
-    document.body.classList.toggle("clean-mode");
-    const active = document.body.classList.contains("clean-mode");
-    document.getElementById("clean-toggle").innerText = active ? "MOSTRA UI" : "SOLO MAPPA";
-
-    setTimeout(() => {
-      if (map) {
-        map.resize();
-        renderWindVectors();
-      }
-    }, 120);
-  };
-
-  window.setPlaybackSpeed = (speed) => {
-    playbackDelay = speed === 1 ? 1150 : speed === 2 ? 650 : 350;
-
-    document.querySelectorAll(".speed-btn").forEach(btn => btn.classList.remove("active"));
-    document.getElementById("speed-" + speed)?.classList.add("active");
-  };
-
-  function updateBtns() {
-    document.querySelectorAll(".toggle").forEach(b => {
-      b.classList.remove("active");
-      b.classList.remove("disabled");
-    });
-
-    Object.keys(LAYER_INFO).forEach(layer => {
-      const btn = document.getElementById("btn-" + layer);
-      if (btn && currentData && !hasLayerData(layer)) btn.classList.add("disabled");
-    });
-
-    const activeBtn = document.getElementById("btn-" + activeLayer);
-    if (activeBtn) activeBtn.classList.add("active");
-
-    document.getElementById("btn-flow")?.classList.toggle("active", showParticles);
-    document.getElementById("btn-vectors")?.classList.toggle("active", showWindVectors);
-    document.getElementById("btn-iso")?.classList.toggle("active", showIsobars);
-    document.getElementById("btn-raw")?.classList.toggle("active", showRawGrid);
-  }
-
-  window.togglePlay = () => {
-    isPlaying = !isPlaying;
-    document.getElementById("play-btn").innerText = isPlaying ? "❚❚" : "►";
-    if (isPlaying) playLoop();
-  };
-
-  async function playLoop() {
-    if (!isPlaying || catalog.length === 0) return;
-
-    const s = document.getElementById("time-slider");
-    const v = (parseInt(s.value) + 1) % catalog.length;
-    s.value = v;
-    await loadStep(v);
-    setTimeout(playLoop, playbackDelay);
-  }
+resize();
+setupMap();
 </script>
 </body>
 </html>
