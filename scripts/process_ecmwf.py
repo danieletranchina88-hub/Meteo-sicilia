@@ -20,6 +20,7 @@ LON_MIN, LON_MAX = 6.0, 19.5
 # sinottico, ma leggero da pubblicare tramite GitHub Pages.
 FORECAST_STEPS = list(range(0, 121, 6))
 PARAMETERS = ["2t", "2d", "10u", "10v", "msl", "tp", "tcc"]
+FEELS_LIKE_METHOD = "heat-index-wind-chill-v1"
 
 
 def iso_z(value):
@@ -43,16 +44,60 @@ def calculate_relative_humidity(temp_kelvin, dew_kelvin):
     return np.clip(humidity, 0.0, 100.0)
 
 
-def calculate_apparent_temperature(temp_c, humidity, u_wind, v_wind):
-    speed = np.hypot(u_wind, v_wind)
-    with np.errstate(over="ignore", invalid="ignore"):
-        vapor_pressure = (
-            np.clip(humidity, 0.0, 100.0)
-            / 100.0
-            * 6.105
-            * np.exp((17.27 * temp_c) / (237.7 + temp_c))
-        )
-    return temp_c + 0.33 * vapor_pressure - 0.70 * speed - 4.0
+def calculate_heat_index_celsius(temp_c, humidity):
+    temp_f = temp_c * 9.0 / 5.0 + 32.0
+    rh = np.clip(humidity, 0.0, 100.0)
+    simple = 0.5 * (temp_f + 61.0 + (temp_f - 68.0) * 1.2 + rh * 0.094)
+    preliminary = (simple + temp_f) / 2.0
+
+    heat_index_f = (
+        -42.379
+        + 2.04901523 * temp_f
+        + 10.14333127 * rh
+        - 0.22475541 * temp_f * rh
+        - 0.00683783 * temp_f**2
+        - 0.05481717 * rh**2
+        + 0.00122874 * temp_f**2 * rh
+        + 0.00085282 * temp_f * rh**2
+        - 0.00000199 * temp_f**2 * rh**2
+    )
+
+    low_humidity = (rh < 13.0) & (temp_f >= 80.0) & (temp_f <= 112.0)
+    low_adjustment = ((13.0 - rh) / 4.0) * np.sqrt(
+        np.maximum(0.0, (17.0 - np.abs(temp_f - 95.0)) / 17.0)
+    )
+    heat_index_f = np.where(low_humidity, heat_index_f - low_adjustment, heat_index_f)
+
+    high_humidity = (rh > 85.0) & (temp_f >= 80.0) & (temp_f <= 87.0)
+    high_adjustment = ((rh - 85.0) / 10.0) * ((87.0 - temp_f) / 5.0)
+    heat_index_f = np.where(high_humidity, heat_index_f + high_adjustment, heat_index_f)
+    heat_index_f = np.where(preliminary >= 80.0, heat_index_f, temp_f)
+    return (heat_index_f - 32.0) * 5.0 / 9.0
+
+
+def calculate_wind_chill_celsius(temp_c, wind_kmh):
+    wind_factor = np.power(wind_kmh, 0.16)
+    return (
+        13.12
+        + 0.6215 * temp_c
+        - 11.37 * wind_factor
+        + 0.3965 * temp_c * wind_factor
+    )
+
+
+def calculate_feels_like(temp_c, humidity, u_wind, v_wind):
+    result = np.array(temp_c, dtype=float, copy=True)
+    speed_kmh = np.hypot(u_wind, v_wind) * 3.6
+    finite_temp = np.isfinite(temp_c)
+
+    cold = finite_temp & np.isfinite(speed_kmh) & (temp_c <= 10.0) & (speed_kmh > 4.8)
+    wind_chill = calculate_wind_chill_celsius(temp_c, speed_kmh)
+    result = np.where(cold, wind_chill, result)
+
+    hot = finite_temp & np.isfinite(humidity) & (temp_c >= 26.7)
+    heat_index = calculate_heat_index_celsius(temp_c, humidity)
+    result = np.where(hot, heat_index, result)
+    return np.where(finite_temp, result, np.nan)
 
 
 def download_latest_forecast():
@@ -167,7 +212,7 @@ def process_data():
 
             temp_c = temp_kelvin - 273.15
             humidity = calculate_relative_humidity(temp_kelvin, dew_kelvin)
-            feels_like = calculate_apparent_temperature(temp_c, humidity, u_wind, v_wind)
+            feels_like = calculate_feels_like(temp_c, humidity, u_wind, v_wind)
             pressure_hpa = pressure_pa / 100.0
 
             precipitation_units = str(rain_field.attrs.get("units", "m")).lower()
@@ -195,6 +240,7 @@ def process_data():
                 "refTime": iso_z(valid_time),
                 "leadHours": int(step_hours),
                 "rainAccumulation": "from-run",
+                "feelsLikeMethod": FEELS_LIKE_METHOD,
             }
 
             step_data = {
