@@ -2492,6 +2492,182 @@
         }
       }
 
+      function smoothPressureGrid(pressure, nx, ny, radius) {
+        const stride = nx + 1;
+        const size = (nx + 1) * (ny + 1);
+        const sums = new Float64Array(size);
+        const counts = new Uint32Array(size);
+        const output = new Float32Array(nx * ny);
+
+        for (let y = 0; y < ny; y += 1) {
+          let rowSum = 0;
+          let rowCount = 0;
+
+          for (let x = 0; x < nx; x += 1) {
+            const value = pressure[y * nx + x];
+            if (Number.isFinite(value)) {
+              rowSum += value;
+              rowCount += 1;
+            }
+
+            const integralIndex = (y + 1) * stride + x + 1;
+            sums[integralIndex] = sums[y * stride + x + 1] + rowSum;
+            counts[integralIndex] = counts[y * stride + x + 1] + rowCount;
+          }
+        }
+
+        for (let y = 0; y < ny; y += 1) {
+          const y0 = Math.max(0, y - radius);
+          const y1 = Math.min(ny - 1, y + radius);
+
+          for (let x = 0; x < nx; x += 1) {
+            const x0 = Math.max(0, x - radius);
+            const x1 = Math.min(nx - 1, x + radius);
+            const bottomRight = (y1 + 1) * stride + x1 + 1;
+            const topRight = y0 * stride + x1 + 1;
+            const bottomLeft = (y1 + 1) * stride + x0;
+            const topLeft = y0 * stride + x0;
+            const count = counts[bottomRight] - counts[topRight] - counts[bottomLeft] + counts[topLeft];
+            const sum = sums[bottomRight] - sums[topRight] - sums[bottomLeft] + sums[topLeft];
+            output[y * nx + x] = count ? sum / count : NaN;
+          }
+        }
+
+        return output;
+      }
+
+      function parabolicCenterOffset(left, center, right) {
+        if (![left, center, right].every(Number.isFinite)) return 0;
+        const denominator = left - 2 * center + right;
+        if (Math.abs(denominator) < 0.0001) return 0;
+        return clamp(0.5 * (left - right) / denominator, -0.5, 0.5);
+      }
+
+      function detectPressureCenters(pressure, meta) {
+        const nx = meta.nx;
+        const ny = meta.ny;
+        const middleLatitude = meta.la1 - (ny - 1) * meta.dy / 2;
+        const kmPerCellX = Math.max(Math.abs(meta.dx) * 111.32 * Math.cos(middleLatitude * Math.PI / 180), 0.5);
+        const kmPerCellY = Math.max(Math.abs(meta.dy) * 111.32, 0.5);
+        const gridKm = (kmPerCellX + kmPerCellY) / 2;
+        const smoothingRadius = Math.round(clamp(42 / gridKm, 1, 18));
+        const searchRadius = Math.round(clamp(175 / gridKm, 6, 80));
+        const scanStep = Math.round(clamp(36 / gridKm, 1, 16));
+        const comparisonStep = Math.max(1, Math.round(searchRadius / 9));
+        const smoothed = smoothPressureGrid(pressure, nx, ny, smoothingRadius);
+        const candidates = [];
+        const evaluated = new Set();
+        const margin = searchRadius + 1;
+        const ringInnerSquared = Math.pow(searchRadius * 0.68, 2);
+        const ringOuterSquared = searchRadius * searchRadius;
+
+        function evaluate(x, y, kind) {
+          if (
+            x <= searchRadius ||
+            y <= searchRadius ||
+            x >= nx - searchRadius - 1 ||
+            y >= ny - searchRadius - 1
+          ) return;
+
+          const key = kind + ":" + x + ":" + y;
+          if (evaluated.has(key)) return;
+          evaluated.add(key);
+
+          const center = smoothed[y * nx + x];
+          if (!Number.isFinite(center)) return;
+
+          let isExtremum = true;
+          let ringSum = 0;
+          let ringCount = 0;
+
+          for (let yy = -searchRadius; yy <= searchRadius; yy += comparisonStep) {
+            for (let xx = -searchRadius; xx <= searchRadius; xx += comparisonStep) {
+              const distanceSquared = xx * xx + yy * yy;
+              if (distanceSquared > ringOuterSquared || (xx === 0 && yy === 0)) continue;
+              const nearby = smoothed[(y + yy) * nx + x + xx];
+              if (!Number.isFinite(nearby)) continue;
+
+              if (kind === "A" && nearby > center + 0.03) isExtremum = false;
+              if (kind === "B" && nearby < center - 0.03) isExtremum = false;
+
+              if (distanceSquared >= ringInnerSquared) {
+                ringSum += nearby;
+                ringCount += 1;
+              }
+            }
+          }
+
+          if (!isExtremum || ringCount < 8) return;
+          const ringMean = ringSum / ringCount;
+          const prominence = kind === "A" ? center - ringMean : ringMean - center;
+          const pressureLimitOk = kind === "A" ? center >= 1015 : center <= 1012.5;
+          if (!pressureLimitOk || prominence < 0.8) return;
+
+          const horizontalOffset = parabolicCenterOffset(
+            smoothed[y * nx + x - 1],
+            center,
+            smoothed[y * nx + x + 1]
+          );
+          const verticalOffset = parabolicCenterOffset(
+            smoothed[(y - 1) * nx + x],
+            center,
+            smoothed[(y + 1) * nx + x]
+          );
+          const refinedX = x + horizontalOffset;
+          const refinedY = y + verticalOffset;
+          const sourceValue = sampleBilinear(pressure, refinedX, refinedY, nx, ny);
+          const referenceDistance = kind === "A" ? center - 1013.25 : 1013.25 - center;
+
+          candidates.push({
+            x: refinedX,
+            y: refinedY,
+            value: Number.isFinite(sourceValue) ? sourceValue : center,
+            kind: kind,
+            prominence: prominence,
+            score: prominence * 5 + Math.max(referenceDistance, 0) * 0.35
+          });
+        }
+
+        for (let centerY = margin; centerY < ny - margin; centerY += scanStep) {
+          for (let centerX = margin; centerX < nx - margin; centerX += scanStep) {
+            const half = Math.max(1, Math.floor(scanStep / 2));
+            let maximum = { x: centerX, y: centerY, value: -Infinity };
+            let minimum = { x: centerX, y: centerY, value: Infinity };
+
+            for (let y = centerY - half; y <= centerY + half; y += 1) {
+              for (let x = centerX - half; x <= centerX + half; x += 1) {
+                const value = smoothed[y * nx + x];
+                if (!Number.isFinite(value)) continue;
+                if (value > maximum.value) maximum = { x: x, y: y, value: value };
+                if (value < minimum.value) minimum = { x: x, y: y, value: value };
+              }
+            }
+
+            evaluate(maximum.x, maximum.y, "A");
+            evaluate(minimum.x, minimum.y, "B");
+          }
+        }
+
+        candidates.sort(function (first, second) {
+          return second.score - first.score;
+        });
+
+        const accepted = [];
+        const minimumDistanceKm = 190;
+
+        candidates.forEach(function (candidate) {
+          if (accepted.length >= 8) return;
+          const tooClose = accepted.some(function (item) {
+            const dxKm = (item.x - candidate.x) * kmPerCellX;
+            const dyKm = (item.y - candidate.y) * kmPerCellY;
+            return Math.hypot(dxKm, dyKm) < minimumDistanceKm;
+          });
+          if (!tooClose) accepted.push(candidate);
+        });
+
+        return accepted;
+      }
+
       function buildPressureProducts(data) {
         if (data.isobars && data.pressureCenters) return;
 
@@ -2503,76 +2679,35 @@
           return;
         }
 
-        const contourFeatures = d3
+        const contours = d3
           .contours()
           .size([meta.nx, meta.ny])
-          .thresholds(d3.range(960, 1052, 2))(pressure)
-          .map(function (contour) {
-            return {
-              type: "Feature",
-              properties: { value: contour.value },
-              geometry: {
-                type: contour.type,
-                coordinates: contour.coordinates.map(function (polygon) {
-                  return polygon.map(function (ring) {
-                    return ring.map(function (point) {
-                      return [meta.lo1 + point[0] * meta.dx, meta.la1 - point[1] * meta.dy];
-                    });
-                  });
-                })
-              }
-            };
+          .thresholds(d3.range(960, 1052, 2))(pressure);
+        const contourFeatures = [];
+
+        contours.forEach(function (contour) {
+          contour.coordinates.forEach(function (polygon) {
+            polygon.forEach(function (ring) {
+              if (ring.length < 4) return;
+              contourFeatures.push({
+                type: "Feature",
+                properties: {
+                  value: contour.value,
+                  major: Math.round(contour.value) % 4 === 0
+                },
+                geometry: {
+                  type: "LineString",
+                  coordinates: ring.map(function (point) {
+                    return [meta.lo1 + point[0] * meta.dx, meta.la1 - point[1] * meta.dy];
+                  })
+                }
+              });
+            });
           });
+        });
 
         data.isobars = { type: "FeatureCollection", features: contourFeatures };
-
-        const candidates = [];
-        const sampleStep = 28;
-        const radius = 22;
-
-        for (let y = radius; y < meta.ny - radius; y += sampleStep) {
-          for (let x = radius; x < meta.nx - radius; x += sampleStep) {
-            const value = pressure[y * meta.nx + x];
-            if (!Number.isFinite(value)) continue;
-
-            let maximum = true;
-            let minimum = true;
-
-            for (let yy = -radius; yy <= radius; yy += 6) {
-              for (let xx = -radius; xx <= radius; xx += 6) {
-                if (xx === 0 && yy === 0) continue;
-                const nearby = pressure[(y + yy) * meta.nx + x + xx];
-                if (!Number.isFinite(nearby)) continue;
-                if (nearby > value) maximum = false;
-                if (nearby < value) minimum = false;
-                if (!maximum && !minimum) break;
-              }
-              if (!maximum && !minimum) break;
-            }
-
-            if (maximum && value >= 1017) {
-              candidates.push({ x: x, y: y, value: value, kind: "A", score: value - 1013 });
-            }
-            if (minimum && value <= 1011) {
-              candidates.push({ x: x, y: y, value: value, kind: "B", score: 1013 - value });
-            }
-          }
-        }
-
-        candidates.sort(function (first, second) {
-          return second.score - first.score;
-        });
-
-        const accepted = [];
-        const minimumDistance = 90;
-
-        candidates.forEach(function (candidate) {
-          if (accepted.length >= 8) return;
-          const tooClose = accepted.some(function (item) {
-            return Math.hypot(item.x - candidate.x, item.y - candidate.y) < minimumDistance;
-          });
-          if (!tooClose) accepted.push(candidate);
-        });
+        const accepted = detectPressureCenters(pressure, meta);
 
         data.pressureCenters = {
           type: "FeatureCollection",
@@ -2597,7 +2732,7 @@
         if (!mapLoaded || !currentData) return;
 
         const visibility = showIsobars ? "visible" : "none";
-        ["isobar-lines", "isobar-labels", "pressure-centers-label"].forEach(function (id) {
+        ["isobar-lines", "isobar-labels", "pressure-centers-label", "pressure-centers-value"].forEach(function (id) {
           if (map.getLayer(id)) map.setLayoutProperty(id, "visibility", visibility);
         });
 
@@ -2786,22 +2921,12 @@
         vectorContext.clearRect(0, 0, window.innerWidth, window.innerHeight);
       }
 
-      function vectorColor(speed) {
-        if (speed < 10) return "rgba(38,107,156,0.92)";
-        if (speed < 20) return "rgba(22,151,193,0.94)";
-        if (speed < 35) return "rgba(22,158,113,0.96)";
-        if (speed < 50) return "rgba(188,156,24,0.97)";
-        if (speed < 70) return "rgba(221,112,22,0.98)";
-        if (speed < 90) return "rgba(204,54,43,0.99)";
-        return "rgba(154,42,132,1)";
-      }
-
-      function drawArrow(startX, startY, endX, endY, color, width, headSize) {
+      function drawArrow(startX, startY, endX, endY, width, headSize) {
         const angle = Math.atan2(endY - startY, endX - startX);
 
-        vectorContext.strokeStyle = "rgba(3,22,36,0.52)";
-        vectorContext.fillStyle = "rgba(3,22,36,0.52)";
-        vectorContext.lineWidth = width + 1.6;
+        vectorContext.strokeStyle = "rgba(255,255,255,0.68)";
+        vectorContext.fillStyle = "rgba(255,255,255,0.68)";
+        vectorContext.lineWidth = width + 1.15;
         vectorContext.beginPath();
         vectorContext.moveTo(startX, startY);
         vectorContext.lineTo(endX, endY);
@@ -2813,8 +2938,8 @@
         vectorContext.closePath();
         vectorContext.fill();
 
-        vectorContext.strokeStyle = color;
-        vectorContext.fillStyle = color;
+        vectorContext.strokeStyle = "rgba(4,7,9,0.92)";
+        vectorContext.fillStyle = "rgba(4,7,9,0.92)";
         vectorContext.lineWidth = width;
         vectorContext.beginPath();
         vectorContext.moveTo(startX, startY);
@@ -2859,15 +2984,14 @@
             const norm = Math.hypot(u, v) || 1;
             const dx = u / norm;
             const dy = -v / norm;
-            const lineWidth = clamp(0.95 + speed * 0.0105, 1.1, mobile ? 2.1 : 2.45);
-            const head = clamp(4.4 + speed * 0.034, 5.4, mobile ? 8 : 9);
+            const lineWidth = clamp(0.72 + speed * 0.0045, 0.8, mobile ? 1.18 : 1.28);
+            const head = clamp(4.2 + speed * 0.018, 4.8, mobile ? 6.4 : 7);
 
             drawArrow(
               x - dx * length * 0.42,
               y - dy * length * 0.42,
               x + dx * length * 0.58,
               y + dy * length * 0.58,
-              vectorColor(speed),
               lineWidth,
               head
             );
@@ -3235,11 +3359,15 @@
             id: "isobar-lines",
             type: "line",
             source: "isobars",
-            layout: { visibility: "none" },
+            layout: {
+              visibility: "none",
+              "line-cap": "round",
+              "line-join": "round"
+            },
             paint: {
-              "line-color": "rgba(10,28,41,0.94)",
-              "line-width": ["case", ["==", ["%", ["to-number", ["get", "value"]], 4], 0], 1.65, 0.85],
-              "line-opacity": ["case", ["==", ["%", ["to-number", ["get", "value"]], 4], 0], 0.86, 0.55]
+              "line-color": "rgba(4,9,13,0.92)",
+              "line-width": ["case", ["==", ["get", "major"], true], 1.35, 0.68],
+              "line-opacity": ["case", ["==", ["get", "major"], true], 0.84, 0.5]
             }
           });
 
@@ -3247,18 +3375,23 @@
             id: "isobar-labels",
             type: "symbol",
             source: "isobars",
+            filter: ["==", ["get", "major"], true],
             layout: {
               visibility: "none",
               "symbol-placement": "line",
-              "text-field": ["concat", ["to-string", ["get", "value"]], " hPa"],
-              "text-font": ["Open Sans Regular", "Arial Unicode MS Regular"],
-              "text-size": 10,
-              "text-padding": 10
+              "symbol-spacing": 170,
+              "text-field": ["to-string", ["get", "value"]],
+              "text-font": ["Open Sans Bold", "Arial Unicode MS Bold"],
+              "text-size": 10.5,
+              "text-padding": 2,
+              "text-max-angle": 28,
+              "text-keep-upright": true,
+              "text-rotation-alignment": "map"
             },
             paint: {
-              "text-color": "#071a29",
-              "text-halo-color": "rgba(255,255,255,0.88)",
-              "text-halo-width": 1.5
+              "text-color": "#05090c",
+              "text-halo-color": "rgba(255,255,255,0.92)",
+              "text-halo-width": 1.6
             }
           });
 
@@ -3271,12 +3404,33 @@
               "text-field": ["get", "label"],
               "text-font": ["Open Sans Bold", "Arial Unicode MS Bold"],
               "text-size": ["interpolate", ["linear"], ["zoom"], 4, 24, 8, 38],
-              "text-allow-overlap": false
+              "text-allow-overlap": true,
+              "text-ignore-placement": true
             },
             paint: {
               "text-color": ["match", ["get", "kind"], "A", "#d84242", "B", "#266dc3", "#122f43"],
               "text-halo-color": "rgba(255,255,255,0.9)",
               "text-halo-width": 2.4
+            }
+          });
+
+          map.addLayer({
+            id: "pressure-centers-value",
+            type: "symbol",
+            source: "pressure-centers",
+            layout: {
+              visibility: "none",
+              "text-field": ["to-string", ["get", "value"]],
+              "text-font": ["Open Sans Bold", "Arial Unicode MS Bold"],
+              "text-size": ["interpolate", ["linear"], ["zoom"], 4, 9.5, 8, 12],
+              "text-offset": [0, 1.65],
+              "text-allow-overlap": true,
+              "text-ignore-placement": true
+            },
+            paint: {
+              "text-color": ["match", ["get", "kind"], "A", "#a92727", "B", "#174f9d", "#122f43"],
+              "text-halo-color": "rgba(255,255,255,0.94)",
+              "text-halo-width": 1.6
             }
           });
 
