@@ -1,0 +1,1714 @@
+<!doctype html>
+<html lang="it">
+  <head>
+    <meta charset="utf-8" />
+    <meta
+      name="viewport"
+      content="width=device-width,initial-scale=1,viewport-fit=cover"
+    />
+    <meta name="theme-color" content="#050a12" />
+    <title>Italia MeteoHub</title>
+    <link
+      rel="stylesheet"
+      href="https://unpkg.com/maplibre-gl@3.6.2/dist/maplibre-gl.css"
+    />
+    <script src="https://unpkg.com/maplibre-gl@3.6.2/dist/maplibre-gl.js"></script>
+    <script src="https://d3js.org/d3.v7.min.js"></script>
+    <style>
+      :root {
+        --bg: #050a12;
+        --panel: rgba(7, 13, 22, 0.88);
+        --stroke: rgba(154, 224, 255, 0.16);
+        --text: #f4f8ff;
+        --muted: #9aacbf;
+        --blue: #078bea;
+        --cyan: #42dff8;
+        --radius: 16px;
+        --safe-top: env(safe-area-inset-top, 0px);
+        --safe-bottom: env(safe-area-inset-bottom, 0px);
+      }
+      * {
+        box-sizing: border-box;
+        -webkit-tap-highlight-color: transparent;
+      }
+      html,
+      body,
+      #map {
+        width: 100%;
+        height: 100%;
+        margin: 0;
+      }
+      body {
+        overflow: hidden;
+        background: var(--bg);
+        font-family:
+          Inter,
+          system-ui,
+          -apple-system,
+          "Segoe UI",
+          sans-serif;
+        color: var(--text);
+        overscroll-behavior: none;
+      }
+      button,
+      input {
+        font: inherit;
+      }
+      button {
+        touch-action: manipulation;
+      }
+      .glass {
+        background: var(--panel);
+        border: 1px solid var(--stroke);
+        box-shadow: 0 12px 32px rgba(0, 0, 0, 0.38);
+        backdrop-filter: blur(10px) saturate(125%);
+        -webkit-backdrop-filter: blur(10px) saturate(125%);
+      }
+      #map {
+        position: fixed;
+        inset: 0;
+        background: var(--bg);
+        touch-action: none;
+        overscroll-behavior: none;
+      }
+      #particles,
+      #vectors {
+        position: fixed;
+        inset: 0;
+        width: 100%;
+        height: 100%;
+        pointer-events: none;
+      }
+      #particles {
+        z-index: 10;
+      }
+      #vectors {
+        z-index: 11;
+      }
+      .top-btn {
+        position: fixed;
+        z-index: 50;
+        top: calc(var(--safe-top) + 9px);
+        height: 36px;
+        border-radius: 999px;
+        border: 1px solid var(--stroke);
+        color: white;
+        font-size: 10px;
+        font-weight: 900;
+        letter-spacing: 0.06em;
+        background: rgba(5, 13, 23, 0.91);
+        padding: 0 12px;
+      }
+      .top-btn:active {
+        transform: scale(0.96);
+      }
+      #clean {
+        left: 50%;
+        transform: translateX(-50%);
+      }
+      #controls {
+        right: 9px;
+        background: linear-gradient(135deg, #0677d9, #00aee8);
+        border-color: rgba(178, 240, 255, 0.5);
+      }
+      #brand {
+        position: fixed;
+        z-index: 45;
+        top: calc(var(--safe-top) + 9px);
+        left: 9px;
+        width: 120px;
+        min-height: 36px;
+        border-radius: 12px;
+        padding: 10px;
+        font-size: 9px;
+        font-weight: 950;
+        letter-spacing: 0.06em;
+        white-space: nowrap;
+      }
+      .desktop-info {
+        display: none;
+      }
+      #side {
+        position: fixed;
+        z-index: 48;
+        left: 9px;
+        right: 9px;
+        bottom: calc(var(--safe-bottom) + 68px);
+        max-height: min(57dvh, 510px);
+        overflow: auto;
+        display: grid;
+        gap: 7px;
+        transform: translateY(calc(100% + 84px));
+        opacity: 0;
+        pointer-events: none;
+        transition:
+          transform 0.24s ease,
+          opacity 0.24s ease;
+        scrollbar-width: none;
+      }
+      #side.open {
+        transform: translateY(0);
+        opacity: 1;
+        pointer-events: auto;
+      }
+      #side::-webkit-scrollbar {
+        display: none;
+      }
+      .panel {
+        padding: 9px;
+        border-radius: 15px;
+      }
+      .panel h2 {
+        font-size: 8px;
+        letter-spacing: 0.1em;
+        color: var(--muted);
+        margin: 2px 5px 7px;
+        text-transform: uppercase;
+      }
+      .option,
+      .gps {
+        width: 100%;
+        min-height: 41px;
+        margin: 5px 0;
+        padding: 9px 11px;
+        border: 1px solid transparent;
+        border-radius: 11px;
+        background: rgba(255, 255, 255, 0.055);
+        color: #dbe6f3;
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        text-align: left;
+        font-size: 11.5px;
+        font-weight: 800;
+      }
+      .option .dot {
+        height: 8px;
+        width: 8px;
+        border-radius: 50%;
+        background: rgba(255, 255, 255, 0.26);
+      }
+      .option.active {
+        color: #fff;
+        background: linear-gradient(135deg, #0879dd, #00abe9);
+        border-color: rgba(166, 237, 255, 0.48);
+        box-shadow: 0 6px 15px rgba(0, 133, 225, 0.18);
+      }
+      .option.active .dot {
+        background: #fff;
+        box-shadow: 0 0 0 4px rgba(255, 255, 255, 0.17);
+      }
+      .option.disabled {
+        opacity: 0.38;
+        pointer-events: none;
+      }
+      .gps {
+        justify-content: center;
+        background: linear-gradient(135deg, #159a58, #35d777);
+        color: white;
+        border-color: rgba(255, 255, 255, 0.16);
+        font-size: 12px;
+      }
+      #legend {
+        position: fixed;
+        z-index: 40;
+        left: 9px;
+        bottom: calc(var(--safe-bottom) + 69px);
+        width: min(242px, calc(100vw - 18px));
+        padding: 9px 10px;
+        border-radius: 13px;
+        pointer-events: none;
+      }
+      .legend-head {
+        display: flex;
+        justify-content: space-between;
+        gap: 8px;
+        font-size: 9px;
+        font-weight: 900;
+      }
+      .legend-head span:last-child {
+        color: var(--muted);
+      }
+      #gradient {
+        height: 10px;
+        border: 1px solid rgba(255, 255, 255, 0.15);
+        border-radius: 99px;
+        margin-top: 7px;
+      }
+      #ticks {
+        display: flex;
+        justify-content: space-between;
+        gap: 2px;
+        font:
+          7px ui-monospace,
+          monospace;
+        color: #c5d2df;
+        margin-top: 5px;
+      }
+      #bar {
+        position: fixed;
+        z-index: 45;
+        left: 7px;
+        right: 7px;
+        bottom: calc(var(--safe-bottom) + 6px);
+        height: 55px;
+        border-radius: 17px;
+        padding: 8px 10px;
+        display: flex;
+        gap: 9px;
+        align-items: center;
+        background: rgba(5, 10, 17, 0.93);
+      }
+      #play {
+        width: 38px;
+        height: 38px;
+        flex: none;
+        border: 0;
+        border-radius: 50%;
+        color: white;
+        background: linear-gradient(135deg, #087fe5, #00afea);
+        font-size: 15px;
+      }
+      #slider {
+        min-width: 60px;
+        flex: 1;
+        accent-color: #16bde9;
+      }
+      #time {
+        width: 86px;
+        text-align: right;
+        font:
+          10px ui-monospace,
+          monospace;
+        font-weight: 800;
+        color: #e7f6ff;
+      }
+      .speed {
+        display: none;
+      }
+      #readout {
+        position: fixed;
+        z-index: 44;
+        left: 9px;
+        right: 9px;
+        bottom: calc(var(--safe-bottom) + 68px);
+        display: none;
+        max-height: 38dvh;
+        overflow: auto;
+        padding: 11px;
+        border-radius: 15px;
+      }
+      .readout-name {
+        font-size: 9px;
+        letter-spacing: 0.08em;
+        text-transform: uppercase;
+        color: var(--muted);
+        font-weight: 900;
+      }
+      .value {
+        font-size: 34px;
+        line-height: 1;
+        margin-top: 4px;
+        font-weight: 950;
+      }
+      .value small {
+        font-size: 14px;
+        color: #cddae8;
+      }
+      .coords {
+        font:
+          9px ui-monospace,
+          monospace;
+        color: var(--muted);
+        margin-top: 6px;
+      }
+      .details {
+        display: grid;
+        grid-template-columns: repeat(2, 1fr);
+        gap: 6px;
+        margin-top: 9px;
+      }
+      .detail {
+        padding: 7px;
+        border: 1px solid rgba(255, 255, 255, 0.07);
+        border-radius: 9px;
+        background: rgba(255, 255, 255, 0.05);
+      }
+      .detail b {
+        display: block;
+        font-size: 7px;
+        color: var(--muted);
+        letter-spacing: 0.05em;
+        text-transform: uppercase;
+      }
+      .detail span {
+        font-size: 11px;
+        font-weight: 850;
+      }
+      #gps-card {
+        position: fixed;
+        z-index: 70;
+        left: 9px;
+        right: 9px;
+        top: calc(var(--safe-top) + 9px);
+        padding: 34px 10px 10px;
+        border-radius: 16px;
+        display: none;
+        grid-template-columns: repeat(2, 1fr);
+        gap: 6px;
+      }
+      .gps-close {
+        position: absolute;
+        right: 12px;
+        top: 7px;
+        border: 0;
+        background: none;
+        color: #aebfd0;
+        font-size: 22px;
+      }
+      .stat {
+        padding: 7px;
+        border-radius: 9px;
+        background: rgba(255, 255, 255, 0.05);
+        text-align: center;
+      }
+      .stat b {
+        display: block;
+        color: var(--muted);
+        font-size: 7px;
+        text-transform: uppercase;
+      }
+      .stat span {
+        font-size: 14px;
+        font-weight: 950;
+      }
+      .loading {
+        position: fixed;
+        z-index: 99;
+        left: 50%;
+        top: 50%;
+        transform: translate(-50%, -50%);
+        display: none;
+        padding: 12px 16px;
+        border-radius: 13px;
+        font-weight: 850;
+        background: #07111d;
+        border: 1px solid rgba(0, 190, 255, 0.5);
+      }
+      .loading.show {
+        display: block;
+      }
+      .maplibregl-ctrl-bottom-right {
+        right: 8px !important;
+        bottom: calc(var(--safe-bottom) + 72px) !important;
+      }
+      .maplibregl-ctrl-group {
+        border-radius: 12px !important;
+        overflow: hidden;
+        border: 1px solid var(--stroke) !important;
+        box-shadow: 0 8px 24px rgba(0, 0, 0, 0.35) !important;
+      }
+      .maplibregl-ctrl-group button {
+        width: 34px !important;
+        height: 34px !important;
+        background-color: rgba(8, 12, 19, 0.92) !important;
+      }
+      .clean #side,
+      .clean #legend,
+      .clean #brand,
+      .clean #controls {
+        display: none;
+      }
+      .clean #bar {
+        opacity: 0.72;
+      }
+      @media (min-width: 921px) {
+        #brand {
+          width: 330px;
+          padding: 12px;
+          font-size: 13px;
+        }
+        .desktop-info {
+          display: block;
+          font-size: 10px;
+          color: var(--muted);
+          margin-top: 7px;
+        }
+        .top-btn {
+          top: 14px;
+        }
+        .top-btn#controls {
+          right: 14px;
+        }
+        .top-btn#clean {
+          left: auto;
+          right: 105px;
+          transform: none;
+        }
+        #side {
+          left: auto;
+          right: 14px;
+          top: 14px;
+          bottom: 95px;
+          width: 245px;
+          max-height: none;
+          transform: none;
+          opacity: 1;
+          pointer-events: auto;
+        }
+        #legend {
+          left: 18px;
+          bottom: 95px;
+          width: 340px;
+        }
+        #bar {
+          left: 14px;
+          right: 14px;
+          bottom: 12px;
+          height: 66px;
+        }
+        #time {
+          width: 155px;
+          font-size: 12px;
+        }
+        .speed {
+          display: flex;
+          gap: 4px;
+        }
+        .speed button {
+          border: 1px solid var(--stroke);
+          border-radius: 99px;
+          background: rgba(255, 255, 255, 0.07);
+          color: #d7e3ee;
+          padding: 5px 8px;
+          font-size: 10px;
+          font-weight: 800;
+        }
+        .speed button.active {
+          background: #72eafa;
+          color: #00202c;
+        }
+        .details {
+          grid-template-columns: repeat(4, 1fr);
+        }
+        #readout {
+          left: 18px;
+          right: auto;
+          bottom: 95px;
+          width: 390px;
+        }
+        .maplibregl-ctrl-bottom-right {
+          bottom: 100px !important;
+          right: 14px !important;
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <div id="map"></div>
+    <canvas id="particles"></canvas><canvas id="vectors"></canvas>
+    <div id="brand" class="glass">
+      ITALIA METEOHUB
+      <div class="desktop-info">
+        ICON-2I · Dati modellistici · <span id="run">Run n/d</span><br /><span
+          id="valid"
+          >Validità --</span
+        >
+      </div>
+    </div>
+    <button id="clean" class="top-btn" onclick="toggleClean()">
+      SOLO MAPPA</button
+    ><button id="controls" class="top-btn" onclick="toggleControls()">
+      CONTROLLI
+    </button>
+    <section id="side">
+      <div class="panel glass">
+        <button class="gps" onclick="myWeather()">📍 Il mio meteo</button>
+      </div>
+      <div class="panel glass">
+        <h2>Campi modellistici</h2>
+        <button
+          class="option active"
+          data-layer="temp"
+          onclick="setLayer('temp')"
+        >
+          Temperatura 2 m <i class="dot"></i></button
+        ><button class="option" data-layer="feels" onclick="setLayer('feels')">
+          Temperatura percepita <i class="dot"></i></button
+        ><button class="option" data-layer="wind" onclick="setLayer('wind')">
+          Vento a 10 m <i class="dot"></i></button
+        ><button class="option" data-layer="rain" onclick="setLayer('rain')">
+          Precipitazioni <i class="dot"></i></button
+        ><button class="option" data-layer="cloud" onclick="setLayer('cloud')">
+          Nuvolosità <i class="dot"></i></button
+        ><button class="option" data-layer="rh" onclick="setLayer('rh')">
+          Umidità relativa <i class="dot"></i></button
+        ><button class="option" data-layer="press" onclick="setLayer('press')">
+          Pressione al suolo <i class="dot"></i>
+        </button>
+      </div>
+      <div class="panel glass">
+        <h2>Overlay sinottici</h2>
+        <button id="flow" class="option" onclick="toggleParticles()">
+          Streamline vento <i class="dot"></i></button
+        ><button id="vectors-btn" class="option" onclick="toggleVectors()">
+          Vettori vento <i class="dot"></i></button
+        ><button id="iso" class="option" onclick="toggleIsobars()">
+          Isobare + alta/bassa <i class="dot"></i></button
+        ><button id="grid" class="option" onclick="toggleGrid()">
+          Griglia raw <i class="dot"></i>
+        </button>
+      </div>
+    </section>
+    <section id="legend" class="glass">
+      <div class="legend-head">
+        <span id="legend-name">Temperatura 2 m</span
+        ><span id="legend-unit">°C</span>
+      </div>
+      <div id="gradient"></div>
+      <div id="ticks"></div>
+    </section>
+    <section id="readout" class="glass">
+      <div class="readout-name" id="r-name">Valore puntuale</div>
+      <div class="value">
+        <span id="r-value">--</span> <small id="r-unit">--</small>
+      </div>
+      <div id="r-coords" class="coords">--</div>
+      <div class="details">
+        <div class="detail"><b>Temperatura</b><span id="d-temp">--</span></div>
+        <div class="detail"><b>Percepita</b><span id="d-feels">--</span></div>
+        <div class="detail"><b>Pioggia</b><span id="d-rain">--</span></div>
+        <div class="detail"><b>Vento</b><span id="d-wind">--</span></div>
+        <div class="detail"><b>Direzione</b><span id="d-dir">--</span></div>
+        <div class="detail"><b>Umidità</b><span id="d-rh">--</span></div>
+        <div class="detail"><b>Nuvolosità</b><span id="d-cloud">--</span></div>
+        <div class="detail"><b>Pressione</b><span id="d-press">--</span></div>
+      </div>
+    </section>
+    <section id="gps-card" class="glass">
+      <button class="gps-close" onclick="closeGps()">×</button>
+      <div class="stat"><b>Temp.</b><span id="g-temp">--</span></div>
+      <div class="stat"><b>Percepita</b><span id="g-feels">--</span></div>
+      <div class="stat"><b>Pioggia</b><span id="g-rain">--</span></div>
+      <div class="stat"><b>Vento</b><span id="g-wind">--</span></div>
+      <div class="stat"><b>Direzione</b><span id="g-dir">--</span></div>
+      <div class="stat"><b>Pressione</b><span id="g-press">--</span></div>
+    </section>
+    <section id="bar" class="glass">
+      <button id="play" onclick="togglePlay()">▶</button
+      ><input id="slider" type="range" min="0" max="0" value="0" />
+      <div class="speed">
+        <button class="active" onclick="speed(1150,this)">1×</button
+        ><button onclick="speed(650,this)">2×</button
+        ><button onclick="speed(350,this)">4×</button>
+      </div>
+      <div id="time">--</div>
+    </section>
+    <div id="loading" class="loading">Elaborazione dati…</div>
+    <script>
+      const TEMP_STOPS = [
+        { v: -75, c: [31, 235, 243] },
+        { v: -65, c: [37, 210, 233] },
+        { v: -55, c: [42, 160, 185] },
+        { v: -45, c: [49, 112, 143] },
+        { v: -35, c: [59, 57, 103] },
+        { v: -30, c: [115, 62, 141] },
+        { v: -26, c: [157, 56, 150] },
+        { v: -22, c: [202, 47, 201] },
+        { v: -18, c: [101, 76, 222] },
+        { v: -14, c: [70, 101, 210] },
+        { v: -10, c: [80, 142, 224] },
+        { v: -6, c: [100, 181, 232] },
+        { v: -2, c: [153, 223, 238] },
+        { v: 2, c: [35, 237, 148] },
+        { v: 6, c: [49, 198, 151] },
+        { v: 10, c: [69, 157, 110] },
+        { v: 14, c: [111, 183, 81] },
+        { v: 18, c: [207, 237, 131] },
+        { v: 22, c: [255, 244, 104] },
+        { v: 26, c: [255, 205, 62] },
+        { v: 30, c: [255, 157, 43] },
+        { v: 33, c: [255, 105, 54] },
+        { v: 36, c: [243, 65, 83] },
+        { v: 39, c: [224, 52, 128] },
+        { v: 42, c: [239, 65, 194] },
+        { v: 46, c: [164, 41, 96] },
+      ];
+      const WIND = [
+        { v: 0, c: [30, 37, 48], a: 0.55 },
+        { v: 10, c: [0, 100, 165] },
+        { v: 25, c: [0, 180, 150] },
+        { v: 45, c: [210, 205, 40] },
+        { v: 70, c: [220, 125, 0] },
+        { v: 100, c: [180, 0, 42] },
+        { v: 130, c: [115, 0, 150] },
+      ];
+      const RAIN = [
+        { v: 0, c: [0, 0, 0], a: 0 },
+        { v: 0.1, c: [125, 205, 255], a: 0.58 },
+        { v: 1, c: [50, 150, 255] },
+        { v: 2, c: [0, 85, 220] },
+        { v: 5, c: [0, 170, 100] },
+        { v: 10, c: [255, 230, 0] },
+        { v: 20, c: [255, 125, 0] },
+        { v: 40, c: [225, 0, 75] },
+        { v: 80, c: [160, 0, 210] },
+      ];
+      const CLOUD = [
+        { v: 0, c: [255, 255, 255], a: 0 },
+        { v: 15, c: [185, 195, 210], a: 0.28 },
+        { v: 50, c: [155, 165, 185], a: 0.55 },
+        { v: 85, c: [120, 130, 155], a: 0.75 },
+        { v: 100, c: [90, 100, 125], a: 0.86 },
+      ];
+      const RH = [
+        { v: 0, c: [150, 78, 36] },
+        { v: 35, c: [190, 170, 72] },
+        { v: 65, c: [72, 170, 175] },
+        { v: 85, c: [55, 100, 190] },
+        { v: 100, c: [70, 42, 155] },
+      ];
+      const PRESS = [
+        { v: 980, c: [0, 85, 150] },
+        { v: 995, c: [70, 145, 190] },
+        { v: 1013, c: [220, 220, 220] },
+        { v: 1025, c: [215, 155, 70] },
+        { v: 1040, c: [155, 80, 35] },
+      ];
+      const INFO = {
+        temp: {
+          label: "Temperatura 2 m",
+          unit: "°C",
+          stops: TEMP_STOPS,
+          dec: 1,
+          step: true,
+          ticks: [-20, -10, 0, 10, 18, 22, 26, 30, 33, 36, 39, 42, 46],
+        },
+        feels: {
+          label: "Temperatura percepita",
+          unit: "°C",
+          stops: TEMP_STOPS,
+          dec: 1,
+          step: true,
+          ticks: [-20, -10, 0, 10, 18, 22, 26, 30, 33, 36, 39, 42, 46],
+        },
+        wind: {
+          label: "Vento a 10 m",
+          unit: "km/h",
+          stops: WIND,
+          dec: 0,
+          ticks: [0, 10, 25, 45, 70, 100, 130],
+        },
+        rain: {
+          label: "Precipitazioni",
+          unit: "mm",
+          stops: RAIN,
+          dec: 1,
+          ticks: [0.1, 1, 5, 10, 20, 40, 80],
+        },
+        cloud: {
+          label: "Nuvolosità",
+          unit: "%",
+          stops: CLOUD,
+          dec: 0,
+          ticks: [0, 25, 50, 75, 100],
+        },
+        rh: {
+          label: "Umidità relativa",
+          unit: "%",
+          stops: RH,
+          dec: 0,
+          ticks: [0, 40, 60, 80, 100],
+        },
+        press: {
+          label: "Pressione al suolo",
+          unit: "hPa",
+          stops: PRESS,
+          dec: 0,
+          ticks: [980, 995, 1013, 1025, 1040],
+        },
+      };
+      let map,
+        catalog = [],
+        data,
+        current = 0,
+        layer = "temp",
+        playing = false,
+        delay = 1150,
+        raw = false,
+        showFlow = false,
+        showVectors = false,
+        showIso = false,
+        loadId = 0,
+        raf = null,
+        last = 0,
+        particles = [];
+      const cache = new Map(),
+        LIMIT = 5;
+      const raster = document.createElement("canvas"),
+        rctx = raster.getContext("2d");
+      const pc = document.getElementById("particles"),
+        pctx = pc.getContext("2d"),
+        vc = document.getElementById("vectors"),
+        vctx = vc.getContext("2d");
+      const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
+      const grid = (x) => x?.data || x;
+      const rgba = (c, a = 1) => `rgba(${c[0]},${c[1]},${c[2]},${a})`;
+      function colour(v, stops, step = false) {
+        if (!Number.isFinite(v)) return [0, 0, 0, 0];
+        if (step) {
+          let s = stops[0];
+          for (const x of stops) {
+            if (v >= x.v) s = x;
+            else break;
+          }
+          return [...s.c, s.a ?? 0.92];
+        }
+        if (v <= stops[0].v) return [...stops[0].c, stops[0].a ?? 0.86];
+        for (let i = 0; i < stops.length - 1; i++) {
+          let a = stops[i],
+            b = stops[i + 1];
+          if (v <= b.v) {
+            let t = (v - a.v) / (b.v - a.v);
+            return [
+              a.c[0] * (1 - t) + b.c[0] * t,
+              a.c[1] * (1 - t) + b.c[1] * t,
+              a.c[2] * (1 - t) + b.c[2] * t,
+              (a.a ?? 0.86) * (1 - t) + (b.a ?? 0.86) * t,
+            ];
+          }
+        }
+        return [...stops.at(-1).c, stops.at(-1).a ?? 0.86];
+      }
+      function bilinear(a, x, y, nx, ny) {
+        a = grid(a);
+        if (!a) return NaN;
+        let px = clamp(x, 0, nx - 1),
+          py = clamp(y, 0, ny - 1),
+          ix = clamp(Math.floor(px), 0, nx - 2),
+          iy = clamp(Math.floor(py), 0, ny - 2),
+          fx = px - ix,
+          fy = py - iy,
+          i = iy * nx + ix;
+        return (
+          a[i] * (1 - fx) * (1 - fy) +
+          a[i + 1] * fx * (1 - fy) +
+          a[i + nx] * (1 - fx) * fy +
+          a[i + nx + 1] * fx * fy
+        );
+      }
+      function nearest(a, x, y, nx, ny) {
+        a = grid(a);
+        return (
+          a?.[
+            clamp(Math.round(y), 0, ny - 1) * nx +
+              clamp(Math.round(x), 0, nx - 1)
+          ] ?? NaN
+        );
+      }
+      function sample(a, x, y) {
+        let m = data.meta;
+        return (raw ? nearest : bilinear)(a, x, y, m.nx, m.ny);
+      }
+      function field(k, x, y) {
+        if (!data) return NaN;
+        if (k === "wind") {
+          let u = sample(data.wind_u, x, y),
+            v = sample(data.wind_v, x, y);
+          return Math.hypot(u, v) * 3.6;
+        }
+        return sample(data[k === "feels" ? "feels_like" : k], x, y);
+      }
+      function uv(x, y) {
+        return { u: sample(data.wind_u, x, y), v: sample(data.wind_v, x, y) };
+      }
+      function windDir(u, v) {
+        return Number.isFinite(u) && Number.isFinite(v)
+          ? ((Math.atan2(u, v) * 180) / Math.PI + 540) % 360
+          : NaN;
+      }
+      function compass(d) {
+        return Number.isFinite(d)
+          ? [
+              "N",
+              "NNE",
+              "NE",
+              "ENE",
+              "E",
+              "ESE",
+              "SE",
+              "SSE",
+              "S",
+              "SSW",
+              "SW",
+              "WSW",
+              "W",
+              "WNW",
+              "NW",
+              "NNW",
+            ][Math.round(d / 22.5) % 16]
+          : "--";
+      }
+      function fmt(v, n, u) {
+        return Number.isFinite(v) ? `${v.toFixed(n)} ${u}` : "--";
+      }
+      function resize() {
+        let dpr = Math.min(devicePixelRatio || 1, innerWidth < 921 ? 1.5 : 2);
+        for (const [c, x] of [
+          [pc, pctx],
+          [vc, vctx],
+        ]) {
+          c.width = innerWidth * dpr;
+          c.height = innerHeight * dpr;
+          x.setTransform(dpr, 0, 0, dpr, 0, 0);
+        }
+        particles = [];
+        drawVectors();
+      }
+      window.addEventListener("resize", () => {
+        resize();
+        setTimeout(() => map?.resize(), 80);
+      });
+      function setupMap() {
+        map = new maplibregl.Map({
+          container: "map",
+          bounds: [
+            [6, 35],
+            [19.5, 47.5],
+          ],
+          dragPan: true,
+          scrollZoom: true,
+          doubleClickZoom: true,
+          touchZoomRotate: true,
+          dragRotate: false,
+          pitchWithRotate: false,
+          antialias: false,
+          style: {
+            version: 8,
+            sources: {
+              base: {
+                type: "raster",
+                tiles: [
+                  "https://a.basemaps.cartocdn.com/dark_nolabels/{z}/{x}/{y}.png",
+                  "https://b.basemaps.cartocdn.com/dark_nolabels/{z}/{x}/{y}.png",
+                  "https://c.basemaps.cartocdn.com/dark_nolabels/{z}/{x}/{y}.png",
+                ],
+                tileSize: 256,
+                attribution: "© CARTO © OpenStreetMap",
+              },
+              labels: {
+                type: "raster",
+                tiles: [
+                  "https://a.basemaps.cartocdn.com/dark_only_labels/{z}/{x}/{y}.png",
+                  "https://b.basemaps.cartocdn.com/dark_only_labels/{z}/{x}/{y}.png",
+                ],
+                tileSize: 256,
+              },
+              relief: {
+                type: "raster",
+                tiles: [
+                  "https://services.arcgisonline.com/ArcGIS/rest/services/Elevation/World_Hillshade/MapServer/tile/{z}/{y}/{x}",
+                ],
+                tileSize: 256,
+              },
+            },
+            layers: [
+              {
+                id: "bg",
+                type: "background",
+                paint: { "background-color": "#050a12" },
+              },
+              {
+                id: "base",
+                type: "raster",
+                source: "base",
+                paint: {
+                  "raster-opacity": 0.75,
+                  "raster-saturation": -0.5,
+                  "raster-contrast": 0.18,
+                },
+              },
+              {
+                id: "relief",
+                type: "raster",
+                source: "relief",
+                paint: {
+                  "raster-opacity": 0.24,
+                  "raster-saturation": -1,
+                  "raster-contrast": 0.35,
+                },
+              },
+            ],
+          },
+        });
+        map.addControl(
+          new maplibregl.NavigationControl({ visualizePitch: false }),
+          "bottom-right",
+        );
+        map.dragPan.enable();
+        map.scrollZoom.enable();
+        map.doubleClickZoom.enable();
+        map.touchZoomRotate.enable();
+        map.touchZoomRotate.disableRotation();
+        map.on("load", async () => {
+          map.addSource("weather", {
+            type: "image",
+            url: "data:image/gif;base64,R0lGODlhAQABAAD/ACwAAAAAAQABAAACADs=",
+            coordinates: [
+              [0, 0],
+              [0, 0],
+              [0, 0],
+              [0, 0],
+            ],
+          });
+          map.addLayer({
+            id: "weather",
+            type: "raster",
+            source: "weather",
+            paint: {
+              "raster-opacity": 0.92,
+              "raster-resampling": "linear",
+              "raster-fade-duration": 0,
+            },
+          });
+          map.addLayer({
+            id: "labels",
+            type: "raster",
+            source: "labels",
+            paint: { "raster-opacity": 0.58 },
+          });
+          map.addSource("iso", {
+            type: "geojson",
+            data: { type: "FeatureCollection", features: [] },
+          });
+          map.addSource("centres", {
+            type: "geojson",
+            data: { type: "FeatureCollection", features: [] },
+          });
+          map.addLayer({
+            id: "iso-line",
+            type: "line",
+            source: "iso",
+            layout: { visibility: "none" },
+            paint: {
+              "line-color": "#fff",
+              "line-width": 1.1,
+              "line-opacity": 0.7,
+            },
+          });
+          map.addLayer({
+            id: "iso-label",
+            type: "symbol",
+            source: "iso",
+            layout: {
+              visibility: "none",
+              "symbol-placement": "line",
+              "text-field": ["concat", ["to-string", ["get", "value"]], " hPa"],
+              "text-size": 10,
+            },
+            paint: {
+              "text-color": "#fff",
+              "text-halo-color": "#000",
+              "text-halo-width": 1.5,
+            },
+          });
+          map.addLayer({
+            id: "centres-label",
+            type: "symbol",
+            source: "centres",
+            layout: {
+              visibility: "none",
+              "text-field": ["get", "label"],
+              "text-size": 32,
+            },
+            paint: {
+              "text-color": [
+                "match",
+                ["get", "kind"],
+                "A",
+                "#ff5656",
+                "B",
+                "#55aaff",
+                "#fff",
+              ],
+              "text-halo-color": "#000",
+              "text-halo-width": 2.5,
+            },
+          });
+          map.on("click", readPoint);
+          map.on("move", () => {
+            pctx.clearRect(0, 0, innerWidth, innerHeight);
+            vctx.clearRect(0, 0, innerWidth, innerHeight);
+          });
+          map.on("moveend", () => {
+            particles = [];
+            drawVectors();
+          });
+          await loadCatalog();
+        });
+      }
+      map.on("load", () => {
+        map.addLayer(
+          {
+            id: "terrain-detail",
+            type: "raster",
+            source: "relief",
+            paint: {
+              "raster-opacity": 0.58,
+              "raster-saturation": -1,
+              "raster-contrast": 0.78,
+              "raster-brightness-min": 0,
+              "raster-brightness-max": 0.3,
+            },
+          },
+          "labels",
+        );
+        setWeatherOpacity();
+      });
+      function catalogDate(x) {
+        let m = x?.label?.match(/(\d{1,2})\/(\d{1,2})\s+(\d{1,2}):(\d{2})/);
+        if (!m) return null;
+        let n = new Date();
+        return new Date(n.getFullYear(), m[2] - 1, m[1], m[3], m[4]);
+      }
+      function label(i) {
+        let d = catalogDate(catalog[i]),
+          n = new Date();
+        if (!d) return catalog[i]?.label || "--";
+        let day =
+          d.toDateString() === n.toDateString()
+            ? "Oggi"
+            : d.toDateString() === new Date(n - 864e5).toDateString()
+              ? "Ieri"
+              : d.toLocaleDateString("it-IT", {
+                  weekday: "short",
+                  day: "2-digit",
+                  month: "2-digit",
+                });
+        return `${day} · ${d.toLocaleTimeString("it-IT", { hour: "2-digit", minute: "2-digit" })}`;
+      }
+      async function loadCatalog() {
+        try {
+          let r = await fetch(`data_weather/catalog.json?t=${Date.now()}`);
+          catalog = await r.json();
+          slider.max = Math.max(0, catalog.length - 1);
+          slider.oninput = (e) => loadStep(+e.target.value);
+          let best = 0,
+            min = Infinity;
+          catalog.forEach((x, i) => {
+            let d = catalogDate(x);
+            if (d && Math.abs(Date.now() - d) < min) {
+              min = Math.abs(Date.now() - d);
+              best = i;
+            }
+          });
+          slider.value = best;
+          await loadStep(best);
+        } catch (e) {
+          console.error(e);
+          toast("Errore caricamento catalogo");
+        }
+      }
+      async function loadStep(i) {
+        if (!catalog[i]) return;
+        let id = ++loadId;
+        loading.classList.add("show");
+        try {
+          let x = cache.get(i);
+          if (!x) {
+            let r = await fetch(`data_weather/${catalog[i].file}`);
+            if (!r.ok) throw Error("Dati non disponibili");
+            x = await r.json();
+            prepare(x);
+            cache.set(i, x);
+            while (cache.size > LIMIT) cache.delete(cache.keys().next().value);
+          }
+          if (id !== loadId) return;
+          data = x;
+          current = i;
+          updateTime();
+          renderWeather();
+          updateIso();
+          buttons();
+          legend();
+          drawVectors();
+          particles = [];
+          prefetch(i + 1);
+          prefetch(i - 1);
+        } catch (e) {
+          console.error(e);
+          toast("Errore caricamento dati");
+        } finally {
+          if (id === loadId) loading.classList.remove("show");
+        }
+      }
+      function prefetch(i) {
+        if (!catalog[i] || cache.has(i)) return;
+        fetch(`data_weather/${catalog[i].file}`)
+          .then((r) => r.json())
+          .then((x) => {
+            prepare(x);
+            cache.set(i, x);
+            while (cache.size > LIMIT) cache.delete(cache.keys().next().value);
+          })
+          .catch(() => {});
+      }
+      function prepare(x) {
+        let m = x.meta,
+          t = grid(x.temp),
+          h = grid(x.rh),
+          u = grid(x.wind_u),
+          v = grid(x.wind_v);
+        if (t && h && u && v) {
+          x.feels_like = new Float32Array(m.nx * m.ny);
+          for (let i = 0; i < x.feels_like.length; i++) {
+            let e =
+              (clamp(h[i], 0, 100) / 100) *
+              6.105 *
+              Math.exp((17.27 * t[i]) / (237.7 + t[i]));
+            x.feels_like[i] =
+              t[i] + 0.33 * e - 0.7 * Math.hypot(u[i], v[i]) - 4;
+          }
+        }
+      }
+      function updateTime() {
+        let x = catalog[current],
+          d = catalogDate(x),
+          f = catalogDate(catalog[0]);
+        time.textContent = label(current);
+        valid.textContent = `Validità ${x.label || "--"}`;
+        run.textContent = `Run ${x.run || x.model_run || x.init || "n/d"}`;
+        if (d && f) valid.textContent += ` · +${Math.round((d - f) / 36e5)}h`;
+      }
+      function renderWeather() {
+        if (!data || !map.getSource("weather")) return;
+        let m = data.meta,
+          info = INFO[layer];
+        raster.width = m.nx;
+        raster.height = m.ny;
+        let im = rctx.createImageData(m.nx, m.ny),
+          out = im.data,
+          top = m.la1 + m.dy / 2,
+          bottom = m.la1 - (m.ny - 1) * m.dy - m.dy / 2,
+          left = m.lo1 - m.dx / 2,
+          right = m.lo1 + (m.nx - 1) * m.dx + m.dx / 2,
+          yTop = Math.log(Math.tan(Math.PI / 4 + (top * Math.PI) / 360)),
+          yBottom = Math.log(Math.tan(Math.PI / 4 + (bottom * Math.PI) / 360));
+        for (let y = 0; y < m.ny; y++) {
+          let lat =
+              ((2 *
+                Math.atan(
+                  Math.exp(yTop + (y / (m.ny - 1)) * (yBottom - yTop)),
+                ) -
+                Math.PI / 2) *
+                180) /
+              Math.PI,
+            gy = (m.la1 - lat) / m.dy;
+          for (let x = 0; x < m.nx; x++) {
+            let v = field(layer, x, gy),
+              p = (y * m.nx + x) * 4;
+            if (
+              !Number.isFinite(v) ||
+              (layer === "rain" && v < 0.08) ||
+              (layer === "cloud" && v < 5)
+            )
+              continue;
+            let c = colour(v, info.stops, info.step);
+            out[p] = c[0];
+            out[p + 1] = c[1];
+            out[p + 2] = c[2];
+            out[p + 3] = Math.round(c[3] * 255);
+          }
+        }
+        rctx.putImageData(im, 0, 0);
+        map.setPaintProperty(
+          "weather",
+          "raster-resampling",
+          raw ? "nearest" : "linear",
+        );
+        map.getSource("weather").updateImage({
+          url: raster.toDataURL("image/png"),
+          coordinates: [
+            [left, top],
+            [right, top],
+            [right, bottom],
+            [left, bottom],
+          ],
+        });
+      }
+      function setWeatherOpacity() {
+        const opacity = {
+          temp: 0.8,
+          feels: 0.8,
+          wind: 0.73,
+          rain: 0.84,
+          cloud: 0.62,
+          rh: 0.74,
+          press: 0.66,
+        };
+        if (map?.getLayer("weather"))
+          map.setPaintProperty(
+            "weather",
+            "raster-opacity",
+            opacity[layer] ?? 0.8,
+          );
+      }
+      function legend() {
+        let x = INFO[layer],
+          s = x.stops,
+          min = s[0].v,
+          max = s.at(-1).v;
+        legendName.textContent = x.label;
+        legendUnit.textContent = x.unit;
+        let p = [];
+        if (x.step) {
+          s.forEach((q, i) => {
+            let a = ((q.v - min) / (max - min)) * 100,
+              b = (((s[i + 1]?.v ?? max) - min) / (max - min)) * 100,
+              c = rgba(q.c, 1);
+            p.push(`${c} ${a}%`, `${c} ${b}%`);
+          });
+        } else
+          p = s.map(
+            (q) =>
+              `${rgba(q.c, Math.max(q.a ?? 1, 0.94))} ${((q.v - min) / (max - min)) * 100}%`,
+          );
+        gradient.style.background = `linear-gradient(to right,${p.join(",")})`;
+        ticks.innerHTML = x.ticks.map((v) => `<span>${v}</span>`).join("");
+      }
+      function buttons() {
+        document
+          .querySelectorAll("[data-layer]")
+          .forEach((b) =>
+            b.classList.toggle("active", b.dataset.layer === layer),
+          );
+        flow.classList.toggle("active", showFlow);
+        vectorsBtn.classList.toggle("active", showVectors);
+        iso.classList.toggle("active", showIso);
+        rawButton.classList.toggle("active", raw);
+      }
+      function setLayer(x) {
+        layer = x;
+        if (x === "wind") {
+          showFlow = true;
+          showVectors = true;
+          startFlow();
+        }
+        if (x === "press") showIso = true;
+        renderWeather();
+        updateIso();
+        buttons();
+        legend();
+        drawVectors();
+        closeControls();
+      }
+      function contours() {
+        if (data.iso) return;
+        let m = data.meta,
+          p = grid(data.press);
+        if (!p) {
+          data.iso = { type: "FeatureCollection", features: [] };
+          return;
+        }
+        let c = d3
+          .contours()
+          .size([m.nx, m.ny])
+          .thresholds(d3.range(960, 1052, 2))(p);
+        data.iso = {
+          type: "FeatureCollection",
+          features: c.map((q) => ({
+            type: "Feature",
+            properties: { value: q.value },
+            geometry: {
+              type: q.type,
+              coordinates: q.coordinates.map((a) =>
+                a.map((b) =>
+                  b.map((z) => [m.lo1 + z[0] * m.dx, m.la1 - z[1] * m.dy]),
+                ),
+              ),
+            },
+          })),
+        };
+        let candidates = [];
+        for (let y = 25; y < m.ny - 25; y += 30)
+          for (let x = 25; x < m.nx - 25; x += 30) {
+            let v = p[y * m.nx + x],
+              hi = true,
+              lo = true;
+            for (let yy = -20; yy <= 20; yy += 10)
+              for (let xx = -20; xx <= 20; xx += 10) {
+                let z = p[(y + yy) * m.nx + x + xx];
+                if (z > v) hi = false;
+                if (z < v) lo = false;
+              }
+            if (hi && v >= 1017) candidates.push({ x, y, v, kind: "A" });
+            if (lo && v <= 1011) candidates.push({ x, y, v, kind: "B" });
+          }
+        candidates.sort((a, b) => Math.abs(b.v - 1013) - Math.abs(a.v - 1013));
+        let ok = [];
+        for (let q of candidates) {
+          if (!ok.some((z) => Math.hypot(q.x - z.x, q.y - z.y) < 90))
+            ok.push(q);
+          if (ok.length === 8) break;
+        }
+        data.centres = {
+          type: "FeatureCollection",
+          features: ok.map((q) => ({
+            type: "Feature",
+            properties: { kind: q.kind, label: q.kind },
+            geometry: {
+              type: "Point",
+              coordinates: [m.lo1 + q.x * m.dx, m.la1 - q.y * m.dy],
+            },
+          })),
+        };
+      }
+      function updateIso() {
+        if (!map || !data) return;
+        let v = showIso ? "visible" : "none";
+        ["iso-line", "iso-label", "centres-label"].forEach((x) =>
+          map.setLayoutProperty(x, "visibility", v),
+        );
+        if (showIso) {
+          contours();
+          map.getSource("iso").setData(data.iso);
+          map.getSource("centres").setData(data.centres);
+        }
+      }
+      function toggleIsobars() {
+        showIso = !showIso;
+        updateIso();
+        buttons();
+        closeControls();
+      }
+      function toggleGrid() {
+        raw = !raw;
+        renderWeather();
+        buttons();
+        closeControls();
+      }
+      function makeParticle() {
+        let b = map.getBounds(),
+          m = data.meta,
+          w = Math.max(b.getWest(), m.lo1),
+          e = Math.min(b.getEast(), m.lo1 + m.nx * m.dx),
+          s = Math.max(b.getSouth(), m.la1 - m.ny * m.dy),
+          n = Math.min(b.getNorth(), m.la1);
+        return {
+          lng: w + Math.random() * (e - w),
+          lat: s + Math.random() * (n - s),
+          age: Math.random() * 80,
+          life: 48 + Math.random() * 60,
+        };
+      }
+      function startFlow() {
+        if (!raf && showFlow) raf = requestAnimationFrame(flowFrame);
+      }
+      function toggleParticles() {
+        showFlow = !showFlow;
+        if (showFlow) startFlow();
+        else {
+          cancelAnimationFrame(raf);
+          raf = null;
+          pctx.clearRect(0, 0, innerWidth, innerHeight);
+        }
+        buttons();
+        closeControls();
+      }
+      function flowFrame(t) {
+        if (!showFlow || !data) {
+          raf = null;
+          return;
+        }
+        if (t - last < 1000 / 24) {
+          raf = requestAnimationFrame(flowFrame);
+          return;
+        }
+        let dt = clamp((t - last || 0.03) / 1000, 0.01, 0.07);
+        last = t;
+        let target = clamp(
+          Math.round((innerWidth * innerHeight) / 1200),
+          280,
+          650,
+        );
+        while (particles.length < target) particles.push(makeParticle());
+        particles.length = target;
+        pctx.globalCompositeOperation = "destination-in";
+        pctx.fillStyle = "rgba(0,0,0,.84)";
+        pctx.fillRect(0, 0, innerWidth, innerHeight);
+        pctx.globalCompositeOperation = "lighter";
+        pctx.lineCap = "round";
+        let buckets = {};
+        for (let p of particles) {
+          if (++p.age > p.life) {
+            Object.assign(p, makeParticle());
+            continue;
+          }
+          let m = data.meta,
+            x = (p.lng - m.lo1) / m.dx,
+            y = (m.la1 - p.lat) / m.dy,
+            u = sample(data.wind_u, x, y),
+            v = sample(data.wind_v, x, y),
+            k = Math.hypot(u, v) * 3.6;
+          if (!Number.isFinite(k) || k < 2) {
+            p.age = p.life;
+            continue;
+          }
+          let a = map.project([p.lng, p.lat]),
+            mult = 5900 * clamp(2 ** (6 - map.getZoom()), 0.25, 3),
+            oldLng = p.lng;
+          p.lng +=
+            (u * dt * mult) /
+            (111320 * Math.max(Math.cos((p.lat * Math.PI) / 180), 0.25));
+          p.lat += (v * dt * mult) / 111320;
+          let b = map.project([p.lng, p.lat]);
+          if (Math.hypot(a.x - b.x, a.y - b.y) < 0.2) continue;
+          let color =
+              k < 10
+                ? "rgba(150,210,255,.72)"
+                : k < 25
+                  ? "rgba(85,235,255,.82)"
+                  : k < 40
+                    ? "rgba(85,255,205,.9)"
+                    : k < 60
+                      ? "rgba(245,255,95,.94)"
+                      : k < 80
+                        ? "rgba(255,185,55,.97)"
+                        : k < 105
+                          ? "rgba(255,80,80,1)"
+                          : "rgba(230,95,255,1)",
+            width = k < 25 ? 1.25 : k < 55 ? 1.8 : k < 80 ? 2.4 : 3;
+          let z = (buckets[color + "|" + width] ??= []);
+          z.push([a.x, a.y, b.x, b.y]);
+          buckets[color + "|" + width] = z;
+        }
+        for (let k in buckets) {
+          let [color, w] = k.split("|");
+          pctx.beginPath();
+          pctx.strokeStyle = color;
+          pctx.lineWidth = +w;
+          for (let l of buckets[k]) {
+            pctx.moveTo(l[0], l[1]);
+            pctx.lineTo(l[2], l[3]);
+          }
+          pctx.stroke();
+        }
+        raf = requestAnimationFrame(flowFrame);
+      }
+      function arrow(a, b, c, d, col, w, h) {
+        let q = Math.atan2(d - b, c - a);
+        vctx.strokeStyle = "rgba(255,255,255,.42)";
+        vctx.fillStyle = "rgba(255,255,255,.42)";
+        vctx.lineWidth = w + 1;
+        vctx.beginPath();
+        vctx.moveTo(a, b);
+        vctx.lineTo(c, d);
+        vctx.stroke();
+        vctx.beginPath();
+        vctx.moveTo(c, d);
+        vctx.lineTo(c - Math.cos(q - 0.45) * h, d - Math.sin(q - 0.45) * h);
+        vctx.lineTo(c - Math.cos(q + 0.45) * h, d - Math.sin(q + 0.45) * h);
+        vctx.fill();
+        vctx.strokeStyle = col;
+        vctx.fillStyle = col;
+        vctx.lineWidth = w;
+        vctx.beginPath();
+        vctx.moveTo(a, b);
+        vctx.lineTo(c, d);
+        vctx.stroke();
+        vctx.beginPath();
+        vctx.moveTo(c, d);
+        vctx.lineTo(c - Math.cos(q - 0.45) * h, d - Math.sin(q - 0.45) * h);
+        vctx.lineTo(c - Math.cos(q + 0.45) * h, d - Math.sin(q + 0.45) * h);
+        vctx.fill();
+      }
+      function drawVectors() {
+        vctx.clearRect(0, 0, innerWidth, innerHeight);
+        if (!showVectors || !data || !map) return;
+        let spacing = innerWidth < 921 ? 66 : 80,
+          m = data.meta;
+        for (let sy = 55; sy < innerHeight - 55; sy += spacing)
+          for (let sx = 35; sx < innerWidth - 35; sx += spacing) {
+            let ll = map.unproject([sx, sy]),
+              x = (ll.lng - m.lo1) / m.dx,
+              y = (m.la1 - ll.lat) / m.dy,
+              u = sample(data.wind_u, x, y),
+              v = sample(data.wind_v, x, y),
+              k = Math.hypot(u, v) * 3.6;
+            if (!Number.isFinite(k) || k < 2) continue;
+            let len = clamp(13 + k * 0.36, 16, 42),
+              n = Math.hypot(u, v) || 1,
+              dx = u / n,
+              dy = -v / n,
+              col =
+                k < 25
+                  ? "rgba(35,120,160,.9)"
+                  : k < 60
+                    ? "rgba(25,165,115,.95)"
+                    : k < 80
+                      ? "rgba(205,155,35,.98)"
+                      : "rgba(210,55,55,1)";
+            arrow(
+              sx - dx * len * 0.43,
+              sy - dy * len * 0.43,
+              sx + dx * len * 0.57,
+              sy + dy * len * 0.57,
+              col,
+              clamp(1 + k * 0.01, 1, 2.2),
+              clamp(5 + k * 0.03, 5, 8),
+            );
+          }
+      }
+      function toggleVectors() {
+        showVectors = !showVectors;
+        drawVectors();
+        buttons();
+        closeControls();
+      }
+      function readPoint(e) {
+        if (!data) return;
+        let m = data.meta,
+          x = (e.lngLat.lng - m.lo1) / m.dx,
+          y = (m.la1 - e.lngLat.lat) / m.dy;
+        if (x < 0 || y < 0 || x >= m.nx || y >= m.ny) return;
+        let i = INFO[layer],
+          v = field(layer, x, y),
+          w = uv(x, y),
+          d = windDir(w.u, w.v);
+        readout.style.display = "block";
+        rName.textContent = i.label;
+        rValue.textContent = Number.isFinite(v) ? v.toFixed(i.dec) : "--";
+        rUnit.textContent = i.unit;
+        rCoords.textContent = `${e.lngLat.lat.toFixed(3)}°, ${e.lngLat.lng.toFixed(3)}° · ${raw ? "cella modello" : "interpolazione bilineare"}`;
+        dTemp.textContent = fmt(field("temp", x, y), 1, "°C");
+        dFeels.textContent = fmt(field("feels", x, y), 1, "°C");
+        dRain.textContent = fmt(field("rain", x, y), 1, "mm");
+        dWind.textContent = fmt(field("wind", x, y), 0, "km/h");
+        dDir.textContent = Number.isFinite(d)
+          ? `${Math.round(d)}° ${compass(d)}`
+          : "--";
+        dRh.textContent = fmt(field("rh", x, y), 0, "%");
+        dCloud.textContent = fmt(field("cloud", x, y), 0, "%");
+        dPress.textContent = fmt(field("press", x, y), 0, "hPa");
+      }
+      function toggleControls() {
+        side.classList.toggle("open");
+      }
+      function closeControls() {
+        if (innerWidth < 921) side.classList.remove("open");
+      }
+      function toggleClean() {
+        document.body.classList.toggle("clean");
+        clean.textContent = document.body.classList.contains("clean")
+          ? "MOSTRA UI"
+          : "SOLO MAPPA";
+      }
+      function speed(x, b) {
+        delay = x;
+        document
+          .querySelectorAll(".speed button")
+          .forEach((q) => q.classList.remove("active"));
+        b.classList.add("active");
+      }
+      function togglePlay() {
+        playing = !playing;
+        play.textContent = playing ? "❚❚" : "▶";
+        if (playing) loop();
+      }
+      async function loop() {
+        if (!playing) return;
+        slider.value = (+slider.value + 1) % catalog.length;
+        await loadStep(+slider.value);
+        setTimeout(loop, delay);
+      }
+      function closeGps() {
+        gpsCard.style.display = "none";
+      }
+      function myWeather() {
+        if (!navigator.geolocation) return toast("GPS non supportato");
+        navigator.geolocation.getCurrentPosition(
+          (p) => {
+            let { lng, lat } = p.coords;
+            map.flyTo({
+              center: [lng, lat],
+              zoom: Math.max(8.8, map.getZoom()),
+              duration: 800,
+            });
+            if (!data) return;
+            let m = data.meta,
+              x = (lng - m.lo1) / m.dx,
+              y = (m.la1 - lat) / m.dy;
+            if (x < 0 || y < 0 || x >= m.nx || y >= m.ny)
+              return toast("Posizione fuori dall’area del modello");
+            let w = uv(x, y),
+              d = windDir(w.u, w.v);
+            gpsCard.style.display = "grid";
+            gTemp.textContent = fmt(field("temp", x, y), 1, "°");
+            gFeels.textContent = fmt(field("feels", x, y), 1, "°");
+            gRain.textContent = fmt(field("rain", x, y), 1, "mm");
+            gWind.textContent = fmt(field("wind", x, y), 0, "km/h");
+            gDir.textContent = Number.isFinite(d)
+              ? `${Math.round(d)}° ${compass(d)}`
+              : "--";
+            gPress.textContent = fmt(field("press", x, y), 0, "hPa");
+          },
+          () => toast("Permesso GPS negato"),
+          { enableHighAccuracy: false, timeout: 7000, maximumAge: 300000 },
+        );
+      }
+      function toast(x) {
+        loading.textContent = x;
+        loading.classList.add("show");
+        setTimeout(() => {
+          loading.textContent = "Elaborazione dati…";
+          loading.classList.remove("show");
+        }, 2200);
+      }
+      document.addEventListener("visibilitychange", () => {
+        if (document.hidden) {
+          cancelAnimationFrame(raf);
+          raf = null;
+        } else startFlow();
+      });
+      const $ = (id) => document.getElementById(id);
+      const slider = $("slider"),
+        loading = $("loading"),
+        time = $("time"),
+        valid = $("valid"),
+        run = $("run"),
+        legendName = $("legend-name"),
+        legendUnit = $("legend-unit"),
+        gradient = $("gradient"),
+        ticks = $("ticks"),
+        side = $("side"),
+        flow = $("flow"),
+        vectorsBtn = $("vectors-btn"),
+        iso = $("iso"),
+        rawButton = $("grid"),
+        readout = $("readout"),
+        rName = $("r-name"),
+        rValue = $("r-value"),
+        rUnit = $("r-unit"),
+        rCoords = $("r-coords"),
+        dTemp = $("d-temp"),
+        dFeels = $("d-feels"),
+        dRain = $("d-rain"),
+        dWind = $("d-wind"),
+        dDir = $("d-dir"),
+        dRh = $("d-rh"),
+        dCloud = $("d-cloud"),
+        dPress = $("d-press"),
+        gpsCard = $("gps-card"),
+        gTemp = $("g-temp"),
+        gFeels = $("g-feels"),
+        gRain = $("g-rain"),
+        gWind = $("g-wind"),
+        gDir = $("g-dir"),
+        gPress = $("g-press"),
+        play = $("play"),
+        clean = $("clean");
+      resize();
+      setupMap();
+    </script>
+  </body>
+</html>
