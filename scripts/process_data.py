@@ -27,10 +27,7 @@ LON_MIN, LON_MAX = 6.0, 19.5
 # FIX 1: Portato a 600_000 per mantenere la risoluzione nativa a 2.2km
 # ============================================================
 MAX_PIXELS = 600_000  
-
-# PARAMETRI OROGRAFIA
-PATH_DEM_ITALIA = "topografia_italia_1km.nc"
-LAPSE_RATE = 0.0065
+FEELS_LIKE_METHOD = "heat-index-wind-chill-v1"
 
 def get_latest_run_files():
     print("1. Cerco dati su MeteoHub...", flush=True)
@@ -67,6 +64,62 @@ def calculate_rh_numpy(temp_k, dew_k):
         rh = 100 * (numerator / denominator)
 
     return np.clip(rh, 0, 100)
+
+
+def calculate_heat_index_celsius(temp_c, humidity):
+    temp_f = temp_c * 9.0 / 5.0 + 32.0
+    rh = np.clip(humidity, 0.0, 100.0)
+    simple = 0.5 * (temp_f + 61.0 + (temp_f - 68.0) * 1.2 + rh * 0.094)
+    preliminary = (simple + temp_f) / 2.0
+
+    heat_index_f = (
+        -42.379
+        + 2.04901523 * temp_f
+        + 10.14333127 * rh
+        - 0.22475541 * temp_f * rh
+        - 0.00683783 * temp_f**2
+        - 0.05481717 * rh**2
+        + 0.00122874 * temp_f**2 * rh
+        + 0.00085282 * temp_f * rh**2
+        - 0.00000199 * temp_f**2 * rh**2
+    )
+
+    low_humidity = (rh < 13.0) & (temp_f >= 80.0) & (temp_f <= 112.0)
+    low_adjustment = ((13.0 - rh) / 4.0) * np.sqrt(
+        np.maximum(0.0, (17.0 - np.abs(temp_f - 95.0)) / 17.0)
+    )
+    heat_index_f = np.where(low_humidity, heat_index_f - low_adjustment, heat_index_f)
+
+    high_humidity = (rh > 85.0) & (temp_f >= 80.0) & (temp_f <= 87.0)
+    high_adjustment = ((rh - 85.0) / 10.0) * ((87.0 - temp_f) / 5.0)
+    heat_index_f = np.where(high_humidity, heat_index_f + high_adjustment, heat_index_f)
+    heat_index_f = np.where(preliminary >= 80.0, heat_index_f, temp_f)
+    return (heat_index_f - 32.0) * 5.0 / 9.0
+
+
+def calculate_wind_chill_celsius(temp_c, wind_kmh):
+    wind_factor = np.power(wind_kmh, 0.16)
+    return (
+        13.12
+        + 0.6215 * temp_c
+        - 11.37 * wind_factor
+        + 0.3965 * temp_c * wind_factor
+    )
+
+
+def calculate_feels_like(temp_c, humidity, u_wind, v_wind):
+    result = np.array(temp_c, dtype=float, copy=True)
+    speed_kmh = np.hypot(u_wind, v_wind) * 3.6
+    finite_temp = np.isfinite(temp_c)
+
+    cold = finite_temp & np.isfinite(speed_kmh) & (temp_c <= 10.0) & (speed_kmh > 4.8)
+    wind_chill = calculate_wind_chill_celsius(temp_c, speed_kmh)
+    result = np.where(cold, wind_chill, result)
+
+    hot = finite_temp & np.isfinite(humidity) & (temp_c >= 26.7)
+    heat_index = calculate_heat_index_celsius(temp_c, humidity)
+    result = np.where(hot, heat_index, result)
+    return np.where(finite_temp, result, np.nan)
 
 
 def extract_raw_grid(ds, mask, var_names):
@@ -175,15 +228,6 @@ def process_data():
 
     print(f"2. Elaboro Run: {run_dt} ({len(file_list)} files)", flush=True)
 
-    # Caricamento DEM (Topografia Reale) se presente
-    real_dem = None
-    if os.path.exists(PATH_DEM_ITALIA):
-        try:
-            real_dem = xr.open_dataset(PATH_DEM_ITALIA)
-            print("   DEM Topografico trovato.")
-        except:
-            pass
-
     if os.path.exists(TEMP_DIR):
         shutil.rmtree(TEMP_DIR)
     os.makedirs(TEMP_DIR)
@@ -225,11 +269,6 @@ def process_data():
 
             ds_cloud = try_open_cloud_dataset(TEMP_FILE)
             
-            # Recupero altitudine modello (opzionale)
-            ds_hsurf = None
-            try: ds_hsurf = xr.open_dataset(TEMP_FILE, engine='cfgrib', backend_kwargs={'filter_by_keys':{'shortName':'gh','typeOfLevel':'surface'}})
-            except: pass
-
         except Exception as e:
             print(f" Skip (Grib Error: {e})")
             continue
@@ -304,20 +343,8 @@ def process_data():
                                 if d_raw.shape == u_val.shape:
                                     rh_val = calculate_rh_numpy(t_raw, d_raw)
 
-                # FIX 2: CALCOLO PERCEPITA SICURO
-                feels_like = np.copy(temp_c)
-                try:
-                    if real_dem is not None and ds_hsurf is not None:
-                        dh_step = select_step(ds_hsurf, raw_step, i)
-                        dh_step = dh_step.sortby('latitude', ascending=False).sortby('longitude', ascending=True)
-                        h_model = extract_raw_grid(dh_step, mask, ['gh'])
-                        if h_model is not None:
-                            if f > 1: h_model = downsample_2d(h_model, f)
-                            h_real = real_dem.interp(latitude=cut_w.latitude, longitude=cut_w.longitude).elevation.values
-                            if h_real.shape == u_val.shape:
-                                feels_like = temp_c + (h_model - np.where(np.isfinite(h_real), h_real, h_model)) * LAPSE_RATE
-                except Exception:
-                    pass # Se fallisce, feels_like rimane uguale a temp_c
+                # Temperatura percepita: Heat Index con caldo, Wind Chill con freddo.
+                feels_like = calculate_feels_like(temp_c, rh_val, u_val, v_val)
 
                 # 2) PRESSIONE
                 press = np.full_like(u_val, np.nan, dtype=float)
@@ -364,7 +391,8 @@ def process_data():
 
                 header = {
                     "nx": nx, "ny": ny, "lo1": lo1, "la1": la1, "lo2": lo2, "la2": la2,
-                    "dx": dx, "dy": dy, "runTime": iso_z(run_dt), "validTime": iso_date, "refTime": iso_date, "leadHours": step_hours
+                    "dx": dx, "dy": dy, "runTime": iso_z(run_dt), "validTime": iso_date, "refTime": iso_date, "leadHours": step_hours,
+                    "feelsLikeMethod": FEELS_LIKE_METHOD
                 }
 
                 step_data = {
