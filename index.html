@@ -390,6 +390,51 @@
         background: rgba(255, 255, 255, 0.035);
       }
 
+      .model-grid {
+        display: grid;
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+        gap: 7px;
+      }
+
+      .model-card {
+        min-width: 0;
+        padding: 9px 10px;
+        border: 1px solid rgba(191, 225, 241, 0.14);
+        border-radius: 12px;
+        background: rgba(255, 255, 255, 0.045);
+        color: #d9e9f3;
+        text-align: left;
+      }
+
+      .model-card b,
+      .model-card small {
+        display: block;
+      }
+
+      .model-card b {
+        color: #fff;
+        font-size: 10.5px;
+        font-weight: 900;
+      }
+
+      .model-card small {
+        margin-top: 3px;
+        color: var(--muted);
+        font-size: 8px;
+        font-weight: 650;
+        line-height: 1.25;
+      }
+
+      .model-card.active {
+        border-color: rgba(99, 226, 249, 0.78);
+        background: linear-gradient(135deg, rgba(5, 117, 202, 0.96), rgba(12, 189, 214, 0.84));
+        box-shadow: 0 8px 18px rgba(0, 126, 211, 0.2);
+      }
+
+      .model-card.active small {
+        color: #d8f7ff;
+      }
+
       .section-title {
         display: flex;
         align-items: baseline;
@@ -1144,7 +1189,7 @@
         <div>
           <div class="eyebrow">Italia · meteo modellistico</div>
           <h1>METEOHUB</h1>
-          <p class="brand-subtitle">ICON-2I · alta risoluzione</p>
+          <p id="brand-subtitle" class="brand-subtitle">ICON-2I · alta risoluzione</p>
         </div>
       </div>
       <div id="header-actions">
@@ -1190,7 +1235,7 @@
         <header class="drawer-head">
           <div>
             <h2>Livelli e analisi</h2>
-            <p>Campi ICON-2I e strumenti sinottici</p>
+            <p id="drawer-subtitle">Campi ICON-2I e strumenti sinottici</p>
           </div>
           <button id="drawer-close" class="close-button" type="button" aria-label="Chiudi pannello">
             <svg class="icon" viewBox="0 0 24 24">
@@ -1201,6 +1246,21 @@
         </header>
 
         <div class="drawer-content">
+          <section class="drawer-section">
+            <div class="section-title">
+              <h3>Modello di previsione</h3>
+              <span>cataloghi separati</span>
+            </div>
+            <div class="model-grid">
+              <button class="model-card active" type="button" data-model="icon2i" aria-pressed="true">
+                <b>ICON-2I</b><small>Italia · circa 2,2 km</small>
+              </button>
+              <button class="model-card" type="button" data-model="ecmwf" aria-pressed="false">
+                <b>ECMWF IFS</b><small>Globale · 0,25°</small>
+              </button>
+            </div>
+          </section>
+
           <section class="drawer-section">
             <div class="section-title">
               <h3>Campo modellistico</h3>
@@ -1277,7 +1337,7 @@
             </div>
           </section>
 
-          <p class="scientific-note">
+          <p id="scientific-note" class="scientific-note">
             Dati numerici ICON-2I. Le letture puntuali usano l'interpolazione selezionata e non sostituiscono allerte o bollettini ufficiali.
           </p>
         </div>
@@ -1349,85 +1409,133 @@
     <div id="toast" role="status" aria-live="polite"></div>
 
     <script>
-      const TEMP_BANDS = [
-        { v: -75, c: [30, 231, 241] },
-        { v: -65, c: [33, 207, 232] },
-        { v: -55, c: [39, 165, 188] },
-        { v: -45, c: [48, 115, 145] },
-        { v: -35, c: [61, 61, 103] },
-        { v: -30, c: [116, 63, 142] },
-        { v: -26, c: [157, 57, 151] },
-        { v: -22, c: [204, 48, 204] },
-        { v: -18, c: [103, 77, 223] },
-        { v: -14, c: [71, 102, 211] },
-        { v: -10, c: [78, 141, 224] },
-        { v: -6, c: [99, 181, 232] },
-        { v: -2, c: [153, 222, 238] },
-        { v: 2, c: [30, 233, 148] },
-        { v: 6, c: [51, 201, 151] },
-        { v: 10, c: [68, 157, 111] },
-        { v: 14, c: [110, 183, 81] },
-        { v: 18, c: [207, 237, 130] },
-        { v: 22, c: [255, 244, 103] },
-        { v: 26, c: [255, 205, 61] },
-        { v: 30, c: [255, 157, 42] },
-        { v: 33, c: [255, 106, 54] },
-        { v: 36, c: [243, 65, 83] },
-        { v: 39, c: [224, 51, 128] },
-        { v: 42, c: [239, 64, 194] },
-        { v: 46, c: [164, 41, 96] }
-      ];
+      function interpolateScale(anchors, value) {
+        if (value <= anchors[0].v) return anchors[0];
+        for (let index = 0; index < anchors.length - 1; index += 1) {
+          const first = anchors[index];
+          const second = anchors[index + 1];
+          if (value <= second.v) {
+            const ratio = (value - first.v) / (second.v - first.v);
+            return {
+              v: value,
+              c: [
+                Math.round(first.c[0] * (1 - ratio) + second.c[0] * ratio),
+                Math.round(first.c[1] * (1 - ratio) + second.c[1] * ratio),
+                Math.round(first.c[2] * (1 - ratio) + second.c[2] * ratio)
+              ],
+              a: (first.a === undefined ? 1 : first.a) * (1 - ratio) +
+                (second.a === undefined ? 1 : second.a) * ratio
+            };
+          }
+        }
+        return anchors[anchors.length - 1];
+      }
 
-      const WIND_STOPS = [
-        { v: 0, c: [91, 126, 151], a: 0.35 },
-        { v: 10, c: [51, 147, 203], a: 0.62 },
-        { v: 20, c: [32, 188, 197], a: 0.7 },
-        { v: 35, c: [53, 191, 126], a: 0.76 },
-        { v: 50, c: [208, 207, 54], a: 0.82 },
-        { v: 70, c: [245, 151, 46], a: 0.86 },
-        { v: 90, c: [226, 70, 53], a: 0.9 },
-        { v: 110, c: [176, 44, 127], a: 0.92 },
-        { v: 130, c: [120, 50, 156], a: 0.94 }
+      function buildDiscreteBands(anchors, minimum, maximum, step, forcedAlpha) {
+        const bands = [];
+        for (let value = minimum; value <= maximum + 0.0001; value += step) {
+          const sampled = interpolateScale(anchors, value);
+          bands.push({
+            v: Number(value.toFixed(3)),
+            c: sampled.c.slice(),
+            a: forcedAlpha === undefined ? sampled.a : forcedAlpha
+          });
+        }
+        return bands;
+      }
+
+      const TEMP_ANCHORS = [
+        { v: -75, c: [18, 229, 240] },
+        { v: -65, c: [20, 194, 224] },
+        { v: -55, c: [28, 151, 186] },
+        { v: -45, c: [41, 91, 139] },
+        { v: -35, c: [57, 47, 99] },
+        { v: -30, c: [120, 43, 142] },
+        { v: -26, c: [171, 42, 168] },
+        { v: -22, c: [216, 31, 216] },
+        { v: -18, c: [102, 52, 235] },
+        { v: -14, c: [61, 83, 225] },
+        { v: -10, c: [55, 132, 237] },
+        { v: -6, c: [64, 181, 243] },
+        { v: -2, c: [124, 225, 245] },
+        { v: 2, c: [12, 238, 145] },
+        { v: 6, c: [23, 205, 119] },
+        { v: 10, c: [44, 154, 86] },
+        { v: 14, c: [100, 187, 61] },
+        { v: 18, c: [200, 240, 100] },
+        { v: 22, c: [255, 241, 64] },
+        { v: 26, c: [255, 197, 37] },
+        { v: 30, c: [255, 139, 28] },
+        { v: 34, c: [255, 77, 44] },
+        { v: 38, c: [239, 41, 120] },
+        { v: 42, c: [243, 37, 205] },
+        { v: 46, c: [168, 27, 91] }
       ];
+      const TEMP_BANDS = buildDiscreteBands(TEMP_ANCHORS, -76, 46, 2, 1);
+
+      const WIND_ANCHORS = [
+        { v: 0, c: [43, 88, 161] },
+        { v: 15, c: [0, 151, 220] },
+        { v: 30, c: [0, 204, 184] },
+        { v: 45, c: [57, 204, 91] },
+        { v: 60, c: [242, 224, 33] },
+        { v: 75, c: [255, 145, 20] },
+        { v: 90, c: [239, 54, 46] },
+        { v: 110, c: [193, 33, 133] },
+        { v: 130, c: [114, 32, 165] }
+      ];
+      const WIND_STOPS = buildDiscreteBands(WIND_ANCHORS, 0, 130, 5, 1);
 
       const RAIN_STOPS = [
         { v: 0, c: [0, 0, 0], a: 0 },
-        { v: 0.1, c: [95, 203, 255], a: 0.5 },
-        { v: 0.5, c: [47, 150, 255], a: 0.62 },
-        { v: 2, c: [30, 88, 215], a: 0.72 },
-        { v: 5, c: [22, 174, 100], a: 0.78 },
-        { v: 10, c: [238, 218, 48], a: 0.83 },
-        { v: 20, c: [252, 137, 40], a: 0.88 },
-        { v: 40, c: [220, 40, 84], a: 0.92 },
-        { v: 80, c: [149, 18, 172], a: 0.95 }
+        { v: 0.1, c: [74, 201, 255], a: 0.88 },
+        { v: 0.5, c: [28, 153, 255], a: 0.94 },
+        { v: 1, c: [24, 106, 238], a: 0.97 },
+        { v: 2, c: [37, 61, 211], a: 0.98 },
+        { v: 4, c: [16, 175, 149], a: 0.98 },
+        { v: 6, c: [35, 205, 92], a: 0.99 },
+        { v: 10, c: [245, 227, 40], a: 1 },
+        { v: 15, c: [255, 170, 26], a: 1 },
+        { v: 20, c: [255, 108, 25], a: 1 },
+        { v: 30, c: [241, 44, 65], a: 1 },
+        { v: 40, c: [205, 25, 121], a: 1 },
+        { v: 60, c: [161, 22, 177], a: 1 },
+        { v: 80, c: [103, 19, 149], a: 1 }
       ];
 
-      const CLOUD_STOPS = [
-        { v: 0, c: [255, 255, 255], a: 0 },
-        { v: 10, c: [221, 229, 235], a: 0.16 },
-        { v: 35, c: [175, 190, 202], a: 0.38 },
-        { v: 65, c: [123, 144, 160], a: 0.58 },
-        { v: 85, c: [84, 104, 123], a: 0.72 },
-        { v: 100, c: [50, 67, 87], a: 0.8 }
+      const CLOUD_ANCHORS = [
+        { v: 0, c: [239, 250, 253], a: 0 },
+        { v: 10, c: [210, 242, 249], a: 0.72 },
+        { v: 30, c: [155, 216, 233], a: 0.82 },
+        { v: 50, c: [101, 169, 205], a: 0.88 },
+        { v: 70, c: [70, 116, 165], a: 0.92 },
+        { v: 90, c: [48, 70, 119], a: 0.96 },
+        { v: 100, c: [32, 39, 78], a: 0.98 }
       ];
+      const CLOUD_STOPS = buildDiscreteBands(CLOUD_ANCHORS, 0, 100, 10);
 
-      const RH_STOPS = [
-        { v: 0, c: [181, 105, 50], a: 0.62 },
-        { v: 25, c: [206, 170, 68], a: 0.66 },
-        { v: 45, c: [162, 196, 101], a: 0.7 },
-        { v: 65, c: [71, 173, 168], a: 0.76 },
-        { v: 80, c: [51, 123, 193], a: 0.82 },
-        { v: 100, c: [74, 61, 157], a: 0.86 }
+      const RH_ANCHORS = [
+        { v: 0, c: [181, 67, 35] },
+        { v: 20, c: [226, 124, 35] },
+        { v: 40, c: [231, 204, 48] },
+        { v: 60, c: [101, 190, 79] },
+        { v: 75, c: [30, 178, 163] },
+        { v: 90, c: [34, 105, 207] },
+        { v: 100, c: [88, 45, 166] }
       ];
+      const RH_STOPS = buildDiscreteBands(RH_ANCHORS, 0, 100, 5, 1);
 
-      const PRESS_STOPS = [
-        { v: 970, c: [37, 95, 164], a: 0.68 },
-        { v: 985, c: [58, 139, 192], a: 0.68 },
-        { v: 1000, c: [135, 181, 205], a: 0.64 },
-        { v: 1013, c: [230, 234, 232], a: 0.48 },
-        { v: 1025, c: [233, 178, 91], a: 0.64 },
-        { v: 1040, c: [183, 94, 55], a: 0.7 }
+      const PRESS_ANCHORS = [
+        { v: 960, c: [91, 45, 166] },
+        { v: 980, c: [38, 92, 204] },
+        { v: 1000, c: [30, 179, 217] },
+        { v: 1012, c: [205, 240, 224] },
+        { v: 1020, c: [246, 226, 65] },
+        { v: 1030, c: [249, 145, 33] },
+        { v: 1040, c: [225, 58, 46] },
+        { v: 1048, c: [166, 36, 121] }
       ];
+      const PRESS_STOPS = buildDiscreteBands(PRESS_ANCHORS, 960, 1048, 2, 1);
 
       const LAYER_INFO = {
         temp: {
@@ -1436,10 +1544,10 @@
           stops: TEMP_BANDS,
           discrete: true,
           decimals: 1,
-          ticks: [-40, -20, -10, 0, 10, 18, 22, 26, 30, 33, 36, 39, 42, 46],
-          note: "Fasce discrete su tutta la scala termica, utili per leggere isoterme e soglie.",
-          opacity: 0.8,
-          terrainOpacity: 0.42
+          ticks: [-40, -20, -10, 0, 10, 20, 30, 40, 46],
+          note: "Fasce cromatiche nette ogni 2 °C su tutta la scala termica.",
+          opacity: 0.98,
+          terrainOpacity: 0.34
         },
         feels: {
           label: "Temperatura apparente",
@@ -1447,60 +1555,84 @@
           stops: TEMP_BANDS,
           discrete: true,
           decimals: 1,
-          ticks: [-40, -20, -10, 0, 10, 18, 22, 26, 30, 33, 36, 39, 42, 46],
-          note: "Stima di temperatura apparente secondo la formulazione di Steadman.",
-          opacity: 0.8,
-          terrainOpacity: 0.4
+          ticks: [-40, -20, -10, 0, 10, 20, 30, 40, 46],
+          note: "Temperatura apparente in fasce nette ogni 2 °C.",
+          opacity: 0.98,
+          terrainOpacity: 0.33
         },
         wind: {
           label: "Vento a 10 m",
           unit: "km/h",
           stops: WIND_STOPS,
+          discrete: true,
           decimals: 0,
-          ticks: [0, 10, 20, 35, 50, 70, 90, 110, 130],
-          note: "Intensità ricavata dalle componenti orizzontali u e v del vento.",
-          opacity: 0.76,
-          terrainOpacity: 0.31
+          ticks: [0, 20, 40, 60, 80, 100, 130],
+          note: "Fasce nette ogni 5 km/h, ricavate dalle componenti u e v.",
+          opacity: 0.96,
+          terrainOpacity: 0.3
         },
         rain: {
           label: "Precipitazioni",
           unit: "mm",
           stops: RAIN_STOPS,
+          discrete: true,
           decimals: 1,
-          ticks: [0.1, 0.5, 2, 5, 10, 20, 40, 80],
-          note: "Accumulo previsto nel passo temporale disponibile nel modello.",
-          opacity: 0.9,
-          terrainOpacity: 0.23
+          ticks: [0.1, 1, 4, 10, 20, 40, 80],
+          note: "Soglie pluviometriche discrete per separare pioggia debole, moderata e intensa.",
+          opacity: 0.99,
+          terrainOpacity: 0.24
         },
         cloud: {
           label: "Nuvolosità",
           unit: "%",
           stops: CLOUD_STOPS,
+          discrete: true,
           decimals: 0,
-          ticks: [0, 10, 35, 65, 85, 100],
-          note: "Copertura nuvolosa totale: trasparente con cielo poco nuvoloso.",
-          opacity: 0.78,
-          terrainOpacity: 0.27
+          ticks: [0, 20, 40, 60, 80, 100],
+          note: "Copertura totale in fasce nette ogni 10%.",
+          opacity: 0.94,
+          terrainOpacity: 0.26
         },
         rh: {
           label: "Umidità relativa",
           unit: "%",
           stops: RH_STOPS,
+          discrete: true,
           decimals: 0,
-          ticks: [0, 25, 45, 65, 80, 100],
-          note: "Rapporto percentuale tra vapore presente e saturazione alla temperatura locale.",
-          opacity: 0.78,
-          terrainOpacity: 0.34
+          ticks: [0, 20, 40, 60, 80, 100],
+          note: "Umidità relativa in fasce nette ogni 5%.",
+          opacity: 0.96,
+          terrainOpacity: 0.31
         },
         press: {
           label: "Pressione al suolo",
           unit: "hPa",
           stops: PRESS_STOPS,
+          discrete: true,
           decimals: 0,
-          ticks: [970, 985, 1000, 1013, 1025, 1040],
-          note: "Con isobare a passo di 2 hPa e centri A/B derivati dal campo di pressione.",
-          opacity: 0.7,
-          terrainOpacity: 0.32
+          ticks: [960, 980, 1000, 1012, 1020, 1040, 1048],
+          note: "Fasce e isobare ogni 2 hPa, con centri A/B derivati dal campo.",
+          opacity: 0.95,
+          terrainOpacity: 0.3
+        }
+      };
+
+      const MODEL_INFO = {
+        icon2i: {
+          label: "ICON-2I",
+          subtitle: "ICON-2I · alta risoluzione",
+          drawer: "Campi ICON-2I e strumenti sinottici",
+          directory: "data_weather",
+          gridLabel: "griglia ICON-2I · circa 2,2 km",
+          attribution: "Dati numerici ICON-2I da Agenzia ItaliaMeteo / MeteoHub."
+        },
+        ecmwf: {
+          label: "ECMWF IFS",
+          subtitle: "ECMWF IFS · previsione globale",
+          drawer: "Campi ECMWF IFS e strumenti sinottici",
+          directory: "data_weather_ecmwf",
+          gridLabel: "griglia ECMWF IFS · 0,25°",
+          attribution: "Dati ECMWF Open Data, licenza CC BY 4.0 · © ECMWF."
         }
       };
 
@@ -1518,6 +1650,9 @@
         drawerClose: document.getElementById("drawer-close"),
         drawerScrim: document.getElementById("drawer-scrim"),
         cleanButton: document.getElementById("clean-button"),
+        brandSubtitle: document.getElementById("brand-subtitle"),
+        drawerSubtitle: document.getElementById("drawer-subtitle"),
+        scientificNote: document.getElementById("scientific-note"),
         runValue: document.getElementById("run-value"),
         validValue: document.getElementById("valid-value"),
         sampleValue: document.getElementById("sample-value"),
@@ -1565,6 +1700,7 @@
       let currentData = null;
       let catalog = [];
       let currentIndex = 0;
+      let activeModel = "icon2i";
       let activeLayer = "temp";
       let loadingToken = 0;
       let isPlaying = false;
@@ -1637,6 +1773,20 @@
         return [lastStop.c[0], lastStop.c[1], lastStop.c[2], lastStop.a === undefined ? 0.86 : lastStop.a];
       }
 
+      function bandRangeFor(value, info) {
+        if (!info.discrete || !Number.isFinite(value)) return "";
+        let index = 0;
+        for (let current = 0; current < info.stops.length; current += 1) {
+          if (value >= info.stops[current].v) index = current;
+          else break;
+        }
+        const start = info.stops[index].v;
+        const next = info.stops[index + 1];
+        return next
+          ? "fascia " + start + "–" + next.v + " " + info.unit
+          : "fascia ≥ " + start + " " + info.unit;
+      }
+
       function sampleBilinear(array, gx, gy, nx, ny) {
         const values = getGrid(array);
         if (!values) return NaN;
@@ -1649,12 +1799,18 @@
         const fx = x - x0;
         const fy = y - y0;
         const index = y0 * nx + x0;
+        const v00 = values[index];
+        const v10 = values[index + 1];
+        const v01 = values[index + nx];
+        const v11 = values[index + nx + 1];
+
+        if (![v00, v10, v01, v11].every(Number.isFinite)) return NaN;
 
         return (
-          values[index] * (1 - fx) * (1 - fy) +
-          values[index + 1] * fx * (1 - fy) +
-          values[index + nx] * (1 - fx) * fy +
-          values[index + nx + 1] * fx * fy
+          v00 * (1 - fx) * (1 - fy) +
+          v10 * fx * (1 - fy) +
+          v01 * (1 - fx) * fy +
+          v11 * fx * fy
         );
       }
 
@@ -1664,7 +1820,7 @@
         const x = clamp(Math.round(gx), 0, nx - 1);
         const y = clamp(Math.round(gy), 0, ny - 1);
         const value = values[y * nx + x];
-        return value === undefined ? NaN : value;
+        return Number.isFinite(value) ? value : NaN;
       }
 
       function sample(array, gx, gy) {
@@ -1749,7 +1905,7 @@
             minute: "2-digit"
           }).format(date).replace(",", " ·");
         }
-        return run ? "Run " + run : "Run ICON-2I";
+        return run ? "Run " + run : "Run " + MODEL_INFO[activeModel].label;
       }
 
       function leadHours(index) {
@@ -1809,8 +1965,15 @@
 
           for (let index = 0; index < length; index += 1) {
             const temp = temperature[index];
-            const relativeHumidity = clamp(humidity[index], 0, 100);
-            const speed = Math.hypot(u[index], v[index]);
+            const humidityValue = humidity[index];
+            const uValue = u[index];
+            const vValue = v[index];
+            if (![temp, humidityValue, uValue, vValue].every(Number.isFinite)) {
+              data.feels_like[index] = NaN;
+              continue;
+            }
+            const relativeHumidity = clamp(humidityValue, 0, 100);
+            const speed = Math.hypot(uValue, vValue);
             const vaporPressure = (relativeHumidity / 100) * 6.105 * Math.exp((17.27 * temp) / (237.7 + temp));
             data.feels_like[index] = temp + 0.33 * vaporPressure - 0.7 * speed - 4;
           }
@@ -1824,7 +1987,7 @@
           return cached;
         }
 
-        const response = await fetch("data_weather/" + catalog[index].file);
+        const response = await fetch(MODEL_INFO[activeModel].directory + "/" + catalog[index].file);
         if (!response.ok) throw new Error("Dati non disponibili per questo passo");
         const data = await response.json();
         prepareData(data);
@@ -1835,7 +1998,7 @@
       async function prefetchStep(index) {
         if (!catalog[index] || stepCache.has(index)) return;
         try {
-          const response = await fetch("data_weather/" + catalog[index].file);
+          const response = await fetch(MODEL_INFO[activeModel].directory + "/" + catalog[index].file);
           if (!response.ok) return;
           const next = await response.json();
           prepareData(next);
@@ -1845,12 +2008,14 @@
         }
       }
 
-      async function loadCatalog() {
+      async function loadCatalog(silentFailure) {
         try {
-          showLoading("Lettura del catalogo ICON-2I…");
-          const response = await fetch("data_weather/catalog.json?t=" + Date.now());
+          const model = MODEL_INFO[activeModel];
+          showLoading("Lettura del catalogo " + model.label + "…");
+          const response = await fetch(model.directory + "/catalog.json?t=" + Date.now());
           if (!response.ok) throw new Error("Catalogo non disponibile");
           catalog = await response.json();
+          if (!Array.isArray(catalog) || catalog.length === 0) throw new Error("Catalogo vuoto");
 
           ui.slider.max = Math.max(catalog.length - 1, 0);
           ui.slider.min = 0;
@@ -1870,12 +2035,71 @@
           });
 
           ui.slider.value = String(bestIndex);
-          await loadStep(bestIndex);
+          const loaded = await loadStep(bestIndex);
+          if (!loaded) throw new Error("Passo iniziale non disponibile");
+          return true;
         } catch (error) {
           console.error(error);
           hideLoading();
-          toast("Impossibile caricare il catalogo del modello");
+          if (!silentFailure) toast("Impossibile caricare il catalogo del modello");
+          return false;
         }
+      }
+
+      function updateModelUi() {
+        const model = MODEL_INFO[activeModel];
+        document.querySelectorAll("[data-model]").forEach(function (button) {
+          const selected = button.dataset.model === activeModel;
+          button.classList.toggle("active", selected);
+          button.setAttribute("aria-pressed", selected ? "true" : "false");
+        });
+        ui.brandSubtitle.textContent = model.subtitle;
+        ui.drawerSubtitle.textContent = model.drawer;
+        ui.scientificNote.textContent = model.attribution +
+          " Le letture puntuali usano l'interpolazione selezionata e non sostituiscono allerte o bollettini ufficiali.";
+      }
+
+      async function setModel(nextModel) {
+        if (!MODEL_INFO[nextModel] || nextModel === activeModel) {
+          closeDrawerOnMobile();
+          return;
+        }
+
+        const previous = {
+          model: activeModel,
+          catalog: catalog,
+          data: currentData,
+          index: currentIndex
+        };
+
+        if (isPlaying) setPlaying(false);
+        stopParticles();
+        activeModel = nextModel;
+        catalog = [];
+        currentData = null;
+        currentIndex = 0;
+        stepCache.clear();
+        updateModelUi();
+        updateLayerUi();
+
+        const loaded = await loadCatalog(true);
+        if (!loaded) {
+          activeModel = previous.model;
+          catalog = previous.catalog;
+          currentData = previous.data;
+          currentIndex = previous.index;
+          stepCache.clear();
+          updateModelUi();
+          updateTimeUi();
+          updateLayerUi();
+          updateLegend();
+          renderWeather();
+          updateIsobars();
+          requestVectorRender();
+          toast(MODEL_INFO[nextModel].label + " non è ancora disponibile");
+        }
+
+        closeDrawerOnMobile();
       }
 
       async function loadStep(index) {
@@ -1899,14 +2123,17 @@
           updateIsobars();
           updateMapPresentation();
           resetParticles();
+          if (showParticles) startParticles();
           requestVectorRender();
           refreshSelectedPoint();
 
           prefetchStep(index + 1);
           prefetchStep(index - 1);
+          return true;
         } catch (error) {
           console.error(error);
           toast("Errore nel caricamento del passo selezionato");
+          return false;
         } finally {
           if (token === loadingToken) hideLoading();
         }
@@ -1960,10 +2187,12 @@
         ui.legendTicks.innerHTML = info.ticks.map(function (tick) {
           return "<span>" + tick + "</span>";
         }).join("");
-        ui.legendNote.textContent = info.note;
+        ui.legendNote.textContent = activeLayer === "rain" && currentData && currentData.meta.rainAccumulation === "from-run"
+          ? "Accumulo totale dall'inizio del run, suddiviso in soglie pluviometriche nette."
+          : info.note;
         ui.sampleValue.textContent = useNearestCell
-          ? "Cella modello più vicina · nessuna interpolazione"
-          : "Interpolazione bilineare · griglia ICON-2I";
+          ? "Cella modello più vicina · " + MODEL_INFO[activeModel].gridLabel
+          : "Interpolazione bilineare · " + MODEL_INFO[activeModel].gridLabel;
       }
 
       function updateLayerUi() {
@@ -2052,8 +2281,13 @@
 
         const meta = currentData.meta;
         const info = LAYER_INFO[activeLayer];
-        const width = meta.nx;
-        const height = meta.ny;
+        const sourcePixels = Math.max(meta.nx * meta.ny, 1);
+        const targetPixels = window.innerWidth < 900 ? 900000 : 1250000;
+        const renderScale = useNearestCell
+          ? 1
+          : clamp(Math.sqrt(targetPixels / sourcePixels), 1, 2.25);
+        const width = Math.max(2, Math.round(meta.nx * renderScale));
+        const height = Math.max(2, Math.round(meta.ny * renderScale));
 
         rasterCanvas.width = width;
         rasterCanvas.height = height;
@@ -2074,7 +2308,8 @@
           const gy = (meta.la1 - latitude) / meta.dy;
 
           for (let x = 0; x < width; x += 1) {
-            const value = fieldValue(activeLayer, x, gy);
+            const gx = (x / (width - 1)) * (meta.nx - 1);
+            const value = fieldValue(activeLayer, gx, gy);
             const pixel = (y * width + x) * 4;
 
             if (
@@ -2094,7 +2329,7 @@
         }
 
         rasterContext.putImageData(image, 0, 0);
-        map.setPaintProperty("weather-layer", "raster-resampling", useNearestCell ? "nearest" : "linear");
+        map.setPaintProperty("weather-layer", "raster-resampling", info.discrete || useNearestCell ? "nearest" : "linear");
         map.setPaintProperty("weather-layer", "raster-opacity", info.opacity);
 
         if (map.getLayer("terrain-detail")) {
@@ -2592,9 +2827,10 @@
         ui.pointValue.textContent = Number.isFinite(selectedValue) ? selectedValue.toFixed(info.decimals) : "--";
         ui.pointUnit.textContent = info.unit;
         ui.pointLocation.textContent = selectedPoint.lat.toFixed(3) + "°N · " + selectedPoint.lng.toFixed(3) + "°E";
-        ui.pointSampling.textContent = useNearestCell
+        const bandRange = bandRangeFor(selectedValue, info);
+        ui.pointSampling.textContent = (useNearestCell
           ? "Lettura: cella modello più vicina"
-          : "Lettura: interpolazione bilineare";
+          : "Lettura: interpolazione bilineare") + (bandRange ? " · " + bandRange : "");
 
         ui.detailTemp.textContent = formatValue(fieldValue("temp", point.gx, point.gy), 1, "°C");
         ui.detailFeels.textContent = formatValue(fieldValue("feels", point.gx, point.gy), 1, "°C");
@@ -2792,8 +3028,10 @@
             type: "raster",
             source: "weather",
             paint: {
-              "raster-opacity": 0.8,
-              "raster-resampling": "linear",
+              "raster-opacity": 0.98,
+              "raster-resampling": "nearest",
+              "raster-saturation": 0.16,
+              "raster-contrast": 0.08,
               "raster-fade-duration": 0
             }
           });
@@ -2973,6 +3211,12 @@
         });
       }
 
+      document.querySelectorAll("[data-model]").forEach(function (button) {
+        button.addEventListener("click", function () {
+          setModel(button.dataset.model);
+        });
+      });
+
       document.querySelectorAll("[data-layer]").forEach(function (button) {
         button.addEventListener("click", function () {
           setLayer(button.dataset.layer);
@@ -3043,6 +3287,7 @@
       });
 
       resizeCanvases();
+      updateModelUi();
       setupMap();
     </script>
   </body>
