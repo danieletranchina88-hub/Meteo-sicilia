@@ -8,7 +8,6 @@
     <title>Italia MeteoHub · ICON-2I</title>
     <link rel="stylesheet" href="https://unpkg.com/maplibre-gl@3.6.2/dist/maplibre-gl.css" />
     <script src="https://unpkg.com/maplibre-gl@3.6.2/dist/maplibre-gl.js"></script>
-    <script src="https://d3js.org/d3.v7.min.js"></script>
     <style>
       :root {
         --ink: #091a29;
@@ -2668,6 +2667,162 @@
         return accepted;
       }
 
+      function isobarPointKey(point) {
+        return Math.round(point[0] * 100000) + ":" + Math.round(point[1] * 100000);
+      }
+
+      function interpolateIsobarPoint(first, second, threshold) {
+        const difference = second.value - first.value;
+        const fraction = Math.abs(difference) < 0.000001
+          ? 0.5
+          : clamp((threshold - first.value) / difference, 0, 1);
+        return [
+          first.x + (second.x - first.x) * fraction,
+          first.y + (second.y - first.y) * fraction
+        ];
+      }
+
+      function stitchIsobarSegments(segments) {
+        const endpointMap = new Map();
+        const used = new Uint8Array(segments.length);
+
+        segments.forEach(function (segment, index) {
+          segment.forEach(function (point) {
+            const key = isobarPointKey(point);
+            if (!endpointMap.has(key)) endpointMap.set(key, []);
+            endpointMap.get(key).push(index);
+          });
+        });
+
+        function unusedNeighbour(point) {
+          const candidates = endpointMap.get(isobarPointKey(point)) || [];
+          for (let index = 0; index < candidates.length; index += 1) {
+            if (!used[candidates[index]]) return candidates[index];
+          }
+          return -1;
+        }
+
+        function appendConnected(line, atStart) {
+          while (true) {
+            const endpoint = atStart ? line[0] : line[line.length - 1];
+            const segmentIndex = unusedNeighbour(endpoint);
+            if (segmentIndex < 0) break;
+
+            used[segmentIndex] = 1;
+            const segment = segments[segmentIndex];
+            const firstMatches = isobarPointKey(segment[0]) === isobarPointKey(endpoint);
+            const nextPoint = firstMatches ? segment[1] : segment[0];
+            if (atStart) line.unshift(nextPoint);
+            else line.push(nextPoint);
+          }
+        }
+
+        const lines = [];
+        for (let index = 0; index < segments.length; index += 1) {
+          if (used[index]) continue;
+          used[index] = 1;
+          const line = [segments[index][0], segments[index][1]];
+          appendConnected(line, false);
+          appendConnected(line, true);
+          if (line.length >= 2) lines.push(line);
+        }
+
+        return lines;
+      }
+
+      function createIsobarFeatures(pressure, meta) {
+        let minimum = Infinity;
+        let maximum = -Infinity;
+
+        for (let index = 0; index < pressure.length; index += 1) {
+          const value = pressure[index];
+          if (!Number.isFinite(value)) continue;
+          if (value < minimum) minimum = value;
+          if (value > maximum) maximum = value;
+        }
+
+        if (!Number.isFinite(minimum) || !Number.isFinite(maximum)) return [];
+
+        const firstThreshold = Math.ceil(minimum / 2) * 2;
+        const lastThreshold = Math.floor(maximum / 2) * 2;
+        const features = [];
+        const nx = meta.nx;
+        const ny = meta.ny;
+
+        for (let threshold = firstThreshold; threshold <= lastThreshold; threshold += 2) {
+          const segments = [];
+
+          for (let y = 0; y < ny - 1; y += 1) {
+            for (let x = 0; x < nx - 1; x += 1) {
+              const topLeft = { x: x, y: y, value: pressure[y * nx + x] };
+              const topRight = { x: x + 1, y: y, value: pressure[y * nx + x + 1] };
+              const bottomRight = { x: x + 1, y: y + 1, value: pressure[(y + 1) * nx + x + 1] };
+              const bottomLeft = { x: x, y: y + 1, value: pressure[(y + 1) * nx + x] };
+              const corners = [topLeft, topRight, bottomRight, bottomLeft];
+              if (!corners.every(function (corner) { return Number.isFinite(corner.value); })) continue;
+
+              let mask = 0;
+              if (topLeft.value >= threshold) mask |= 1;
+              if (topRight.value >= threshold) mask |= 2;
+              if (bottomRight.value >= threshold) mask |= 4;
+              if (bottomLeft.value >= threshold) mask |= 8;
+              if (mask === 0 || mask === 15) continue;
+
+              const edgePoints = [
+                interpolateIsobarPoint(topLeft, topRight, threshold),
+                interpolateIsobarPoint(topRight, bottomRight, threshold),
+                interpolateIsobarPoint(bottomLeft, bottomRight, threshold),
+                interpolateIsobarPoint(topLeft, bottomLeft, threshold)
+              ];
+              const centerValue = (
+                topLeft.value + topRight.value + bottomRight.value + bottomLeft.value
+              ) / 4;
+              let pairs;
+
+              if (mask === 1 || mask === 14) pairs = [[0, 3]];
+              else if (mask === 2 || mask === 13) pairs = [[0, 1]];
+              else if (mask === 3 || mask === 12) pairs = [[1, 3]];
+              else if (mask === 4 || mask === 11) pairs = [[1, 2]];
+              else if (mask === 6 || mask === 9) pairs = [[0, 2]];
+              else if (mask === 7 || mask === 8) pairs = [[2, 3]];
+              else if (mask === 5) {
+                pairs = centerValue >= threshold
+                  ? [[0, 1], [2, 3]]
+                  : [[0, 3], [1, 2]];
+              } else if (mask === 10) {
+                pairs = centerValue >= threshold
+                  ? [[0, 3], [1, 2]]
+                  : [[0, 1], [2, 3]];
+              } else {
+                pairs = [];
+              }
+
+              pairs.forEach(function (pair) {
+                segments.push([edgePoints[pair[0]], edgePoints[pair[1]]]);
+              });
+            }
+          }
+
+          stitchIsobarSegments(segments).forEach(function (line) {
+            features.push({
+              type: "Feature",
+              properties: {
+                value: threshold,
+                major: Math.round(threshold) % 4 === 0
+              },
+              geometry: {
+                type: "LineString",
+                coordinates: line.map(function (point) {
+                  return [meta.lo1 + point[0] * meta.dx, meta.la1 - point[1] * meta.dy];
+                })
+              }
+            });
+          });
+        }
+
+        return features;
+      }
+
       function buildPressureProducts(data) {
         if (data.isobars && data.pressureCenters) return;
 
@@ -2679,35 +2834,17 @@
           return;
         }
 
-        const contours = d3
-          .contours()
-          .size([meta.nx, meta.ny])
-          .thresholds(d3.range(960, 1052, 2))(pressure);
-        const contourFeatures = [];
+        data.isobars = {
+          type: "FeatureCollection",
+          features: createIsobarFeatures(pressure, meta)
+        };
 
-        contours.forEach(function (contour) {
-          contour.coordinates.forEach(function (polygon) {
-            polygon.forEach(function (ring) {
-              if (ring.length < 4) return;
-              contourFeatures.push({
-                type: "Feature",
-                properties: {
-                  value: contour.value,
-                  major: Math.round(contour.value) % 4 === 0
-                },
-                geometry: {
-                  type: "LineString",
-                  coordinates: ring.map(function (point) {
-                    return [meta.lo1 + point[0] * meta.dx, meta.la1 - point[1] * meta.dy];
-                  })
-                }
-              });
-            });
-          });
-        });
-
-        data.isobars = { type: "FeatureCollection", features: contourFeatures };
-        const accepted = detectPressureCenters(pressure, meta);
+        let accepted = [];
+        try {
+          accepted = detectPressureCenters(pressure, meta);
+        } catch (error) {
+          console.error("Errore nel rilevamento dei centri di pressione", error);
+        }
 
         data.pressureCenters = {
           type: "FeatureCollection",
@@ -2737,9 +2874,14 @@
         });
 
         if (showIsobars) {
-          buildPressureProducts(currentData);
-          map.getSource("isobars").setData(currentData.isobars);
-          map.getSource("pressure-centers").setData(currentData.pressureCenters);
+          try {
+            buildPressureProducts(currentData);
+            map.getSource("isobars").setData(currentData.isobars);
+            map.getSource("pressure-centers").setData(currentData.pressureCenters);
+          } catch (error) {
+            console.error("Errore nella costruzione delle isobare", error);
+            toast("Impossibile costruire le isobare per questo passo");
+          }
         }
       }
 
@@ -3365,9 +3507,9 @@
               "line-join": "round"
             },
             paint: {
-              "line-color": "rgba(4,9,13,0.92)",
-              "line-width": ["case", ["==", ["get", "major"], true], 1.35, 0.68],
-              "line-opacity": ["case", ["==", ["get", "major"], true], 0.84, 0.5]
+              "line-color": "#081018",
+              "line-width": ["case", ["==", ["get", "major"], true], 1.35, 0.76],
+              "line-opacity": ["case", ["==", ["get", "major"], true], 0.92, 0.64]
             }
           });
 
@@ -3386,7 +3528,9 @@
               "text-padding": 2,
               "text-max-angle": 28,
               "text-keep-upright": true,
-              "text-rotation-alignment": "map"
+              "text-rotation-alignment": "map",
+              "text-allow-overlap": true,
+              "text-ignore-placement": true
             },
             paint: {
               "text-color": "#05090c",
@@ -3408,9 +3552,9 @@
               "text-ignore-placement": true
             },
             paint: {
-              "text-color": ["match", ["get", "kind"], "A", "#d84242", "B", "#266dc3", "#122f43"],
-              "text-halo-color": "rgba(255,255,255,0.9)",
-              "text-halo-width": 2.4
+              "text-color": ["match", ["get", "kind"], "A", "#e21b2d", "B", "#1266d6", "#122f43"],
+              "text-halo-color": "rgba(255,255,255,0.96)",
+              "text-halo-width": 3
             }
           });
 
@@ -3428,7 +3572,7 @@
               "text-ignore-placement": true
             },
             paint: {
-              "text-color": ["match", ["get", "kind"], "A", "#a92727", "B", "#174f9d", "#122f43"],
+              "text-color": ["match", ["get", "kind"], "A", "#b80f20", "B", "#0b4fae", "#122f43"],
               "text-halo-color": "rgba(255,255,255,0.94)",
               "text-halo-width": 1.6
             }
