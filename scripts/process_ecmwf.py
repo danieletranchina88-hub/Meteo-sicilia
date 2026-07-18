@@ -16,9 +16,9 @@ GRIB_FILE = "temp_ecmwf.grib2"
 LAT_MIN, LAT_MAX = 35.0, 48.5
 LON_MIN, LON_MAX = 6.0, 19.5
 
-# Cinque giorni con passo di tre ore: abbastanza esteso per il confronto
+# Cinque giorni con passo di sei ore: abbastanza esteso per il confronto
 # sinottico, ma leggero da pubblicare tramite GitHub Pages.
-FORECAST_STEPS = list(range(0, 121, 3))
+FORECAST_STEPS = list(range(0, 121, 6))
 PARAMETERS = ["2t", "2d", "10u", "10v", "msl", "tp", "tcc"]
 
 
