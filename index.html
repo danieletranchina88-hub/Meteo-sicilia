@@ -1271,7 +1271,7 @@
                 <span class="layer-swatch"></span><span><b>Temperatura</b><small>a 2 metri</small></span>
               </button>
               <button class="layer-card" type="button" data-layer="feels" style="--swatch: linear-gradient(#ffcd3a,#e24078)">
-                <span class="layer-swatch"></span><span><b>Apparente</b><small>stima Steadman</small></span>
+                <span class="layer-swatch"></span><span><b>Percepita</b><small>caldo · freddo · comfort</small></span>
               </button>
               <button class="layer-card" type="button" data-layer="wind" style="--swatch: linear-gradient(#2e8fc7,#d756a8)">
                 <span class="layer-swatch"></span><span><b>Vento</b><small>a 10 metri</small></span>
@@ -1373,7 +1373,7 @@
       <div id="point-sampling">--</div>
       <div class="point-grid">
         <div class="point-detail"><b>Temperatura 2 m</b><span id="detail-temp">--</span></div>
-        <div class="point-detail"><b>Apparente</b><span id="detail-feels">--</span></div>
+        <div class="point-detail"><b>Percepita</b><span id="detail-feels">--</span></div>
         <div class="point-detail"><b>Precipitazioni</b><span id="detail-rain">--</span></div>
         <div class="point-detail"><b>Vento 10 m</b><span id="detail-wind">--</span></div>
         <div class="point-detail"><b>Direzione</b><span id="detail-direction">--</span></div>
@@ -1550,13 +1550,13 @@
           terrainOpacity: 0.3
         },
         feels: {
-          label: "Temperatura apparente",
+          label: "Temperatura percepita",
           unit: "°C",
           stops: TEMP_BANDS,
           discrete: true,
           decimals: 1,
           ticks: [-40, -20, -10, 0, 10, 20, 30, 40, 46],
-          note: "Temperatura apparente in fasce da 2 °C ad alta definizione.",
+          note: "Heat Index con caldo · Wind Chill con freddo · temperatura dell'aria nella fascia intermedia. Valori all'ombra.",
           opacity: 0.95,
           terrainOpacity: 0.3
         },
@@ -1651,6 +1651,8 @@
         mobilePixelLimit: 1850000,
         desktopPixelLimit: 2800000
       };
+
+      const FEELS_LIKE_METHOD = "heat-index-wind-chill-v1";
 
       const ui = {
         drawer: document.getElementById("drawer"),
@@ -1876,6 +1878,62 @@
         return Number.isFinite(value) ? value.toFixed(decimals) + " " + unit : "--";
       }
 
+      function heatIndexCelsius(temperatureC, relativeHumidity) {
+        const temperatureF = temperatureC * 9 / 5 + 32;
+        const humidity = clamp(relativeHumidity, 0, 100);
+        const simple = 0.5 * (
+          temperatureF + 61 + (temperatureF - 68) * 1.2 + humidity * 0.094
+        );
+        const preliminary = (simple + temperatureF) / 2;
+
+        if (preliminary < 80) return temperatureC;
+
+        let heatIndexF =
+          -42.379 +
+          2.04901523 * temperatureF +
+          10.14333127 * humidity -
+          0.22475541 * temperatureF * humidity -
+          0.00683783 * temperatureF * temperatureF -
+          0.05481717 * humidity * humidity +
+          0.00122874 * temperatureF * temperatureF * humidity +
+          0.00085282 * temperatureF * humidity * humidity -
+          0.00000199 * temperatureF * temperatureF * humidity * humidity;
+
+        if (humidity < 13 && temperatureF >= 80 && temperatureF <= 112) {
+          heatIndexF -= ((13 - humidity) / 4) *
+            Math.sqrt(Math.max(0, (17 - Math.abs(temperatureF - 95)) / 17));
+        } else if (humidity > 85 && temperatureF >= 80 && temperatureF <= 87) {
+          heatIndexF += ((humidity - 85) / 10) * ((87 - temperatureF) / 5);
+        }
+
+        return (heatIndexF - 32) * 5 / 9;
+      }
+
+      function windChillCelsius(temperatureC, windKmh) {
+        const windFactor = Math.pow(windKmh, 0.16);
+        return 13.12 +
+          0.6215 * temperatureC -
+          11.37 * windFactor +
+          0.3965 * temperatureC * windFactor;
+      }
+
+      function calculateFeelsLike(temperatureC, relativeHumidity, uWind, vWind) {
+        if (!Number.isFinite(temperatureC)) return NaN;
+
+        const hasWind = Number.isFinite(uWind) && Number.isFinite(vWind);
+        const windKmh = hasWind ? Math.hypot(uWind, vWind) * 3.6 : NaN;
+
+        if (temperatureC <= 10 && Number.isFinite(windKmh) && windKmh > 4.8) {
+          return windChillCelsius(temperatureC, windKmh);
+        }
+
+        if (temperatureC >= 26.7 && Number.isFinite(relativeHumidity)) {
+          return heatIndexCelsius(temperatureC, relativeHumidity);
+        }
+
+        return temperatureC;
+      }
+
       function formatWindDirection(degrees) {
         return Number.isFinite(degrees) ? "da " + Math.round(degrees) + "° " + compassDirection(degrees) : "--";
       }
@@ -1971,25 +2029,27 @@
         const humidity = getGrid(data.rh);
         const u = getGrid(data.wind_u);
         const v = getGrid(data.wind_v);
+        const publishedFeelsLike = getGrid(data.feels_like);
 
-        if (temperature && humidity && u && v) {
+        if (
+          data.meta.feelsLikeMethod === FEELS_LIKE_METHOD &&
+          publishedFeelsLike &&
+          publishedFeelsLike.length === meta.nx * meta.ny
+        ) return;
+
+        if (temperature && u && v) {
           const length = meta.nx * meta.ny;
           data.feels_like = new Float32Array(length);
 
           for (let index = 0; index < length; index += 1) {
             const temp = temperature[index];
-            const humidityValue = humidity[index];
+            const humidityValue = humidity ? humidity[index] : NaN;
             const uValue = u[index];
             const vValue = v[index];
-            if (![temp, humidityValue, uValue, vValue].every(Number.isFinite)) {
-              data.feels_like[index] = NaN;
-              continue;
-            }
-            const relativeHumidity = clamp(humidityValue, 0, 100);
-            const speed = Math.hypot(uValue, vValue);
-            const vaporPressure = (relativeHumidity / 100) * 6.105 * Math.exp((17.27 * temp) / (237.7 + temp));
-            data.feels_like[index] = temp + 0.33 * vaporPressure - 0.7 * speed - 4;
+            data.feels_like[index] = calculateFeelsLike(temp, humidityValue, uValue, vValue);
           }
+
+          data.meta.feelsLikeMethod = FEELS_LIKE_METHOD;
         }
       }
 
