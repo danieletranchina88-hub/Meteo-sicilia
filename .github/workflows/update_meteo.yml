@@ -4,6 +4,14 @@ on:
   schedule:
     - cron: '35 1,13 * * *'
     - cron: '20 3,15 * * *'
+  push:
+    branches:
+      - main
+    paths:
+      - 'scripts/process_data.py'
+      - 'scripts/process_ecmwf.py'
+      - 'requirements.txt'
+      - '.github/workflows/update_meteo.yml'
   workflow_dispatch:
 
 concurrency:
@@ -13,7 +21,7 @@ concurrency:
 jobs:
   build:
     runs-on: ubuntu-latest
-    timeout-minutes: 75
+    timeout-minutes: 110
     permissions:
       contents: write
 
@@ -39,18 +47,25 @@ jobs:
           python -m pip install --upgrade pip
           python -m pip install -r requirements.txt
 
-      - name: Run data processor
+      - name: Run ICON-2I processor
         run: python scripts/process_data.py
+
+      - name: Run ECMWF IFS processor
+        continue-on-error: true
+        run: python scripts/process_ecmwf.py
 
       - name: Commit and push
         run: |
           git config user.name "MeteoBot"
           git config user.email "bot@meteo.local"
           git add data_weather/
+          if [ -d data_weather_ecmwf ]; then
+            git add data_weather_ecmwf/
+          fi
           if git diff --staged --quiet; then
             echo "Nessuna modifica."
             exit 0
           fi
-          git commit -m "Aggiorna dati ICON-2I"
+          git commit -m "Aggiorna dati ICON-2I ed ECMWF IFS"
           git pull --rebase --autostash
           git push
