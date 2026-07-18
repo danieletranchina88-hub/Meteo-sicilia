@@ -2,880 +2,2706 @@
 <html lang="it">
   <head>
     <meta charset="utf-8" />
-    <meta
-      name="viewport"
-      content="width=device-width,initial-scale=1,viewport-fit=cover"
-    />
-    <meta name="theme-color" content="#050a12" />
-    <title>Italia MeteoHub</title>
-    <link
-      rel="stylesheet"
-      href="https://unpkg.com/maplibre-gl@3.6.2/dist/maplibre-gl.css"
-    />
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+    <meta name="theme-color" content="#0a1b2a" />
+    <meta name="color-scheme" content="light" />
+    <title>Italia MeteoHub · ICON-2I</title>
+    <link rel="stylesheet" href="https://unpkg.com/maplibre-gl@3.6.2/dist/maplibre-gl.css" />
     <script src="https://unpkg.com/maplibre-gl@3.6.2/dist/maplibre-gl.js"></script>
     <script src="https://d3js.org/d3.v7.min.js"></script>
     <style>
       :root {
-        --bg: #050a12;
-        --panel: rgba(7, 13, 22, 0.88);
-        --stroke: rgba(154, 224, 255, 0.16);
-        --text: #f4f8ff;
-        --muted: #9aacbf;
-        --blue: #078bea;
-        --cyan: #42dff8;
-        --radius: 16px;
+        --ink: #091a29;
+        --ink-2: #15324a;
+        --surface: rgba(8, 24, 38, 0.88);
+        --surface-strong: rgba(6, 18, 29, 0.96);
+        --surface-soft: rgba(237, 246, 252, 0.94);
+        --stroke: rgba(188, 222, 240, 0.28);
+        --stroke-strong: rgba(67, 184, 234, 0.64);
+        --text: #f5fbff;
+        --muted: #a8bdcd;
+        --deep-muted: #6f8a9e;
+        --accent: #159fe4;
+        --accent-2: #31d2e9;
+        --green: #19b96b;
+        --danger: #e45858;
+        --blue-low: #3a92d7;
+        --shadow: 0 18px 46px rgba(2, 13, 22, 0.36);
+        --radius: 18px;
         --safe-top: env(safe-area-inset-top, 0px);
         --safe-bottom: env(safe-area-inset-bottom, 0px);
       }
+
       * {
         box-sizing: border-box;
         -webkit-tap-highlight-color: transparent;
       }
+
       html,
-      body,
-      #map {
+      body {
         width: 100%;
         height: 100%;
         margin: 0;
       }
+
       body {
         overflow: hidden;
-        background: var(--bg);
-        font-family:
-          Inter,
-          system-ui,
-          -apple-system,
-          "Segoe UI",
-          sans-serif;
+        background: #dfeaf1;
         color: var(--text);
+        font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
         overscroll-behavior: none;
       }
+
       button,
       input {
         font: inherit;
       }
+
       button {
+        -webkit-appearance: none;
+        appearance: none;
+        border: 0;
+        cursor: pointer;
         touch-action: manipulation;
       }
-      .glass {
-        background: var(--panel);
-        border: 1px solid var(--stroke);
-        box-shadow: 0 12px 32px rgba(0, 0, 0, 0.38);
-        backdrop-filter: blur(10px) saturate(125%);
-        -webkit-backdrop-filter: blur(10px) saturate(125%);
+
+      button:focus-visible,
+      input:focus-visible {
+        outline: 3px solid rgba(35, 189, 239, 0.78);
+        outline-offset: 2px;
       }
+
       #map {
         position: fixed;
         inset: 0;
-        background: var(--bg);
+        z-index: 0;
+        width: 100%;
+        height: 100%;
+        background: #dfeaf1;
         touch-action: none;
         overscroll-behavior: none;
       }
-      #particles,
-      #vectors {
+
+      #particle-canvas,
+      #vector-canvas,
+      #map-vignette {
         position: fixed;
         inset: 0;
         width: 100%;
         height: 100%;
         pointer-events: none;
       }
-      #particles {
-        z-index: 10;
+
+      #particle-canvas {
+        z-index: 6;
       }
-      #vectors {
-        z-index: 11;
+
+      #vector-canvas {
+        z-index: 7;
       }
-      .top-btn {
-        position: fixed;
-        z-index: 50;
-        top: calc(var(--safe-top) + 9px);
-        height: 36px;
-        border-radius: 999px;
+
+      #map-vignette {
+        z-index: 8;
+        background:
+          linear-gradient(180deg, rgba(7, 22, 35, 0.28), transparent 19%, transparent 74%, rgba(7, 22, 35, 0.16)),
+          linear-gradient(90deg, rgba(255, 255, 255, 0.06), transparent 26%, transparent 74%, rgba(255, 255, 255, 0.06));
+      }
+
+      .surface {
+        background: var(--surface);
         border: 1px solid var(--stroke);
-        color: white;
-        font-size: 10px;
-        font-weight: 900;
-        letter-spacing: 0.06em;
-        background: rgba(5, 13, 23, 0.91);
-        padding: 0 12px;
+        box-shadow: var(--shadow);
+        backdrop-filter: blur(18px) saturate(130%);
+        -webkit-backdrop-filter: blur(18px) saturate(130%);
       }
-      .top-btn:active {
-        transform: scale(0.96);
+
+      .icon {
+        display: block;
+        width: 18px;
+        height: 18px;
+        fill: none;
+        stroke: currentColor;
+        stroke-width: 1.9;
+        stroke-linecap: round;
+        stroke-linejoin: round;
       }
-      #clean {
-        left: 50%;
-        transform: translateX(-50%);
-      }
-      #controls {
-        right: 9px;
-        background: linear-gradient(135deg, #0677d9, #00aee8);
-        border-color: rgba(178, 240, 255, 0.5);
-      }
-      #brand {
-        position: fixed;
-        z-index: 45;
-        top: calc(var(--safe-top) + 9px);
-        left: 9px;
-        width: 120px;
-        min-height: 36px;
-        border-radius: 12px;
-        padding: 10px;
-        font-size: 9px;
-        font-weight: 950;
-        letter-spacing: 0.06em;
-        white-space: nowrap;
-      }
-      .desktop-info {
-        display: none;
-      }
-      #side {
-        position: fixed;
-        z-index: 48;
-        left: 9px;
-        right: 9px;
-        bottom: calc(var(--safe-bottom) + 68px);
-        max-height: min(57dvh, 510px);
-        overflow: auto;
-        display: grid;
-        gap: 7px;
-        transform: translateY(calc(100% + 84px));
-        opacity: 0;
-        pointer-events: none;
-        transition:
-          transform 0.24s ease,
-          opacity 0.24s ease;
-        scrollbar-width: none;
-      }
-      #side.open {
-        transform: translateY(0);
-        opacity: 1;
-        pointer-events: auto;
-      }
-      #side::-webkit-scrollbar {
-        display: none;
-      }
-      .panel {
-        padding: 9px;
-        border-radius: 15px;
-      }
-      .panel h2 {
-        font-size: 8px;
-        letter-spacing: 0.1em;
-        color: var(--muted);
-        margin: 2px 5px 7px;
-        text-transform: uppercase;
-      }
-      .option,
-      .gps {
-        width: 100%;
-        min-height: 41px;
-        margin: 5px 0;
-        padding: 9px 11px;
-        border: 1px solid transparent;
-        border-radius: 11px;
-        background: rgba(255, 255, 255, 0.055);
-        color: #dbe6f3;
-        display: flex;
-        justify-content: space-between;
-        align-items: center;
-        text-align: left;
-        font-size: 11.5px;
-        font-weight: 800;
-      }
-      .option .dot {
-        height: 8px;
-        width: 8px;
-        border-radius: 50%;
-        background: rgba(255, 255, 255, 0.26);
-      }
-      .option.active {
-        color: #fff;
-        background: linear-gradient(135deg, #0879dd, #00abe9);
-        border-color: rgba(166, 237, 255, 0.48);
-        box-shadow: 0 6px 15px rgba(0, 133, 225, 0.18);
-      }
-      .option.active .dot {
-        background: #fff;
-        box-shadow: 0 0 0 4px rgba(255, 255, 255, 0.17);
-      }
-      .option.disabled {
-        opacity: 0.38;
-        pointer-events: none;
-      }
-      .gps {
-        justify-content: center;
-        background: linear-gradient(135deg, #159a58, #35d777);
-        color: white;
-        border-color: rgba(255, 255, 255, 0.16);
-        font-size: 12px;
-      }
-      #legend {
+
+      #app-header {
         position: fixed;
         z-index: 40;
-        left: 9px;
-        bottom: calc(var(--safe-bottom) + 69px);
-        width: min(242px, calc(100vw - 18px));
-        padding: 9px 10px;
-        border-radius: 13px;
-        pointer-events: none;
-      }
-      .legend-head {
+        top: calc(var(--safe-top) + 10px);
+        left: 10px;
+        right: 10px;
         display: flex;
+        align-items: flex-start;
         justify-content: space-between;
         gap: 8px;
+        pointer-events: none;
+      }
+
+      .brand-panel {
+        display: flex;
+        min-width: 0;
+        max-width: min(258px, calc(100vw - 126px));
+        align-items: center;
+        gap: 10px;
+        padding: 8px 11px 8px 8px;
+        border-radius: 16px;
+        pointer-events: auto;
+      }
+
+      .brand-mark {
+        display: grid;
+        flex: 0 0 34px;
+        width: 34px;
+        height: 34px;
+        place-items: center;
+        border-radius: 11px;
+        background: linear-gradient(145deg, #0d7ec7, #3bd9e7);
+        color: white;
+        box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.28);
+      }
+
+      .brand-mark .icon {
+        width: 21px;
+        height: 21px;
+        stroke-width: 2.1;
+      }
+
+      .eyebrow,
+      .micro-label {
+        color: var(--muted);
+        font-size: 8px;
+        font-weight: 850;
+        letter-spacing: 0.1em;
+        line-height: 1.15;
+        text-transform: uppercase;
+      }
+
+      .brand-panel h1 {
+        margin: 1px 0 0;
+        color: #fff;
+        font-size: 13px;
+        font-weight: 950;
+        letter-spacing: 0.04em;
+        line-height: 1.05;
+      }
+
+      .brand-subtitle {
+        margin: 2px 0 0;
+        overflow: hidden;
+        color: #bdd4e2;
+        font-size: 9px;
+        font-weight: 650;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+      }
+
+      #header-actions {
+        display: flex;
+        gap: 7px;
+        pointer-events: auto;
+      }
+
+      .header-button {
+        display: inline-flex;
+        min-width: 42px;
+        height: 42px;
+        align-items: center;
+        justify-content: center;
+        gap: 6px;
+        padding: 0 11px;
+        border: 1px solid var(--stroke);
+        border-radius: 14px;
+        background: var(--surface-strong);
+        color: #f6fbff;
+        box-shadow: 0 8px 22px rgba(4, 16, 27, 0.28);
+        font-size: 10px;
+        font-weight: 900;
+        letter-spacing: 0.03em;
+      }
+
+      .header-button.primary {
+        border-color: rgba(147, 231, 250, 0.68);
+        background: linear-gradient(135deg, #087fd5, #21c2e9);
+      }
+
+      .header-button:active {
+        transform: scale(0.96);
+      }
+
+      .header-button span {
+        display: none;
+      }
+
+      #meta-card {
+        position: fixed;
+        z-index: 35;
+        top: calc(var(--safe-top) + 66px);
+        left: 10px;
+        right: 10px;
+        display: grid;
+        grid-template-columns: 1.32fr 0.72fr;
+        overflow: hidden;
+        border-radius: 14px;
+        pointer-events: none;
+      }
+
+      .meta-item {
+        min-width: 0;
+        padding: 8px 10px;
+      }
+
+      .meta-item + .meta-item {
+        border-left: 1px solid rgba(193, 222, 239, 0.13);
+      }
+
+      .meta-value {
+        display: block;
+        overflow: hidden;
+        margin-top: 3px;
+        color: #fff;
+        font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+        font-size: 10px;
+        font-weight: 780;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+      }
+
+      .sample-badge {
+        grid-column: 1 / -1;
+        display: flex;
+        min-height: 25px;
+        align-items: center;
+        gap: 6px;
+        padding: 6px 10px;
+        border-top: 1px solid rgba(193, 222, 239, 0.13);
+        color: #d7e7f2;
+        font-size: 8.5px;
+        font-weight: 700;
+      }
+
+      .sample-dot {
+        width: 7px;
+        height: 7px;
+        border-radius: 50%;
+        background: #47d28b;
+        box-shadow: 0 0 0 4px rgba(71, 210, 139, 0.12);
+      }
+
+      #drawer-scrim {
+        position: fixed;
+        z-index: 54;
+        inset: 0;
+        visibility: hidden;
+        background: rgba(3, 13, 22, 0.34);
+        opacity: 0;
+        transition: opacity 0.22s ease, visibility 0.22s ease;
+      }
+
+      #drawer {
+        position: fixed;
+        z-index: 60;
+        right: 0;
+        bottom: 0;
+        left: 0;
+        max-height: min(75dvh, 680px);
+        padding: 0 9px calc(var(--safe-bottom) + 88px);
+        overflow: auto;
+        transform: translateY(calc(100% + 110px));
+        transition: transform 0.26s cubic-bezier(0.2, 0.75, 0.25, 1);
+        scrollbar-width: none;
+      }
+
+      #drawer::-webkit-scrollbar {
+        display: none;
+      }
+
+      #drawer.open {
+        transform: translateY(0);
+      }
+
+      body.drawer-open #drawer-scrim {
+        visibility: visible;
+        opacity: 1;
+      }
+
+      .drawer-shell {
+        overflow: hidden;
+        border-radius: 23px 23px 18px 18px;
+        background: rgba(6, 19, 31, 0.98);
+        border: 1px solid rgba(178, 220, 242, 0.25);
+        box-shadow: 0 -12px 48px rgba(1, 9, 16, 0.36);
+      }
+
+      .drawer-grabber {
+        width: 40px;
+        height: 4px;
+        margin: 9px auto 2px;
+        border-radius: 999px;
+        background: rgba(193, 224, 241, 0.42);
+      }
+
+      .drawer-head {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 12px;
+        padding: 8px 14px 11px;
+      }
+
+      .drawer-head h2 {
+        margin: 0;
+        color: #fff;
+        font-size: 14px;
+        font-weight: 900;
+        letter-spacing: -0.01em;
+      }
+
+      .drawer-head p {
+        margin: 2px 0 0;
+        color: var(--muted);
+        font-size: 9px;
+        font-weight: 650;
+      }
+
+      .close-button {
+        display: grid;
+        width: 32px;
+        height: 32px;
+        flex: 0 0 auto;
+        place-items: center;
+        border: 1px solid rgba(192, 223, 240, 0.18);
+        border-radius: 10px;
+        background: rgba(255, 255, 255, 0.045);
+        color: #d7e8f3;
+      }
+
+      .drawer-content {
+        display: grid;
+        gap: 12px;
+        padding: 0 10px 13px;
+      }
+
+      .drawer-section {
+        padding: 10px;
+        border: 1px solid rgba(192, 222, 239, 0.1);
+        border-radius: 15px;
+        background: rgba(255, 255, 255, 0.035);
+      }
+
+      .section-title {
+        display: flex;
+        align-items: baseline;
+        justify-content: space-between;
+        gap: 10px;
+        margin: 0 2px 8px;
+      }
+
+      .section-title h3 {
+        margin: 0;
+        color: #c5d6e2;
         font-size: 9px;
         font-weight: 900;
+        letter-spacing: 0.1em;
+        text-transform: uppercase;
       }
-      .legend-head span:last-child {
-        color: var(--muted);
+
+      .section-title span {
+        color: var(--deep-muted);
+        font-size: 8px;
+        font-weight: 700;
       }
-      #gradient {
-        height: 10px;
-        border: 1px solid rgba(255, 255, 255, 0.15);
+
+      .layer-grid {
+        display: grid;
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+        gap: 6px;
+      }
+
+      .layer-card {
+        display: flex;
+        min-width: 0;
+        min-height: 58px;
+        align-items: center;
+        gap: 8px;
+        padding: 7px;
+        border: 1px solid transparent;
+        border-radius: 12px;
+        background: rgba(255, 255, 255, 0.05);
+        color: #dbeaf4;
+        text-align: left;
+      }
+
+      .layer-card:active {
+        transform: scale(0.98);
+      }
+
+      .layer-card.active {
+        border-color: rgba(115, 221, 246, 0.62);
+        background: linear-gradient(135deg, rgba(6, 121, 213, 0.94), rgba(14, 181, 221, 0.8));
+        box-shadow: 0 8px 18px rgba(0, 126, 211, 0.2);
+        color: #fff;
+      }
+
+      .layer-card.disabled {
+        opacity: 0.4;
+        pointer-events: none;
+      }
+
+      .layer-swatch {
+        width: 8px;
+        height: 33px;
+        flex: 0 0 auto;
         border-radius: 99px;
-        margin-top: 7px;
+        background: var(--swatch, #54bbed);
+        box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.22);
       }
-      #ticks {
+
+      .layer-card b,
+      .layer-card small {
+        display: block;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+      }
+
+      .layer-card b {
+        font-size: 10px;
+        font-weight: 860;
+        line-height: 1.1;
+      }
+
+      .layer-card small {
+        margin-top: 3px;
+        color: #aac1d1;
+        font-size: 8px;
+        font-weight: 650;
+      }
+
+      .layer-card.active small {
+        color: rgba(255, 255, 255, 0.78);
+      }
+
+      .gps-button {
+        display: flex;
+        width: 100%;
+        min-height: 45px;
+        align-items: center;
+        justify-content: center;
+        gap: 8px;
+        border: 1px solid rgba(172, 246, 202, 0.48);
+        border-radius: 13px;
+        background: linear-gradient(135deg, #139557, #2dd884);
+        color: #fff;
+        font-size: 11px;
+        font-weight: 900;
+      }
+
+      .gps-button .icon {
+        width: 17px;
+        height: 17px;
+      }
+
+      .toggle-list {
+        display: grid;
+        gap: 4px;
+      }
+
+      .toggle-row {
+        display: flex;
+        width: 100%;
+        min-height: 42px;
+        align-items: center;
+        justify-content: space-between;
+        gap: 10px;
+        padding: 7px 6px 7px 8px;
+        border-radius: 11px;
+        background: rgba(255, 255, 255, 0.04);
+        color: #dcebf5;
+        text-align: left;
+      }
+
+      .toggle-row b,
+      .toggle-row small {
+        display: block;
+      }
+
+      .toggle-row b {
+        font-size: 10px;
+        font-weight: 820;
+      }
+
+      .toggle-row small {
+        margin-top: 2px;
+        color: var(--deep-muted);
+        font-size: 8px;
+        font-weight: 650;
+      }
+
+      .switch {
+        position: relative;
+        width: 31px;
+        height: 18px;
+        flex: 0 0 auto;
+        border-radius: 999px;
+        background: rgba(189, 216, 230, 0.24);
+        transition: background 0.18s ease;
+      }
+
+      .switch::after {
+        position: absolute;
+        top: 3px;
+        left: 3px;
+        width: 12px;
+        height: 12px;
+        border-radius: 50%;
+        background: #eaf6fb;
+        content: "";
+        transition: transform 0.18s ease;
+      }
+
+      .toggle-row.active .switch {
+        background: #1bb8e8;
+      }
+
+      .toggle-row.active .switch::after {
+        transform: translateX(13px);
+      }
+
+      .scientific-note {
+        margin: 0;
+        color: #8ea8ba;
+        font-size: 8px;
+        line-height: 1.45;
+      }
+
+      #legend-card {
+        position: fixed;
+        z-index: 34;
+        bottom: calc(var(--safe-bottom) + 96px);
+        left: 10px;
+        width: min(306px, calc(100vw - 20px));
+        padding: 10px 11px 9px;
+        border-radius: 15px;
+        pointer-events: none;
+        transition: opacity 0.2s ease, transform 0.2s ease;
+      }
+
+      .legend-head {
+        display: flex;
+        align-items: flex-start;
+        justify-content: space-between;
+        gap: 10px;
+      }
+
+      .legend-head h2 {
+        margin: 2px 0 0;
+        color: #f9fdff;
+        font-size: 12px;
+        font-weight: 900;
+        line-height: 1.15;
+      }
+
+      .legend-head span {
+        color: var(--muted);
+        font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+        font-size: 10px;
+        font-weight: 800;
+      }
+
+      #legend-range {
+        margin-top: 2px;
+        color: var(--deep-muted);
+        font-size: 8px;
+        font-weight: 680;
+      }
+
+      #legend-bar {
+        height: 12px;
+        margin-top: 8px;
+        overflow: hidden;
+        border: 1px solid rgba(6, 24, 37, 0.22);
+        border-radius: 999px;
+        background: #d2e0e8;
+        box-shadow: inset 0 1px 2px rgba(0, 0, 0, 0.18);
+      }
+
+      #legend-ticks {
         display: flex;
         justify-content: space-between;
         gap: 2px;
-        font:
-          7px ui-monospace,
-          monospace;
-        color: #c5d2df;
+        margin-top: 5px;
+        overflow: hidden;
+        color: #d4e3ec;
+        font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+        font-size: 7px;
+        font-weight: 740;
+      }
+
+      #legend-ticks span {
+        flex: 0 0 auto;
+      }
+
+      #legend-note {
+        margin: 6px 0 0;
+        color: #9bb3c3;
+        font-size: 8px;
+        font-weight: 640;
+        line-height: 1.35;
+      }
+
+      #readout-card {
+        position: fixed;
+        z-index: 38;
+        right: 10px;
+        bottom: calc(var(--safe-bottom) + 95px);
+        left: 10px;
+        max-height: min(47dvh, 380px);
+        padding: 12px;
+        overflow: auto;
+        border-radius: 17px;
+        opacity: 0;
+        pointer-events: none;
+        transform: translateY(12px);
+        transition: opacity 0.2s ease, transform 0.2s ease;
+      }
+
+      #readout-card.visible {
+        opacity: 1;
+        pointer-events: auto;
+        transform: translateY(0);
+      }
+
+      body.readout-open #legend-card {
+        opacity: 0;
+        transform: translateY(8px);
+      }
+
+      .readout-close {
+        position: absolute;
+        top: 9px;
+        right: 9px;
+        display: grid;
+        width: 28px;
+        height: 28px;
+        place-items: center;
+        border: 1px solid rgba(198, 223, 237, 0.2);
+        border-radius: 9px;
+        background: rgba(255, 255, 255, 0.06);
+        color: #dfeef7;
+      }
+
+      .readout-kicker {
+        padding-right: 36px;
+        color: var(--muted);
+        font-size: 8px;
+        font-weight: 900;
+        letter-spacing: 0.1em;
+        text-transform: uppercase;
+      }
+
+      .readout-primary {
+        display: flex;
+        align-items: flex-end;
+        gap: 7px;
         margin-top: 5px;
       }
-      #bar {
-        position: fixed;
-        z-index: 45;
-        left: 7px;
-        right: 7px;
-        bottom: calc(var(--safe-bottom) + 6px);
-        height: 55px;
-        border-radius: 17px;
-        padding: 8px 10px;
-        display: flex;
-        gap: 9px;
-        align-items: center;
-        background: rgba(5, 10, 17, 0.93);
-      }
-      #play {
-        width: 38px;
-        height: 38px;
-        flex: none;
-        border: 0;
-        border-radius: 50%;
-        color: white;
-        background: linear-gradient(135deg, #087fe5, #00afea);
-        font-size: 15px;
-      }
-      #slider {
-        min-width: 60px;
-        flex: 1;
-        accent-color: #16bde9;
-      }
-      #time {
-        width: 86px;
-        text-align: right;
-        font:
-          10px ui-monospace,
-          monospace;
-        font-weight: 800;
-        color: #e7f6ff;
-      }
-      .speed {
-        display: none;
-      }
-      #readout {
-        position: fixed;
-        z-index: 44;
-        left: 9px;
-        right: 9px;
-        bottom: calc(var(--safe-bottom) + 68px);
-        display: none;
-        max-height: 38dvh;
-        overflow: auto;
-        padding: 11px;
-        border-radius: 15px;
-      }
-      .readout-name {
-        font-size: 9px;
-        letter-spacing: 0.08em;
-        text-transform: uppercase;
-        color: var(--muted);
-        font-weight: 900;
-      }
-      .value {
-        font-size: 34px;
-        line-height: 1;
-        margin-top: 4px;
+
+      #point-value {
+        color: #fff;
+        font-size: 39px;
         font-weight: 950;
+        letter-spacing: -0.055em;
+        line-height: 0.9;
       }
-      .value small {
-        font-size: 14px;
-        color: #cddae8;
+
+      #point-unit {
+        padding-bottom: 3px;
+        color: #c7d9e6;
+        font-size: 13px;
+        font-weight: 860;
       }
-      .coords {
-        font:
-          9px ui-monospace,
-          monospace;
-        color: var(--muted);
-        margin-top: 6px;
+
+      #point-location,
+      #point-sampling {
+        margin-top: 7px;
+        color: #adc3d2;
+        font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+        font-size: 8px;
+        font-weight: 680;
       }
-      .details {
+
+      #point-sampling {
+        margin-top: 3px;
+        color: #7fa3b8;
+      }
+
+      .point-grid {
         display: grid;
-        grid-template-columns: repeat(2, 1fr);
+        grid-template-columns: repeat(2, minmax(0, 1fr));
         gap: 6px;
-        margin-top: 9px;
+        margin-top: 10px;
       }
-      .detail {
-        padding: 7px;
-        border: 1px solid rgba(255, 255, 255, 0.07);
-        border-radius: 9px;
-        background: rgba(255, 255, 255, 0.05);
+
+      .point-detail {
+        min-width: 0;
+        padding: 7px 8px;
+        border: 1px solid rgba(197, 222, 237, 0.09);
+        border-radius: 10px;
+        background: rgba(255, 255, 255, 0.048);
       }
-      .detail b {
+
+      .point-detail b {
         display: block;
+        overflow: hidden;
+        color: #91acbd;
         font-size: 7px;
-        color: var(--muted);
-        letter-spacing: 0.05em;
+        font-weight: 900;
+        letter-spacing: 0.07em;
+        text-overflow: ellipsis;
         text-transform: uppercase;
+        white-space: nowrap;
       }
-      .detail span {
+
+      .point-detail span {
+        display: block;
+        overflow: hidden;
+        margin-top: 3px;
+        color: #f1f8fc;
         font-size: 11px;
         font-weight: 850;
+        text-overflow: ellipsis;
+        white-space: nowrap;
       }
-      #gps-card {
+
+      #timeline {
         position: fixed;
-        z-index: 70;
-        left: 9px;
-        right: 9px;
-        top: calc(var(--safe-top) + 9px);
-        padding: 34px 10px 10px;
-        border-radius: 16px;
-        display: none;
-        grid-template-columns: repeat(2, 1fr);
-        gap: 6px;
+        z-index: 42;
+        right: 8px;
+        bottom: calc(var(--safe-bottom) + 7px);
+        left: 8px;
+        display: flex;
+        min-height: 76px;
+        align-items: center;
+        gap: 10px;
+        padding: 10px;
+        border-radius: 20px;
+        background: rgba(6, 19, 31, 0.94);
       }
-      .gps-close {
-        position: absolute;
-        right: 12px;
-        top: 7px;
-        border: 0;
-        background: none;
-        color: #aebfd0;
-        font-size: 22px;
+
+      #play-button {
+        display: grid;
+        width: 43px;
+        height: 43px;
+        flex: 0 0 auto;
+        place-items: center;
+        border-radius: 50%;
+        background: linear-gradient(135deg, #0d83d8, #28c9e6);
+        color: #fff;
+        box-shadow: 0 7px 16px rgba(0, 137, 220, 0.28);
       }
-      .stat {
-        padding: 7px;
-        border-radius: 9px;
-        background: rgba(255, 255, 255, 0.05);
-        text-align: center;
+
+      #play-button .icon {
+        width: 19px;
+        height: 19px;
+        stroke-width: 2.35;
       }
-      .stat b {
+
+      .timeline-main {
+        min-width: 0;
+        flex: 1;
+      }
+
+      #time-slider {
         display: block;
-        color: var(--muted);
-        font-size: 7px;
-        text-transform: uppercase;
+        width: 100%;
+        height: 16px;
+        margin: 0;
+        accent-color: #2bc9ea;
+        cursor: pointer;
       }
-      .stat span {
-        font-size: 14px;
-        font-weight: 950;
+
+      .timeline-meta {
+        display: flex;
+        min-width: 0;
+        align-items: center;
+        justify-content: space-between;
+        gap: 8px;
+        margin-top: 3px;
       }
-      .loading {
-        position: fixed;
-        z-index: 99;
-        left: 50%;
-        top: 50%;
-        transform: translate(-50%, -50%);
-        display: none;
-        padding: 12px 16px;
-        border-radius: 13px;
-        font-weight: 850;
-        background: #07111d;
-        border: 1px solid rgba(0, 190, 255, 0.5);
-      }
-      .loading.show {
-        display: block;
-      }
-      .maplibregl-ctrl-bottom-right {
-        right: 8px !important;
-        bottom: calc(var(--safe-bottom) + 72px) !important;
-      }
-      .maplibregl-ctrl-group {
-        border-radius: 12px !important;
+
+      #time-label {
         overflow: hidden;
-        border: 1px solid var(--stroke) !important;
-        box-shadow: 0 8px 24px rgba(0, 0, 0, 0.35) !important;
+        color: #edf8fc;
+        font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+        font-size: 9px;
+        font-weight: 850;
+        text-overflow: ellipsis;
+        white-space: nowrap;
       }
-      .maplibregl-ctrl-group button {
-        width: 34px !important;
-        height: 34px !important;
-        background-color: rgba(8, 12, 19, 0.92) !important;
+
+      #lead-label {
+        flex: 0 0 auto;
+        color: #77d8e8;
+        font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+        font-size: 9px;
+        font-weight: 880;
       }
-      .clean #side,
-      .clean #legend,
-      .clean #brand,
-      .clean #controls {
+
+      .speed-controls {
         display: none;
+        gap: 4px;
       }
-      .clean #bar {
-        opacity: 0.72;
+
+      .speed-controls button {
+        padding: 5px 7px;
+        border: 1px solid rgba(187, 220, 237, 0.2);
+        border-radius: 999px;
+        background: rgba(255, 255, 255, 0.05);
+        color: #d4e8f3;
+        font-size: 9px;
+        font-weight: 900;
       }
-      @media (min-width: 921px) {
-        #brand {
-          width: 330px;
-          padding: 12px;
-          font-size: 13px;
+
+      .speed-controls button.active {
+        border-color: rgba(114, 235, 248, 0.65);
+        background: #67e4ef;
+        color: #032131;
+      }
+
+      #loading {
+        position: fixed;
+        z-index: 90;
+        top: 50%;
+        left: 50%;
+        display: flex;
+        align-items: center;
+        gap: 9px;
+        padding: 11px 14px;
+        border: 1px solid rgba(103, 209, 240, 0.62);
+        border-radius: 13px;
+        background: rgba(5, 18, 29, 0.94);
+        box-shadow: 0 18px 44px rgba(3, 14, 23, 0.38);
+        color: #fff;
+        font-size: 11px;
+        font-weight: 850;
+        opacity: 0;
+        pointer-events: none;
+        transform: translate(-50%, -45%);
+        transition: opacity 0.16s ease, transform 0.16s ease;
+      }
+
+      #loading.visible {
+        opacity: 1;
+        transform: translate(-50%, -50%);
+      }
+
+      .spinner {
+        width: 14px;
+        height: 14px;
+        border: 2px solid rgba(235, 250, 255, 0.26);
+        border-top-color: #72e9f7;
+        border-radius: 50%;
+        animation: spin 0.76s linear infinite;
+      }
+
+      #toast {
+        position: fixed;
+        z-index: 95;
+        top: calc(var(--safe-top) + 142px);
+        left: 50%;
+        max-width: min(330px, calc(100vw - 30px));
+        padding: 9px 12px;
+        border-radius: 11px;
+        background: rgba(4, 18, 29, 0.94);
+        box-shadow: 0 12px 28px rgba(1, 10, 18, 0.34);
+        color: #effbff;
+        font-size: 10px;
+        font-weight: 780;
+        opacity: 0;
+        pointer-events: none;
+        transform: translate(-50%, -8px);
+        transition: opacity 0.18s ease, transform 0.18s ease;
+      }
+
+      #toast.visible {
+        opacity: 1;
+        transform: translate(-50%, 0);
+      }
+
+      .maplibregl-ctrl-bottom-right {
+        z-index: 25 !important;
+        right: 10px !important;
+        bottom: calc(var(--safe-bottom) + 99px) !important;
+      }
+
+      .maplibregl-ctrl-group {
+        overflow: hidden;
+        border: 1px solid rgba(10, 42, 60, 0.24) !important;
+        border-radius: 12px !important;
+        box-shadow: 0 9px 24px rgba(4, 21, 32, 0.22) !important;
+      }
+
+      .maplibregl-ctrl-group button {
+        width: 35px !important;
+        height: 35px !important;
+        background-color: rgba(250, 253, 255, 0.92) !important;
+      }
+
+      .maplibregl-ctrl-group button span {
+        filter: contrast(1.45) saturate(0.62);
+      }
+
+      .maplibregl-ctrl-attrib {
+        display: none !important;
+      }
+
+      body.clean-mode #app-header,
+      body.clean-mode #meta-card,
+      body.clean-mode #legend-card,
+      body.clean-mode #readout-card,
+      body.clean-mode #drawer-button,
+      body.clean-mode .maplibregl-ctrl-bottom-right {
+        display: none !important;
+      }
+
+      body.clean-mode #timeline {
+        opacity: 0.35;
+      }
+
+      body.clean-mode #clean-button {
+        display: inline-flex;
+      }
+
+      @keyframes spin {
+        to {
+          transform: rotate(360deg);
         }
-        .desktop-info {
-          display: block;
-          font-size: 10px;
-          color: var(--muted);
-          margin-top: 7px;
+      }
+
+      @media (min-width: 720px) {
+        .header-button span {
+          display: inline;
         }
-        .top-btn {
-          top: 14px;
-        }
-        .top-btn#controls {
-          right: 14px;
-        }
-        .top-btn#clean {
-          left: auto;
-          right: 105px;
-          transform: none;
-        }
-        #side {
-          left: auto;
-          right: 14px;
-          top: 14px;
-          bottom: 95px;
-          width: 245px;
-          max-height: none;
-          transform: none;
-          opacity: 1;
-          pointer-events: auto;
-        }
-        #legend {
-          left: 18px;
-          bottom: 95px;
-          width: 340px;
-        }
-        #bar {
-          left: 14px;
-          right: 14px;
-          bottom: 12px;
-          height: 66px;
-        }
-        #time {
-          width: 155px;
-          font-size: 12px;
-        }
-        .speed {
-          display: flex;
-          gap: 4px;
-        }
-        .speed button {
-          border: 1px solid var(--stroke);
-          border-radius: 99px;
-          background: rgba(255, 255, 255, 0.07);
-          color: #d7e3ee;
-          padding: 5px 8px;
-          font-size: 10px;
-          font-weight: 800;
-        }
-        .speed button.active {
-          background: #72eafa;
-          color: #00202c;
-        }
-        .details {
-          grid-template-columns: repeat(4, 1fr);
-        }
-        #readout {
-          left: 18px;
+
+        #meta-card {
+          width: 355px;
           right: auto;
-          bottom: 95px;
-          width: 390px;
         }
+
+        .point-grid {
+          grid-template-columns: repeat(4, minmax(0, 1fr));
+        }
+
+        #readout-card {
+          width: min(520px, calc(100vw - 38px));
+          right: auto;
+          left: 18px;
+        }
+      }
+
+      @media (min-width: 960px) {
+        #app-header {
+          top: 16px;
+          left: 18px;
+          right: 18px;
+        }
+
+        .brand-panel {
+          max-width: 320px;
+          padding: 10px 13px 10px 10px;
+        }
+
+        .brand-mark {
+          width: 39px;
+          height: 39px;
+          flex-basis: 39px;
+        }
+
+        .eyebrow {
+          font-size: 8.5px;
+        }
+
+        .brand-panel h1 {
+          font-size: 15px;
+        }
+
+        .brand-subtitle {
+          font-size: 10px;
+        }
+
+        #meta-card {
+          top: 88px;
+          left: 18px;
+          width: 340px;
+          grid-template-columns: 1fr 1fr;
+        }
+
+        #drawer {
+          top: 16px;
+          right: 16px;
+          bottom: 103px;
+          left: auto;
+          width: 310px;
+          max-height: none;
+          padding: 0;
+          overflow: visible;
+          transform: none;
+          transition: none;
+        }
+
+        .drawer-shell {
+          max-height: calc(100dvh - 120px);
+          overflow: auto;
+          border-radius: 18px;
+          scrollbar-width: thin;
+        }
+
+        .drawer-grabber,
+        .drawer-head .close-button {
+          display: none;
+        }
+
+        .drawer-head {
+          padding: 14px 15px 9px;
+        }
+
+        .drawer-content {
+          padding: 0 11px 12px;
+        }
+
+        #drawer-button {
+          display: none;
+        }
+
+        #drawer-scrim {
+          display: none;
+        }
+
+        #legend-card {
+          bottom: 104px;
+          left: 18px;
+          width: 350px;
+        }
+
+        #timeline {
+          right: 18px;
+          bottom: 14px;
+          left: 18px;
+          min-height: 72px;
+          padding: 10px 13px;
+        }
+
+        .speed-controls {
+          display: flex;
+        }
+
+        #time-label,
+        #lead-label {
+          font-size: 11px;
+        }
+
         .maplibregl-ctrl-bottom-right {
-          bottom: 100px !important;
-          right: 14px !important;
+          right: 338px !important;
+          bottom: 108px !important;
+        }
+
+        body.readout-open #legend-card {
+          opacity: 1;
+          transform: none;
+        }
+      }
+
+      @media (prefers-reduced-motion: reduce) {
+        *,
+        *::before,
+        *::after {
+          scroll-behavior: auto !important;
+          transition-duration: 0.01ms !important;
+          animation-duration: 0.01ms !important;
+          animation-iteration-count: 1 !important;
         }
       }
     </style>
   </head>
   <body>
-    <div id="map"></div>
-    <canvas id="particles"></canvas><canvas id="vectors"></canvas>
-    <div id="brand" class="glass">
-      ITALIA METEOHUB
-      <div class="desktop-info">
-        ICON-2I · Dati modellistici · <span id="run">Run n/d</span><br /><span
-          id="valid"
-          >Validità --</span
-        >
+    <div id="map" aria-label="Mappa meteorologica interattiva"></div>
+    <canvas id="particle-canvas" aria-hidden="true"></canvas>
+    <canvas id="vector-canvas" aria-hidden="true"></canvas>
+    <div id="map-vignette" aria-hidden="true"></div>
+
+    <header id="app-header">
+      <div class="brand-panel surface">
+        <div class="brand-mark" aria-hidden="true">
+          <svg class="icon" viewBox="0 0 24 24">
+            <path d="M3 13c2.2 0 2.2-2 4.4-2s2.2 2 4.4 2 2.2-2 4.4-2 2.2 2 4.4 2"></path>
+            <path d="M4 17c2 0 2-1.8 4-1.8s2 1.8 4 1.8 2-1.8 4-1.8 2 1.8 4 1.8"></path>
+            <path d="M11.8 3.5v4.2"></path>
+            <path d="M9.7 5.6h4.2"></path>
+          </svg>
+        </div>
+        <div>
+          <div class="eyebrow">Italia · meteo modellistico</div>
+          <h1>METEOHUB</h1>
+          <p class="brand-subtitle">ICON-2I · alta risoluzione</p>
+        </div>
       </div>
-    </div>
-    <button id="clean" class="top-btn" onclick="toggleClean()">
-      SOLO MAPPA</button
-    ><button id="controls" class="top-btn" onclick="toggleControls()">
-      CONTROLLI
-    </button>
-    <section id="side">
-      <div class="panel glass">
-        <button class="gps" onclick="myWeather()">📍 Il mio meteo</button>
-      </div>
-      <div class="panel glass">
-        <h2>Campi modellistici</h2>
-        <button
-          class="option active"
-          data-layer="temp"
-          onclick="setLayer('temp')"
-        >
-          Temperatura 2 m <i class="dot"></i></button
-        ><button class="option" data-layer="feels" onclick="setLayer('feels')">
-          Temperatura percepita <i class="dot"></i></button
-        ><button class="option" data-layer="wind" onclick="setLayer('wind')">
-          Vento a 10 m <i class="dot"></i></button
-        ><button class="option" data-layer="rain" onclick="setLayer('rain')">
-          Precipitazioni <i class="dot"></i></button
-        ><button class="option" data-layer="cloud" onclick="setLayer('cloud')">
-          Nuvolosità <i class="dot"></i></button
-        ><button class="option" data-layer="rh" onclick="setLayer('rh')">
-          Umidità relativa <i class="dot"></i></button
-        ><button class="option" data-layer="press" onclick="setLayer('press')">
-          Pressione al suolo <i class="dot"></i>
+      <div id="header-actions">
+        <button id="clean-button" class="header-button" type="button" aria-pressed="false" aria-label="Attiva solo mappa">
+          <svg class="icon" viewBox="0 0 24 24">
+            <path d="M4 7V4h3"></path>
+            <path d="M20 7V4h-3"></path>
+            <path d="M4 17v3h3"></path>
+            <path d="M20 17v3h-3"></path>
+          </svg>
+          <span>Solo mappa</span>
+        </button>
+        <button id="drawer-button" class="header-button primary" type="button" aria-expanded="false" aria-controls="drawer">
+          <svg class="icon" viewBox="0 0 24 24">
+            <path d="M4 6h16"></path>
+            <path d="M4 12h16"></path>
+            <path d="M4 18h16"></path>
+          </svg>
+          <span>Livelli</span>
         </button>
       </div>
-      <div class="panel glass">
-        <h2>Overlay sinottici</h2>
-        <button id="flow" class="option" onclick="toggleParticles()">
-          Streamline vento <i class="dot"></i></button
-        ><button id="vectors-btn" class="option" onclick="toggleVectors()">
-          Vettori vento <i class="dot"></i></button
-        ><button id="iso" class="option" onclick="toggleIsobars()">
-          Isobare + alta/bassa <i class="dot"></i></button
-        ><button id="grid" class="option" onclick="toggleGrid()">
-          Griglia raw <i class="dot"></i>
-        </button>
+    </header>
+
+    <section id="meta-card" class="surface" aria-label="Metadati della previsione">
+      <div class="meta-item">
+        <div class="micro-label">Run del modello</div>
+        <strong id="run-value" class="meta-value">In attesa dei dati</strong>
+      </div>
+      <div class="meta-item">
+        <div class="micro-label">Validità</div>
+        <strong id="valid-value" class="meta-value">--</strong>
+      </div>
+      <div class="sample-badge">
+        <span class="sample-dot"></span>
+        <span id="sample-value">Interpolazione bilineare · griglia ICON-2I</span>
       </div>
     </section>
-    <section id="legend" class="glass">
+
+    <div id="drawer-scrim" aria-hidden="true"></div>
+    <aside id="drawer" aria-label="Livelli e strumenti mappa">
+      <div class="drawer-shell">
+        <div class="drawer-grabber" aria-hidden="true"></div>
+        <header class="drawer-head">
+          <div>
+            <h2>Livelli e analisi</h2>
+            <p>Campi ICON-2I e strumenti sinottici</p>
+          </div>
+          <button id="drawer-close" class="close-button" type="button" aria-label="Chiudi pannello">
+            <svg class="icon" viewBox="0 0 24 24">
+              <path d="M6 6l12 12"></path>
+              <path d="M18 6L6 18"></path>
+            </svg>
+          </button>
+        </header>
+
+        <div class="drawer-content">
+          <section class="drawer-section">
+            <div class="section-title">
+              <h3>Campo modellistico</h3>
+              <span>tocca per cambiare</span>
+            </div>
+            <div class="layer-grid">
+              <button class="layer-card active" type="button" data-layer="temp" style="--swatch: linear-gradient(#ffcc3e,#ec3c68)">
+                <span class="layer-swatch"></span><span><b>Temperatura</b><small>a 2 metri</small></span>
+              </button>
+              <button class="layer-card" type="button" data-layer="feels" style="--swatch: linear-gradient(#ffcd3a,#e24078)">
+                <span class="layer-swatch"></span><span><b>Apparente</b><small>stima Steadman</small></span>
+              </button>
+              <button class="layer-card" type="button" data-layer="wind" style="--swatch: linear-gradient(#2e8fc7,#d756a8)">
+                <span class="layer-swatch"></span><span><b>Vento</b><small>a 10 metri</small></span>
+              </button>
+              <button class="layer-card" type="button" data-layer="rain" style="--swatch: linear-gradient(#2c9fff,#a700d1)">
+                <span class="layer-swatch"></span><span><b>Precipitazioni</b><small>accumulo del passo</small></span>
+              </button>
+              <button class="layer-card" type="button" data-layer="cloud" style="--swatch: linear-gradient(#dae6ee,#606f80)">
+                <span class="layer-swatch"></span><span><b>Nuvolosità</b><small>copertura totale</small></span>
+              </button>
+              <button class="layer-card" type="button" data-layer="rh" style="--swatch: linear-gradient(#c69a4b,#3656a8)">
+                <span class="layer-swatch"></span><span><b>Umidità</b><small>relativa</small></span>
+              </button>
+              <button class="layer-card" type="button" data-layer="press" style="--swatch: linear-gradient(#257cc0,#ca783c)">
+                <span class="layer-swatch"></span><span><b>Pressione</b><small>al suolo</small></span>
+              </button>
+            </div>
+          </section>
+
+          <section class="drawer-section">
+            <button id="gps-button" class="gps-button" type="button">
+              <svg class="icon" viewBox="0 0 24 24">
+                <path d="M12 21s6-5.2 6-11A6 6 0 0 0 6 10c0 5.8 6 11 6 11z"></path>
+                <circle cx="12" cy="10" r="2"></circle>
+              </svg>
+              Il mio meteo sulla mappa
+            </button>
+          </section>
+
+          <section class="drawer-section">
+            <div class="section-title">
+              <h3>Analisi sinottica</h3>
+              <span>derivata dal campo</span>
+            </div>
+            <div class="toggle-list">
+              <button class="toggle-row" type="button" data-toggle="flow" aria-pressed="false">
+                <span><b>Particelle di vento</b><small>flusso reale da u/v</small></span><span class="switch"></span>
+              </button>
+              <button class="toggle-row" type="button" data-toggle="vectors" aria-pressed="false">
+                <span><b>Vettori di vento</b><small>direzione del flusso</small></span><span class="switch"></span>
+              </button>
+              <button class="toggle-row" type="button" data-toggle="isobars" aria-pressed="false">
+                <span><b>Isobare e A/B</b><small>passo 2 hPa</small></span><span class="switch"></span>
+              </button>
+            </div>
+          </section>
+
+          <section class="drawer-section">
+            <div class="section-title">
+              <h3>Presentazione</h3>
+              <span>lettura della griglia</span>
+            </div>
+            <div class="toggle-list">
+              <button class="toggle-row active" type="button" data-toggle="terrain" aria-pressed="true">
+                <span><b>Rilievo topografico</b><small>ombreggiatura del terreno</small></span><span class="switch"></span>
+              </button>
+              <button class="toggle-row" type="button" data-toggle="graticule" aria-pressed="false">
+                <span><b>Reticolo geografico</b><small>coordinate intere</small></span><span class="switch"></span>
+              </button>
+              <button class="toggle-row" type="button" data-toggle="raw" aria-pressed="false">
+                <span><b>Celle del modello</b><small>senza interpolazione</small></span><span class="switch"></span>
+              </button>
+            </div>
+          </section>
+
+          <p class="scientific-note">
+            Dati numerici ICON-2I. Le letture puntuali usano l'interpolazione selezionata e non sostituiscono allerte o bollettini ufficiali.
+          </p>
+        </div>
+      </div>
+    </aside>
+
+    <section id="legend-card" class="surface" aria-label="Legenda del campo attivo">
       <div class="legend-head">
-        <span id="legend-name">Temperatura 2 m</span
-        ><span id="legend-unit">°C</span>
+        <div>
+          <div class="micro-label">Campo attivo</div>
+          <h2 id="legend-title">Temperatura a 2 m</h2>
+        </div>
+        <span id="legend-unit">°C</span>
       </div>
-      <div id="gradient"></div>
-      <div id="ticks"></div>
+      <div id="legend-range">--</div>
+      <div id="legend-bar"></div>
+      <div id="legend-ticks"></div>
+      <p id="legend-note">Fasce discrete per distinguere con precisione le isoterme.</p>
     </section>
-    <section id="readout" class="glass">
-      <div class="readout-name" id="r-name">Valore puntuale</div>
-      <div class="value">
-        <span id="r-value">--</span> <small id="r-unit">--</small>
+
+    <section id="readout-card" class="surface" aria-live="polite" aria-label="Valori puntuali">
+      <button id="readout-close" class="readout-close" type="button" aria-label="Chiudi valori puntuali">
+        <svg class="icon" viewBox="0 0 24 24">
+          <path d="M6 6l12 12"></path>
+          <path d="M18 6L6 18"></path>
+        </svg>
+      </button>
+      <div id="point-title" class="readout-kicker">Punto selezionato</div>
+      <div class="readout-primary">
+        <span id="point-value">--</span><span id="point-unit">--</span>
       </div>
-      <div id="r-coords" class="coords">--</div>
-      <div class="details">
-        <div class="detail"><b>Temperatura</b><span id="d-temp">--</span></div>
-        <div class="detail"><b>Percepita</b><span id="d-feels">--</span></div>
-        <div class="detail"><b>Pioggia</b><span id="d-rain">--</span></div>
-        <div class="detail"><b>Vento</b><span id="d-wind">--</span></div>
-        <div class="detail"><b>Direzione</b><span id="d-dir">--</span></div>
-        <div class="detail"><b>Umidità</b><span id="d-rh">--</span></div>
-        <div class="detail"><b>Nuvolosità</b><span id="d-cloud">--</span></div>
-        <div class="detail"><b>Pressione</b><span id="d-press">--</span></div>
+      <div id="point-location">--</div>
+      <div id="point-sampling">--</div>
+      <div class="point-grid">
+        <div class="point-detail"><b>Temperatura 2 m</b><span id="detail-temp">--</span></div>
+        <div class="point-detail"><b>Apparente</b><span id="detail-feels">--</span></div>
+        <div class="point-detail"><b>Precipitazioni</b><span id="detail-rain">--</span></div>
+        <div class="point-detail"><b>Vento 10 m</b><span id="detail-wind">--</span></div>
+        <div class="point-detail"><b>Direzione</b><span id="detail-direction">--</span></div>
+        <div class="point-detail"><b>Umidità</b><span id="detail-rh">--</span></div>
+        <div class="point-detail"><b>Nuvolosità</b><span id="detail-cloud">--</span></div>
+        <div class="point-detail"><b>Pressione</b><span id="detail-pressure">--</span></div>
       </div>
     </section>
-    <section id="gps-card" class="glass">
-      <button class="gps-close" onclick="closeGps()">×</button>
-      <div class="stat"><b>Temp.</b><span id="g-temp">--</span></div>
-      <div class="stat"><b>Percepita</b><span id="g-feels">--</span></div>
-      <div class="stat"><b>Pioggia</b><span id="g-rain">--</span></div>
-      <div class="stat"><b>Vento</b><span id="g-wind">--</span></div>
-      <div class="stat"><b>Direzione</b><span id="g-dir">--</span></div>
-      <div class="stat"><b>Pressione</b><span id="g-press">--</span></div>
-    </section>
-    <section id="bar" class="glass">
-      <button id="play" onclick="togglePlay()">▶</button
-      ><input id="slider" type="range" min="0" max="0" value="0" />
-      <div class="speed">
-        <button class="active" onclick="speed(1150,this)">1×</button
-        ><button onclick="speed(650,this)">2×</button
-        ><button onclick="speed(350,this)">4×</button>
+
+    <section id="timeline" class="surface" aria-label="Sequenza temporale">
+      <button id="play-button" type="button" aria-label="Avvia animazione" aria-pressed="false">
+        <svg id="play-icon" class="icon" viewBox="0 0 24 24">
+          <path d="M8 5l11 7-11 7z" fill="currentColor" stroke="none"></path>
+        </svg>
+      </button>
+      <div class="timeline-main">
+        <input id="time-slider" type="range" min="0" max="0" value="0" aria-label="Orario della previsione" />
+        <div class="timeline-meta">
+          <span id="time-label">In attesa dei dati</span>
+          <span id="lead-label">--</span>
+        </div>
       </div>
-      <div id="time">--</div>
+      <div class="speed-controls" aria-label="Velocità animazione">
+        <button class="active" type="button" data-speed="1200">1×</button>
+        <button type="button" data-speed="700">2×</button>
+        <button type="button" data-speed="380">4×</button>
+      </div>
     </section>
-    <div id="loading" class="loading">Elaborazione dati…</div>
+
+    <div id="loading" role="status" aria-live="polite">
+      <span class="spinner"></span><span id="loading-text">Caricamento modello…</span>
+    </div>
+    <div id="toast" role="status" aria-live="polite"></div>
+
     <script>
-      const TEMP_STOPS = [
-        { v: -75, c: [31, 235, 243] },
-        { v: -65, c: [37, 210, 233] },
-        { v: -55, c: [42, 160, 185] },
-        { v: -45, c: [49, 112, 143] },
-        { v: -35, c: [59, 57, 103] },
-        { v: -30, c: [115, 62, 141] },
-        { v: -26, c: [157, 56, 150] },
-        { v: -22, c: [202, 47, 201] },
-        { v: -18, c: [101, 76, 222] },
-        { v: -14, c: [70, 101, 210] },
-        { v: -10, c: [80, 142, 224] },
-        { v: -6, c: [100, 181, 232] },
-        { v: -2, c: [153, 223, 238] },
-        { v: 2, c: [35, 237, 148] },
-        { v: 6, c: [49, 198, 151] },
-        { v: 10, c: [69, 157, 110] },
-        { v: 14, c: [111, 183, 81] },
-        { v: 18, c: [207, 237, 131] },
-        { v: 22, c: [255, 244, 104] },
-        { v: 26, c: [255, 205, 62] },
-        { v: 30, c: [255, 157, 43] },
-        { v: 33, c: [255, 105, 54] },
+      const TEMP_BANDS = [
+        { v: -75, c: [30, 231, 241] },
+        { v: -65, c: [33, 207, 232] },
+        { v: -55, c: [39, 165, 188] },
+        { v: -45, c: [48, 115, 145] },
+        { v: -35, c: [61, 61, 103] },
+        { v: -30, c: [116, 63, 142] },
+        { v: -26, c: [157, 57, 151] },
+        { v: -22, c: [204, 48, 204] },
+        { v: -18, c: [103, 77, 223] },
+        { v: -14, c: [71, 102, 211] },
+        { v: -10, c: [78, 141, 224] },
+        { v: -6, c: [99, 181, 232] },
+        { v: -2, c: [153, 222, 238] },
+        { v: 2, c: [30, 233, 148] },
+        { v: 6, c: [51, 201, 151] },
+        { v: 10, c: [68, 157, 111] },
+        { v: 14, c: [110, 183, 81] },
+        { v: 18, c: [207, 237, 130] },
+        { v: 22, c: [255, 244, 103] },
+        { v: 26, c: [255, 205, 61] },
+        { v: 30, c: [255, 157, 42] },
+        { v: 33, c: [255, 106, 54] },
         { v: 36, c: [243, 65, 83] },
-        { v: 39, c: [224, 52, 128] },
-        { v: 42, c: [239, 65, 194] },
-        { v: 46, c: [164, 41, 96] },
+        { v: 39, c: [224, 51, 128] },
+        { v: 42, c: [239, 64, 194] },
+        { v: 46, c: [164, 41, 96] }
       ];
-      const WIND = [
-        { v: 0, c: [30, 37, 48], a: 0.55 },
-        { v: 10, c: [0, 100, 165] },
-        { v: 25, c: [0, 180, 150] },
-        { v: 45, c: [210, 205, 40] },
-        { v: 70, c: [220, 125, 0] },
-        { v: 100, c: [180, 0, 42] },
-        { v: 130, c: [115, 0, 150] },
+
+      const WIND_STOPS = [
+        { v: 0, c: [91, 126, 151], a: 0.35 },
+        { v: 10, c: [51, 147, 203], a: 0.62 },
+        { v: 20, c: [32, 188, 197], a: 0.7 },
+        { v: 35, c: [53, 191, 126], a: 0.76 },
+        { v: 50, c: [208, 207, 54], a: 0.82 },
+        { v: 70, c: [245, 151, 46], a: 0.86 },
+        { v: 90, c: [226, 70, 53], a: 0.9 },
+        { v: 110, c: [176, 44, 127], a: 0.92 },
+        { v: 130, c: [120, 50, 156], a: 0.94 }
       ];
-      const RAIN = [
+
+      const RAIN_STOPS = [
         { v: 0, c: [0, 0, 0], a: 0 },
-        { v: 0.1, c: [125, 205, 255], a: 0.58 },
-        { v: 1, c: [50, 150, 255] },
-        { v: 2, c: [0, 85, 220] },
-        { v: 5, c: [0, 170, 100] },
-        { v: 10, c: [255, 230, 0] },
-        { v: 20, c: [255, 125, 0] },
-        { v: 40, c: [225, 0, 75] },
-        { v: 80, c: [160, 0, 210] },
+        { v: 0.1, c: [95, 203, 255], a: 0.5 },
+        { v: 0.5, c: [47, 150, 255], a: 0.62 },
+        { v: 2, c: [30, 88, 215], a: 0.72 },
+        { v: 5, c: [22, 174, 100], a: 0.78 },
+        { v: 10, c: [238, 218, 48], a: 0.83 },
+        { v: 20, c: [252, 137, 40], a: 0.88 },
+        { v: 40, c: [220, 40, 84], a: 0.92 },
+        { v: 80, c: [149, 18, 172], a: 0.95 }
       ];
-      const CLOUD = [
+
+      const CLOUD_STOPS = [
         { v: 0, c: [255, 255, 255], a: 0 },
-        { v: 15, c: [185, 195, 210], a: 0.28 },
-        { v: 50, c: [155, 165, 185], a: 0.55 },
-        { v: 85, c: [120, 130, 155], a: 0.75 },
-        { v: 100, c: [90, 100, 125], a: 0.86 },
+        { v: 10, c: [221, 229, 235], a: 0.16 },
+        { v: 35, c: [175, 190, 202], a: 0.38 },
+        { v: 65, c: [123, 144, 160], a: 0.58 },
+        { v: 85, c: [84, 104, 123], a: 0.72 },
+        { v: 100, c: [50, 67, 87], a: 0.8 }
       ];
-      const RH = [
-        { v: 0, c: [150, 78, 36] },
-        { v: 35, c: [190, 170, 72] },
-        { v: 65, c: [72, 170, 175] },
-        { v: 85, c: [55, 100, 190] },
-        { v: 100, c: [70, 42, 155] },
+
+      const RH_STOPS = [
+        { v: 0, c: [181, 105, 50], a: 0.62 },
+        { v: 25, c: [206, 170, 68], a: 0.66 },
+        { v: 45, c: [162, 196, 101], a: 0.7 },
+        { v: 65, c: [71, 173, 168], a: 0.76 },
+        { v: 80, c: [51, 123, 193], a: 0.82 },
+        { v: 100, c: [74, 61, 157], a: 0.86 }
       ];
-      const PRESS = [
-        { v: 980, c: [0, 85, 150] },
-        { v: 995, c: [70, 145, 190] },
-        { v: 1013, c: [220, 220, 220] },
-        { v: 1025, c: [215, 155, 70] },
-        { v: 1040, c: [155, 80, 35] },
+
+      const PRESS_STOPS = [
+        { v: 970, c: [37, 95, 164], a: 0.68 },
+        { v: 985, c: [58, 139, 192], a: 0.68 },
+        { v: 1000, c: [135, 181, 205], a: 0.64 },
+        { v: 1013, c: [230, 234, 232], a: 0.48 },
+        { v: 1025, c: [233, 178, 91], a: 0.64 },
+        { v: 1040, c: [183, 94, 55], a: 0.7 }
       ];
-      const INFO = {
+
+      const LAYER_INFO = {
         temp: {
-          label: "Temperatura 2 m",
+          label: "Temperatura a 2 m",
           unit: "°C",
-          stops: TEMP_STOPS,
-          dec: 1,
-          step: true,
-          ticks: [-20, -10, 0, 10, 18, 22, 26, 30, 33, 36, 39, 42, 46],
+          stops: TEMP_BANDS,
+          discrete: true,
+          decimals: 1,
+          ticks: [-40, -20, -10, 0, 10, 18, 22, 26, 30, 33, 36, 39, 42, 46],
+          note: "Fasce discrete su tutta la scala termica, utili per leggere isoterme e soglie.",
+          opacity: 0.8,
+          terrainOpacity: 0.42
         },
         feels: {
-          label: "Temperatura percepita",
+          label: "Temperatura apparente",
           unit: "°C",
-          stops: TEMP_STOPS,
-          dec: 1,
-          step: true,
-          ticks: [-20, -10, 0, 10, 18, 22, 26, 30, 33, 36, 39, 42, 46],
+          stops: TEMP_BANDS,
+          discrete: true,
+          decimals: 1,
+          ticks: [-40, -20, -10, 0, 10, 18, 22, 26, 30, 33, 36, 39, 42, 46],
+          note: "Stima di temperatura apparente secondo la formulazione di Steadman.",
+          opacity: 0.8,
+          terrainOpacity: 0.4
         },
         wind: {
           label: "Vento a 10 m",
           unit: "km/h",
-          stops: WIND,
-          dec: 0,
-          ticks: [0, 10, 25, 45, 70, 100, 130],
+          stops: WIND_STOPS,
+          decimals: 0,
+          ticks: [0, 10, 20, 35, 50, 70, 90, 110, 130],
+          note: "Intensità ricavata dalle componenti orizzontali u e v del vento.",
+          opacity: 0.76,
+          terrainOpacity: 0.31
         },
         rain: {
           label: "Precipitazioni",
           unit: "mm",
-          stops: RAIN,
-          dec: 1,
-          ticks: [0.1, 1, 5, 10, 20, 40, 80],
+          stops: RAIN_STOPS,
+          decimals: 1,
+          ticks: [0.1, 0.5, 2, 5, 10, 20, 40, 80],
+          note: "Accumulo previsto nel passo temporale disponibile nel modello.",
+          opacity: 0.9,
+          terrainOpacity: 0.23
         },
         cloud: {
           label: "Nuvolosità",
           unit: "%",
-          stops: CLOUD,
-          dec: 0,
-          ticks: [0, 25, 50, 75, 100],
+          stops: CLOUD_STOPS,
+          decimals: 0,
+          ticks: [0, 10, 35, 65, 85, 100],
+          note: "Copertura nuvolosa totale: trasparente con cielo poco nuvoloso.",
+          opacity: 0.78,
+          terrainOpacity: 0.27
         },
         rh: {
           label: "Umidità relativa",
           unit: "%",
-          stops: RH,
-          dec: 0,
-          ticks: [0, 40, 60, 80, 100],
+          stops: RH_STOPS,
+          decimals: 0,
+          ticks: [0, 25, 45, 65, 80, 100],
+          note: "Rapporto percentuale tra vapore presente e saturazione alla temperatura locale.",
+          opacity: 0.78,
+          terrainOpacity: 0.34
         },
         press: {
           label: "Pressione al suolo",
           unit: "hPa",
-          stops: PRESS,
-          dec: 0,
-          ticks: [980, 995, 1013, 1025, 1040],
-        },
+          stops: PRESS_STOPS,
+          decimals: 0,
+          ticks: [970, 985, 1000, 1013, 1025, 1040],
+          note: "Con isobare a passo di 2 hPa e centri A/B derivati dal campo di pressione.",
+          opacity: 0.7,
+          terrainOpacity: 0.32
+        }
       };
-      let map,
-        catalog = [],
-        data,
-        current = 0,
-        layer = "temp",
-        playing = false,
-        delay = 1150,
-        raw = false,
-        showFlow = false,
-        showVectors = false,
-        showIso = false,
-        loadId = 0,
-        raf = null,
-        last = 0,
-        particles = [];
-      const cache = new Map(),
-        LIMIT = 5;
-      const raster = document.createElement("canvas"),
-        rctx = raster.getContext("2d");
-      const pc = document.getElementById("particles"),
-        pctx = pc.getContext("2d"),
-        vc = document.getElementById("vectors"),
-        vctx = vc.getContext("2d");
-      const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
-      const grid = (x) => x?.data || x;
-      const rgba = (c, a = 1) => `rgba(${c[0]},${c[1]},${c[2]},${a})`;
-      function colour(v, stops, step = false) {
-        if (!Number.isFinite(v)) return [0, 0, 0, 0];
-        if (step) {
-          let s = stops[0];
-          for (const x of stops) {
-            if (v >= x.v) s = x;
+
+      const PARTICLE_CONFIG = {
+        targetFps: 30,
+        fade: 0.86,
+        minLife: 46,
+        maxLife: 112,
+        minimumSpeed: 0.45
+      };
+
+      const ui = {
+        drawer: document.getElementById("drawer"),
+        drawerButton: document.getElementById("drawer-button"),
+        drawerClose: document.getElementById("drawer-close"),
+        drawerScrim: document.getElementById("drawer-scrim"),
+        cleanButton: document.getElementById("clean-button"),
+        runValue: document.getElementById("run-value"),
+        validValue: document.getElementById("valid-value"),
+        sampleValue: document.getElementById("sample-value"),
+        legendTitle: document.getElementById("legend-title"),
+        legendUnit: document.getElementById("legend-unit"),
+        legendRange: document.getElementById("legend-range"),
+        legendBar: document.getElementById("legend-bar"),
+        legendTicks: document.getElementById("legend-ticks"),
+        legendNote: document.getElementById("legend-note"),
+        slider: document.getElementById("time-slider"),
+        timeLabel: document.getElementById("time-label"),
+        leadLabel: document.getElementById("lead-label"),
+        playButton: document.getElementById("play-button"),
+        playIcon: document.getElementById("play-icon"),
+        gpsButton: document.getElementById("gps-button"),
+        loading: document.getElementById("loading"),
+        loadingText: document.getElementById("loading-text"),
+        toast: document.getElementById("toast"),
+        readout: document.getElementById("readout-card"),
+        readoutClose: document.getElementById("readout-close"),
+        pointTitle: document.getElementById("point-title"),
+        pointValue: document.getElementById("point-value"),
+        pointUnit: document.getElementById("point-unit"),
+        pointLocation: document.getElementById("point-location"),
+        pointSampling: document.getElementById("point-sampling"),
+        detailTemp: document.getElementById("detail-temp"),
+        detailFeels: document.getElementById("detail-feels"),
+        detailRain: document.getElementById("detail-rain"),
+        detailWind: document.getElementById("detail-wind"),
+        detailDirection: document.getElementById("detail-direction"),
+        detailRh: document.getElementById("detail-rh"),
+        detailCloud: document.getElementById("detail-cloud"),
+        detailPressure: document.getElementById("detail-pressure")
+      };
+
+      const rasterCanvas = document.createElement("canvas");
+      const rasterContext = rasterCanvas.getContext("2d");
+      const particleCanvas = document.getElementById("particle-canvas");
+      const particleContext = particleCanvas.getContext("2d", { alpha: true });
+      const vectorCanvas = document.getElementById("vector-canvas");
+      const vectorContext = vectorCanvas.getContext("2d", { alpha: true });
+
+      let map;
+      let mapLoaded = false;
+      let currentData = null;
+      let catalog = [];
+      let currentIndex = 0;
+      let activeLayer = "temp";
+      let loadingToken = 0;
+      let isPlaying = false;
+      let playbackDelay = 1200;
+      let useNearestCell = false;
+      let showParticles = false;
+      let showVectors = false;
+      let showIsobars = false;
+      let showTerrain = true;
+      let showGraticule = false;
+      let isMapMoving = false;
+      let selectedPoint = null;
+      let particleFrame = null;
+      let lastParticleFrame = 0;
+      let lastParticleTime = performance.now();
+      let particles = [];
+      let particleTarget = 420;
+      let toastTimer = null;
+
+      const stepCache = new Map();
+      const CACHE_LIMIT = 6;
+      const prefersReducedMotion = window.matchMedia && window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+
+      function clamp(value, minimum, maximum) {
+        return Math.max(minimum, Math.min(maximum, value));
+      }
+
+      function getGrid(field) {
+        return field && field.data ? field.data : field;
+      }
+
+      function rgba(color, alpha) {
+        return "rgba(" + Math.round(color[0]) + "," + Math.round(color[1]) + "," + Math.round(color[2]) + "," + alpha + ")";
+      }
+
+      function colorFor(value, info) {
+        if (!Number.isFinite(value)) return [0, 0, 0, 0];
+
+        const stops = info.stops;
+        if (info.discrete) {
+          let selected = stops[0];
+          for (let i = 0; i < stops.length; i += 1) {
+            if (value >= stops[i].v) selected = stops[i];
             else break;
           }
-          return [...s.c, s.a ?? 0.92];
+          return [selected.c[0], selected.c[1], selected.c[2], selected.a === undefined ? 0.92 : selected.a];
         }
-        if (v <= stops[0].v) return [...stops[0].c, stops[0].a ?? 0.86];
-        for (let i = 0; i < stops.length - 1; i++) {
-          let a = stops[i],
-            b = stops[i + 1];
-          if (v <= b.v) {
-            let t = (v - a.v) / (b.v - a.v);
+
+        if (value <= stops[0].v) {
+          return [stops[0].c[0], stops[0].c[1], stops[0].c[2], stops[0].a === undefined ? 0.86 : stops[0].a];
+        }
+
+        for (let index = 0; index < stops.length - 1; index += 1) {
+          const first = stops[index];
+          const second = stops[index + 1];
+          if (value <= second.v) {
+            const ratio = (value - first.v) / (second.v - first.v);
+            const firstAlpha = first.a === undefined ? 0.86 : first.a;
+            const secondAlpha = second.a === undefined ? 0.86 : second.a;
             return [
-              a.c[0] * (1 - t) + b.c[0] * t,
-              a.c[1] * (1 - t) + b.c[1] * t,
-              a.c[2] * (1 - t) + b.c[2] * t,
-              (a.a ?? 0.86) * (1 - t) + (b.a ?? 0.86) * t,
+              first.c[0] * (1 - ratio) + second.c[0] * ratio,
+              first.c[1] * (1 - ratio) + second.c[1] * ratio,
+              first.c[2] * (1 - ratio) + second.c[2] * ratio,
+              firstAlpha * (1 - ratio) + secondAlpha * ratio
             ];
           }
         }
-        return [...stops.at(-1).c, stops.at(-1).a ?? 0.86];
+
+        const lastStop = stops[stops.length - 1];
+        return [lastStop.c[0], lastStop.c[1], lastStop.c[2], lastStop.a === undefined ? 0.86 : lastStop.a];
       }
-      function bilinear(a, x, y, nx, ny) {
-        a = grid(a);
-        if (!a) return NaN;
-        let px = clamp(x, 0, nx - 1),
-          py = clamp(y, 0, ny - 1),
-          ix = clamp(Math.floor(px), 0, nx - 2),
-          iy = clamp(Math.floor(py), 0, ny - 2),
-          fx = px - ix,
-          fy = py - iy,
-          i = iy * nx + ix;
+
+      function sampleBilinear(array, gx, gy, nx, ny) {
+        const values = getGrid(array);
+        if (!values) return NaN;
+        if (nx < 2 || ny < 2) return sampleNearest(values, gx, gy, nx, ny);
+
+        const x = clamp(gx, 0, nx - 1);
+        const y = clamp(gy, 0, ny - 1);
+        const x0 = clamp(Math.floor(x), 0, nx - 2);
+        const y0 = clamp(Math.floor(y), 0, ny - 2);
+        const fx = x - x0;
+        const fy = y - y0;
+        const index = y0 * nx + x0;
+
         return (
-          a[i] * (1 - fx) * (1 - fy) +
-          a[i + 1] * fx * (1 - fy) +
-          a[i + nx] * (1 - fx) * fy +
-          a[i + nx + 1] * fx * fy
+          values[index] * (1 - fx) * (1 - fy) +
+          values[index + 1] * fx * (1 - fy) +
+          values[index + nx] * (1 - fx) * fy +
+          values[index + nx + 1] * fx * fy
         );
       }
-      function nearest(a, x, y, nx, ny) {
-        a = grid(a);
-        return (
-          a?.[
-            clamp(Math.round(y), 0, ny - 1) * nx +
-              clamp(Math.round(x), 0, nx - 1)
-          ] ?? NaN
-        );
+
+      function sampleNearest(array, gx, gy, nx, ny) {
+        const values = getGrid(array);
+        if (!values) return NaN;
+        const x = clamp(Math.round(gx), 0, nx - 1);
+        const y = clamp(Math.round(gy), 0, ny - 1);
+        const value = values[y * nx + x];
+        return value === undefined ? NaN : value;
       }
-      function sample(a, x, y) {
-        let m = data.meta;
-        return (raw ? nearest : bilinear)(a, x, y, m.nx, m.ny);
+
+      function sample(array, gx, gy) {
+        if (!currentData) return NaN;
+        const meta = currentData.meta;
+        return (useNearestCell ? sampleNearest : sampleBilinear)(array, gx, gy, meta.nx, meta.ny);
       }
-      function field(k, x, y) {
-        if (!data) return NaN;
-        if (k === "wind") {
-          let u = sample(data.wind_u, x, y),
-            v = sample(data.wind_v, x, y);
-          return Math.hypot(u, v) * 3.6;
+
+      function fieldValue(key, gx, gy) {
+        if (!currentData) return NaN;
+
+        if (key === "wind") {
+          const vector = windUV(gx, gy);
+          return Math.hypot(vector.u, vector.v) * 3.6;
         }
-        return sample(data[k === "feels" ? "feels_like" : k], x, y);
+
+        const dataKey = key === "feels" ? "feels_like" : key;
+        return sample(currentData[dataKey], gx, gy);
       }
-      function uv(x, y) {
-        return { u: sample(data.wind_u, x, y), v: sample(data.wind_v, x, y) };
+
+      function windUV(gx, gy) {
+        return {
+          u: sample(currentData && currentData.wind_u, gx, gy),
+          v: sample(currentData && currentData.wind_v, gx, gy)
+        };
       }
-      function windDir(u, v) {
-        return Number.isFinite(u) && Number.isFinite(v)
-          ? ((Math.atan2(u, v) * 180) / Math.PI + 540) % 360
-          : NaN;
+
+      function windDirectionFrom(u, v) {
+        if (!Number.isFinite(u) || !Number.isFinite(v)) return NaN;
+        return (Math.atan2(u, v) * 180 / Math.PI + 540) % 360;
       }
-      function compass(d) {
-        return Number.isFinite(d)
-          ? [
-              "N",
-              "NNE",
-              "NE",
-              "ENE",
-              "E",
-              "ESE",
-              "SE",
-              "SSE",
-              "S",
-              "SSW",
-              "SW",
-              "WSW",
-              "W",
-              "WNW",
-              "NW",
-              "NNW",
-            ][Math.round(d / 22.5) % 16]
-          : "--";
+
+      function compassDirection(degrees) {
+        if (!Number.isFinite(degrees)) return "--";
+        const directions = ["N", "NNE", "NE", "ENE", "E", "ESE", "SE", "SSE", "S", "SSW", "SW", "WSW", "W", "WNW", "NW", "NNW"];
+        return directions[Math.round(degrees / 22.5) % 16];
       }
-      function fmt(v, n, u) {
-        return Number.isFinite(v) ? `${v.toFixed(n)} ${u}` : "--";
+
+      function formatValue(value, decimals, unit) {
+        return Number.isFinite(value) ? value.toFixed(decimals) + " " + unit : "--";
       }
-      function resize() {
-        let dpr = Math.min(devicePixelRatio || 1, innerWidth < 921 ? 1.5 : 2);
-        for (const [c, x] of [
-          [pc, pctx],
-          [vc, vctx],
-        ]) {
-          c.width = innerWidth * dpr;
-          c.height = innerHeight * dpr;
-          x.setTransform(dpr, 0, 0, dpr, 0, 0);
+
+      function formatWindDirection(degrees) {
+        return Number.isFinite(degrees) ? "da " + Math.round(degrees) + "° " + compassDirection(degrees) : "--";
+      }
+
+      function parseCatalogDate(item) {
+        if (!item) return null;
+
+        if (item.validTime) {
+          const parsed = new Date(item.validTime);
+          if (!Number.isNaN(parsed.getTime())) return parsed;
         }
+
+        const match = item.label && item.label.match(/(\d{1,2})\/(\d{1,2})\s+(\d{1,2}):(\d{2})/);
+        if (!match) return null;
+        const now = new Date();
+        return new Date(now.getFullYear(), Number(match[2]) - 1, Number(match[1]), Number(match[3]), Number(match[4]));
+      }
+
+      function formatDateTime(date) {
+        if (!date) return "--";
+        return new Intl.DateTimeFormat("it-IT", {
+          timeZone: "Europe/Rome",
+          weekday: "short",
+          day: "2-digit",
+          month: "short",
+          hour: "2-digit",
+          minute: "2-digit"
+        }).format(date).replace(",", " ·");
+      }
+
+      function formatRun(item) {
+        const run = item && (item.runTime || item.run || item.model_run || item.init || item.init_time);
+        const date = run ? new Date(run) : null;
+        if (date && !Number.isNaN(date.getTime())) {
+          return "Run " + new Intl.DateTimeFormat("it-IT", {
+            timeZone: "Europe/Rome",
+            day: "2-digit",
+            month: "short",
+            hour: "2-digit",
+            minute: "2-digit"
+          }).format(date).replace(",", " ·");
+        }
+        return run ? "Run " + run : "Run ICON-2I";
+      }
+
+      function leadHours(index) {
+        const item = catalog[index] || {};
+        if (Number.isFinite(Number(item.leadHours))) return Number(item.leadHours);
+
+        const start = parseCatalogDate(catalog[0]);
+        const date = parseCatalogDate(item);
+        return start && date ? Math.round((date - start) / 3600000) : null;
+      }
+
+      function showLoading(message) {
+        ui.loadingText.textContent = message || "Elaborazione dati…";
+        ui.loading.classList.add("visible");
+      }
+
+      function hideLoading() {
+        ui.loading.classList.remove("visible");
+      }
+
+      function toast(message) {
+        clearTimeout(toastTimer);
+        ui.toast.textContent = message;
+        ui.toast.classList.add("visible");
+        toastTimer = setTimeout(function () {
+          ui.toast.classList.remove("visible");
+        }, 2800);
+      }
+
+      function cacheStep(index, value) {
+        if (stepCache.has(index)) stepCache.delete(index);
+        stepCache.set(index, value);
+        while (stepCache.size > CACHE_LIMIT) {
+          stepCache.delete(stepCache.keys().next().value);
+        }
+      }
+
+      function hasLayerData(key) {
+        if (!currentData) return true;
+        if (key === "feels") return Boolean(currentData.feels_like);
+        if (key === "wind") return Boolean(currentData.wind_u && currentData.wind_v);
+        return Boolean(getGrid(currentData[key]));
+      }
+
+      function prepareData(data) {
+        if (!data || !data.meta) return;
+
+        const meta = data.meta;
+        const temperature = getGrid(data.temp);
+        const humidity = getGrid(data.rh);
+        const u = getGrid(data.wind_u);
+        const v = getGrid(data.wind_v);
+
+        if (temperature && humidity && u && v) {
+          const length = meta.nx * meta.ny;
+          data.feels_like = new Float32Array(length);
+
+          for (let index = 0; index < length; index += 1) {
+            const temp = temperature[index];
+            const relativeHumidity = clamp(humidity[index], 0, 100);
+            const speed = Math.hypot(u[index], v[index]);
+            const vaporPressure = (relativeHumidity / 100) * 6.105 * Math.exp((17.27 * temp) / (237.7 + temp));
+            data.feels_like[index] = temp + 0.33 * vaporPressure - 0.7 * speed - 4;
+          }
+        }
+      }
+
+      async function fetchStep(index) {
+        if (stepCache.has(index)) {
+          const cached = stepCache.get(index);
+          cacheStep(index, cached);
+          return cached;
+        }
+
+        const response = await fetch("data_weather/" + catalog[index].file);
+        if (!response.ok) throw new Error("Dati non disponibili per questo passo");
+        const data = await response.json();
+        prepareData(data);
+        cacheStep(index, data);
+        return data;
+      }
+
+      async function prefetchStep(index) {
+        if (!catalog[index] || stepCache.has(index)) return;
+        try {
+          const response = await fetch("data_weather/" + catalog[index].file);
+          if (!response.ok) return;
+          const next = await response.json();
+          prepareData(next);
+          cacheStep(index, next);
+        } catch (error) {
+          console.warn("Prefetch non riuscito", error);
+        }
+      }
+
+      async function loadCatalog() {
+        try {
+          showLoading("Lettura del catalogo ICON-2I…");
+          const response = await fetch("data_weather/catalog.json?t=" + Date.now());
+          if (!response.ok) throw new Error("Catalogo non disponibile");
+          catalog = await response.json();
+
+          ui.slider.max = Math.max(catalog.length - 1, 0);
+          ui.slider.min = 0;
+
+          let bestIndex = 0;
+          let minimumDifference = Infinity;
+          const now = Date.now();
+
+          catalog.forEach(function (item, index) {
+            const date = parseCatalogDate(item);
+            if (!date) return;
+            const difference = Math.abs(now - date.getTime());
+            if (difference < minimumDifference) {
+              minimumDifference = difference;
+              bestIndex = index;
+            }
+          });
+
+          ui.slider.value = String(bestIndex);
+          await loadStep(bestIndex);
+        } catch (error) {
+          console.error(error);
+          hideLoading();
+          toast("Impossibile caricare il catalogo del modello");
+        }
+      }
+
+      async function loadStep(index) {
+        if (!catalog[index]) return;
+
+        const token = ++loadingToken;
+        showLoading("Aggiornamento del campo meteorologico…");
+
+        try {
+          const nextData = await fetchStep(index);
+          if (token !== loadingToken) return;
+
+          currentData = nextData;
+          currentIndex = index;
+          ui.slider.value = String(index);
+
+          updateTimeUi();
+          updateLayerUi();
+          updateLegend();
+          renderWeather();
+          updateIsobars();
+          updateMapPresentation();
+          resetParticles();
+          requestVectorRender();
+          refreshSelectedPoint();
+
+          prefetchStep(index + 1);
+          prefetchStep(index - 1);
+        } catch (error) {
+          console.error(error);
+          toast("Errore nel caricamento del passo selezionato");
+        } finally {
+          if (token === loadingToken) hideLoading();
+        }
+      }
+
+      function updateTimeUi() {
+        const item = catalog[currentIndex] || {};
+        const date = parseCatalogDate(item);
+        const lead = leadHours(currentIndex);
+
+        ui.runValue.textContent = formatRun(item);
+        ui.validValue.textContent = formatDateTime(date);
+        ui.timeLabel.textContent = formatDateTime(date);
+        ui.leadLabel.textContent = lead === null ? "--" : "+" + lead + " h";
+        ui.slider.setAttribute("aria-valuetext", formatDateTime(date));
+      }
+
+      function makeLegendGradient(info) {
+        const stops = info.stops;
+        const minimum = stops[0].v;
+        const maximum = stops[stops.length - 1].v;
+        const parts = [];
+
+        for (let index = 0; index < stops.length; index += 1) {
+          const current = stops[index];
+          const next = stops[index + 1];
+          const start = ((current.v - minimum) / (maximum - minimum)) * 100;
+          const end = next ? ((next.v - minimum) / (maximum - minimum)) * 100 : 100;
+          const alpha = current.a === undefined ? 1 : Math.max(current.a, 0.9);
+
+          if (info.discrete) {
+            parts.push(rgba(current.c, alpha) + " " + start + "%");
+            parts.push(rgba(current.c, alpha) + " " + end + "%");
+          } else {
+            parts.push(rgba(current.c, alpha) + " " + start + "%");
+          }
+        }
+
+        return "linear-gradient(to right," + parts.join(",") + ")";
+      }
+
+      function updateLegend() {
+        const info = LAYER_INFO[activeLayer];
+        const minimum = info.stops[0].v;
+        const maximum = info.stops[info.stops.length - 1].v;
+
+        ui.legendTitle.textContent = info.label;
+        ui.legendUnit.textContent = info.unit;
+        ui.legendRange.textContent = minimum + " → ≥ " + maximum + " " + info.unit;
+        ui.legendBar.style.background = makeLegendGradient(info);
+        ui.legendTicks.innerHTML = info.ticks.map(function (tick) {
+          return "<span>" + tick + "</span>";
+        }).join("");
+        ui.legendNote.textContent = info.note;
+        ui.sampleValue.textContent = useNearestCell
+          ? "Cella modello più vicina · nessuna interpolazione"
+          : "Interpolazione bilineare · griglia ICON-2I";
+      }
+
+      function updateLayerUi() {
+        document.querySelectorAll("[data-layer]").forEach(function (button) {
+          const key = button.dataset.layer;
+          button.classList.toggle("active", key === activeLayer);
+          button.classList.toggle("disabled", !hasLayerData(key));
+          button.setAttribute("aria-pressed", key === activeLayer ? "true" : "false");
+        });
+
+        const states = {
+          flow: showParticles,
+          vectors: showVectors,
+          isobars: showIsobars,
+          terrain: showTerrain,
+          graticule: showGraticule,
+          raw: useNearestCell
+        };
+
+        document.querySelectorAll("[data-toggle]").forEach(function (button) {
+          const active = Boolean(states[button.dataset.toggle]);
+          button.classList.toggle("active", active);
+          button.setAttribute("aria-pressed", active ? "true" : "false");
+        });
+      }
+
+      function setLayer(nextLayer) {
+        if (!LAYER_INFO[nextLayer]) return;
+        if (currentData && !hasLayerData(nextLayer)) {
+          toast("Campo non disponibile per questo passo");
+          return;
+        }
+
+        activeLayer = nextLayer;
+
+        if (nextLayer === "wind") {
+          if (!showParticles && !prefersReducedMotion) showParticles = true;
+          showVectors = true;
+          startParticles();
+        }
+
+        if (nextLayer === "press") showIsobars = true;
+
+        updateLayerUi();
+        updateLegend();
+        renderWeather();
+        updateIsobars();
+        updateMapPresentation();
+        requestVectorRender();
+        refreshSelectedPoint();
+        closeDrawerOnMobile();
+      }
+
+      function setToggle(name) {
+        if (name === "flow") {
+          showParticles = !showParticles;
+          if (showParticles) startParticles();
+          else stopParticles();
+        } else if (name === "vectors") {
+          showVectors = !showVectors;
+          requestVectorRender();
+        } else if (name === "isobars") {
+          showIsobars = !showIsobars;
+          updateIsobars();
+        } else if (name === "terrain") {
+          showTerrain = !showTerrain;
+          updateMapPresentation();
+          renderWeather();
+        } else if (name === "graticule") {
+          showGraticule = !showGraticule;
+          updateMapPresentation();
+        } else if (name === "raw") {
+          useNearestCell = !useNearestCell;
+          updateLegend();
+          renderWeather();
+          requestVectorRender();
+          refreshSelectedPoint();
+        }
+
+        updateLayerUi();
+        closeDrawerOnMobile();
+      }
+
+      function renderWeather() {
+        if (!mapLoaded || !currentData || !map.getSource("weather")) return;
+
+        const meta = currentData.meta;
+        const info = LAYER_INFO[activeLayer];
+        const width = meta.nx;
+        const height = meta.ny;
+
+        rasterCanvas.width = width;
+        rasterCanvas.height = height;
+
+        const image = rasterContext.createImageData(width, height);
+        const pixels = image.data;
+        const topLatitude = meta.la1 + meta.dy / 2;
+        const bottomLatitude = meta.la1 - (meta.ny - 1) * meta.dy - meta.dy / 2;
+        const leftLongitude = meta.lo1 - meta.dx / 2;
+        const rightLongitude = meta.lo1 + (meta.nx - 1) * meta.dx + meta.dx / 2;
+        const topMercator = Math.log(Math.tan(Math.PI / 4 + (topLatitude * Math.PI) / 360));
+        const bottomMercator = Math.log(Math.tan(Math.PI / 4 + (bottomLatitude * Math.PI) / 360));
+
+        for (let y = 0; y < height; y += 1) {
+          const fraction = height > 1 ? y / (height - 1) : 0;
+          const mercatorY = topMercator + fraction * (bottomMercator - topMercator);
+          const latitude = (2 * Math.atan(Math.exp(mercatorY)) - Math.PI / 2) * 180 / Math.PI;
+          const gy = (meta.la1 - latitude) / meta.dy;
+
+          for (let x = 0; x < width; x += 1) {
+            const value = fieldValue(activeLayer, x, gy);
+            const pixel = (y * width + x) * 4;
+
+            if (
+              !Number.isFinite(value) ||
+              (activeLayer === "rain" && value < 0.08) ||
+              (activeLayer === "cloud" && value < 4)
+            ) {
+              continue;
+            }
+
+            const color = colorFor(value, info);
+            pixels[pixel] = Math.round(color[0]);
+            pixels[pixel + 1] = Math.round(color[1]);
+            pixels[pixel + 2] = Math.round(color[2]);
+            pixels[pixel + 3] = Math.round(color[3] * 255);
+          }
+        }
+
+        rasterContext.putImageData(image, 0, 0);
+        map.setPaintProperty("weather-layer", "raster-resampling", useNearestCell ? "nearest" : "linear");
+        map.setPaintProperty("weather-layer", "raster-opacity", info.opacity);
+
+        if (map.getLayer("terrain-detail")) {
+          map.setPaintProperty("terrain-detail", "raster-opacity", showTerrain ? info.terrainOpacity : 0);
+        }
+
+        map.getSource("weather").updateImage({
+          url: rasterCanvas.toDataURL("image/png"),
+          coordinates: [
+            [leftLongitude, topLatitude],
+            [rightLongitude, topLatitude],
+            [rightLongitude, bottomLatitude],
+            [leftLongitude, bottomLatitude]
+          ]
+        });
+      }
+
+      function generateGraticule() {
+        const features = [];
+        for (let longitude = 6; longitude <= 20; longitude += 1) {
+          features.push({
+            type: "Feature",
+            properties: { axis: "longitude", value: longitude },
+            geometry: { type: "LineString", coordinates: [[longitude, 35], [longitude, 48]] }
+          });
+        }
+        for (let latitude = 35; latitude <= 48; latitude += 1) {
+          features.push({
+            type: "Feature",
+            properties: { axis: "latitude", value: latitude },
+            geometry: { type: "LineString", coordinates: [[6, latitude], [20, latitude]] }
+          });
+        }
+        return { type: "FeatureCollection", features: features };
+      }
+
+      function updateMapPresentation() {
+        if (!mapLoaded) return;
+
+        if (map.getLayer("graticule-layer")) {
+          map.setLayoutProperty("graticule-layer", "visibility", showGraticule ? "visible" : "none");
+        }
+        if (map.getLayer("terrain-detail")) {
+          map.setLayoutProperty("terrain-detail", "visibility", showTerrain ? "visible" : "none");
+        }
+      }
+
+      function buildPressureProducts(data) {
+        if (data.isobars && data.pressureCenters) return;
+
+        const meta = data.meta;
+        const pressure = getGrid(data.press);
+        if (!pressure) {
+          data.isobars = { type: "FeatureCollection", features: [] };
+          data.pressureCenters = { type: "FeatureCollection", features: [] };
+          return;
+        }
+
+        const contourFeatures = d3
+          .contours()
+          .size([meta.nx, meta.ny])
+          .thresholds(d3.range(960, 1052, 2))(pressure)
+          .map(function (contour) {
+            return {
+              type: "Feature",
+              properties: { value: contour.value },
+              geometry: {
+                type: contour.type,
+                coordinates: contour.coordinates.map(function (polygon) {
+                  return polygon.map(function (ring) {
+                    return ring.map(function (point) {
+                      return [meta.lo1 + point[0] * meta.dx, meta.la1 - point[1] * meta.dy];
+                    });
+                  });
+                })
+              }
+            };
+          });
+
+        data.isobars = { type: "FeatureCollection", features: contourFeatures };
+
+        const candidates = [];
+        const sampleStep = 28;
+        const radius = 22;
+
+        for (let y = radius; y < meta.ny - radius; y += sampleStep) {
+          for (let x = radius; x < meta.nx - radius; x += sampleStep) {
+            const value = pressure[y * meta.nx + x];
+            if (!Number.isFinite(value)) continue;
+
+            let maximum = true;
+            let minimum = true;
+
+            for (let yy = -radius; yy <= radius; yy += 6) {
+              for (let xx = -radius; xx <= radius; xx += 6) {
+                if (xx === 0 && yy === 0) continue;
+                const nearby = pressure[(y + yy) * meta.nx + x + xx];
+                if (!Number.isFinite(nearby)) continue;
+                if (nearby > value) maximum = false;
+                if (nearby < value) minimum = false;
+                if (!maximum && !minimum) break;
+              }
+              if (!maximum && !minimum) break;
+            }
+
+            if (maximum && value >= 1017) {
+              candidates.push({ x: x, y: y, value: value, kind: "A", score: value - 1013 });
+            }
+            if (minimum && value <= 1011) {
+              candidates.push({ x: x, y: y, value: value, kind: "B", score: 1013 - value });
+            }
+          }
+        }
+
+        candidates.sort(function (first, second) {
+          return second.score - first.score;
+        });
+
+        const accepted = [];
+        const minimumDistance = 90;
+
+        candidates.forEach(function (candidate) {
+          if (accepted.length >= 8) return;
+          const tooClose = accepted.some(function (item) {
+            return Math.hypot(item.x - candidate.x, item.y - candidate.y) < minimumDistance;
+          });
+          if (!tooClose) accepted.push(candidate);
+        });
+
+        data.pressureCenters = {
+          type: "FeatureCollection",
+          features: accepted.map(function (candidate) {
+            return {
+              type: "Feature",
+              properties: {
+                kind: candidate.kind,
+                label: candidate.kind,
+                value: Math.round(candidate.value)
+              },
+              geometry: {
+                type: "Point",
+                coordinates: [meta.lo1 + candidate.x * meta.dx, meta.la1 - candidate.y * meta.dy]
+              }
+            };
+          })
+        };
+      }
+
+      function updateIsobars() {
+        if (!mapLoaded || !currentData) return;
+
+        const visibility = showIsobars ? "visible" : "none";
+        ["isobar-lines", "isobar-labels", "pressure-centers-label"].forEach(function (id) {
+          if (map.getLayer(id)) map.setLayoutProperty(id, "visibility", visibility);
+        });
+
+        if (showIsobars) {
+          buildPressureProducts(currentData);
+          map.getSource("isobars").setData(currentData.isobars);
+          map.getSource("pressure-centers").setData(currentData.pressureCenters);
+        }
+      }
+
+      function resetParticles() {
         particles = [];
-        drawVectors();
+        particleContext.clearRect(0, 0, window.innerWidth, window.innerHeight);
       }
-      window.addEventListener("resize", () => {
-        resize();
-        setTimeout(() => map?.resize(), 80);
-      });
+
+      function calculateParticleTarget() {
+        const area = Math.max(window.innerWidth * window.innerHeight, 1);
+        const mobile = window.innerWidth < 900;
+        particleTarget = Math.round(clamp(area / (mobile ? 1500 : 1050), mobile ? 260 : 420, mobile ? 760 : 1280));
+      }
+
+      function resizeCanvases() {
+        const mobile = window.innerWidth < 900;
+        const ratio = Math.min(window.devicePixelRatio || 1, mobile ? 2 : 2.15);
+
+        [[particleCanvas, particleContext], [vectorCanvas, vectorContext]].forEach(function (entry) {
+          const canvas = entry[0];
+          const context = entry[1];
+          canvas.width = Math.round(window.innerWidth * ratio);
+          canvas.height = Math.round(window.innerHeight * ratio);
+          canvas.style.width = window.innerWidth + "px";
+          canvas.style.height = window.innerHeight + "px";
+          context.setTransform(ratio, 0, 0, ratio, 0, 0);
+        });
+
+        calculateParticleTarget();
+        resetParticles();
+        requestVectorRender();
+      }
+
+      function respawnParticle(particle, randomAge) {
+        if (!currentData || !map) return;
+
+        const meta = currentData.meta;
+        const bounds = map.getBounds();
+        const west = Math.max(bounds.getWest(), meta.lo1);
+        const east = Math.min(bounds.getEast(), meta.lo1 + (meta.nx - 1) * meta.dx);
+        const south = Math.max(bounds.getSouth(), meta.la1 - (meta.ny - 1) * meta.dy);
+        const north = Math.min(bounds.getNorth(), meta.la1);
+
+        if (east <= west || north <= south) {
+          particle.age = 999;
+          return;
+        }
+
+        particle.lng = west + Math.random() * (east - west);
+        particle.lat = south + Math.random() * (north - south);
+        particle.maxAge = PARTICLE_CONFIG.minLife + Math.random() * (PARTICLE_CONFIG.maxLife - PARTICLE_CONFIG.minLife);
+        particle.age = randomAge ? Math.random() * particle.maxAge : 0;
+      }
+
+      function createParticle(randomAge) {
+        const particle = { lng: 0, lat: 0, age: 999, maxAge: PARTICLE_CONFIG.maxLife };
+        respawnParticle(particle, randomAge);
+        return particle;
+      }
+
+      function particleStyle(speed) {
+        if (speed < 10) return { color: "rgba(30,103,159,0.68)", width: 1.05 };
+        if (speed < 20) return { color: "rgba(18,161,200,0.74)", width: 1.25 };
+        if (speed < 35) return { color: "rgba(12,174,128,0.8)", width: 1.45 };
+        if (speed < 50) return { color: "rgba(197,180,31,0.88)", width: 1.7 };
+        if (speed < 70) return { color: "rgba(240,132,24,0.92)", width: 2 };
+        if (speed < 90) return { color: "rgba(219,59,41,0.95)", width: 2.25 };
+        return { color: "rgba(168,41,137,0.98)", width: 2.55 };
+      }
+
+      function startParticles() {
+        if (prefersReducedMotion || !showParticles || particleFrame) return;
+        lastParticleTime = performance.now();
+        lastParticleFrame = 0;
+        particleFrame = requestAnimationFrame(animateParticles);
+      }
+
+      function stopParticles() {
+        if (particleFrame) cancelAnimationFrame(particleFrame);
+        particleFrame = null;
+        particleContext.clearRect(0, 0, window.innerWidth, window.innerHeight);
+      }
+
+      function animateParticles(timestamp) {
+        if (!showParticles || !currentData || !map || !currentData.wind_u || !currentData.wind_v) {
+          particleFrame = null;
+          particleContext.clearRect(0, 0, window.innerWidth, window.innerHeight);
+          return;
+        }
+
+        const frameInterval = 1000 / PARTICLE_CONFIG.targetFps;
+        if (timestamp - lastParticleFrame < frameInterval) {
+          particleFrame = requestAnimationFrame(animateParticles);
+          return;
+        }
+
+        const dt = clamp((timestamp - lastParticleTime) / 1000, 0.01, 0.075);
+        lastParticleTime = timestamp;
+        lastParticleFrame = timestamp;
+
+        if (isMapMoving) {
+          particleContext.clearRect(0, 0, window.innerWidth, window.innerHeight);
+          particleFrame = requestAnimationFrame(animateParticles);
+          return;
+        }
+
+        while (particles.length < particleTarget) particles.push(createParticle(true));
+        if (particles.length > particleTarget) particles.length = particleTarget;
+
+        particleContext.save();
+        particleContext.globalCompositeOperation = "destination-in";
+        particleContext.fillStyle = "rgba(0,0,0," + PARTICLE_CONFIG.fade + ")";
+        particleContext.fillRect(0, 0, window.innerWidth, window.innerHeight);
+        particleContext.globalCompositeOperation = "source-over";
+        particleContext.lineCap = "round";
+        particleContext.lineJoin = "round";
+
+        const meta = currentData.meta;
+        const visualScale = 6900 * clamp(Math.pow(2, 6 - map.getZoom()), 0.22, 3.4);
+        const buckets = {};
+
+        particles.forEach(function (particle) {
+          if (particle.age > particle.maxAge) respawnParticle(particle, false);
+
+          const gx = (particle.lng - meta.lo1) / meta.dx;
+          const gy = (meta.la1 - particle.lat) / meta.dy;
+
+          if (gx < 0 || gy < 0 || gx >= meta.nx - 1 || gy >= meta.ny - 1) {
+            particle.age = particle.maxAge + 1;
+            return;
+          }
+
+          const u = sampleBilinear(currentData.wind_u, gx, gy, meta.nx, meta.ny);
+          const v = sampleBilinear(currentData.wind_v, gx, gy, meta.nx, meta.ny);
+          const speed = Math.hypot(u, v);
+          const speedKmh = speed * 3.6;
+
+          if (!Number.isFinite(speed) || speed < PARTICLE_CONFIG.minimumSpeed) {
+            particle.age = particle.maxAge + 1;
+            return;
+          }
+
+          const start = map.project([particle.lng, particle.lat]);
+          const cosineLatitude = Math.max(Math.cos(particle.lat * Math.PI / 180), 0.25);
+          particle.lng += (u * dt * visualScale) / (111320 * cosineLatitude);
+          particle.lat += (v * dt * visualScale) / 111320;
+          const end = map.project([particle.lng, particle.lat]);
+          const distance = Math.hypot(end.x - start.x, end.y - start.y);
+
+          if (distance > 0.24) {
+            const style = particleStyle(speedKmh);
+            const key = style.color + "|" + style.width;
+            if (!buckets[key]) buckets[key] = [];
+            buckets[key].push([start.x, start.y, end.x, end.y]);
+          }
+
+          particle.age += 1 + clamp(speedKmh / 110, 0, 1.2);
+        });
+
+        Object.keys(buckets).forEach(function (key) {
+          const pieces = key.split("|");
+          particleContext.beginPath();
+          particleContext.strokeStyle = pieces[0];
+          particleContext.lineWidth = Number(pieces[1]);
+
+          buckets[key].forEach(function (line) {
+            particleContext.moveTo(line[0], line[1]);
+            particleContext.lineTo(line[2], line[3]);
+          });
+
+          particleContext.stroke();
+        });
+
+        particleContext.restore();
+        particleFrame = requestAnimationFrame(animateParticles);
+      }
+
+      function clearVectors() {
+        vectorContext.clearRect(0, 0, window.innerWidth, window.innerHeight);
+      }
+
+      function vectorColor(speed) {
+        if (speed < 10) return "rgba(38,107,156,0.92)";
+        if (speed < 20) return "rgba(22,151,193,0.94)";
+        if (speed < 35) return "rgba(22,158,113,0.96)";
+        if (speed < 50) return "rgba(188,156,24,0.97)";
+        if (speed < 70) return "rgba(221,112,22,0.98)";
+        if (speed < 90) return "rgba(204,54,43,0.99)";
+        return "rgba(154,42,132,1)";
+      }
+
+      function drawArrow(startX, startY, endX, endY, color, width, headSize) {
+        const angle = Math.atan2(endY - startY, endX - startX);
+
+        vectorContext.strokeStyle = "rgba(3,22,36,0.52)";
+        vectorContext.fillStyle = "rgba(3,22,36,0.52)";
+        vectorContext.lineWidth = width + 1.6;
+        vectorContext.beginPath();
+        vectorContext.moveTo(startX, startY);
+        vectorContext.lineTo(endX, endY);
+        vectorContext.stroke();
+        vectorContext.beginPath();
+        vectorContext.moveTo(endX, endY);
+        vectorContext.lineTo(endX - Math.cos(angle - Math.PI / 7) * headSize, endY - Math.sin(angle - Math.PI / 7) * headSize);
+        vectorContext.lineTo(endX - Math.cos(angle + Math.PI / 7) * headSize, endY - Math.sin(angle + Math.PI / 7) * headSize);
+        vectorContext.closePath();
+        vectorContext.fill();
+
+        vectorContext.strokeStyle = color;
+        vectorContext.fillStyle = color;
+        vectorContext.lineWidth = width;
+        vectorContext.beginPath();
+        vectorContext.moveTo(startX, startY);
+        vectorContext.lineTo(endX, endY);
+        vectorContext.stroke();
+        vectorContext.beginPath();
+        vectorContext.moveTo(endX, endY);
+        vectorContext.lineTo(endX - Math.cos(angle - Math.PI / 7) * headSize, endY - Math.sin(angle - Math.PI / 7) * headSize);
+        vectorContext.lineTo(endX - Math.cos(angle + Math.PI / 7) * headSize, endY - Math.sin(angle + Math.PI / 7) * headSize);
+        vectorContext.closePath();
+        vectorContext.fill();
+      }
+
+      function drawVectors() {
+        clearVectors();
+        if (!showVectors || !currentData || !map || isMapMoving) return;
+
+        const meta = currentData.meta;
+        const mobile = window.innerWidth < 900;
+        const spacing = clamp((mobile ? 69 : 84) + (6 - map.getZoom()) * 3, mobile ? 58 : 66, mobile ? 86 : 102);
+        const topInset = mobile ? 118 : 54;
+        const bottomInset = mobile ? 88 : 56;
+
+        vectorContext.save();
+        vectorContext.lineCap = "round";
+        vectorContext.lineJoin = "round";
+
+        for (let y = topInset; y < window.innerHeight - bottomInset; y += spacing) {
+          for (let x = 34; x < window.innerWidth - 34; x += spacing) {
+            const location = map.unproject([x, y]);
+            const gx = (location.lng - meta.lo1) / meta.dx;
+            const gy = (meta.la1 - location.lat) / meta.dy;
+
+            if (gx < 0 || gy < 0 || gx >= meta.nx - 1 || gy >= meta.ny - 1) continue;
+
+            const u = sampleBilinear(currentData.wind_u, gx, gy, meta.nx, meta.ny);
+            const v = sampleBilinear(currentData.wind_v, gx, gy, meta.nx, meta.ny);
+            const speed = Math.hypot(u, v) * 3.6;
+            if (!Number.isFinite(speed) || speed < 1.5) continue;
+
+            const length = clamp(12 + speed * 0.39, mobile ? 15 : 17, mobile ? 39 : 49);
+            const norm = Math.hypot(u, v) || 1;
+            const dx = u / norm;
+            const dy = -v / norm;
+            const lineWidth = clamp(0.95 + speed * 0.0105, 1.1, mobile ? 2.1 : 2.45);
+            const head = clamp(4.4 + speed * 0.034, 5.4, mobile ? 8 : 9);
+
+            drawArrow(
+              x - dx * length * 0.42,
+              y - dy * length * 0.42,
+              x + dx * length * 0.58,
+              y + dy * length * 0.58,
+              vectorColor(speed),
+              lineWidth,
+              head
+            );
+          }
+        }
+
+        vectorContext.restore();
+      }
+
+      function requestVectorRender() {
+        requestAnimationFrame(drawVectors);
+      }
+
+      function pointFromCoordinates(lng, lat) {
+        if (!currentData) return null;
+        const meta = currentData.meta;
+        const gx = (lng - meta.lo1) / meta.dx;
+        const gy = (meta.la1 - lat) / meta.dy;
+        if (gx < 0 || gy < 0 || gx >= meta.nx || gy >= meta.ny) return null;
+        return { gx: gx, gy: gy };
+      }
+
+      function updateSelectedPointMarker() {
+        if (!mapLoaded || !map.getSource("selected-point")) return;
+        const source = map.getSource("selected-point");
+        if (!selectedPoint) {
+          source.setData({ type: "FeatureCollection", features: [] });
+          return;
+        }
+
+        source.setData({
+          type: "FeatureCollection",
+          features: [{
+            type: "Feature",
+            properties: {},
+            geometry: {
+              type: "Point",
+              coordinates: [selectedPoint.lng, selectedPoint.lat]
+            }
+          }]
+        });
+      }
+
+      function showPoint(lng, lat, title) {
+        const point = pointFromCoordinates(lng, lat);
+        if (!point) {
+          toast("Punto fuori dal dominio disponibile del modello");
+          return;
+        }
+
+        selectedPoint = {
+          lng: lng,
+          lat: lat,
+          title: title || "Punto selezionato"
+        };
+
+        updateSelectedPointMarker();
+        refreshSelectedPoint();
+      }
+
+      function refreshSelectedPoint() {
+        if (!selectedPoint || !currentData) return;
+        const point = pointFromCoordinates(selectedPoint.lng, selectedPoint.lat);
+        if (!point) return;
+
+        const info = LAYER_INFO[activeLayer];
+        const selectedValue = fieldValue(activeLayer, point.gx, point.gy);
+        const wind = windUV(point.gx, point.gy);
+        const windDirection = windDirectionFrom(wind.u, wind.v);
+
+        ui.pointTitle.textContent = selectedPoint.title + " · " + info.label;
+        ui.pointValue.textContent = Number.isFinite(selectedValue) ? selectedValue.toFixed(info.decimals) : "--";
+        ui.pointUnit.textContent = info.unit;
+        ui.pointLocation.textContent = selectedPoint.lat.toFixed(3) + "°N · " + selectedPoint.lng.toFixed(3) + "°E";
+        ui.pointSampling.textContent = useNearestCell
+          ? "Lettura: cella modello più vicina"
+          : "Lettura: interpolazione bilineare";
+
+        ui.detailTemp.textContent = formatValue(fieldValue("temp", point.gx, point.gy), 1, "°C");
+        ui.detailFeels.textContent = formatValue(fieldValue("feels", point.gx, point.gy), 1, "°C");
+        ui.detailRain.textContent = formatValue(fieldValue("rain", point.gx, point.gy), 1, "mm");
+        ui.detailWind.textContent = formatValue(fieldValue("wind", point.gx, point.gy), 0, "km/h");
+        ui.detailDirection.textContent = formatWindDirection(windDirection);
+        ui.detailRh.textContent = formatValue(fieldValue("rh", point.gx, point.gy), 0, "%");
+        ui.detailCloud.textContent = formatValue(fieldValue("cloud", point.gx, point.gy), 0, "%");
+        ui.detailPressure.textContent = formatValue(fieldValue("press", point.gx, point.gy), 0, "hPa");
+
+        ui.readout.classList.add("visible");
+        document.body.classList.add("readout-open");
+      }
+
+      function closeReadout() {
+        selectedPoint = null;
+        ui.readout.classList.remove("visible");
+        document.body.classList.remove("readout-open");
+        updateSelectedPointMarker();
+      }
+
+      function locateUser() {
+        if (!navigator.geolocation) {
+          toast("Geolocalizzazione non supportata dal browser");
+          return;
+        }
+
+        showLoading("Ricerca della posizione…");
+
+        navigator.geolocation.getCurrentPosition(
+          function (position) {
+            hideLoading();
+            const lng = position.coords.longitude;
+            const lat = position.coords.latitude;
+
+            map.flyTo({
+              center: [lng, lat],
+              zoom: Math.max(map.getZoom(), 8.7),
+              duration: 850,
+              essential: true
+            });
+
+            showPoint(lng, lat, "La tua posizione");
+            closeDrawerOnMobile();
+          },
+          function () {
+            hideLoading();
+            toast("Permesso GPS negato o posizione non disponibile");
+          },
+          {
+            enableHighAccuracy: false,
+            timeout: 8000,
+            maximumAge: 300000
+          }
+        );
+      }
+
+      function setDrawer(open) {
+        const mobile = window.innerWidth < 960;
+        if (!mobile) return;
+        ui.drawer.classList.toggle("open", open);
+        document.body.classList.toggle("drawer-open", open);
+        ui.drawerButton.setAttribute("aria-expanded", open ? "true" : "false");
+      }
+
+      function closeDrawerOnMobile() {
+        if (window.innerWidth < 960) setDrawer(false);
+      }
+
+      function toggleCleanMode() {
+        const active = document.body.classList.toggle("clean-mode");
+        ui.cleanButton.setAttribute("aria-pressed", active ? "true" : "false");
+        ui.cleanButton.setAttribute("aria-label", active ? "Mostra interfaccia" : "Attiva solo mappa");
+        ui.cleanButton.querySelector("span").textContent = active ? "Mostra UI" : "Solo mappa";
+        closeDrawerOnMobile();
+      }
+
+      function setPlaybackSpeed(value, button) {
+        playbackDelay = Number(value);
+        document.querySelectorAll("[data-speed]").forEach(function (item) {
+          item.classList.toggle("active", item === button);
+        });
+      }
+
+      function setPlaying(next) {
+        isPlaying = next;
+        ui.playButton.setAttribute("aria-pressed", next ? "true" : "false");
+        ui.playButton.setAttribute("aria-label", next ? "Ferma animazione" : "Avvia animazione");
+        ui.playIcon.innerHTML = next
+          ? "<path d='M7 5v14'></path><path d='M17 5v14'></path>"
+          : "<path d='M8 5l11 7-11 7z' fill='currentColor' stroke='none'></path>";
+        if (next) playLoop();
+      }
+
+      async function playLoop() {
+        if (!isPlaying || catalog.length === 0) return;
+        const next = (currentIndex + 1) % catalog.length;
+        await loadStep(next);
+        if (isPlaying) setTimeout(playLoop, playbackDelay);
+      }
+
       function setupMap() {
         map = new maplibregl.Map({
           container: "map",
-          bounds: [
-            [6, 35],
-            [19.5, 47.5],
-          ],
+          bounds: [[6, 35], [19.5, 47.5]],
+          maxZoom: 12.5,
+          minZoom: 3.2,
           dragPan: true,
           scrollZoom: true,
           doubleClickZoom: true,
@@ -883,829 +2709,340 @@
           dragRotate: false,
           pitchWithRotate: false,
           antialias: false,
+          attributionControl: true,
           style: {
             version: 8,
+            glyphs: "https://demotiles.maplibre.org/font/{fontstack}/{range}.pbf",
             sources: {
-              base: {
+              basemap: {
                 type: "raster",
                 tiles: [
-                  "https://a.basemaps.cartocdn.com/dark_nolabels/{z}/{x}/{y}.png",
-                  "https://b.basemaps.cartocdn.com/dark_nolabels/{z}/{x}/{y}.png",
-                  "https://c.basemaps.cartocdn.com/dark_nolabels/{z}/{x}/{y}.png",
+                  "https://a.basemaps.cartocdn.com/light_nolabels/{z}/{x}/{y}.png",
+                  "https://b.basemaps.cartocdn.com/light_nolabels/{z}/{x}/{y}.png",
+                  "https://c.basemaps.cartocdn.com/light_nolabels/{z}/{x}/{y}.png"
                 ],
                 tileSize: 256,
-                attribution: "© CARTO © OpenStreetMap",
+                attribution: "© CARTO © OpenStreetMap contributors"
               },
               labels: {
                 type: "raster",
                 tiles: [
-                  "https://a.basemaps.cartocdn.com/dark_only_labels/{z}/{x}/{y}.png",
-                  "https://b.basemaps.cartocdn.com/dark_only_labels/{z}/{x}/{y}.png",
+                  "https://a.basemaps.cartocdn.com/light_only_labels/{z}/{x}/{y}.png",
+                  "https://b.basemaps.cartocdn.com/light_only_labels/{z}/{x}/{y}.png",
+                  "https://c.basemaps.cartocdn.com/light_only_labels/{z}/{x}/{y}.png"
                 ],
-                tileSize: 256,
+                tileSize: 256
               },
-              relief: {
+              hillshade: {
                 type: "raster",
                 tiles: [
-                  "https://services.arcgisonline.com/ArcGIS/rest/services/Elevation/World_Hillshade/MapServer/tile/{z}/{y}/{x}",
+                  "https://services.arcgisonline.com/ArcGIS/rest/services/Elevation/World_Hillshade/MapServer/tile/{z}/{y}/{x}"
                 ],
                 tileSize: 256,
-              },
+                attribution: "World Hillshade © Esri"
+              }
             },
             layers: [
               {
-                id: "bg",
+                id: "background",
                 type: "background",
-                paint: { "background-color": "#050a12" },
+                paint: { "background-color": "#dfeaf1" }
               },
               {
-                id: "base",
+                id: "basemap-layer",
                 type: "raster",
-                source: "base",
+                source: "basemap",
                 paint: {
-                  "raster-opacity": 0.75,
-                  "raster-saturation": -0.5,
-                  "raster-contrast": 0.18,
-                },
+                  "raster-opacity": 0.72,
+                  "raster-saturation": -0.28,
+                  "raster-contrast": 0.06,
+                  "raster-brightness-min": 0.18,
+                  "raster-brightness-max": 0.94
+                }
               },
               {
-                id: "relief",
+                id: "terrain-base",
                 type: "raster",
-                source: "relief",
+                source: "hillshade",
                 paint: {
                   "raster-opacity": 0.24,
                   "raster-saturation": -1,
-                  "raster-contrast": 0.35,
-                },
-              },
-            ],
-          },
+                  "raster-contrast": 0.54,
+                  "raster-brightness-min": 0.14,
+                  "raster-brightness-max": 0.72
+                }
+              }
+            ]
+          }
         });
-        map.addControl(
-          new maplibregl.NavigationControl({ visualizePitch: false }),
-          "bottom-right",
-        );
-        map.dragPan.enable();
-        map.scrollZoom.enable();
-        map.doubleClickZoom.enable();
-        map.touchZoomRotate.enable();
-        map.touchZoomRotate.disableRotation();
-        map.on("load", async () => {
+
+        map.addControl(new maplibregl.NavigationControl({ visualizePitch: false }), "bottom-right");
+
+        map.on("load", async function () {
+          mapLoaded = true;
+
           map.addSource("weather", {
             type: "image",
             url: "data:image/gif;base64,R0lGODlhAQABAAD/ACwAAAAAAQABAAACADs=",
-            coordinates: [
-              [0, 0],
-              [0, 0],
-              [0, 0],
-              [0, 0],
-            ],
+            coordinates: [[6, 48], [20, 48], [20, 35], [6, 35]]
           });
+
           map.addLayer({
-            id: "weather",
+            id: "weather-layer",
             type: "raster",
             source: "weather",
             paint: {
-              "raster-opacity": 0.92,
+              "raster-opacity": 0.8,
               "raster-resampling": "linear",
-              "raster-fade-duration": 0,
-            },
+              "raster-fade-duration": 0
+            }
           });
+
           map.addLayer({
-            id: "labels",
+            id: "terrain-detail",
+            type: "raster",
+            source: "hillshade",
+            paint: {
+              "raster-opacity": 0.42,
+              "raster-saturation": -1,
+              "raster-contrast": 0.83,
+              "raster-brightness-min": 0.03,
+              "raster-brightness-max": 0.38
+            }
+          });
+
+          map.addLayer({
+            id: "labels-layer",
             type: "raster",
             source: "labels",
-            paint: { "raster-opacity": 0.78 },
+            paint: {
+              "raster-opacity": 0.86,
+              "raster-contrast": 0.08
+            }
           });
-          map.addLayer(
-            {
-              id: "terrain-detail",
-              type: "raster",
-              source: "relief",
-              paint: {
-                "raster-opacity": 0.48,
-                "raster-saturation": -1,
-                "raster-contrast": 0.78,
-                "raster-brightness-min": 0,
-                "raster-brightness-max": 0.3,
-              },
-            },
-            "labels",
-          );
-          map.addSource("iso", {
+
+          map.addSource("regions", {
             type: "geojson",
-            data: { type: "FeatureCollection", features: [] },
+            data: "https://raw.githubusercontent.com/openpolis/geojson-italy/master/geojson/limits_IT_regions.geojson"
           });
-          map.addSource("centres", {
-            type: "geojson",
-            data: { type: "FeatureCollection", features: [] },
-          });
+
           map.addLayer({
-            id: "iso-line",
+            id: "regions-layer",
             type: "line",
-            source: "iso",
+            source: "regions",
+            paint: {
+              "line-color": "rgba(22,52,70,0.76)",
+              "line-width": ["interpolate", ["linear"], ["zoom"], 4, 0.45, 8, 1.05],
+              "line-opacity": 0.44
+            }
+          });
+
+          map.addSource("graticule", {
+            type: "geojson",
+            data: generateGraticule()
+          });
+
+          map.addLayer({
+            id: "graticule-layer",
+            type: "line",
+            source: "graticule",
             layout: { visibility: "none" },
             paint: {
-              "line-color": "#fff",
-              "line-width": 1.1,
-              "line-opacity": 0.7,
-            },
+              "line-color": "rgba(18,66,93,0.68)",
+              "line-width": 0.55,
+              "line-opacity": 0.34,
+              "line-dasharray": [2, 2]
+            }
           });
+
+          map.addSource("isobars", {
+            type: "geojson",
+            data: { type: "FeatureCollection", features: [] }
+          });
+
+          map.addSource("pressure-centers", {
+            type: "geojson",
+            data: { type: "FeatureCollection", features: [] }
+          });
+
           map.addLayer({
-            id: "iso-label",
+            id: "isobar-lines",
+            type: "line",
+            source: "isobars",
+            layout: { visibility: "none" },
+            paint: {
+              "line-color": "rgba(10,28,41,0.94)",
+              "line-width": ["case", ["==", ["%", ["to-number", ["get", "value"]], 4], 0], 1.65, 0.85],
+              "line-opacity": ["case", ["==", ["%", ["to-number", ["get", "value"]], 4], 0], 0.86, 0.55]
+            }
+          });
+
+          map.addLayer({
+            id: "isobar-labels",
             type: "symbol",
-            source: "iso",
+            source: "isobars",
             layout: {
               visibility: "none",
               "symbol-placement": "line",
               "text-field": ["concat", ["to-string", ["get", "value"]], " hPa"],
+              "text-font": ["Open Sans Regular", "Arial Unicode MS Regular"],
               "text-size": 10,
+              "text-padding": 10
             },
             paint: {
-              "text-color": "#fff",
-              "text-halo-color": "#000",
-              "text-halo-width": 1.5,
-            },
+              "text-color": "#071a29",
+              "text-halo-color": "rgba(255,255,255,0.88)",
+              "text-halo-width": 1.5
+            }
           });
+
           map.addLayer({
-            id: "centres-label",
+            id: "pressure-centers-label",
             type: "symbol",
-            source: "centres",
+            source: "pressure-centers",
             layout: {
               visibility: "none",
               "text-field": ["get", "label"],
-              "text-size": 32,
+              "text-font": ["Open Sans Bold", "Arial Unicode MS Bold"],
+              "text-size": ["interpolate", ["linear"], ["zoom"], 4, 24, 8, 38],
+              "text-allow-overlap": false
             },
             paint: {
-              "text-color": [
-                "match",
-                ["get", "kind"],
-                "A",
-                "#ff5656",
-                "B",
-                "#55aaff",
-                "#fff",
-              ],
-              "text-halo-color": "#000",
-              "text-halo-width": 2.5,
-            },
+              "text-color": ["match", ["get", "kind"], "A", "#d84242", "B", "#266dc3", "#122f43"],
+              "text-halo-color": "rgba(255,255,255,0.9)",
+              "text-halo-width": 2.4
+            }
           });
-          map.on("click", readPoint);
-          map.on("move", () => {
-            pctx.clearRect(0, 0, innerWidth, innerHeight);
-            vctx.clearRect(0, 0, innerWidth, innerHeight);
+
+          map.addSource("selected-point", {
+            type: "geojson",
+            data: { type: "FeatureCollection", features: [] }
           });
-          map.on("moveend", () => {
-            particles = [];
-            drawVectors();
+
+          map.addLayer({
+            id: "selected-point-halo",
+            type: "circle",
+            source: "selected-point",
+            paint: {
+              "circle-radius": 10,
+              "circle-color": "rgba(255,255,255,0.18)",
+              "circle-stroke-width": 1.5,
+              "circle-stroke-color": "#0c83d4"
+            }
           });
+
+          map.addLayer({
+            id: "selected-point-core",
+            type: "circle",
+            source: "selected-point",
+            paint: {
+              "circle-radius": 3.8,
+              "circle-color": "#0d9ee2",
+              "circle-stroke-width": 1.5,
+              "circle-stroke-color": "#fff"
+            }
+          });
+
+          map.on("click", function (event) {
+            showPoint(event.lngLat.lng, event.lngLat.lat, "Punto selezionato");
+          });
+
+          map.on("mousemove", function (event) {
+            const point = pointFromCoordinates(event.lngLat.lng, event.lngLat.lat);
+            map.getCanvas().style.cursor = point ? "crosshair" : "";
+          });
+
+          map.on("movestart", function () {
+            isMapMoving = true;
+            resetParticles();
+            clearVectors();
+          });
+
+          map.on("move", function () {
+            clearVectors();
+          });
+
+          map.on("moveend", function () {
+            isMapMoving = false;
+            resetParticles();
+            requestVectorRender();
+          });
+
+          updateMapPresentation();
           await loadCatalog();
         });
       }
-      function catalogDate(x) {
-        let m = x?.label?.match(/(\d{1,2})\/(\d{1,2})\s+(\d{1,2}):(\d{2})/);
-        if (!m) return null;
-        let n = new Date();
-        return new Date(n.getFullYear(), m[2] - 1, m[1], m[3], m[4]);
-      }
-      function label(i) {
-        let d = catalogDate(catalog[i]),
-          n = new Date();
-        if (!d) return catalog[i]?.label || "--";
-        let day =
-          d.toDateString() === n.toDateString()
-            ? "Oggi"
-            : d.toDateString() === new Date(n - 864e5).toDateString()
-              ? "Ieri"
-              : d.toLocaleDateString("it-IT", {
-                  weekday: "short",
-                  day: "2-digit",
-                  month: "2-digit",
-                });
-        return `${day} · ${d.toLocaleTimeString("it-IT", { hour: "2-digit", minute: "2-digit" })}`;
-      }
-      async function loadCatalog() {
-        try {
-          let r = await fetch(`data_weather/catalog.json?t=${Date.now()}`);
-          catalog = await r.json();
-          slider.max = Math.max(0, catalog.length - 1);
-          slider.oninput = (e) => loadStep(+e.target.value);
-          let best = 0,
-            min = Infinity;
-          catalog.forEach((x, i) => {
-            let d = catalogDate(x);
-            if (d && Math.abs(Date.now() - d) < min) {
-              min = Math.abs(Date.now() - d);
-              best = i;
-            }
-          });
-          slider.value = best;
-          await loadStep(best);
-        } catch (e) {
-          console.error(e);
-          toast("Errore caricamento catalogo");
-        }
-      }
-      async function loadStep(i) {
-        if (!catalog[i]) return;
-        let id = ++loadId;
-        loading.classList.add("show");
-        try {
-          let x = cache.get(i);
-          if (!x) {
-            let r = await fetch(`data_weather/${catalog[i].file}`);
-            if (!r.ok) throw Error("Dati non disponibili");
-            x = await r.json();
-            prepare(x);
-            cache.set(i, x);
-            while (cache.size > LIMIT) cache.delete(cache.keys().next().value);
-          }
-          if (id !== loadId) return;
-          data = x;
-          current = i;
-          updateTime();
-          renderWeather();
-          updateIso();
-          buttons();
-          legend();
-          drawVectors();
-          particles = [];
-          prefetch(i + 1);
-          prefetch(i - 1);
-        } catch (e) {
-          console.error(e);
-          toast("Errore caricamento dati");
-        } finally {
-          if (id === loadId) loading.classList.remove("show");
-        }
-      }
-      function prefetch(i) {
-        if (!catalog[i] || cache.has(i)) return;
-        fetch(`data_weather/${catalog[i].file}`)
-          .then((r) => r.json())
-          .then((x) => {
-            prepare(x);
-            cache.set(i, x);
-            while (cache.size > LIMIT) cache.delete(cache.keys().next().value);
-          })
-          .catch(() => {});
-      }
-      function prepare(x) {
-        let m = x.meta,
-          t = grid(x.temp),
-          h = grid(x.rh),
-          u = grid(x.wind_u),
-          v = grid(x.wind_v);
-        if (t && h && u && v) {
-          x.feels_like = new Float32Array(m.nx * m.ny);
-          for (let i = 0; i < x.feels_like.length; i++) {
-            let e =
-              (clamp(h[i], 0, 100) / 100) *
-              6.105 *
-              Math.exp((17.27 * t[i]) / (237.7 + t[i]));
-            x.feels_like[i] =
-              t[i] + 0.33 * e - 0.7 * Math.hypot(u[i], v[i]) - 4;
-          }
-        }
-      }
-      function updateTime() {
-        let x = catalog[current],
-          d = catalogDate(x),
-          f = catalogDate(catalog[0]);
-        time.textContent = label(current);
-        valid.textContent = `Validità ${x.label || "--"}`;
-        run.textContent = `Run ${x.run || x.model_run || x.init || "n/d"}`;
-        if (d && f) valid.textContent += ` · +${Math.round((d - f) / 36e5)}h`;
-      }
-      function renderWeather() {
-        if (!data || !map.getSource("weather")) return;
-        let m = data.meta,
-          info = INFO[layer];
-        raster.width = m.nx;
-        raster.height = m.ny;
-        let im = rctx.createImageData(m.nx, m.ny),
-          out = im.data,
-          top = m.la1 + m.dy / 2,
-          bottom = m.la1 - (m.ny - 1) * m.dy - m.dy / 2,
-          left = m.lo1 - m.dx / 2,
-          right = m.lo1 + (m.nx - 1) * m.dx + m.dx / 2,
-          yTop = Math.log(Math.tan(Math.PI / 4 + (top * Math.PI) / 360)),
-          yBottom = Math.log(Math.tan(Math.PI / 4 + (bottom * Math.PI) / 360));
-        for (let y = 0; y < m.ny; y++) {
-          let lat =
-              ((2 *
-                Math.atan(
-                  Math.exp(yTop + (y / (m.ny - 1)) * (yBottom - yTop)),
-                ) -
-                Math.PI / 2) *
-                180) /
-              Math.PI,
-            gy = (m.la1 - lat) / m.dy;
-          for (let x = 0; x < m.nx; x++) {
-            let v = field(layer, x, gy),
-              p = (y * m.nx + x) * 4;
-            if (
-              !Number.isFinite(v) ||
-              (layer === "rain" && v < 0.08) ||
-              (layer === "cloud" && v < 5)
-            )
-              continue;
-            let c = colour(v, info.stops, info.step);
-            out[p] = c[0];
-            out[p + 1] = c[1];
-            out[p + 2] = c[2];
-            out[p + 3] = Math.round(c[3] * 255);
-          }
-        }
-        rctx.putImageData(im, 0, 0);
-        map.setPaintProperty(
-          "weather",
-          "raster-resampling",
-          raw ? "nearest" : "linear",
-        );
-        setWeatherOpacity();
-        map.getSource("weather").updateImage({
-          url: raster.toDataURL("image/png"),
-          coordinates: [
-            [left, top],
-            [right, top],
-            [right, bottom],
-            [left, bottom],
-          ],
+
+      document.querySelectorAll("[data-layer]").forEach(function (button) {
+        button.addEventListener("click", function () {
+          setLayer(button.dataset.layer);
+        });
+      });
+
+      document.querySelectorAll("[data-toggle]").forEach(function (button) {
+        button.addEventListener("click", function () {
+          setToggle(button.dataset.toggle);
+        });
+      });
+
+      ui.drawerButton.addEventListener("click", function () {
+        setDrawer(!ui.drawer.classList.contains("open"));
+      });
+
+      ui.drawerClose.addEventListener("click", function () {
+        setDrawer(false);
+      });
+
+      ui.drawerScrim.addEventListener("click", function () {
+        setDrawer(false);
+      });
+
+      ui.cleanButton.addEventListener("click", toggleCleanMode);
+      ui.gpsButton.addEventListener("click", locateUser);
+      ui.readoutClose.addEventListener("click", closeReadout);
+
+      ui.slider.addEventListener("input", function () {
+        loadStep(Number(ui.slider.value));
+      });
+
+      ui.playButton.addEventListener("click", function () {
+        setPlaying(!isPlaying);
+      });
+
+      document.querySelectorAll("[data-speed]").forEach(function (button) {
+        button.addEventListener("click", function () {
+          setPlaybackSpeed(button.dataset.speed, button);
+        });
+      });
+
+      window.addEventListener("resize", function () {
+        resizeCanvases();
+        setTimeout(function () {
+          if (map) map.resize();
+          requestVectorRender();
+        }, 80);
+      });
+
+      if (window.visualViewport) {
+        window.visualViewport.addEventListener("resize", function () {
+          resizeCanvases();
+          setTimeout(function () {
+            if (map) map.resize();
+            requestVectorRender();
+          }, 80);
         });
       }
-      function setWeatherOpacity() {
-        const opacity = {
-          temp: 0.8,
-          feels: 0.8,
-          wind: 0.73,
-          rain: 0.84,
-          cloud: 0.62,
-          rh: 0.74,
-          press: 0.66,
-        };
-        if (map?.getLayer("weather"))
-          map.setPaintProperty(
-            "weather",
-            "raster-opacity",
-            opacity[layer] ?? 0.8,
-          );
-      }
-      function legend() {
-        let x = INFO[layer],
-          s = x.stops,
-          min = s[0].v,
-          max = s.at(-1).v;
-        legendName.textContent = x.label;
-        legendUnit.textContent = x.unit;
-        let p = [];
-        if (x.step) {
-          s.forEach((q, i) => {
-            let a = ((q.v - min) / (max - min)) * 100,
-              b = (((s[i + 1]?.v ?? max) - min) / (max - min)) * 100,
-              c = rgba(q.c, 1);
-            p.push(`${c} ${a}%`, `${c} ${b}%`);
-          });
-        } else
-          p = s.map(
-            (q) =>
-              `${rgba(q.c, Math.max(q.a ?? 1, 0.94))} ${((q.v - min) / (max - min)) * 100}%`,
-          );
-        gradient.style.background = `linear-gradient(to right,${p.join(",")})`;
-        ticks.innerHTML = x.ticks.map((v) => `<span>${v}</span>`).join("");
-      }
-      function buttons() {
-        document
-          .querySelectorAll("[data-layer]")
-          .forEach((b) =>
-            b.classList.toggle("active", b.dataset.layer === layer),
-          );
-        flow.classList.toggle("active", showFlow);
-        vectorsBtn.classList.toggle("active", showVectors);
-        iso.classList.toggle("active", showIso);
-        rawButton.classList.toggle("active", raw);
-      }
-      function setLayer(x) {
-        layer = x;
-        if (x === "wind") {
-          showFlow = true;
-          showVectors = true;
-          startFlow();
-        }
-        if (x === "press") showIso = true;
-        renderWeather();
-        updateIso();
-        buttons();
-        legend();
-        drawVectors();
-        closeControls();
-      }
-      function contours() {
-        if (data.iso) return;
-        let m = data.meta,
-          p = grid(data.press);
-        if (!p) {
-          data.iso = { type: "FeatureCollection", features: [] };
-          return;
-        }
-        let c = d3
-          .contours()
-          .size([m.nx, m.ny])
-          .thresholds(d3.range(960, 1052, 2))(p);
-        data.iso = {
-          type: "FeatureCollection",
-          features: c.map((q) => ({
-            type: "Feature",
-            properties: { value: q.value },
-            geometry: {
-              type: q.type,
-              coordinates: q.coordinates.map((a) =>
-                a.map((b) =>
-                  b.map((z) => [m.lo1 + z[0] * m.dx, m.la1 - z[1] * m.dy]),
-                ),
-              ),
-            },
-          })),
-        };
-        let candidates = [];
-        for (let y = 25; y < m.ny - 25; y += 30)
-          for (let x = 25; x < m.nx - 25; x += 30) {
-            let v = p[y * m.nx + x],
-              hi = true,
-              lo = true;
-            for (let yy = -20; yy <= 20; yy += 10)
-              for (let xx = -20; xx <= 20; xx += 10) {
-                let z = p[(y + yy) * m.nx + x + xx];
-                if (z > v) hi = false;
-                if (z < v) lo = false;
-              }
-            if (hi && v >= 1017) candidates.push({ x, y, v, kind: "A" });
-            if (lo && v <= 1011) candidates.push({ x, y, v, kind: "B" });
-          }
-        candidates.sort((a, b) => Math.abs(b.v - 1013) - Math.abs(a.v - 1013));
-        let ok = [];
-        for (let q of candidates) {
-          if (!ok.some((z) => Math.hypot(q.x - z.x, q.y - z.y) < 90))
-            ok.push(q);
-          if (ok.length === 8) break;
-        }
-        data.centres = {
-          type: "FeatureCollection",
-          features: ok.map((q) => ({
-            type: "Feature",
-            properties: { kind: q.kind, label: q.kind },
-            geometry: {
-              type: "Point",
-              coordinates: [m.lo1 + q.x * m.dx, m.la1 - q.y * m.dy],
-            },
-          })),
-        };
-      }
-      function updateIso() {
-        if (!map || !data) return;
-        let v = showIso ? "visible" : "none";
-        ["iso-line", "iso-label", "centres-label"].forEach((x) =>
-          map.setLayoutProperty(x, "visibility", v),
-        );
-        if (showIso) {
-          contours();
-          map.getSource("iso").setData(data.iso);
-          map.getSource("centres").setData(data.centres);
-        }
-      }
-      function toggleIsobars() {
-        showIso = !showIso;
-        updateIso();
-        buttons();
-        closeControls();
-      }
-      function toggleGrid() {
-        raw = !raw;
-        renderWeather();
-        buttons();
-        closeControls();
-      }
-      function makeParticle() {
-        let b = map.getBounds(),
-          m = data.meta,
-          w = Math.max(b.getWest(), m.lo1),
-          e = Math.min(b.getEast(), m.lo1 + m.nx * m.dx),
-          s = Math.max(b.getSouth(), m.la1 - m.ny * m.dy),
-          n = Math.min(b.getNorth(), m.la1);
-        return {
-          lng: w + Math.random() * (e - w),
-          lat: s + Math.random() * (n - s),
-          age: Math.random() * 80,
-          life: 48 + Math.random() * 60,
-        };
-      }
-      function startFlow() {
-        if (!raf && showFlow) raf = requestAnimationFrame(flowFrame);
-      }
-      function toggleParticles() {
-        showFlow = !showFlow;
-        if (showFlow) startFlow();
-        else {
-          cancelAnimationFrame(raf);
-          raf = null;
-          pctx.clearRect(0, 0, innerWidth, innerHeight);
-        }
-        buttons();
-        closeControls();
-      }
-      function flowFrame(t) {
-        if (!showFlow || !data) {
-          raf = null;
-          return;
-        }
-        if (t - last < 1000 / 24) {
-          raf = requestAnimationFrame(flowFrame);
-          return;
-        }
-        let dt = clamp((t - last || 0.03) / 1000, 0.01, 0.07);
-        last = t;
-        let target = clamp(
-          Math.round((innerWidth * innerHeight) / 1200),
-          280,
-          650,
-        );
-        while (particles.length < target) particles.push(makeParticle());
-        particles.length = target;
-        pctx.globalCompositeOperation = "destination-in";
-        pctx.fillStyle = "rgba(0,0,0,.84)";
-        pctx.fillRect(0, 0, innerWidth, innerHeight);
-        pctx.globalCompositeOperation = "lighter";
-        pctx.lineCap = "round";
-        let buckets = {};
-        for (let p of particles) {
-          if (++p.age > p.life) {
-            Object.assign(p, makeParticle());
-            continue;
-          }
-          let m = data.meta,
-            x = (p.lng - m.lo1) / m.dx,
-            y = (m.la1 - p.lat) / m.dy,
-            u = sample(data.wind_u, x, y),
-            v = sample(data.wind_v, x, y),
-            k = Math.hypot(u, v) * 3.6;
-          if (!Number.isFinite(k) || k < 2) {
-            p.age = p.life;
-            continue;
-          }
-          let a = map.project([p.lng, p.lat]),
-            mult = 5900 * clamp(2 ** (6 - map.getZoom()), 0.25, 3),
-            oldLng = p.lng;
-          p.lng +=
-            (u * dt * mult) /
-            (111320 * Math.max(Math.cos((p.lat * Math.PI) / 180), 0.25));
-          p.lat += (v * dt * mult) / 111320;
-          let b = map.project([p.lng, p.lat]);
-          if (Math.hypot(a.x - b.x, a.y - b.y) < 0.2) continue;
-          let color =
-              k < 10
-                ? "rgba(150,210,255,.72)"
-                : k < 25
-                  ? "rgba(85,235,255,.82)"
-                  : k < 40
-                    ? "rgba(85,255,205,.9)"
-                    : k < 60
-                      ? "rgba(245,255,95,.94)"
-                      : k < 80
-                        ? "rgba(255,185,55,.97)"
-                        : k < 105
-                          ? "rgba(255,80,80,1)"
-                          : "rgba(230,95,255,1)",
-            width = k < 25 ? 1.25 : k < 55 ? 1.8 : k < 80 ? 2.4 : 3;
-          let z = (buckets[color + "|" + width] ??= []);
-          z.push([a.x, a.y, b.x, b.y]);
-          buckets[color + "|" + width] = z;
-        }
-        for (let k in buckets) {
-          let [color, w] = k.split("|");
-          pctx.beginPath();
-          pctx.strokeStyle = color;
-          pctx.lineWidth = +w;
-          for (let l of buckets[k]) {
-            pctx.moveTo(l[0], l[1]);
-            pctx.lineTo(l[2], l[3]);
-          }
-          pctx.stroke();
-        }
-        raf = requestAnimationFrame(flowFrame);
-      }
-      function arrow(a, b, c, d, col, w, h) {
-        let q = Math.atan2(d - b, c - a);
-        vctx.strokeStyle = "rgba(255,255,255,.42)";
-        vctx.fillStyle = "rgba(255,255,255,.42)";
-        vctx.lineWidth = w + 1;
-        vctx.beginPath();
-        vctx.moveTo(a, b);
-        vctx.lineTo(c, d);
-        vctx.stroke();
-        vctx.beginPath();
-        vctx.moveTo(c, d);
-        vctx.lineTo(c - Math.cos(q - 0.45) * h, d - Math.sin(q - 0.45) * h);
-        vctx.lineTo(c - Math.cos(q + 0.45) * h, d - Math.sin(q + 0.45) * h);
-        vctx.fill();
-        vctx.strokeStyle = col;
-        vctx.fillStyle = col;
-        vctx.lineWidth = w;
-        vctx.beginPath();
-        vctx.moveTo(a, b);
-        vctx.lineTo(c, d);
-        vctx.stroke();
-        vctx.beginPath();
-        vctx.moveTo(c, d);
-        vctx.lineTo(c - Math.cos(q - 0.45) * h, d - Math.sin(q - 0.45) * h);
-        vctx.lineTo(c - Math.cos(q + 0.45) * h, d - Math.sin(q + 0.45) * h);
-        vctx.fill();
-      }
-      function drawVectors() {
-        vctx.clearRect(0, 0, innerWidth, innerHeight);
-        if (!showVectors || !data || !map) return;
-        let spacing = innerWidth < 921 ? 66 : 80,
-          m = data.meta;
-        for (let sy = 55; sy < innerHeight - 55; sy += spacing)
-          for (let sx = 35; sx < innerWidth - 35; sx += spacing) {
-            let ll = map.unproject([sx, sy]),
-              x = (ll.lng - m.lo1) / m.dx,
-              y = (m.la1 - ll.lat) / m.dy,
-              u = sample(data.wind_u, x, y),
-              v = sample(data.wind_v, x, y),
-              k = Math.hypot(u, v) * 3.6;
-            if (!Number.isFinite(k) || k < 2) continue;
-            let len = clamp(13 + k * 0.36, 16, 42),
-              n = Math.hypot(u, v) || 1,
-              dx = u / n,
-              dy = -v / n,
-              col =
-                k < 25
-                  ? "rgba(35,120,160,.9)"
-                  : k < 60
-                    ? "rgba(25,165,115,.95)"
-                    : k < 80
-                      ? "rgba(205,155,35,.98)"
-                      : "rgba(210,55,55,1)";
-            arrow(
-              sx - dx * len * 0.43,
-              sy - dy * len * 0.43,
-              sx + dx * len * 0.57,
-              sy + dy * len * 0.57,
-              col,
-              clamp(1 + k * 0.01, 1, 2.2),
-              clamp(5 + k * 0.03, 5, 8),
-            );
-          }
-      }
-      function toggleVectors() {
-        showVectors = !showVectors;
-        drawVectors();
-        buttons();
-        closeControls();
-      }
-      function readPoint(e) {
-        if (!data) return;
-        let m = data.meta,
-          x = (e.lngLat.lng - m.lo1) / m.dx,
-          y = (m.la1 - e.lngLat.lat) / m.dy;
-        if (x < 0 || y < 0 || x >= m.nx || y >= m.ny) return;
-        let i = INFO[layer],
-          v = field(layer, x, y),
-          w = uv(x, y),
-          d = windDir(w.u, w.v);
-        readout.style.display = "block";
-        rName.textContent = i.label;
-        rValue.textContent = Number.isFinite(v) ? v.toFixed(i.dec) : "--";
-        rUnit.textContent = i.unit;
-        rCoords.textContent = `${e.lngLat.lat.toFixed(3)}°, ${e.lngLat.lng.toFixed(3)}° · ${raw ? "cella modello" : "interpolazione bilineare"}`;
-        dTemp.textContent = fmt(field("temp", x, y), 1, "°C");
-        dFeels.textContent = fmt(field("feels", x, y), 1, "°C");
-        dRain.textContent = fmt(field("rain", x, y), 1, "mm");
-        dWind.textContent = fmt(field("wind", x, y), 0, "km/h");
-        dDir.textContent = Number.isFinite(d)
-          ? `${Math.round(d)}° ${compass(d)}`
-          : "--";
-        dRh.textContent = fmt(field("rh", x, y), 0, "%");
-        dCloud.textContent = fmt(field("cloud", x, y), 0, "%");
-        dPress.textContent = fmt(field("press", x, y), 0, "hPa");
-      }
-      function toggleControls() {
-        side.classList.toggle("open");
-      }
-      function closeControls() {
-        if (innerWidth < 921) side.classList.remove("open");
-      }
-      function toggleClean() {
-        document.body.classList.toggle("clean");
-        clean.textContent = document.body.classList.contains("clean")
-          ? "MOSTRA UI"
-          : "SOLO MAPPA";
-      }
-      function speed(x, b) {
-        delay = x;
-        document
-          .querySelectorAll(".speed button")
-          .forEach((q) => q.classList.remove("active"));
-        b.classList.add("active");
-      }
-      function togglePlay() {
-        playing = !playing;
-        play.textContent = playing ? "❚❚" : "▶";
-        if (playing) loop();
-      }
-      async function loop() {
-        if (!playing) return;
-        slider.value = (+slider.value + 1) % catalog.length;
-        await loadStep(+slider.value);
-        setTimeout(loop, delay);
-      }
-      function closeGps() {
-        gpsCard.style.display = "none";
-      }
-      function myWeather() {
-        if (!navigator.geolocation) return toast("GPS non supportato");
-        navigator.geolocation.getCurrentPosition(
-          (p) => {
-            let { lng, lat } = p.coords;
-            map.flyTo({
-              center: [lng, lat],
-              zoom: Math.max(8.8, map.getZoom()),
-              duration: 800,
-            });
-            if (!data) return;
-            let m = data.meta,
-              x = (lng - m.lo1) / m.dx,
-              y = (m.la1 - lat) / m.dy;
-            if (x < 0 || y < 0 || x >= m.nx || y >= m.ny)
-              return toast("Posizione fuori dall’area del modello");
-            let w = uv(x, y),
-              d = windDir(w.u, w.v);
-            gpsCard.style.display = "grid";
-            gTemp.textContent = fmt(field("temp", x, y), 1, "°");
-            gFeels.textContent = fmt(field("feels", x, y), 1, "°");
-            gRain.textContent = fmt(field("rain", x, y), 1, "mm");
-            gWind.textContent = fmt(field("wind", x, y), 0, "km/h");
-            gDir.textContent = Number.isFinite(d)
-              ? `${Math.round(d)}° ${compass(d)}`
-              : "--";
-            gPress.textContent = fmt(field("press", x, y), 0, "hPa");
-          },
-          () => toast("Permesso GPS negato"),
-          { enableHighAccuracy: false, timeout: 7000, maximumAge: 300000 },
-        );
-      }
-      function toast(x) {
-        loading.textContent = x;
-        loading.classList.add("show");
-        setTimeout(() => {
-          loading.textContent = "Elaborazione dati…";
-          loading.classList.remove("show");
-        }, 2200);
-      }
-      document.addEventListener("visibilitychange", () => {
+
+      document.addEventListener("visibilitychange", function () {
         if (document.hidden) {
-          cancelAnimationFrame(raf);
-          raf = null;
-        } else startFlow();
+          if (particleFrame) cancelAnimationFrame(particleFrame);
+          particleFrame = null;
+        } else {
+          startParticles();
+        }
       });
-      const $ = (id) => document.getElementById(id);
-      const slider = $("slider"),
-        loading = $("loading"),
-        time = $("time"),
-        valid = $("valid"),
-        run = $("run"),
-        legendName = $("legend-name"),
-        legendUnit = $("legend-unit"),
-        gradient = $("gradient"),
-        ticks = $("ticks"),
-        side = $("side"),
-        flow = $("flow"),
-        vectorsBtn = $("vectors-btn"),
-        iso = $("iso"),
-        rawButton = $("grid"),
-        readout = $("readout"),
-        rName = $("r-name"),
-        rValue = $("r-value"),
-        rUnit = $("r-unit"),
-        rCoords = $("r-coords"),
-        dTemp = $("d-temp"),
-        dFeels = $("d-feels"),
-        dRain = $("d-rain"),
-        dWind = $("d-wind"),
-        dDir = $("d-dir"),
-        dRh = $("d-rh"),
-        dCloud = $("d-cloud"),
-        dPress = $("d-press"),
-        gpsCard = $("gps-card"),
-        gTemp = $("g-temp"),
-        gFeels = $("g-feels"),
-        gRain = $("g-rain"),
-        gWind = $("g-wind"),
-        gDir = $("g-dir"),
-        gPress = $("g-press"),
-        play = $("play"),
-        clean = $("clean");
-      resize();
+
+      resizeCanvases();
       setupMap();
     </script>
   </body>
