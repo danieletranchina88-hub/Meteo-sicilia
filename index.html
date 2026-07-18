@@ -2868,7 +2868,11 @@
       function updateIsobars() {
         if (!mapLoaded || !currentData) return;
 
-        const visibility = showIsobars ? "visible" : "none";
+        // La sinottica viene disegnata sul canvas ad alta risoluzione insieme ai
+        // vettori. I layer MapLibre restano come sorgenti di riserva ma nascosti:
+        // alcuni browser mobili non renderizzano in modo affidabile simboli e
+        // linee GeoJSON aggiornati dinamicamente sopra una image source.
+        const visibility = "none";
         ["isobar-lines", "isobar-labels", "pressure-centers-label", "pressure-centers-value"].forEach(function (id) {
           if (map.getLayer(id)) map.setLayoutProperty(id, "visibility", visibility);
         });
@@ -2883,6 +2887,8 @@
             toast("Impossibile costruire le isobare per questo passo");
           }
         }
+
+        requestVectorRender();
       }
 
       function resetParticles() {
@@ -3063,6 +3069,134 @@
         vectorContext.clearRect(0, 0, window.innerWidth, window.innerHeight);
       }
 
+      function uprightTextAngle(angle) {
+        let result = angle;
+        if (result > Math.PI / 2) result -= Math.PI;
+        if (result < -Math.PI / 2) result += Math.PI;
+        return result;
+      }
+
+      function drawIsobarText(text, x, y, angle) {
+        vectorContext.save();
+        vectorContext.translate(x, y);
+        vectorContext.rotate(uprightTextAngle(angle));
+        vectorContext.font = "800 11px system-ui, -apple-system, Segoe UI, sans-serif";
+        vectorContext.textAlign = "center";
+        vectorContext.textBaseline = "middle";
+        vectorContext.lineJoin = "round";
+        vectorContext.strokeStyle = "rgba(255,255,255,0.96)";
+        vectorContext.lineWidth = 4;
+        vectorContext.strokeText(text, 0, 0);
+        vectorContext.fillStyle = "#071019";
+        vectorContext.fillText(text, 0, 0);
+        vectorContext.restore();
+      }
+
+      function drawLabelsAlongIsobar(points, value, featureIndex) {
+        const mobile = window.innerWidth < 900;
+        const spacing = mobile ? 210 : 260;
+        const maximumLabels = mobile ? 2 : 4;
+        let distanceUntilLabel = spacing * (0.42 + (featureIndex % 3) * 0.12);
+        let labelsDrawn = 0;
+
+        for (let index = 1; index < points.length && labelsDrawn < maximumLabels; index += 1) {
+          const start = points[index - 1];
+          const end = points[index];
+          const dx = end.x - start.x;
+          const dy = end.y - start.y;
+          const length = Math.hypot(dx, dy);
+          if (!Number.isFinite(length) || length < 0.5) continue;
+
+          while (distanceUntilLabel <= length && labelsDrawn < maximumLabels) {
+            const fraction = distanceUntilLabel / length;
+            const x = start.x + dx * fraction;
+            const y = start.y + dy * fraction;
+            const insideViewport = x > 26 && x < window.innerWidth - 26 && y > 96 && y < window.innerHeight - 76;
+
+            if (insideViewport) {
+              drawIsobarText(String(value), x, y, Math.atan2(dy, dx));
+              labelsDrawn += 1;
+            }
+            distanceUntilLabel += spacing;
+          }
+
+          distanceUntilLabel -= length;
+        }
+      }
+
+      function drawPressureCenter(feature) {
+        const coordinates = feature.geometry && feature.geometry.coordinates;
+        if (!coordinates) return;
+        const point = map.project(coordinates);
+        if (
+          point.x < -30 || point.x > window.innerWidth + 30 ||
+          point.y < 70 || point.y > window.innerHeight + 30
+        ) return;
+
+        const properties = feature.properties || {};
+        const kind = properties.kind === "A" ? "A" : "B";
+        const color = kind === "A" ? "#e21b2d" : "#1266d6";
+        const mobile = window.innerWidth < 900;
+
+        vectorContext.save();
+        vectorContext.textAlign = "center";
+        vectorContext.textBaseline = "middle";
+        vectorContext.lineJoin = "round";
+        vectorContext.font = "950 " + (mobile ? 31 : 36) + "px system-ui, -apple-system, Segoe UI, sans-serif";
+        vectorContext.strokeStyle = "rgba(255,255,255,0.98)";
+        vectorContext.lineWidth = 6;
+        vectorContext.strokeText(kind, point.x, point.y);
+        vectorContext.fillStyle = color;
+        vectorContext.fillText(kind, point.x, point.y);
+
+        vectorContext.font = "850 " + (mobile ? 11 : 12) + "px ui-monospace, SFMono-Regular, Menlo, monospace";
+        vectorContext.lineWidth = 3.5;
+        vectorContext.strokeText(String(properties.value), point.x, point.y + (mobile ? 24 : 28));
+        vectorContext.fillStyle = kind === "A" ? "#a80d1c" : "#084ca8";
+        vectorContext.fillText(String(properties.value), point.x, point.y + (mobile ? 24 : 28));
+        vectorContext.restore();
+      }
+
+      function drawSynopticCanvas() {
+        if (!showIsobars || !currentData || !map) return;
+        if (!currentData.isobars || !currentData.pressureCenters) buildPressureProducts(currentData);
+
+        const features = currentData.isobars ? currentData.isobars.features : [];
+        vectorContext.save();
+        vectorContext.lineCap = "round";
+        vectorContext.lineJoin = "round";
+
+        features.forEach(function (feature, featureIndex) {
+          const coordinates = feature.geometry && feature.geometry.coordinates;
+          if (!coordinates || coordinates.length < 2) return;
+          const points = coordinates.map(function (coordinate) {
+            return map.project(coordinate);
+          });
+          const major = Boolean(feature.properties && feature.properties.major);
+
+          vectorContext.beginPath();
+          points.forEach(function (point, pointIndex) {
+            if (pointIndex === 0) vectorContext.moveTo(point.x, point.y);
+            else vectorContext.lineTo(point.x, point.y);
+          });
+          vectorContext.strokeStyle = "rgba(255,255,255," + (major ? "0.72" : "0.48") + ")";
+          vectorContext.lineWidth = major ? 3.5 : 2.5;
+          vectorContext.stroke();
+
+          vectorContext.strokeStyle = major ? "rgba(5,12,18,0.96)" : "rgba(7,16,23,0.78)";
+          vectorContext.lineWidth = major ? 1.45 : 0.82;
+          vectorContext.stroke();
+
+          if (major) {
+            drawLabelsAlongIsobar(points, feature.properties.value, featureIndex);
+          }
+        });
+
+        const centers = currentData.pressureCenters ? currentData.pressureCenters.features : [];
+        centers.forEach(drawPressureCenter);
+        vectorContext.restore();
+      }
+
       function drawArrow(startX, startY, endX, endY, width, headSize) {
         const angle = Math.atan2(endY - startY, endX - startX);
 
@@ -3097,7 +3231,10 @@
 
       function drawVectors() {
         clearVectors();
-        if (!showVectors || !currentData || !map || isMapMoving) return;
+        if (!currentData || !map || isMapMoving) return;
+
+        drawSynopticCanvas();
+        if (!showVectors) return;
 
         const meta = currentData.meta;
         const mobile = window.innerWidth < 900;
