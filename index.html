@@ -1545,9 +1545,9 @@
           discrete: true,
           decimals: 1,
           ticks: [-40, -20, -10, 0, 10, 20, 30, 40, 46],
-          note: "Fasce cromatiche nette ogni 2 °C su tutta la scala termica.",
-          opacity: 0.98,
-          terrainOpacity: 0.34
+          note: "Fasce cromatiche ogni 2 °C, interpolate ad alta definizione.",
+          opacity: 0.95,
+          terrainOpacity: 0.3
         },
         feels: {
           label: "Temperatura apparente",
@@ -1556,9 +1556,9 @@
           discrete: true,
           decimals: 1,
           ticks: [-40, -20, -10, 0, 10, 20, 30, 40, 46],
-          note: "Temperatura apparente in fasce nette ogni 2 °C.",
-          opacity: 0.98,
-          terrainOpacity: 0.33
+          note: "Temperatura apparente in fasce da 2 °C ad alta definizione.",
+          opacity: 0.95,
+          terrainOpacity: 0.3
         },
         wind: {
           label: "Vento a 10 m",
@@ -1568,8 +1568,8 @@
           decimals: 0,
           ticks: [0, 20, 40, 60, 80, 100, 130],
           note: "Fasce nette ogni 5 km/h, ricavate dalle componenti u e v.",
-          opacity: 0.96,
-          terrainOpacity: 0.3
+          opacity: 0.93,
+          terrainOpacity: 0.29
         },
         rain: {
           label: "Precipitazioni",
@@ -1579,8 +1579,8 @@
           decimals: 1,
           ticks: [0.1, 1, 4, 10, 20, 40, 80],
           note: "Soglie pluviometriche discrete per separare pioggia debole, moderata e intensa.",
-          opacity: 0.99,
-          terrainOpacity: 0.24
+          opacity: 0.96,
+          terrainOpacity: 0.25
         },
         cloud: {
           label: "Nuvolosità",
@@ -1590,8 +1590,8 @@
           decimals: 0,
           ticks: [0, 20, 40, 60, 80, 100],
           note: "Copertura totale in fasce nette ogni 10%.",
-          opacity: 0.94,
-          terrainOpacity: 0.26
+          opacity: 0.88,
+          terrainOpacity: 0.27
         },
         rh: {
           label: "Umidità relativa",
@@ -1601,8 +1601,8 @@
           decimals: 0,
           ticks: [0, 20, 40, 60, 80, 100],
           note: "Umidità relativa in fasce nette ogni 5%.",
-          opacity: 0.96,
-          terrainOpacity: 0.31
+          opacity: 0.93,
+          terrainOpacity: 0.3
         },
         press: {
           label: "Pressione al suolo",
@@ -1612,7 +1612,7 @@
           decimals: 0,
           ticks: [960, 980, 1000, 1012, 1020, 1040, 1048],
           note: "Fasce e isobare ogni 2 hPa, con centri A/B derivati dal campo.",
-          opacity: 0.95,
+          opacity: 0.92,
           terrainOpacity: 0.3
         }
       };
@@ -1642,6 +1642,14 @@
         minLife: 46,
         maxLife: 112,
         minimumSpeed: 0.45
+      };
+
+      const RASTER_CONFIG = {
+        padding: 0.2,
+        mobileDensity: 2.05,
+        desktopDensity: 1.8,
+        mobilePixelLimit: 1850000,
+        desktopPixelLimit: 2800000
       };
 
       const ui = {
@@ -1804,7 +1812,12 @@
         const v01 = values[index + nx];
         const v11 = values[index + nx + 1];
 
-        if (![v00, v10, v01, v11].every(Number.isFinite)) return NaN;
+        if (
+          !Number.isFinite(v00) ||
+          !Number.isFinite(v10) ||
+          !Number.isFinite(v01) ||
+          !Number.isFinite(v11)
+        ) return NaN;
 
         return (
           v00 * (1 - fx) * (1 - fy) +
@@ -2281,25 +2294,57 @@
 
         const meta = currentData.meta;
         const info = LAYER_INFO[activeLayer];
-        const sourcePixels = Math.max(meta.nx * meta.ny, 1);
-        const targetPixels = window.innerWidth < 900 ? 900000 : 1250000;
-        const renderScale = useNearestCell
+        const dataWest = meta.lo1 - meta.dx / 2;
+        const dataEast = meta.lo1 + (meta.nx - 1) * meta.dx + meta.dx / 2;
+        const dataNorth = meta.la1 + meta.dy / 2;
+        const dataSouth = meta.la1 - (meta.ny - 1) * meta.dy - meta.dy / 2;
+        const bounds = map.getBounds();
+        const visibleWest = bounds.getWest();
+        const visibleEast = bounds.getEast();
+        const visibleSouth = bounds.getSouth();
+        const visibleNorth = bounds.getNorth();
+        const longitudePadding = Math.max((visibleEast - visibleWest) * RASTER_CONFIG.padding, meta.dx * 2);
+        const latitudePadding = Math.max((visibleNorth - visibleSouth) * RASTER_CONFIG.padding, meta.dy * 2);
+        const leftLongitude = Math.max(dataWest, visibleWest - longitudePadding);
+        const rightLongitude = Math.min(dataEast, visibleEast + longitudePadding);
+        const bottomLatitude = Math.max(dataSouth, visibleSouth - latitudePadding);
+        const topLatitude = Math.min(dataNorth, visibleNorth + latitudePadding);
+
+        if (rightLongitude <= leftLongitude || topLatitude <= bottomLatitude) return;
+
+        const mapElement = map.getContainer();
+        const mobile = mapElement.clientWidth < 900;
+        const density = useNearestCell
           ? 1
-          : clamp(Math.sqrt(targetPixels / sourcePixels), 1, 2.25);
-        const width = Math.max(2, Math.round(meta.nx * renderScale));
-        const height = Math.max(2, Math.round(meta.ny * renderScale));
+          : Math.min(window.devicePixelRatio || 1, mobile ? RASTER_CONFIG.mobileDensity : RASTER_CONFIG.desktopDensity);
+        const widthExpansion = (rightLongitude - leftLongitude) / Math.max(visibleEast - visibleWest, 0.001);
+        const visibleTopMercator = Math.log(Math.tan(Math.PI / 4 + (visibleNorth * Math.PI) / 360));
+        const visibleBottomMercator = Math.log(Math.tan(Math.PI / 4 + (visibleSouth * Math.PI) / 360));
+        const topMercator = Math.log(Math.tan(Math.PI / 4 + (topLatitude * Math.PI) / 360));
+        const bottomMercator = Math.log(Math.tan(Math.PI / 4 + (bottomLatitude * Math.PI) / 360));
+        const heightExpansion = Math.abs(topMercator - bottomMercator) /
+          Math.max(Math.abs(visibleTopMercator - visibleBottomMercator), 0.001);
+        let width = Math.max(2, Math.round(mapElement.clientWidth * density * widthExpansion));
+        let height = Math.max(2, Math.round(mapElement.clientHeight * density * heightExpansion));
+        const pixelLimit = mobile ? RASTER_CONFIG.mobilePixelLimit : RASTER_CONFIG.desktopPixelLimit;
+
+        if (width * height > pixelLimit) {
+          const reduction = Math.sqrt(pixelLimit / (width * height));
+          width = Math.max(2, Math.round(width * reduction));
+          height = Math.max(2, Math.round(height * reduction));
+        }
 
         rasterCanvas.width = width;
         rasterCanvas.height = height;
 
         const image = rasterContext.createImageData(width, height);
         const pixels = image.data;
-        const topLatitude = meta.la1 + meta.dy / 2;
-        const bottomLatitude = meta.la1 - (meta.ny - 1) * meta.dy - meta.dy / 2;
-        const leftLongitude = meta.lo1 - meta.dx / 2;
-        const rightLongitude = meta.lo1 + (meta.nx - 1) * meta.dx + meta.dx / 2;
-        const topMercator = Math.log(Math.tan(Math.PI / 4 + (topLatitude * Math.PI) / 360));
-        const bottomMercator = Math.log(Math.tan(Math.PI / 4 + (bottomLatitude * Math.PI) / 360));
+        const rasterSampler = useNearestCell ? sampleNearest : sampleBilinear;
+        const isWindField = activeLayer === "wind";
+        const fieldKey = activeLayer === "feels" ? "feels_like" : activeLayer;
+        const fieldGrid = isWindField ? null : getGrid(currentData[fieldKey]);
+        const windUGrid = isWindField ? getGrid(currentData.wind_u) : null;
+        const windVGrid = isWindField ? getGrid(currentData.wind_v) : null;
 
         for (let y = 0; y < height; y += 1) {
           const fraction = height > 1 ? y / (height - 1) : 0;
@@ -2308,8 +2353,17 @@
           const gy = (meta.la1 - latitude) / meta.dy;
 
           for (let x = 0; x < width; x += 1) {
-            const gx = (x / (width - 1)) * (meta.nx - 1);
-            const value = fieldValue(activeLayer, gx, gy);
+            const longitude = leftLongitude + (x / Math.max(width - 1, 1)) * (rightLongitude - leftLongitude);
+            const gx = (longitude - meta.lo1) / meta.dx;
+            let value;
+
+            if (isWindField) {
+              const u = rasterSampler(windUGrid, gx, gy, meta.nx, meta.ny);
+              const v = rasterSampler(windVGrid, gx, gy, meta.nx, meta.ny);
+              value = Number.isFinite(u) && Number.isFinite(v) ? Math.hypot(u, v) * 3.6 : NaN;
+            } else {
+              value = rasterSampler(fieldGrid, gx, gy, meta.nx, meta.ny);
+            }
             const pixel = (y * width + x) * 4;
 
             if (
@@ -2329,7 +2383,7 @@
         }
 
         rasterContext.putImageData(image, 0, 0);
-        map.setPaintProperty("weather-layer", "raster-resampling", info.discrete || useNearestCell ? "nearest" : "linear");
+        map.setPaintProperty("weather-layer", "raster-resampling", useNearestCell ? "nearest" : "linear");
         map.setPaintProperty("weather-layer", "raster-opacity", info.opacity);
 
         if (map.getLayer("terrain-detail")) {
@@ -3028,10 +3082,10 @@
             type: "raster",
             source: "weather",
             paint: {
-              "raster-opacity": 0.98,
-              "raster-resampling": "nearest",
-              "raster-saturation": 0.16,
-              "raster-contrast": 0.08,
+              "raster-opacity": 0.95,
+              "raster-resampling": "linear",
+              "raster-saturation": 0.3,
+              "raster-contrast": 0.12,
               "raster-fade-duration": 0
             }
           });
@@ -3041,11 +3095,11 @@
             type: "raster",
             source: "hillshade",
             paint: {
-              "raster-opacity": 0.42,
+              "raster-opacity": 0.3,
               "raster-saturation": -1,
-              "raster-contrast": 0.83,
-              "raster-brightness-min": 0.03,
-              "raster-brightness-max": 0.38
+              "raster-contrast": 0.88,
+              "raster-brightness-min": 0.04,
+              "raster-brightness-max": 0.52
             }
           });
 
@@ -3203,6 +3257,7 @@
           map.on("moveend", function () {
             isMapMoving = false;
             resetParticles();
+            renderWeather();
             requestVectorRender();
           });
 
@@ -3263,6 +3318,7 @@
         resizeCanvases();
         setTimeout(function () {
           if (map) map.resize();
+          renderWeather();
           requestVectorRender();
         }, 80);
       });
@@ -3272,6 +3328,7 @@
           resizeCanvases();
           setTimeout(function () {
             if (map) map.resize();
+            renderWeather();
             requestVectorRender();
           }, 80);
         });
