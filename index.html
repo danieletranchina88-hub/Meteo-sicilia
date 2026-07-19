@@ -613,6 +613,11 @@
         transform: translateX(13px);
       }
 
+      .toggle-row.disabled {
+        opacity: 0.42;
+        cursor: not-allowed;
+      }
+
       .scientific-note {
         margin: 0;
         color: #8ea8ba;
@@ -1315,6 +1320,9 @@
               <button class="toggle-row" type="button" data-toggle="isobars" aria-pressed="false">
                 <span><b>Isobare e A/B</b><small>passo 2 hPa</small></span><span class="switch"></span>
               </button>
+              <button class="toggle-row" type="button" data-toggle="fronts" aria-pressed="false">
+                <span><b>Fronti stimati</b><small>masse d’aria ICON-2I · 850 hPa</small></span><span class="switch"></span>
+              </button>
             </div>
           </section>
 
@@ -1749,6 +1757,7 @@
       let showParticles = false;
       let showVectors = false;
       let showIsobars = false;
+      let showFronts = false;
       let showTerrain = true;
       let showGraticule = false;
       let isMapMoving = false;
@@ -2177,6 +2186,7 @@
 
         if (isPlaying) setPlaying(false);
         stopParticles();
+        if (nextModel !== "icon2i") showFronts = false;
         activeModel = nextModel;
         catalog = [];
         currentData = null;
@@ -2310,6 +2320,7 @@
           flow: showParticles,
           vectors: showVectors,
           isobars: showIsobars,
+          fronts: showFronts,
           terrain: showTerrain,
           graticule: showGraticule,
           raw: useNearestCell
@@ -2317,7 +2328,12 @@
 
         document.querySelectorAll("[data-toggle]").forEach(function (button) {
           const active = Boolean(states[button.dataset.toggle]);
+          const frontUnavailable = button.dataset.toggle === "fronts" && (
+            activeModel !== "icon2i" || !currentData || !currentData.meta || !currentData.meta.frontMethod
+          );
           button.classList.toggle("active", active);
+          button.classList.toggle("disabled", frontUnavailable);
+          button.disabled = frontUnavailable;
           button.setAttribute("aria-pressed", active ? "true" : "false");
         });
       }
@@ -2360,6 +2376,16 @@
         } else if (name === "isobars") {
           showIsobars = !showIsobars;
           updateIsobars();
+        } else if (name === "fronts") {
+          if (activeModel !== "icon2i" || !currentData || !currentData.meta.frontMethod) {
+            toast("Fronti stimati disponibili solo con i nuovi dati ICON-2I");
+            return;
+          }
+          showFronts = !showFronts;
+          requestVectorRender();
+          if (showFronts) {
+            toast("Stima ICON-2I a 850 hPa · non è un’analisi ufficiale");
+          }
         } else if (name === "terrain") {
           showTerrain = !showTerrain;
           updateMapPresentation();
@@ -3234,6 +3260,152 @@
         vectorContext.restore();
       }
 
+      function walkFront(points, spacing, offset, callback) {
+        let remaining = offset;
+        let symbolIndex = 0;
+        for (let index = 1; index < points.length; index += 1) {
+          const start = points[index - 1];
+          const end = points[index];
+          const dx = end.x - start.x;
+          const dy = end.y - start.y;
+          const length = Math.hypot(dx, dy);
+          if (!Number.isFinite(length) || length < 1) continue;
+
+          while (remaining <= length) {
+            const fraction = remaining / length;
+            callback(
+              start.x + dx * fraction,
+              start.y + dy * fraction,
+              Math.atan2(dy, dx),
+              symbolIndex
+            );
+            symbolIndex += 1;
+            remaining += spacing;
+          }
+          remaining -= length;
+        }
+      }
+
+      function drawFrontTriangle(x, y, angle, color, alpha) {
+        vectorContext.save();
+        vectorContext.translate(x, y);
+        vectorContext.rotate(angle);
+        vectorContext.globalAlpha = alpha;
+        vectorContext.beginPath();
+        vectorContext.moveTo(-6.2, 0);
+        vectorContext.lineTo(6.2, 0);
+        vectorContext.lineTo(0, -10.5);
+        vectorContext.closePath();
+        vectorContext.fillStyle = color;
+        vectorContext.fill();
+        vectorContext.strokeStyle = "rgba(255,255,255,0.94)";
+        vectorContext.lineWidth = 1.25;
+        vectorContext.stroke();
+        vectorContext.restore();
+      }
+
+      function drawFrontSemicircle(x, y, angle, color, alpha) {
+        vectorContext.save();
+        vectorContext.translate(x, y);
+        vectorContext.rotate(angle);
+        vectorContext.globalAlpha = alpha;
+        vectorContext.beginPath();
+        vectorContext.arc(0, 0, 7, 0, Math.PI, false);
+        vectorContext.strokeStyle = "rgba(255,255,255,0.94)";
+        vectorContext.lineWidth = 5.6;
+        vectorContext.stroke();
+        vectorContext.strokeStyle = color;
+        vectorContext.lineWidth = 3.3;
+        vectorContext.stroke();
+        vectorContext.restore();
+      }
+
+      function strokeFrontLine(points, frontType, alpha) {
+        vectorContext.beginPath();
+        points.forEach(function (point, index) {
+          if (index === 0) vectorContext.moveTo(point.x, point.y);
+          else vectorContext.lineTo(point.x, point.y);
+        });
+        vectorContext.globalAlpha = alpha;
+        vectorContext.strokeStyle = "rgba(255,255,255,0.94)";
+        vectorContext.lineWidth = 5.4;
+        vectorContext.stroke();
+
+        if (frontType !== "stationary") {
+          vectorContext.strokeStyle = frontType === "cold" ? "#0875df" : "#e32638";
+          vectorContext.lineWidth = 2.9;
+          vectorContext.stroke();
+          vectorContext.globalAlpha = 1;
+          return;
+        }
+
+        let travelled = 0;
+        const bandLength = 28;
+        for (let index = 1; index < points.length; index += 1) {
+          const start = points[index - 1];
+          const end = points[index];
+          const dx = end.x - start.x;
+          const dy = end.y - start.y;
+          const length = Math.hypot(dx, dy);
+          if (length < 0.5) continue;
+          let position = 0;
+          while (position < length) {
+            const band = Math.floor(travelled / bandLength);
+            const available = bandLength - (travelled % bandLength);
+            const piece = Math.min(available, length - position);
+            const from = position / length;
+            const to = (position + piece) / length;
+            vectorContext.beginPath();
+            vectorContext.moveTo(start.x + dx * from, start.y + dy * from);
+            vectorContext.lineTo(start.x + dx * to, start.y + dy * to);
+            vectorContext.strokeStyle = band % 2 === 0 ? "#0875df" : "#e32638";
+            vectorContext.lineWidth = 2.9;
+            vectorContext.stroke();
+            position += piece;
+            travelled += piece;
+          }
+        }
+        vectorContext.globalAlpha = 1;
+      }
+
+      function drawFrontsCanvas() {
+        if (!showFronts || !currentData || !map || !currentData.fronts) return;
+        const features = currentData.fronts.features || [];
+        vectorContext.save();
+        vectorContext.lineCap = "round";
+        vectorContext.lineJoin = "round";
+
+        features.forEach(function (feature) {
+          const coordinates = feature.geometry && feature.geometry.coordinates;
+          if (!coordinates || coordinates.length < 2) return;
+          const properties = feature.properties || {};
+          const frontType = ["cold", "warm", "stationary"].includes(properties.frontType)
+            ? properties.frontType
+            : "stationary";
+          const confidence = Number(properties.confidence);
+          const alpha = Number.isFinite(confidence) ? clamp(0.72 + confidence * 0.28, 0.78, 1) : 0.92;
+          const points = coordinates.map(function (coordinate) {
+            return map.project(coordinate);
+          });
+
+          strokeFrontLine(points, frontType, alpha);
+          walkFront(points, window.innerWidth < 900 ? 48 : 54, 25, function (x, y, angle, index) {
+            if (x < -18 || x > window.innerWidth + 18 || y < 70 || y > window.innerHeight + 18) return;
+            if (frontType === "cold") {
+              drawFrontTriangle(x, y, angle, "#0875df", alpha);
+            } else if (frontType === "warm") {
+              drawFrontSemicircle(x, y, angle, "#e32638", alpha);
+            } else if (index % 2 === 0) {
+              drawFrontTriangle(x, y, angle, "#0875df", alpha);
+            } else {
+              drawFrontSemicircle(x, y, angle, "#e32638", alpha);
+            }
+          });
+        });
+
+        vectorContext.restore();
+      }
+
       function drawArrow(startX, startY, endX, endY, width, headSize) {
         const angle = Math.atan2(endY - startY, endX - startX);
 
@@ -3271,6 +3443,7 @@
         if (!currentData || !map || isMapMoving) return;
 
         drawSynopticCanvas();
+        drawFrontsCanvas();
         if (!showVectors) return;
 
         const meta = currentData.meta;
