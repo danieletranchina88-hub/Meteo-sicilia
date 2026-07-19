@@ -111,10 +111,12 @@ class SynopticFrontAnalyzer:
         filters: dict[str, dict] | None = None,
         method: str = FRONT_METHOD,
         source: str = "NWP",
+        tendency_window_hours: int = 3,
     ) -> None:
         self.bounds = bounds
         self.method = method
         self.source = source
+        self.tendency_window_hours = max(1, int(tendency_window_hours))
         filters = filters or {}
 
         def open_field(path: str, name: str) -> xr.Dataset:
@@ -404,9 +406,20 @@ class SynopticFrontAnalyzer:
         tfp = np.where(self.terrain > 1_500.0, np.nan, tfp)
 
         available = np.asarray(self.available_hours)
-        position = self.hour_to_index[hour]
-        previous_hour = int(available[max(0, position - 1)])
-        next_hour = int(available[min(len(available) - 1, position + 1)])
+        previous_hour = int(
+            available[
+                np.argmin(
+                    np.abs(available - (hour - self.tendency_window_hours))
+                )
+            ]
+        )
+        next_hour = int(
+            available[
+                np.argmin(
+                    np.abs(available - (hour + self.tendency_window_hours))
+                )
+            ]
+        )
         elapsed = max(next_hour - previous_hour, 1)
         tendency = (self._theta_e(next_hour) - self._theta_e(previous_hour)) / elapsed
         u_wind = _box_smooth(
