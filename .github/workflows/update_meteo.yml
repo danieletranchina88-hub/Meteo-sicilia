@@ -48,59 +48,34 @@ jobs:
           python -m pip install --upgrade pip
           python -m pip install -r requirements.txt
 
+      # I trasferimenti git dei runner verso questo repo possono congelarsi
+      # senza timeout (osservato: git pull fermo 46 minuti senza output).
+      # Con low-speed limit un trasferimento stagnante viene abortito dopo
+      # 60 secondi, cosi' i tentativi di retry possono partire davvero.
+      - name: Configura timeout git anti-stallo
+        run: |
+          git config http.lowSpeedLimit 1000
+          git config http.lowSpeedTime 60
+
       - name: Run ECMWF IFS processor
         continue-on-error: true
         run: python scripts/process_ecmwf.py
 
-      - name: Publish ECMWF IFS data
-        run: |
-          git config user.name "MeteoBot"
-          git config user.email "bot@meteo.local"
-          if [ ! -d data_weather_ecmwf ]; then
-            echo "Catalogo ECMWF non disponibile in questo tentativo."
-          else
-            git add data_weather_ecmwf/
-            if git diff --staged --quiet; then
-              echo "Nessuna modifica ECMWF."
-            else
-              git commit -m "Aggiorna dati ECMWF IFS"
-              git pull --rebase --autostash
-              git push
-            fi
-          fi
-
       - name: Run ICON-2I processor
         run: python scripts/process_data.py
 
-      - name: Publish ICON-2I data
-        run: |
-          git config user.name "MeteoBot"
-          git config user.email "bot@meteo.local"
-          git add data_weather/
-          if git diff --staged --quiet; then
-            echo "Nessuna modifica ICON-2I."
-            exit 0
-          fi
-          git commit -m "Aggiorna dati ICON-2I"
-          git pull --rebase --autostash
-          git push
-
-      # Pubblica una copia del sito su un branch dedicato (gh-pages) con un
-      # commit orfano ad ogni run: nessuna storia da trascinare, la
-      # dimensione del branch resta sempre quella dell'ultimo snapshot.
-      # Non tocca la storia di main, che continua a crescere finche' la
-      # sorgente di GitHub Pages non viene spostata su gh-pages (Settings ->
-      # Pages -> Source): a quel punto questa pubblicazione duplicata su
-      # main potra' essere rimossa.
+      # Il deploy del sito avviene per primo e da un repository temporaneo
+      # isolato: un solo commit orfano con l'ultimo snapshot, nessuna storia
+      # accumulata, nessuna dipendenza dai push (fragili) su main.
       - name: Deploy dati su branch gh-pages (senza storia accumulata)
+        timeout-minutes: 25
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           if [ ! -d data_weather ] || [ -z "$(ls -A data_weather)" ]; then
-            echo "data_weather assente o vuota: salto il deploy per non pubblicare un sito senza dati."
+            echo "data_weather assente o vuota: interrompo per non pubblicare un sito senza dati."
             exit 1
           fi
-
-          git config user.name "MeteoBot"
-          git config user.email "bot@meteo.local"
 
           STAGE=$(mktemp -d)
           cp index.html "$STAGE"/
@@ -110,10 +85,75 @@ jobs:
             cp -r data_weather_ecmwf "$STAGE"/data_weather_ecmwf
           fi
 
-          git checkout --orphan gh-pages-deploy
-          git rm -rf --cached . >/dev/null
-          git clean -fdx -q
-          cp -r "$STAGE"/. .
+          cd "$STAGE"
+          git init -q -b gh-pages
+          git config user.name "MeteoBot"
+          git config user.email "bot@meteo.local"
+          git config http.lowSpeedLimit 1000
+          git config http.lowSpeedTime 60
+          git remote add origin "https://x-access-token:${GITHUB_TOKEN}@github.com/${{ github.repository }}.git"
           git add -A
           git commit -q -m "Pubblica dati meteo $(date -u +%Y-%m-%dT%H:%M:%SZ)"
-          git push --force origin gh-pages-deploy:gh-pages
+
+          for attempt in 1 2 3; do
+            if git push --force origin gh-pages; then
+              echo "Deploy gh-pages completato (tentativo $attempt)."
+              exit 0
+            fi
+            echo "Push gh-pages fallito (tentativo $attempt), riprovo tra 20s..."
+            sleep 20
+          done
+          exit 1
+
+      # Pubblicazione legacy su main: serve solo finche' GitHub Pages legge
+      # da main. Una volta spostata la sorgente su gh-pages questi due step
+      # vanno rimossi, cosi' la storia di main smette di crescere di ~1 GB a
+      # run. Sono limitati nel tempo e non bloccanti: se il push si impianta
+      # il run resta comunque valido perche' gh-pages e' gia' aggiornato.
+      - name: Publish ECMWF IFS data (legacy, su main)
+        timeout-minutes: 10
+        continue-on-error: true
+        run: |
+          git config user.name "MeteoBot"
+          git config user.email "bot@meteo.local"
+          if [ ! -d data_weather_ecmwf ]; then
+            echo "Catalogo ECMWF non disponibile in questo tentativo."
+            exit 0
+          fi
+          git add data_weather_ecmwf/
+          if git diff --staged --quiet; then
+            echo "Nessuna modifica ECMWF."
+            exit 0
+          fi
+          git commit -m "Aggiorna dati ECMWF IFS"
+          for attempt in 1 2 3; do
+            git rebase --abort 2>/dev/null || true
+            if git pull --rebase --autostash && git push; then
+              exit 0
+            fi
+            echo "Push ECMWF su main fallito (tentativo $attempt), riprovo tra 15s..."
+            sleep 15
+          done
+          exit 1
+
+      - name: Publish ICON-2I data (legacy, su main)
+        timeout-minutes: 20
+        continue-on-error: true
+        run: |
+          git config user.name "MeteoBot"
+          git config user.email "bot@meteo.local"
+          git add data_weather/
+          if git diff --staged --quiet; then
+            echo "Nessuna modifica ICON-2I."
+            exit 0
+          fi
+          git commit -m "Aggiorna dati ICON-2I"
+          for attempt in 1 2 3; do
+            git rebase --abort 2>/dev/null || true
+            if git pull --rebase --autostash && git push; then
+              exit 0
+            fi
+            echo "Push ICON su main fallito (tentativo $attempt), riprovo tra 15s..."
+            sleep 15
+          done
+          exit 1
