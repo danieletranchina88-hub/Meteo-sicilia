@@ -22,7 +22,7 @@ concurrency:
 jobs:
   build:
     runs-on: ubuntu-latest
-    timeout-minutes: 110
+    timeout-minutes: 60
     permissions:
       contents: write
 
@@ -48,8 +48,8 @@ jobs:
           python -m pip install --upgrade pip
           python -m pip install -r requirements.txt
 
-      # I trasferimenti git dei runner verso questo repo possono congelarsi
-      # senza timeout (osservato: git pull fermo 46 minuti senza output).
+      # I trasferimenti git dei runner verso questo repo si sono congelati
+      # in passato senza timeout (git pull fermo 46 minuti senza output).
       # Con low-speed limit un trasferimento stagnante viene abortito dopo
       # 60 secondi, cosi' i tentativi di retry possono partire davvero.
       - name: Configura timeout git anti-stallo
@@ -61,13 +61,31 @@ jobs:
         continue-on-error: true
         run: python scripts/process_ecmwf.py
 
+      # I dati non vivono piu' su main: se il processore ECMWF e' fallito,
+      # recupera l'ultima copia pubblicata cosi' il sito conserva il layer
+      # ECMWF e l'analisi ICON-2I mantiene la guida per filtrare i fronti.
+      - name: Recupera dati ECMWF precedenti se il processore è fallito
+        run: |
+          if [ -d data_weather_ecmwf ] && [ -n "$(ls -A data_weather_ecmwf)" ]; then
+            echo "Dati ECMWF freschi disponibili."
+            exit 0
+          fi
+          echo "Processore ECMWF fallito: recupero l'ultima copia da gh-pages."
+          if git fetch --depth 1 origin gh-pages; then
+            git checkout FETCH_HEAD -- data_weather_ecmwf 2>/dev/null \
+              && git reset -q -- data_weather_ecmwf \
+              || echo "Nessuna copia ECMWF su gh-pages: si prosegue senza guida."
+          else
+            echo "Fetch di gh-pages non riuscito: si prosegue senza guida ECMWF."
+          fi
+
       - name: Run ICON-2I processor
         run: python scripts/process_data.py
 
-      # Il deploy del sito avviene per primo e da un repository temporaneo
-      # isolato: un solo commit orfano con l'ultimo snapshot, nessuna storia
-      # accumulata, nessuna dipendenza dai push (fragili) su main.
-      - name: Deploy dati su branch gh-pages (senza storia accumulata)
+      # Unica pubblicazione: commit orfano su gh-pages da un repository
+      # temporaneo isolato. Nessuna storia accumulata (la dimensione resta
+      # quella dell'ultimo snapshot) e nessun push di dati su main.
+      - name: Deploy dati su branch gh-pages
         timeout-minutes: 25
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -102,58 +120,5 @@ jobs:
             fi
             echo "Push gh-pages fallito (tentativo $attempt), riprovo tra 20s..."
             sleep 20
-          done
-          exit 1
-
-      # Pubblicazione legacy su main: serve solo finche' GitHub Pages legge
-      # da main. Una volta spostata la sorgente su gh-pages questi due step
-      # vanno rimossi, cosi' la storia di main smette di crescere di ~1 GB a
-      # run. Sono limitati nel tempo e non bloccanti: se il push si impianta
-      # il run resta comunque valido perche' gh-pages e' gia' aggiornato.
-      - name: Publish ECMWF IFS data (legacy, su main)
-        timeout-minutes: 10
-        continue-on-error: true
-        run: |
-          git config user.name "MeteoBot"
-          git config user.email "bot@meteo.local"
-          if [ ! -d data_weather_ecmwf ]; then
-            echo "Catalogo ECMWF non disponibile in questo tentativo."
-            exit 0
-          fi
-          git add data_weather_ecmwf/
-          if git diff --staged --quiet; then
-            echo "Nessuna modifica ECMWF."
-            exit 0
-          fi
-          git commit -m "Aggiorna dati ECMWF IFS"
-          for attempt in 1 2 3; do
-            git rebase --abort 2>/dev/null || true
-            if git pull --rebase --autostash && git push; then
-              exit 0
-            fi
-            echo "Push ECMWF su main fallito (tentativo $attempt), riprovo tra 15s..."
-            sleep 15
-          done
-          exit 1
-
-      - name: Publish ICON-2I data (legacy, su main)
-        timeout-minutes: 20
-        continue-on-error: true
-        run: |
-          git config user.name "MeteoBot"
-          git config user.email "bot@meteo.local"
-          git add data_weather/
-          if git diff --staged --quiet; then
-            echo "Nessuna modifica ICON-2I."
-            exit 0
-          fi
-          git commit -m "Aggiorna dati ICON-2I"
-          for attempt in 1 2 3; do
-            git rebase --abort 2>/dev/null || true
-            if git pull --rebase --autostash && git push; then
-              exit 0
-            fi
-            echo "Push ICON su main fallito (tentativo $attempt), riprovo tra 15s..."
-            sleep 15
           done
           exit 1
