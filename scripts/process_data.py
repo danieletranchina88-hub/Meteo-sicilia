@@ -37,20 +37,71 @@ FEELS_LIKE_METHOD = "heat-index-wind-chill-v1"
 
 def _download_file(url, destination):
     partial = destination + ".part"
-    for attempt in range(1, 4):
+    expected_size = 0
+    headers = {
+        "Accept-Encoding": "identity",
+        "Cache-Control": "no-cache",
+        "User-Agent": "MeteoHub-Synoptic-Viewer/1.0",
+    }
+    try:
+        head = requests.head(url, headers=headers, timeout=(20, 60), allow_redirects=True)
+        head.raise_for_status()
+        expected_size = int(head.headers.get("Content-Length") or 0)
+    except Exception:
+        pass
+
+    for attempt in range(1, 6):
         try:
-            with requests.get(url, stream=True, timeout=(25, 240)) as response:
+            current_size = os.path.getsize(partial) if os.path.exists(partial) else 0
+            request_headers = dict(headers)
+            if current_size > 0:
+                request_headers["Range"] = f"bytes={current_size}-"
+
+            with requests.get(
+                url,
+                headers=request_headers,
+                stream=True,
+                timeout=(25, 240),
+            ) as response:
                 response.raise_for_status()
-                with open(partial, "wb") as output:
+                append = current_size > 0 and response.status_code == 206
+                if not append:
+                    current_size = 0
+                response_size = int(response.headers.get("Content-Length") or 0)
+                if expected_size <= 0:
+                    if response.status_code == 206:
+                        content_range = response.headers.get("Content-Range", "")
+                        if "/" in content_range:
+                            expected_size = int(content_range.rsplit("/", 1)[-1])
+                    elif response_size > 0:
+                        expected_size = response_size
+
+                with open(partial, "ab" if append else "wb") as output:
                     for chunk in response.iter_content(chunk_size=2 * 1024 * 1024):
                         if chunk:
                             output.write(chunk)
+
+            downloaded_size = os.path.getsize(partial) if os.path.exists(partial) else 0
+            if expected_size and downloaded_size != expected_size:
+                if downloaded_size > expected_size:
+                    os.remove(partial)
+                raise IOError(
+                    f"download incompleto: {downloaded_size}/{expected_size} byte"
+                )
+            if downloaded_size < 1_000_000:
+                raise IOError(f"file GRIB troppo piccolo: {downloaded_size} byte")
+            with open(partial, "rb") as check:
+                if check.read(4) != b"GRIB":
+                    raise IOError("firma GRIB iniziale non valida")
+                check.seek(-4, os.SEEK_END)
+                if check.read(4) != b"7777":
+                    raise IOError("file GRIB troncato")
             os.replace(partial, destination)
             return destination
         except Exception as error:
-            if os.path.exists(partial):
-                os.remove(partial)
-            if attempt == 3:
+            if attempt == 5:
+                if os.path.exists(partial):
+                    os.remove(partial)
                 raise error
 
 
@@ -76,7 +127,7 @@ def prepare_front_analyzer(run_dt):
     print("2a. Scarico T/QV/U/V 850 hPa e orografia per i fronti…", flush=True)
 
     try:
-        with ThreadPoolExecutor(max_workers=3) as executor:
+        with ThreadPoolExecutor(max_workers=2) as executor:
             futures = {}
             for name, (url, filename) in requests_to_make.items():
                 destination = os.path.join(FRONT_TEMP_DIR, filename)
@@ -85,7 +136,8 @@ def prepare_front_analyzer(run_dt):
                 name, destination = futures[future]
                 future.result()
                 paths[name] = destination
-                print(f"   {name}: OK", flush=True)
+                size_mb = os.path.getsize(destination) / (1024 * 1024)
+                print(f"   {name}: OK ({size_mb:.1f} MB)", flush=True)
 
         return IconFrontAnalyzer(
             paths["temperature"],
