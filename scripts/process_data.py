@@ -5,7 +5,10 @@ import json
 import os
 import sys
 import shutil
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timedelta, timezone
+
+from front_analysis import FRONT_METHOD, IconFrontAnalyzer
 
 # --- CONFIGURAZIONE ---
 DATASET_ID = "ICON_2I_SURFACE_PRESSURE_LEVELS"
@@ -15,6 +18,8 @@ API_DOWNLOAD_URL = "https://meteohub.agenziaitaliameteo.it/api/opendata"
 FINAL_DIR = "data_weather"
 TEMP_DIR = "temp_processing"
 TEMP_FILE = "temp.grib2"
+FRONT_TEMP_DIR = "temp_front_processing"
+NWP_DIRECT_BASE = "https://meteohub.agenziaitaliameteo.it/nwp"
 
 # ============================================================
 # ITALIA (inclusi Sicilia + Sardegna)
@@ -28,6 +33,70 @@ LON_MIN, LON_MAX = 6.0, 19.5
 # ============================================================
 MAX_PIXELS = 600_000  
 FEELS_LIKE_METHOD = "heat-index-wind-chill-v1"
+
+
+def _download_file(url, destination):
+    partial = destination + ".part"
+    for attempt in range(1, 4):
+        try:
+            with requests.get(url, stream=True, timeout=(25, 240)) as response:
+                response.raise_for_status()
+                with open(partial, "wb") as output:
+                    for chunk in response.iter_content(chunk_size=2 * 1024 * 1024):
+                        if chunk:
+                            output.write(chunk)
+            os.replace(partial, destination)
+            return destination
+        except Exception as error:
+            if os.path.exists(partial):
+                os.remove(partial)
+            if attempt == 3:
+                raise error
+
+
+def prepare_front_analyzer(run_dt):
+    """Download only the five extra ICON fields needed for objective fronts."""
+    run_tag = run_dt.strftime("%Y%m%d%H")
+    common = f"ICON_2I_SURFACE_PRESSURE_LEVELS_{run_tag}"
+    run_base = f"{NWP_DIRECT_BASE}/{DATASET_ID}/{run_tag}"
+    pressure_filename = f"{common}_isobaricInhPa-850.grib"
+    surface_filename = f"{common}_surface-0.grib"
+    requests_to_make = {
+        "temperature": (f"{run_base}/T/{pressure_filename}", "t850.grib"),
+        "humidity": (f"{run_base}/QV/{pressure_filename}", "q850.grib"),
+        "u_wind": (f"{run_base}/U/{pressure_filename}", "u850.grib"),
+        "v_wind": (f"{run_base}/V/{pressure_filename}", "v850.grib"),
+        "orography": (f"{run_base}/HSURF/{surface_filename}", "hsurf.grib"),
+    }
+
+    if os.path.exists(FRONT_TEMP_DIR):
+        shutil.rmtree(FRONT_TEMP_DIR)
+    os.makedirs(FRONT_TEMP_DIR)
+    paths = {}
+    print("2a. Scarico T/QV/U/V 850 hPa e orografia per i fronti…", flush=True)
+
+    try:
+        with ThreadPoolExecutor(max_workers=3) as executor:
+            futures = {}
+            for name, (url, filename) in requests_to_make.items():
+                destination = os.path.join(FRONT_TEMP_DIR, filename)
+                futures[executor.submit(_download_file, url, destination)] = (name, destination)
+            for future in as_completed(futures):
+                name, destination = futures[future]
+                future.result()
+                paths[name] = destination
+                print(f"   {name}: OK", flush=True)
+
+        return IconFrontAnalyzer(
+            paths["temperature"],
+            paths["humidity"],
+            paths["u_wind"],
+            paths["v_wind"],
+            paths["orography"],
+        )
+    except Exception as error:
+        print(f"   Fronti non disponibili per questo run: {error}", flush=True)
+        return None
 
 def get_latest_run_files():
     print("1. Cerco dati su MeteoHub...", flush=True)
@@ -233,6 +302,7 @@ def process_data():
     os.makedirs(TEMP_DIR)
 
     catalog = []
+    front_analyzer = prepare_front_analyzer(run_dt)
 
     for idx, filename in enumerate(file_list):
         print(f"   [{idx+1:02d}] DL {filename}...", end=" ", flush=True)
@@ -392,8 +462,16 @@ def process_data():
                 header = {
                     "nx": nx, "ny": ny, "lo1": lo1, "la1": la1, "lo2": lo2, "la2": la2,
                     "dx": dx, "dy": dy, "runTime": iso_z(run_dt), "validTime": iso_date, "refTime": iso_date, "leadHours": step_hours,
-                    "feelsLikeMethod": FEELS_LIKE_METHOD
+                    "feelsLikeMethod": FEELS_LIKE_METHOD,
+                    "frontMethod": FRONT_METHOD if front_analyzer is not None else None
                 }
+
+                fronts = {"type": "FeatureCollection", "features": []}
+                if front_analyzer is not None:
+                    try:
+                        fronts = front_analyzer.analyze(step_hours)
+                    except Exception as front_error:
+                        print(f" front-{step_hours}h:{front_error}", end="", flush=True)
 
                 step_data = {
                     "meta": header,
@@ -404,7 +482,8 @@ def process_data():
                     "rain": clean_for_json(rain, 2),
                     "press": clean_for_json(press, 1),
                     "rh": clean_for_json(rh_val, 0),
-                    "cloud": clean_for_json(cloud, 0)
+                    "cloud": clean_for_json(cloud, 0),
+                    "fronts": fronts
                 }
 
                 out_name = f"step_{step_hours}.json"
@@ -421,6 +500,10 @@ def process_data():
 
         print(" -> Done")
 
+    if front_analyzer is not None:
+        front_analyzer.close()
+    if os.path.exists(FRONT_TEMP_DIR):
+        shutil.rmtree(FRONT_TEMP_DIR)
     if os.path.exists(TEMP_FILE): os.remove(TEMP_FILE)
     if os.path.exists(f"{TEMP_FILE}.idx"): os.remove(f"{TEMP_FILE}.idx")
 
