@@ -1,4 +1,4 @@
-"""Objective, deliberately conservative ICON-2I front estimation.
+"""Objective, deliberately conservative synoptic-front estimation.
 
 The detector works on equivalent potential temperature and wind at 850 hPa.
 It is intended for a mobile synoptic viewer: the output is a small GeoJSON
@@ -15,7 +15,7 @@ import numpy as np
 import xarray as xr
 
 
-FRONT_METHOD = "theta-e-850-tfp-wind-orography-v1"
+FRONT_METHOD = "theta-e-850-tfp-wind-v2"
 
 
 def _box_smooth(field: np.ndarray, radius: int) -> np.ndarray:
@@ -91,8 +91,13 @@ def _rdp(points: np.ndarray, tolerance_degrees: float) -> np.ndarray:
     return np.vstack((left[:-1], right))
 
 
-class IconFrontAnalyzer:
-    """Extract a few high-confidence, large-scale fronts for each forecast step."""
+class SynopticFrontAnalyzer:
+    """Extract a few high-confidence, large-scale fronts for each forecast step.
+
+    The four pressure-level fields may live in separate files (ICON-2I) or in
+    one multi-field GRIB (ECMWF Open Data).  All calculations are cropped to
+    the requested synoptic domain before entering memory.
+    """
 
     def __init__(
         self,
@@ -100,25 +105,61 @@ class IconFrontAnalyzer:
         humidity_path: str,
         u_wind_path: str,
         v_wind_path: str,
-        orography_path: str,
+        orography_path: str | None = None,
         downsample: int = 4,
+        bounds: tuple[float, float, float, float] | None = None,
+        filters: dict[str, dict] | None = None,
+        method: str = FRONT_METHOD,
+        source: str = "NWP",
     ) -> None:
+        self.bounds = bounds
+        self.method = method
+        self.source = source
+        filters = filters or {}
+
+        def open_field(path: str, name: str) -> xr.Dataset:
+            backend_kwargs: dict = {"indexpath": ""}
+            if filters.get(name):
+                backend_kwargs["filter_by_keys"] = filters[name]
+            return xr.open_dataset(
+                path,
+                engine="cfgrib",
+                backend_kwargs=backend_kwargs,
+            )
+
         self.datasets = {
-            "t": xr.open_dataset(temperature_path, engine="cfgrib"),
-            "q": xr.open_dataset(humidity_path, engine="cfgrib"),
-            "u": xr.open_dataset(u_wind_path, engine="cfgrib"),
-            "v": xr.open_dataset(v_wind_path, engine="cfgrib"),
-            "h": xr.open_dataset(orography_path, engine="cfgrib"),
+            "t": open_field(temperature_path, "t"),
+            "q": open_field(humidity_path, "q"),
+            "u": open_field(u_wind_path, "u"),
+            "v": open_field(v_wind_path, "v"),
         }
+        if orography_path:
+            self.datasets["h"] = open_field(orography_path, "h")
         self.keys = {
             key: next(iter(dataset.data_vars))
             for key, dataset in self.datasets.items()
         }
         factor = max(1, int(downsample))
         self.factor = factor
-        source = self.datasets["t"]
-        self.latitudes = np.asarray(source.latitude.values, dtype=float)[::factor]
-        self.longitudes = np.asarray(source.longitude.values, dtype=float)[::factor]
+        source_dataset = self.datasets["t"]
+        source_latitudes = np.sort(
+            np.asarray(source_dataset.latitude.values, dtype=float).ravel()
+        )
+        source_longitudes = np.sort(
+            np.asarray(source_dataset.longitude.values, dtype=float).ravel()
+        )
+        if bounds is not None:
+            lon_min, lon_max, lat_min, lat_max = bounds
+            source_latitudes = source_latitudes[
+                (source_latitudes >= lat_min) & (source_latitudes <= lat_max)
+            ]
+            source_longitudes = source_longitudes[
+                (source_longitudes >= lon_min) & (source_longitudes <= lon_max)
+            ]
+        self.latitudes = source_latitudes[::factor]
+        self.longitudes = source_longitudes[::factor]
+        if len(self.latitudes) < 3 or len(self.longitudes) < 3:
+            raise ValueError("Dominio insufficiente per l'analisi dei fronti")
         self.delta_latitude = float(abs(self.latitudes[1] - self.latitudes[0]))
         self.delta_longitude = float(abs(self.longitudes[1] - self.longitudes[0]))
         self.dy_km = self.delta_latitude * 111.32
@@ -127,17 +168,28 @@ class IconFrontAnalyzer:
             * 111.32
             * np.cos(np.deg2rad(self.latitudes))[:, None]
         )
-        raw_steps = np.asarray(source.step.values)
+        raw_steps = np.atleast_1d(np.asarray(source_dataset.step.values))
         self.available_hours = [
             int(value / np.timedelta64(1, "h")) for value in raw_steps
         ]
         self.hour_to_index = {
             hour: index for index, hour in enumerate(self.available_hours)
         }
-        terrain = np.asarray(
-            self.datasets["h"][self.keys["h"]].values, dtype=float
+        self.theta_smooth_radius = max(
+            1,
+            min(4, int(round(0.40 / self.delta_latitude))),
         )
-        self.terrain = terrain[::factor, ::factor]
+        self.detail_smooth_radius = max(
+            1,
+            min(2, int(round(0.20 / self.delta_latitude))),
+        )
+        if "h" in self.datasets:
+            self.terrain = self._field("h", self.available_hours[0])
+        else:
+            self.terrain = np.zeros(
+                (len(self.latitudes), len(self.longitudes)),
+                dtype=float,
+            )
         self.theta_cache: OrderedDict[int, np.ndarray] = OrderedDict()
 
     def close(self) -> None:
@@ -151,6 +203,17 @@ class IconFrontAnalyzer:
             if index is None:
                 index = int(np.argmin(np.abs(np.asarray(self.available_hours) - hour)))
             data = data.isel(step=index)
+        data = data.squeeze(drop=True)
+        data = data.sortby("latitude", ascending=True).sortby(
+            "longitude", ascending=True
+        )
+        if self.bounds is not None:
+            lon_min, lon_max, lat_min, lat_max = self.bounds
+            data = data.sel(
+                latitude=slice(lat_min, lat_max),
+                longitude=slice(lon_min, lon_max),
+            )
+        data = data.transpose("latitude", "longitude")
         values = np.asarray(data.values, dtype=float)
         return values[:: self.factor, :: self.factor]
 
@@ -163,7 +226,10 @@ class IconFrontAnalyzer:
             self._field("t", hour), self._field("q", hour)
         )
         # Two passes suppress grid noise while preserving synoptic-scale boundaries.
-        theta = _box_smooth(_box_smooth(theta, 4), 4)
+        theta = _box_smooth(
+            _box_smooth(theta, self.theta_smooth_radius),
+            self.theta_smooth_radius,
+        )
         self.theta_cache[hour] = theta
         while len(self.theta_cache) > 4:
             self.theta_cache.popitem(last=False)
@@ -327,7 +393,7 @@ class IconFrontAnalyzer:
         gradient_east, gradient_north = self._gradients(theta)
         gradient_magnitude = np.hypot(gradient_east, gradient_north)
         strength = gradient_magnitude * 100.0  # K / 100 km
-        strength = _box_smooth(strength, 2)
+        strength = _box_smooth(strength, self.detail_smooth_radius)
         strength_threshold = max(6.0, float(np.nanpercentile(strength, 88.0)))
 
         magnitude_east, magnitude_north = self._gradients(gradient_magnitude)
@@ -338,12 +404,19 @@ class IconFrontAnalyzer:
         tfp = np.where(self.terrain > 1_500.0, np.nan, tfp)
 
         available = np.asarray(self.available_hours)
-        previous_hour = int(available[max(0, self.hour_to_index[hour] - 3)])
-        next_hour = int(available[min(len(available) - 1, self.hour_to_index[hour] + 3)])
+        position = self.hour_to_index[hour]
+        previous_hour = int(available[max(0, position - 1)])
+        next_hour = int(available[min(len(available) - 1, position + 1)])
         elapsed = max(next_hour - previous_hour, 1)
         tendency = (self._theta_e(next_hour) - self._theta_e(previous_hour)) / elapsed
-        u_wind = _box_smooth(self._field("u", hour), 2)
-        v_wind = _box_smooth(self._field("v", hour), 2)
+        u_wind = _box_smooth(
+            self._field("u", hour),
+            self.detail_smooth_radius,
+        )
+        v_wind = _box_smooth(
+            self._field("v", hour),
+            self.detail_smooth_radius,
+        )
 
         generator = contourpy.contour_generator(
             x=self.longitudes, y=self.latitudes, z=tfp, line_type="Separate"
@@ -407,9 +480,10 @@ class IconFrontAnalyzer:
                         "strength": round(metrics["strength"], 1),
                         "windShift": round(metrics["windShift"], 1),
                         "convergence": round(metrics["convergence"], 1),
-                        "motionKmh": round(metrics["motion"], 0),
+                        "motionKmh": float(round(metrics["motion"], 0)),
                         "lengthKm": round(metrics["length"], 0),
-                        "method": FRONT_METHOD,
+                        "method": self.method,
+                        "source": self.source,
                     },
                 }
             )
@@ -418,9 +492,14 @@ class IconFrontAnalyzer:
             "type": "FeatureCollection",
             "features": features,
             "properties": {
-                "method": FRONT_METHOD,
+                "method": self.method,
+                "source": self.source,
                 "level": "850 hPa",
                 "estimated": True,
                 "thresholdKPer100Km": round(strength_threshold, 1),
             },
         }
+
+
+# Backwards-compatible name for older workflow revisions.
+IconFrontAnalyzer = SynopticFrontAnalyzer
