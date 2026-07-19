@@ -5,7 +5,11 @@ import json
 import os
 import sys
 import shutil
+import time
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timedelta, timezone
+
+from front_analysis import SynopticFrontAnalyzer
 
 # --- CONFIGURAZIONE ---
 DATASET_ID = "ICON_2I_SURFACE_PRESSURE_LEVELS"
@@ -15,6 +19,10 @@ API_DOWNLOAD_URL = "https://meteohub.agenziaitaliameteo.it/api/opendata"
 FINAL_DIR = "data_weather"
 TEMP_DIR = "temp_processing"
 TEMP_FILE = "temp.grib2"
+FRONT_TEMP_DIR = "temp_front_processing"
+NWP_DIRECTORY_ID = "ICON-2I_SURFACE_PRESSURE_LEVELS"
+NWP_DIRECT_BASE = "https://meteohub.agenziaitaliameteo.it/nwp"
+ICON_FRONT_METHOD = "theta-e-850-tfp-wind-icon2i-v3"
 SYNOPTIC_FRONT_CATALOG = os.path.join(
     "data_weather_ecmwf",
     "fronts_catalog.json",
@@ -32,6 +40,153 @@ LON_MIN, LON_MAX = 6.0, 19.5
 # ============================================================
 MAX_PIXELS = 600_000  
 FEELS_LIKE_METHOD = "heat-index-wind-chill-v1"
+
+
+def download_grib_file(url, destination):
+    """Download a large MeteoHub GRIB with validation and resumable retries."""
+    partial = destination + ".part"
+    headers = {
+        "Accept-Encoding": "identity",
+        "User-Agent": "MeteoHub-Mobile-Synoptic/1.0",
+    }
+    expected_size = 0
+    try:
+        response = requests.head(
+            url,
+            headers=headers,
+            timeout=(20, 60),
+            allow_redirects=True,
+        )
+        response.raise_for_status()
+        expected_size = int(response.headers.get("Content-Length") or 0)
+    except Exception:
+        pass
+
+    for attempt in range(1, 5):
+        try:
+            current_size = os.path.getsize(partial) if os.path.exists(partial) else 0
+            request_headers = dict(headers)
+            if current_size:
+                request_headers["Range"] = f"bytes={current_size}-"
+
+            with requests.get(
+                url,
+                headers=request_headers,
+                stream=True,
+                timeout=(25, 300),
+            ) as response:
+                response.raise_for_status()
+                append = current_size > 0 and response.status_code == 206
+                if not append:
+                    current_size = 0
+                response_size = int(response.headers.get("Content-Length") or 0)
+                if expected_size <= 0:
+                    if response.status_code == 206:
+                        content_range = response.headers.get("Content-Range", "")
+                        if "/" in content_range:
+                            expected_size = int(content_range.rsplit("/", 1)[-1])
+                    elif response_size:
+                        expected_size = response_size
+
+                with open(partial, "ab" if append else "wb") as output:
+                    for chunk in response.iter_content(chunk_size=2 * 1024 * 1024):
+                        if chunk:
+                            output.write(chunk)
+
+            downloaded_size = os.path.getsize(partial)
+            if expected_size and downloaded_size != expected_size:
+                if downloaded_size > expected_size:
+                    os.remove(partial)
+                raise IOError(
+                    f"download incompleto: {downloaded_size}/{expected_size} byte"
+                )
+            if downloaded_size < 1_000_000:
+                raise IOError(f"risposta troppo piccola: {downloaded_size} byte")
+            with open(partial, "rb") as check:
+                if check.read(4) != b"GRIB":
+                    raise IOError("firma GRIB iniziale non valida")
+                check.seek(-4, os.SEEK_END)
+                if check.read(4) != b"7777":
+                    raise IOError("file GRIB troncato")
+            os.replace(partial, destination)
+            return destination
+        except Exception as error:
+            print(f"   retry {attempt}/4: {error}", flush=True)
+            if attempt == 4:
+                if os.path.exists(partial):
+                    os.remove(partial)
+                raise
+            if os.path.exists(partial) and os.path.getsize(partial) < 1_000_000:
+                os.remove(partial)
+            time.sleep(attempt * 2)
+
+
+def prepare_icon_front_analyzer(run_dt):
+    """Download ICON-2I T/QV/U/V at 850 hPa and build an hourly analyzer."""
+    run_tag = run_dt.strftime("%Y%m%d%H")
+    common = f"ICON_2I_SURFACE_PRESSURE_LEVELS_{run_tag}"
+    run_base = f"{NWP_DIRECT_BASE}/{NWP_DIRECTORY_ID}/{run_tag}"
+    pressure_file = f"{common}_isobaricInhPa-850.grib"
+    surface_file = f"{common}_surface-0.grib"
+    requests_to_make = {
+        "temperature": (f"{run_base}/T/{pressure_file}", "t850.grib"),
+        "humidity": (f"{run_base}/QV/{pressure_file}", "q850.grib"),
+        "u_wind": (f"{run_base}/U/{pressure_file}", "u850.grib"),
+        "v_wind": (f"{run_base}/V/{pressure_file}", "v850.grib"),
+        "orography": (f"{run_base}/HSURF/{surface_file}", "hsurf.grib"),
+    }
+
+    if os.path.exists(FRONT_TEMP_DIR):
+        shutil.rmtree(FRONT_TEMP_DIR)
+    os.makedirs(FRONT_TEMP_DIR)
+    paths = {}
+    print(
+        "2a. Scarico ICON-2I T/QV/U/V a 850 hPa per 73 ore…",
+        flush=True,
+    )
+
+    try:
+        # Due connessioni riducono i tempi senza sovraccaricare MeteoHub.
+        with ThreadPoolExecutor(max_workers=2) as executor:
+            futures = {}
+            for name, (url, filename) in requests_to_make.items():
+                destination = os.path.join(FRONT_TEMP_DIR, filename)
+                future = executor.submit(download_grib_file, url, destination)
+                futures[future] = (name, destination)
+            for future in as_completed(futures):
+                name, destination = futures[future]
+                future.result()
+                paths[name] = destination
+                print(
+                    f"   {name}: {os.path.getsize(destination) / 1048576:.1f} MB",
+                    flush=True,
+                )
+
+        analyzer = SynopticFrontAnalyzer(
+            paths["temperature"],
+            paths["humidity"],
+            paths["u_wind"],
+            paths["v_wind"],
+            paths["orography"],
+            downsample=4,
+            bounds=(3.0, 22.0, 33.7, 48.9),
+            method=ICON_FRONT_METHOD,
+            source="ICON-2I",
+            tendency_window_hours=3,
+        )
+        if len(analyzer.available_hours) < 70:
+            analyzer.close()
+            raise ValueError(
+                f"solo {len(analyzer.available_hours)} scadenze ICON-2I disponibili"
+            )
+        print(
+            f"   Analisi ICON-2I pronta: {len(analyzer.available_hours)} ore.",
+            flush=True,
+        )
+        return analyzer
+    except Exception as error:
+        print(f"   ICON-2I 850 hPa non disponibile: {error}", flush=True)
+        return None
 
 
 def load_synoptic_front_catalog():
@@ -269,7 +424,10 @@ def process_data():
     os.makedirs(TEMP_DIR)
 
     catalog = []
-    front_catalog = load_synoptic_front_catalog()
+    icon_front_analyzer = prepare_icon_front_analyzer(run_dt)
+    front_catalog = (
+        [] if icon_front_analyzer is not None else load_synoptic_front_catalog()
+    )
 
     for idx, filename in enumerate(file_list):
         print(f"   [{idx+1:02d}] DL {filename}...", end=" ", flush=True)
@@ -425,21 +583,43 @@ def process_data():
                 # EXPORT JSON
                 valid_dt = run_dt + timedelta(hours=step_hours)
                 iso_date = iso_z(valid_dt)
-                front_entry = nearest_synoptic_front(front_catalog, valid_dt)
-                fronts = (
-                    front_entry.get("fronts")
-                    if front_entry is not None
-                    else {"type": "FeatureCollection", "features": []}
-                )
+                front_entry = None
+                fronts = {"type": "FeatureCollection", "features": []}
+                front_method = None
+                front_source = None
+                front_level = None
+                front_valid_time = None
+
+                if icon_front_analyzer is not None:
+                    try:
+                        fronts = icon_front_analyzer.analyze(step_hours)
+                        front_method = ICON_FRONT_METHOD
+                        front_source = "ICON-2I"
+                        front_level = "850 hPa"
+                        front_valid_time = iso_date
+                    except Exception as front_error:
+                        print(
+                            f" front-{step_hours}h:{front_error}",
+                            end="",
+                            flush=True,
+                        )
+                else:
+                    front_entry = nearest_synoptic_front(front_catalog, valid_dt)
+                    if front_entry is not None:
+                        fronts = front_entry.get("fronts", fronts)
+                        front_method = front_entry.get("method")
+                        front_source = front_entry.get("source")
+                        front_level = front_entry.get("level")
+                        front_valid_time = front_entry.get("validTime")
 
                 header = {
                     "nx": nx, "ny": ny, "lo1": lo1, "la1": la1, "lo2": lo2, "la2": la2,
                     "dx": dx, "dy": dy, "runTime": iso_z(run_dt), "validTime": iso_date, "refTime": iso_date, "leadHours": step_hours,
                     "feelsLikeMethod": FEELS_LIKE_METHOD,
-                    "frontMethod": front_entry.get("method") if front_entry else None,
-                    "frontSource": front_entry.get("source") if front_entry else None,
-                    "frontLevel": front_entry.get("level") if front_entry else None,
-                    "frontValidTime": front_entry.get("validTime") if front_entry else None,
+                    "frontMethod": front_method,
+                    "frontSource": front_source,
+                    "frontLevel": front_level,
+                    "frontValidTime": front_valid_time,
                 }
 
                 step_data = {
@@ -469,6 +649,10 @@ def process_data():
 
         print(" -> Done")
 
+    if icon_front_analyzer is not None:
+        icon_front_analyzer.close()
+    if os.path.exists(FRONT_TEMP_DIR):
+        shutil.rmtree(FRONT_TEMP_DIR)
     if os.path.exists(TEMP_FILE): os.remove(TEMP_FILE)
     if os.path.exists(f"{TEMP_FILE}.idx"): os.remove(f"{TEMP_FILE}.idx")
 
