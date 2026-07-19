@@ -70,6 +70,60 @@ def _line_length_km(coordinates: np.ndarray) -> float:
     return float(np.sum(np.hypot(dx, dy)))
 
 
+def _line_min_distance_km(coordinates_a: np.ndarray, coordinates_b: np.ndarray) -> float:
+    """Coarse point-to-point minimum distance between two polylines, in km."""
+    mean_latitude = math.radians(
+        float(np.mean(np.concatenate((coordinates_a[:, 1], coordinates_b[:, 1]))))
+    )
+    scale_lon = 111.32 * math.cos(mean_latitude)
+    ax = coordinates_a[:, 0] * scale_lon
+    ay = coordinates_a[:, 1] * 111.32
+    bx = coordinates_b[:, 0] * scale_lon
+    by = coordinates_b[:, 1] * 111.32
+    dx = ax[:, None] - bx[None, :]
+    dy = ay[:, None] - by[None, :]
+    return float(np.min(np.hypot(dx, dy)))
+
+
+def corroborate_with_reference(
+    fronts: dict,
+    reference_fronts: dict | None,
+    max_distance_km: float = 220.0,
+) -> dict:
+    """Discard candidate fronts with no counterpart in a coarser, independent analysis.
+
+    A 2.2 km model such as ICON-2I resolves mesoscale boundaries (sea-breeze
+    convergence, orographic channelling, convective outflows) that a
+    synoptic-front detector can mistake for real fronts, no matter how the
+    thermal/wind thresholds above are tuned. A genuine synoptic front is a
+    large-scale feature, so it is also present - smoothed and displaced by at
+    most a few tens of km - in an independent, coarser-resolution model run.
+    Requiring that match rejects grid-scale false positives that exist in only
+    one model, at the cost of dropping the rare true front the guide missed.
+    """
+    reference_features = (reference_fronts or {}).get("features") or []
+    if not reference_features:
+        return fronts
+
+    reference_lines = [
+        np.asarray(feature["geometry"]["coordinates"], dtype=float)
+        for feature in reference_features
+    ]
+    kept = []
+    for feature in fronts.get("features", []):
+        coordinates = np.asarray(feature["geometry"]["coordinates"], dtype=float)
+        best_distance = min(
+            _line_min_distance_km(coordinates, reference_line)
+            for reference_line in reference_lines
+        )
+        if best_distance <= max_distance_km:
+            kept.append(feature)
+
+    result = dict(fronts)
+    result["features"] = kept
+    return result
+
+
 def _rdp(points: np.ndarray, tolerance_degrees: float) -> np.ndarray:
     """Ramer-Douglas-Peucker simplification for compact GeoJSON output."""
     if len(points) <= 2:
