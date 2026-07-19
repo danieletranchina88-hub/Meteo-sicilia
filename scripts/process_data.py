@@ -5,6 +5,7 @@ import json
 import os
 import sys
 import shutil
+import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timedelta, timezone
 
@@ -41,7 +42,11 @@ def _download_file(url, destination):
     headers = {
         "Accept-Encoding": "identity",
         "Cache-Control": "no-cache",
-        "User-Agent": "MeteoHub-Synoptic-Viewer/1.0",
+        "Referer": "https://meteohub.agenziaitaliameteo.it/",
+        "User-Agent": (
+            "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 "
+            "Chrome/126.0 Safari/537.36"
+        ),
     }
     try:
         head = requests.head(url, headers=headers, timeout=(20, 60), allow_redirects=True)
@@ -57,8 +62,10 @@ def _download_file(url, destination):
             if current_size > 0:
                 request_headers["Range"] = f"bytes={current_size}-"
 
+            separator = "&" if "?" in url else "?"
+            retry_url = f"{url}{separator}_front_retry={attempt}"
             with requests.get(
-                url,
+                retry_url,
                 headers=request_headers,
                 stream=True,
                 timeout=(25, 240),
@@ -99,10 +106,17 @@ def _download_file(url, destination):
             os.replace(partial, destination)
             return destination
         except Exception as error:
+            print(
+                f"   retry {attempt}/5 {url.rsplit('/', 2)[-2]}: {error}",
+                flush=True,
+            )
             if attempt == 5:
                 if os.path.exists(partial):
                     os.remove(partial)
                 raise error
+            if os.path.exists(partial) and os.path.getsize(partial) < 1_000_000:
+                os.remove(partial)
+            time.sleep(attempt * 2)
 
 
 def prepare_front_analyzer(run_dt):
@@ -127,7 +141,9 @@ def prepare_front_analyzer(run_dt):
     print("2a. Scarico T/QV/U/V 850 hPa e orografia per i fronti…", flush=True)
 
     try:
-        with ThreadPoolExecutor(max_workers=2) as executor:
+        # MeteoHub may return a tiny HTTP-200 error body when several large
+        # pressure-level files are requested in parallel. Keep this sequential.
+        with ThreadPoolExecutor(max_workers=1) as executor:
             futures = {}
             for name, (url, filename) in requests_to_make.items():
                 destination = os.path.join(FRONT_TEMP_DIR, filename)
