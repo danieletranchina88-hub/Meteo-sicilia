@@ -9,7 +9,7 @@ import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timedelta, timezone
 
-from front_analysis import SynopticFrontAnalyzer
+from front_analysis import SynopticFrontAnalyzer, corroborate_with_reference
 
 # --- CONFIGURAZIONE ---
 DATASET_ID = "ICON_2I_SURFACE_PRESSURE_LEVELS"
@@ -22,7 +22,15 @@ TEMP_FILE = "temp.grib2"
 FRONT_TEMP_DIR = "temp_front_processing"
 NWP_DIRECTORY_ID = "ICON-2I_SURFACE_PRESSURE_LEVELS"
 NWP_DIRECT_BASE = "https://meteohub.agenziaitaliameteo.it/nwp"
-ICON_FRONT_METHOD = "theta-e-850-tfp-wind-icon2i-v3"
+ICON_FRONT_METHOD = "theta-e-850-tfp-wind-icon2i-v4-ecmwf-guided"
+# ICON-2I risolve strutture di mesoscala (brezze, canalizzazioni orografiche,
+# outflow temporaleschi) che il rilevatore puo' scambiare per fronti sinottici.
+# Un fronte vero e' anche visibile - smussato e spostato di poche decine di km -
+# nella corsa ECMWF, molto piu' rada: usiamo quella come guida di conferma e
+# scartiamo i candidati ICON-2I privi di riscontro.
+FRONT_CORROBORATION_BASE_KM = 180.0
+FRONT_CORROBORATION_PER_HOUR_KM = 1.5
+FRONT_CORROBORATION_MAX_KM = 320.0
 SYNOPTIC_FRONT_CATALOG = os.path.join(
     "data_weather_ecmwf",
     "fronts_catalog.json",
@@ -219,6 +227,13 @@ def nearest_synoptic_front(front_catalog, valid_time):
     )
     difference_hours = abs((candidate_time - valid_time).total_seconds()) / 3600.0
     return candidate if difference_hours <= 3.1 else None
+
+
+def front_corroboration_radius_km(lead_hours):
+    """Allowed ICON-vs-ECMWF front displacement: grows with lead time, capped."""
+    radius = FRONT_CORROBORATION_BASE_KM + FRONT_CORROBORATION_PER_HOUR_KM * lead_hours
+    return float(min(FRONT_CORROBORATION_MAX_KM, radius))
+
 
 def get_latest_run_files():
     print("1. Cerco dati su MeteoHub...", flush=True)
@@ -425,9 +440,9 @@ def process_data():
 
     catalog = []
     icon_front_analyzer = prepare_icon_front_analyzer(run_dt)
-    front_catalog = (
-        [] if icon_front_analyzer is not None else load_synoptic_front_catalog()
-    )
+    # Serve sia come guida di conferma per i fronti ICON-2I sia come fallback
+    # quando l'analisi ICON-2I non e' disponibile.
+    front_catalog = load_synoptic_front_catalog()
 
     for idx, filename in enumerate(file_list):
         print(f"   [{idx+1:02d}] DL {filename}...", end=" ", flush=True)
@@ -593,6 +608,13 @@ def process_data():
                 if icon_front_analyzer is not None:
                     try:
                         fronts = icon_front_analyzer.analyze(step_hours)
+                        guide_entry = nearest_synoptic_front(front_catalog, valid_dt)
+                        if guide_entry is not None:
+                            fronts = corroborate_with_reference(
+                                fronts,
+                                guide_entry.get("fronts"),
+                                max_distance_km=front_corroboration_radius_km(step_hours),
+                            )
                         front_method = ICON_FRONT_METHOD
                         front_source = "ICON-2I"
                         front_level = "850 hPa"
