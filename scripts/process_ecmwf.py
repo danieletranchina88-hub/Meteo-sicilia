@@ -214,6 +214,7 @@ def process_data():
             },
             method=FRONT_METHOD,
             source="ECMWF IFS",
+            tendency_window_hours=6,
         )
 
         if os.path.exists(TEMP_DIR):
