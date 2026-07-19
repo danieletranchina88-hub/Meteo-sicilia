@@ -5,11 +5,7 @@ import json
 import os
 import sys
 import shutil
-import time
-from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timedelta, timezone
-
-from front_analysis import FRONT_METHOD, IconFrontAnalyzer
 
 # --- CONFIGURAZIONE ---
 DATASET_ID = "ICON_2I_SURFACE_PRESSURE_LEVELS"
@@ -19,8 +15,10 @@ API_DOWNLOAD_URL = "https://meteohub.agenziaitaliameteo.it/api/opendata"
 FINAL_DIR = "data_weather"
 TEMP_DIR = "temp_processing"
 TEMP_FILE = "temp.grib2"
-FRONT_TEMP_DIR = "temp_front_processing"
-NWP_DIRECT_BASE = "https://meteohub.agenziaitaliameteo.it/nwp"
+SYNOPTIC_FRONT_CATALOG = os.path.join(
+    "data_weather_ecmwf",
+    "fronts_catalog.json",
+)
 
 # ============================================================
 # ITALIA (inclusi Sicilia + Sardegna)
@@ -36,135 +34,36 @@ MAX_PIXELS = 600_000
 FEELS_LIKE_METHOD = "heat-index-wind-chill-v1"
 
 
-def _download_file(url, destination):
-    partial = destination + ".part"
-    expected_size = 0
-    headers = {
-        "Accept-Encoding": "identity",
-        "Cache-Control": "no-cache",
-        "Referer": "https://meteohub.agenziaitaliameteo.it/",
-        "User-Agent": (
-            "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 "
-            "Chrome/126.0 Safari/537.36"
-        ),
-    }
+def load_synoptic_front_catalog():
+    """Load the small ECMWF 850-hPa guide produced earlier in the workflow."""
     try:
-        head = requests.head(url, headers=headers, timeout=(20, 60), allow_redirects=True)
-        head.raise_for_status()
-        expected_size = int(head.headers.get("Content-Length") or 0)
-    except Exception:
-        pass
-
-    for attempt in range(1, 6):
-        try:
-            current_size = os.path.getsize(partial) if os.path.exists(partial) else 0
-            request_headers = dict(headers)
-            if current_size > 0:
-                request_headers["Range"] = f"bytes={current_size}-"
-
-            separator = "&" if "?" in url else "?"
-            retry_url = f"{url}{separator}_front_retry={attempt}"
-            with requests.get(
-                retry_url,
-                headers=request_headers,
-                stream=True,
-                timeout=(25, 240),
-            ) as response:
-                response.raise_for_status()
-                append = current_size > 0 and response.status_code == 206
-                if not append:
-                    current_size = 0
-                response_size = int(response.headers.get("Content-Length") or 0)
-                if expected_size <= 0:
-                    if response.status_code == 206:
-                        content_range = response.headers.get("Content-Range", "")
-                        if "/" in content_range:
-                            expected_size = int(content_range.rsplit("/", 1)[-1])
-                    elif response_size > 0:
-                        expected_size = response_size
-
-                with open(partial, "ab" if append else "wb") as output:
-                    for chunk in response.iter_content(chunk_size=2 * 1024 * 1024):
-                        if chunk:
-                            output.write(chunk)
-
-            downloaded_size = os.path.getsize(partial) if os.path.exists(partial) else 0
-            if expected_size and downloaded_size != expected_size:
-                if downloaded_size > expected_size:
-                    os.remove(partial)
-                raise IOError(
-                    f"download incompleto: {downloaded_size}/{expected_size} byte"
-                )
-            if downloaded_size < 1_000_000:
-                raise IOError(f"file GRIB troppo piccolo: {downloaded_size} byte")
-            with open(partial, "rb") as check:
-                if check.read(4) != b"GRIB":
-                    raise IOError("firma GRIB iniziale non valida")
-                check.seek(-4, os.SEEK_END)
-                if check.read(4) != b"7777":
-                    raise IOError("file GRIB troncato")
-            os.replace(partial, destination)
-            return destination
-        except Exception as error:
-            print(
-                f"   retry {attempt}/5 {url.rsplit('/', 2)[-2]}: {error}",
-                flush=True,
-            )
-            if attempt == 5:
-                if os.path.exists(partial):
-                    os.remove(partial)
-                raise error
-            if os.path.exists(partial) and os.path.getsize(partial) < 1_000_000:
-                os.remove(partial)
-            time.sleep(attempt * 2)
-
-
-def prepare_front_analyzer(run_dt):
-    """Download only the five extra ICON fields needed for objective fronts."""
-    run_tag = run_dt.strftime("%Y%m%d%H")
-    common = f"ICON_2I_SURFACE_PRESSURE_LEVELS_{run_tag}"
-    run_base = f"{NWP_DIRECT_BASE}/{DATASET_ID}/{run_tag}"
-    pressure_filename = f"{common}_isobaricInhPa-850.grib"
-    surface_filename = f"{common}_surface-0.grib"
-    requests_to_make = {
-        "temperature": (f"{run_base}/T/{pressure_filename}", "t850.grib"),
-        "humidity": (f"{run_base}/QV/{pressure_filename}", "q850.grib"),
-        "u_wind": (f"{run_base}/U/{pressure_filename}", "u850.grib"),
-        "v_wind": (f"{run_base}/V/{pressure_filename}", "v850.grib"),
-        "orography": (f"{run_base}/HSURF/{surface_filename}", "hsurf.grib"),
-    }
-
-    if os.path.exists(FRONT_TEMP_DIR):
-        shutil.rmtree(FRONT_TEMP_DIR)
-    os.makedirs(FRONT_TEMP_DIR)
-    paths = {}
-    print("2a. Scarico T/QV/U/V 850 hPa e orografia per i fronti…", flush=True)
-
-    try:
-        # MeteoHub may return a tiny HTTP-200 error body when several large
-        # pressure-level files are requested in parallel. Keep this sequential.
-        with ThreadPoolExecutor(max_workers=1) as executor:
-            futures = {}
-            for name, (url, filename) in requests_to_make.items():
-                destination = os.path.join(FRONT_TEMP_DIR, filename)
-                futures[executor.submit(_download_file, url, destination)] = (name, destination)
-            for future in as_completed(futures):
-                name, destination = futures[future]
-                future.result()
-                paths[name] = destination
-                size_mb = os.path.getsize(destination) / (1024 * 1024)
-                print(f"   {name}: OK ({size_mb:.1f} MB)", flush=True)
-
-        return IconFrontAnalyzer(
-            paths["temperature"],
-            paths["humidity"],
-            paths["u_wind"],
-            paths["v_wind"],
-            paths["orography"],
+        with open(SYNOPTIC_FRONT_CATALOG, encoding="utf-8") as source:
+            items = json.load(source)
+        prepared = []
+        for item in items:
+            valid_time = datetime.fromisoformat(
+                item["validTime"].replace("Z", "+00:00")
+            ).astimezone(timezone.utc)
+            prepared.append((valid_time, item))
+        print(
+            f"2a. Guida fronti ECMWF disponibile ({len(prepared)} scadenze).",
+            flush=True,
         )
+        return prepared
     except Exception as error:
-        print(f"   Fronti non disponibili per questo run: {error}", flush=True)
+        print(f"2a. Guida fronti non disponibile: {error}", flush=True)
+        return []
+
+
+def nearest_synoptic_front(front_catalog, valid_time):
+    if not front_catalog:
         return None
+    candidate_time, candidate = min(
+        front_catalog,
+        key=lambda pair: abs((pair[0] - valid_time).total_seconds()),
+    )
+    difference_hours = abs((candidate_time - valid_time).total_seconds()) / 3600.0
+    return candidate if difference_hours <= 3.1 else None
 
 def get_latest_run_files():
     print("1. Cerco dati su MeteoHub...", flush=True)
@@ -370,7 +269,7 @@ def process_data():
     os.makedirs(TEMP_DIR)
 
     catalog = []
-    front_analyzer = prepare_front_analyzer(run_dt)
+    front_catalog = load_synoptic_front_catalog()
 
     for idx, filename in enumerate(file_list):
         print(f"   [{idx+1:02d}] DL {filename}...", end=" ", flush=True)
@@ -526,20 +425,22 @@ def process_data():
                 # EXPORT JSON
                 valid_dt = run_dt + timedelta(hours=step_hours)
                 iso_date = iso_z(valid_dt)
+                front_entry = nearest_synoptic_front(front_catalog, valid_dt)
+                fronts = (
+                    front_entry.get("fronts")
+                    if front_entry is not None
+                    else {"type": "FeatureCollection", "features": []}
+                )
 
                 header = {
                     "nx": nx, "ny": ny, "lo1": lo1, "la1": la1, "lo2": lo2, "la2": la2,
                     "dx": dx, "dy": dy, "runTime": iso_z(run_dt), "validTime": iso_date, "refTime": iso_date, "leadHours": step_hours,
                     "feelsLikeMethod": FEELS_LIKE_METHOD,
-                    "frontMethod": FRONT_METHOD if front_analyzer is not None else None
+                    "frontMethod": front_entry.get("method") if front_entry else None,
+                    "frontSource": front_entry.get("source") if front_entry else None,
+                    "frontLevel": front_entry.get("level") if front_entry else None,
+                    "frontValidTime": front_entry.get("validTime") if front_entry else None,
                 }
-
-                fronts = {"type": "FeatureCollection", "features": []}
-                if front_analyzer is not None:
-                    try:
-                        fronts = front_analyzer.analyze(step_hours)
-                    except Exception as front_error:
-                        print(f" front-{step_hours}h:{front_error}", end="", flush=True)
 
                 step_data = {
                     "meta": header,
@@ -568,10 +469,6 @@ def process_data():
 
         print(" -> Done")
 
-    if front_analyzer is not None:
-        front_analyzer.close()
-    if os.path.exists(FRONT_TEMP_DIR):
-        shutil.rmtree(FRONT_TEMP_DIR)
     if os.path.exists(TEMP_FILE): os.remove(TEMP_FILE)
     if os.path.exists(f"{TEMP_FILE}.idx"): os.remove(f"{TEMP_FILE}.idx")
 
