@@ -84,3 +84,36 @@ jobs:
           git commit -m "Aggiorna dati ICON-2I"
           git pull --rebase --autostash
           git push
+
+      # Pubblica una copia del sito su un branch dedicato (gh-pages) con un
+      # commit orfano ad ogni run: nessuna storia da trascinare, la
+      # dimensione del branch resta sempre quella dell'ultimo snapshot.
+      # Non tocca la storia di main, che continua a crescere finche' la
+      # sorgente di GitHub Pages non viene spostata su gh-pages (Settings ->
+      # Pages -> Source): a quel punto questa pubblicazione duplicata su
+      # main potra' essere rimossa.
+      - name: Deploy dati su branch gh-pages (senza storia accumulata)
+        run: |
+          if [ ! -d data_weather ] || [ -z "$(ls -A data_weather)" ]; then
+            echo "data_weather assente o vuota: salto il deploy per non pubblicare un sito senza dati."
+            exit 1
+          fi
+
+          git config user.name "MeteoBot"
+          git config user.email "bot@meteo.local"
+
+          STAGE=$(mktemp -d)
+          cp index.html "$STAGE"/
+          touch "$STAGE"/.nojekyll
+          cp -r data_weather "$STAGE"/data_weather
+          if [ -d data_weather_ecmwf ]; then
+            cp -r data_weather_ecmwf "$STAGE"/data_weather_ecmwf
+          fi
+
+          git checkout --orphan gh-pages-deploy
+          git rm -rf --cached . >/dev/null
+          git clean -fdx -q
+          cp -r "$STAGE"/. .
+          git add -A
+          git commit -q -m "Pubblica dati meteo $(date -u +%Y-%m-%dT%H:%M:%SZ)"
+          git push --force origin gh-pages-deploy:gh-pages
