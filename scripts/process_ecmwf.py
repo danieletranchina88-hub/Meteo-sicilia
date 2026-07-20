@@ -204,6 +204,7 @@ def process_data():
             FRONT_GRIB_FILE,
             FRONT_GRIB_FILE,
             FRONT_GRIB_FILE,
+            pressure_path=GRIB_FILE,
             downsample=1,
             bounds=FRONT_BOUNDS,
             filters={
@@ -211,6 +212,7 @@ def process_data():
                 "q": {"shortName": "q"},
                 "u": {"shortName": "u"},
                 "v": {"shortName": "v"},
+                "p": {"shortName": "msl"},
             },
             method=FRONT_METHOD,
             source="ECMWF IFS",

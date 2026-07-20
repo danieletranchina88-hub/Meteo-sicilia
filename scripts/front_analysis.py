@@ -15,7 +15,7 @@ import numpy as np
 import xarray as xr
 
 
-FRONT_METHOD = "theta-e-850-tfp-wind-v3-physgate"
+FRONT_METHOD = "theta-e-850-tfp-wind-v4-ptrough"
 
 
 def _box_smooth(field: np.ndarray, radius: int) -> np.ndarray:
@@ -205,6 +205,7 @@ class SynopticFrontAnalyzer:
         u_wind_path: str,
         v_wind_path: str,
         orography_path: str | None = None,
+        pressure_path: str | None = None,
         downsample: int = 4,
         bounds: tuple[float, float, float, float] | None = None,
         filters: dict[str, dict] | None = None,
@@ -236,6 +237,20 @@ class SynopticFrontAnalyzer:
         }
         if orography_path:
             self.datasets["h"] = open_field(orography_path, "h")
+        if pressure_path:
+            # La pressione e' una firma in piu', non un requisito: se manca
+            # l'analisi prosegue con le firme termiche e dinamiche.
+            try:
+                self.datasets["p"] = open_field(pressure_path, "p")
+            except Exception:
+                pass
+        if pressure_path:
+            # La pressione e' una firma in piu', non un requisito: se manca
+            # l'analisi prosegue con le firme termiche e dinamiche.
+            try:
+                self.datasets["p"] = open_field(pressure_path, "p")
+            except Exception:
+                pass
         self.keys = {
             key: next(iter(dataset.data_vars))
             for key, dataset in self.datasets.items()
@@ -405,6 +420,7 @@ class SynopticFrontAnalyzer:
         v_wind: np.ndarray,
         threshold: float,
         dry_gradient: np.ndarray,
+        pressure: np.ndarray | None,
     ) -> dict | None:
         line_strength = self._sample(strength, coordinates)
         gx = self._sample(gradient_east, coordinates)
@@ -434,6 +450,24 @@ class SynopticFrontAnalyzer:
         terrain_fraction = float(np.mean(self._sample(self.terrain, coordinates) > 900.0))
         if terrain_fraction > 0.55:
             return None
+
+        # Firma barica: un fronte giace lungo una saccatura, quindi la
+        # pressione ai lati della linea (~75 km) deve essere piu' alta che
+        # sulla linea stessa.  Il segno opposto (linea su un promontorio
+        # anticiclonico) e' fisicamente incompatibile con un fronte.
+        pressure_trough = None
+        if pressure is not None:
+            lon_offset_p = normal_east * 75.0 / np.maximum(
+                111.32 * np.cos(mean_latitude), 25.0
+            )
+            lat_offset_p = normal_north * 75.0 / 111.32
+            offsets_p = np.column_stack((lon_offset_p, lat_offset_p))
+            p_center = self._sample(pressure, coordinates)
+            p_cold = self._sample(pressure, coordinates - offsets_p)
+            p_warm = self._sample(pressure, coordinates + offsets_p)
+            pressure_trough = float(
+                np.nanmedian((p_cold + p_warm) / 2.0 - p_center)
+            )
 
         median_strength = float(np.nanmedian(line_strength))
         median_shift = float(np.nanmedian(wind_shift))
@@ -471,19 +505,30 @@ class SynopticFrontAnalyzer:
         if median_shift < 2.0 and median_convergence < 0.2:
             return None
 
+        # Gate 3 - firma barica.  Una linea adagiata su un massimo di
+        # pressione non puo' essere un fronte, qualunque cosa dicano gli
+        # altri campi.  (Neutrale se la pressione non e' disponibile.)
+        if pressure_trough is not None and pressure_trough < -0.3:
+            return None
+
         length_km = _line_length_km(coordinates)
         thermal_score = np.clip((median_strength - threshold) / 7.0, 0.0, 1.0)
         dry_score = np.clip((median_dry - 2.0) / 6.0, 0.0, 1.0)
         shift_score = np.clip((median_shift - 1.0) / 4.5, 0.0, 1.0)
         convergence_score = np.clip((median_convergence + 0.4) / 4.5, 0.0, 1.0)
+        if pressure_trough is None:
+            trough_score = 0.5  # neutro: assenza di dato, non di saccatura
+        else:
+            trough_score = float(np.clip((pressure_trough + 0.1) / 1.2, 0.0, 1.0))
         length_score = np.clip((math.sqrt(length_km) - math.sqrt(200.0)) / 18.0, 0.0, 1.0)
         confidence = (
             0.40
-            + 0.18 * thermal_score
+            + 0.16 * thermal_score
             + 0.10 * dry_score
-            + 0.12 * shift_score
-            + 0.10 * convergence_score
-            + 0.08 * length_score
+            + 0.10 * shift_score
+            + 0.09 * convergence_score
+            + 0.08 * trough_score
+            + 0.07 * length_score
             + 0.05 * np.clip(abs(motion_kmh) / 25.0, 0.0, 1.0)
             - 0.38 * terrain_fraction
         )
@@ -491,7 +536,7 @@ class SynopticFrontAnalyzer:
         if confidence < 0.55:
             return None
 
-        return {
+        metrics = {
             "frontType": front_type,
             "confidence": float(np.clip(confidence, 0.0, 0.99)),
             "strength": median_strength,
@@ -503,6 +548,9 @@ class SynopticFrontAnalyzer:
             "terrainFraction": terrain_fraction,
             "score": confidence + min(length_km, 900.0) / 5000.0,
         }
+        if pressure_trough is not None:
+            metrics["pressureTrough"] = pressure_trough
+        return metrics
 
     def analyze(self, hour: int) -> dict:
         if hour not in self.hour_to_index:
@@ -526,6 +574,17 @@ class SynopticFrontAnalyzer:
             np.hypot(dry_east, dry_north) * 100.0,
             self.detail_smooth_radius,
         )
+
+        # Pressione al livello del mare (hPa) per la firma della saccatura.
+        pressure = None
+        if "p" in self.datasets:
+            try:
+                raw_pressure = self._field("p", hour)
+                if float(np.nanmedian(raw_pressure)) > 20000.0:
+                    raw_pressure = raw_pressure / 100.0
+                pressure = _box_smooth(raw_pressure, self.theta_smooth_radius)
+            except Exception:
+                pressure = None
 
         magnitude_east, magnitude_north = self._gradients(gradient_magnitude)
         tfp = -(
@@ -590,6 +649,7 @@ class SynopticFrontAnalyzer:
                     v_wind,
                     strength_threshold,
                     dry_gradient,
+                    pressure,
                 )
                 if metrics is not None:
                     candidates.append((piece, metrics))
@@ -633,6 +693,11 @@ class SynopticFrontAnalyzer:
                         "convergence": round(metrics["convergence"], 1),
                         "motionKmh": float(round(metrics["motion"], 0)),
                         "lengthKm": round(metrics["length"], 0),
+                        **(
+                            {"pressureTrough": round(metrics["pressureTrough"], 2)}
+                            if "pressureTrough" in metrics
+                            else {}
+                        ),
                         "method": self.method,
                         "source": self.source,
                     },
@@ -649,6 +714,48 @@ class SynopticFrontAnalyzer:
                 "estimated": True,
                 "thresholdKPer100Km": round(strength_threshold, 1),
             },
+        }
+
+
+    def upper_air(self, hour: int, stride: int = 2) -> dict | None:
+        """Compact 850-hPa fields for the map's inspection layer.
+
+        Exports theta-e, temperature and wind on a coarsened grid (default
+        ~19 km for ICON-2I) so users can visually verify the analysed fronts
+        against the raw ingredients.  Rows are ordered north to south to
+        match the surface data convention of the site.
+        """
+        if hour not in self.hour_to_index:
+            return None
+
+        def prepare(field: np.ndarray, decimals: int) -> list:
+            coarse = np.flipud(field[::stride, ::stride])
+            rounded = np.round(coarse.astype(float), decimals).ravel()
+            return [
+                None if not np.isfinite(value) else float(value)
+                for value in rounded
+            ]
+
+        theta = self._theta_e(hour)
+        temperature = self._field("t", hour) - 273.15
+        u_wind = self._field("u", hour)
+        v_wind = self._field("v", hour)
+        latitudes = self.latitudes[::stride]
+        longitudes = self.longitudes[::stride]
+        return {
+            "level": "850 hPa",
+            "nx": int(len(longitudes)),
+            "ny": int(len(latitudes)),
+            "lo1": float(longitudes[0]),
+            "la1": float(latitudes[-1]),
+            "lo2": float(longitudes[-1]),
+            "la2": float(latitudes[0]),
+            "dx": float(self.delta_longitude * stride),
+            "dy": float(self.delta_latitude * stride),
+            "thetaE": prepare(theta, 1),
+            "t": prepare(temperature, 1),
+            "u": prepare(u_wind, 1),
+            "v": prepare(v_wind, 1),
         }
 
 
