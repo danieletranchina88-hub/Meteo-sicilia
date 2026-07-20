@@ -22,7 +22,7 @@ TEMP_FILE = "temp.grib2"
 FRONT_TEMP_DIR = "temp_front_processing"
 NWP_DIRECTORY_ID = "ICON-2I_SURFACE_PRESSURE_LEVELS"
 NWP_DIRECT_BASE = "https://meteohub.agenziaitaliameteo.it/nwp"
-ICON_FRONT_METHOD = "theta-e-850-icon2i-tracked-v8"
+ICON_FRONT_METHOD = "theta-e-850-icon2i-tracked-v9"
 # ICON-2I risolve strutture di mesoscala (brezze, canalizzazioni orografiche,
 # outflow temporaleschi) che il rilevatore puo' scambiare per fronti sinottici.
 # Un fronte vero e' anche visibile - smussato e spostato di poche decine di km -
@@ -466,7 +466,14 @@ def process_data():
                 front_catalog, run_dt + timedelta(hours=guide_hour)
             )
             if guide_entry is not None:
-                reference_by_hour[guide_hour] = guide_entry.get("fronts") or {}
+                # Preferisce i candidati pre-tracciamento (riferimento
+                # denso); i fronti pubblicati restano come ripiego per i
+                # cataloghi generati da versioni precedenti.
+                reference_by_hour[guide_hour] = (
+                    guide_entry.get("candidates")
+                    or guide_entry.get("fronts")
+                    or {}
+                )
         icon_front_analyzer.set_reference(
             reference_by_hour, front_corroboration_radius_km
         )

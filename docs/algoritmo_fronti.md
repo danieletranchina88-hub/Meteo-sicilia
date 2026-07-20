@@ -2,7 +2,7 @@
 
 Questo documento spiega la fisica su cui si basa il rilevatore di fronti
 (`scripts/front_analysis.py`) e il perché di ogni criterio. Metodo:
-`theta-e-850-tracked-v6` (ICON-2I: `theta-e-850-icon2i-tracked-v8`).
+`theta-e-850-tracked-v7` (ICON-2I: `theta-e-850-icon2i-tracked-v9`).
 
 L'architettura è **multi-evidenza**: nessun singolo campo può "creare" un
 fronte. Un candidato deve superare simultaneamente prove indipendenti su
@@ -106,7 +106,13 @@ avviene a livello di traccia:
   sua vita; un bordo diurno (convezione pomeridiana, brezze) riappare a
   grappoli con lunghi vuoti notturni e viene respinto anche se ogni sua
   singola apparizione sembrava valida;
-- **fiducia mediana ≥ 0.55** sull'intera vita.
+- **fiducia mediana ≥ 0.55** sull'intera vita;
+- **soglie piene come mediane di traccia**: baroclinicità ≥ 2 K/100 km e
+  risposta del vento (≥ 2 m/s o convergenza ≥ 0.2) sono richieste sulla
+  mediana della vita del fronte, con pavimenti per-ora più bassi: un
+  fronte debole ma reale non viene spezzato dalle ore in cui oscilla
+  appena sotto soglia (caso verificato: il fronte freddo francese del
+  run 12z 20/07, visto a tratti per-ora, ora traccia continua 16-35 h).
 
 La pubblicazione è **continua per costruzione**: i buchi brevi (≤ una
 finestra) vengono colmati interpolando la linea tra le ore adiacenti
@@ -120,9 +126,13 @@ Un fronte vero è su larga scala, quindi appare anche in un modello
 indipendente e più rado. La conferma è valutata **sull'insieme della
 traccia**: almeno la metà delle sue ore con guida disponibile deve
 trovare il 50% della linea entro il raggio (180 km a +0 h, +1.5 km/h di
-scadenza, max 320 km) da un fronte ECMWF alla stessa validità. Valutarla
-ora per ora creerebbe sfarfallio quando la guida (passo 6 h) cambia
-scadenza. Fail-open se la guida manca.
+scadenza, max 320 km) da un riferimento ECMWF alla stessa validità.
+Come riferimento si usano i **candidati di rilevamento** ECMWF (pre
+tracciamento, campo `candidates` del catalogo): i fronti pubblicati da
+ECMWF sono volutamente pochissimi, e una guida troppo rada renderebbe la
+conferma quasi sempre non applicabile. Valutarla ora per ora creerebbe
+sfarfallio quando la guida (passo 6 h) cambia scadenza. Fail-open se la
+guida manca.
 
 ## Confidenza e classificazione
 
