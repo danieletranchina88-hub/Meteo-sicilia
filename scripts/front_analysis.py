@@ -15,7 +15,7 @@ import numpy as np
 import xarray as xr
 
 
-FRONT_METHOD = "theta-e-850-tfp-wind-v4-ptrough"
+FRONT_METHOD = "theta-e-850-multievidence-v5"
 
 
 def _box_smooth(field: np.ndarray, radius: int) -> np.ndarray:
@@ -307,6 +307,7 @@ class SynopticFrontAnalyzer:
                 dtype=float,
             )
         self.theta_cache: OrderedDict[int, np.ndarray] = OrderedDict()
+        self.detect_cache: dict[int, dict] = {}
 
     def close(self) -> None:
         for dataset in self.datasets.values():
@@ -421,6 +422,8 @@ class SynopticFrontAnalyzer:
         threshold: float,
         dry_gradient: np.ndarray,
         pressure: np.ndarray | None,
+        vorticity: np.ndarray,
+        frontogenesis: np.ndarray,
     ) -> dict | None:
         line_strength = self._sample(strength, coordinates)
         gx = self._sample(gradient_east, coordinates)
@@ -475,6 +478,10 @@ class SynopticFrontAnalyzer:
         median_tendency = float(np.nanmedian(line_tendency))
         median_gradient = float(np.nanmedian(magnitude))
         median_dry = float(np.nanmedian(self._sample(dry_gradient, coordinates)))
+        median_vorticity = float(np.nanmedian(self._sample(vorticity, coordinates)))
+        median_frontogenesis = float(
+            np.nanmedian(self._sample(frontogenesis, coordinates))
+        )
         normal_flow_kmh = float(
             np.nanmedian(center_u * normal_east + center_v * normal_north) * 3.6
         )
@@ -511,25 +518,37 @@ class SynopticFrontAnalyzer:
         if pressure_trough is not None and pressure_trough < -0.3:
             return None
 
+        # Gate 4 - vorticita'.  Un fronte e' una striscia di shear
+        # ciclonico: vorticita' relativa mediamente negativa (anticiclonica)
+        # lungo la linea e' incompatibile con un fronte reale.
+        if median_vorticity < -2.0e-5:
+            return None
+
         length_km = _line_length_km(coordinates)
         thermal_score = np.clip((median_strength - threshold) / 7.0, 0.0, 1.0)
         dry_score = np.clip((median_dry - 2.0) / 6.0, 0.0, 1.0)
         shift_score = np.clip((median_shift - 1.0) / 4.5, 0.0, 1.0)
         convergence_score = np.clip((median_convergence + 0.4) / 4.5, 0.0, 1.0)
+        vorticity_score = np.clip((median_vorticity * 1.0e5 + 1.0) / 6.0, 0.0, 1.0)
+        # Frontogenesi positiva = fronte in intensificazione (attivo);
+        # negativa = frontolisi, tipica dei bordi in dissoluzione.
+        frontogenesis_score = np.clip((median_frontogenesis + 1.0) / 4.0, 0.0, 1.0)
         if pressure_trough is None:
             trough_score = 0.5  # neutro: assenza di dato, non di saccatura
         else:
             trough_score = float(np.clip((pressure_trough + 0.1) / 1.2, 0.0, 1.0))
         length_score = np.clip((math.sqrt(length_km) - math.sqrt(200.0)) / 18.0, 0.0, 1.0)
         confidence = (
-            0.40
-            + 0.16 * thermal_score
-            + 0.10 * dry_score
+            0.35
+            + 0.14 * thermal_score
+            + 0.08 * dry_score
             + 0.10 * shift_score
-            + 0.09 * convergence_score
-            + 0.08 * trough_score
-            + 0.07 * length_score
-            + 0.05 * np.clip(abs(motion_kmh) / 25.0, 0.0, 1.0)
+            + 0.07 * convergence_score
+            + 0.07 * vorticity_score
+            + 0.06 * frontogenesis_score
+            + 0.07 * trough_score
+            + 0.06 * length_score
+            + 0.03 * np.clip(abs(motion_kmh) / 25.0, 0.0, 1.0)
             - 0.38 * terrain_fraction
         )
 
@@ -543,6 +562,8 @@ class SynopticFrontAnalyzer:
             "tempGradient": median_dry,
             "windShift": median_shift,
             "convergence": median_convergence,
+            "vorticity": median_vorticity,
+            "frontogenesis": median_frontogenesis,
             "motion": motion_kmh,
             "length": length_km,
             "terrainFraction": terrain_fraction,
@@ -552,9 +573,14 @@ class SynopticFrontAnalyzer:
             metrics["pressureTrough"] = pressure_trough
         return metrics
 
-    def analyze(self, hour: int) -> dict:
-        if hour not in self.hour_to_index:
-            return {"type": "FeatureCollection", "features": []}
+    def _detect(self, hour: int) -> dict:
+        """Rilevamento grezzo per una singola ora (tutti i gate locali).
+
+        Il risultato e' in cache: la verifica di coerenza temporale in
+        analyze() riusa i candidati delle ore adiacenti senza ricalcolarli.
+        """
+        if hour in self.detect_cache:
+            return self.detect_cache[hour]
 
         theta = self._theta_e(hour)
         gradient_east, gradient_north = self._gradients(theta)
@@ -619,6 +645,27 @@ class SynopticFrontAnalyzer:
             self.detail_smooth_radius,
         )
 
+        # Vorticita' relativa (s^-1): un fronte e' una striscia di shear
+        # ciclonico.  Frontogenesi cinematica di Petterssen su theta-e
+        # (K/100 km/3 h): positiva se il flusso sta stringendo il gradiente
+        # (fronte attivo), negativa in frontolisi.
+        u_east, u_north = self._gradients(u_wind)
+        v_east, v_north = self._gradients(v_wind)
+        vorticity = _box_smooth(
+            (v_east - u_north) / 1000.0,
+            self.detail_smooth_radius,
+        )
+        safe_magnitude = np.maximum(gradient_magnitude, 1.0e-6)
+        frontogenesis = -(
+            u_east * gradient_east**2
+            + v_north * gradient_north**2
+            + (v_east + u_north) * gradient_east * gradient_north
+        ) / (safe_magnitude * 1000.0)
+        frontogenesis = _box_smooth(
+            frontogenesis * 100.0 * 10800.0,
+            self.detail_smooth_radius,
+        )
+
         generator = contourpy.contour_generator(
             x=self.longitudes, y=self.latitudes, z=tfp, line_type="Separate"
         )
@@ -650,11 +697,57 @@ class SynopticFrontAnalyzer:
                     strength_threshold,
                     dry_gradient,
                     pressure,
+                    vorticity,
+                    frontogenesis,
                 )
                 if metrics is not None:
                     candidates.append((piece, metrics))
 
-        candidates.sort(key=lambda item: item[1]["score"], reverse=True)
+        result = {"candidates": candidates, "threshold": strength_threshold}
+        self.detect_cache[hour] = result
+        return result
+
+    def analyze(self, hour: int) -> dict:
+        if hour not in self.hour_to_index:
+            return {"type": "FeatureCollection", "features": []}
+
+        detection = self._detect(hour)
+
+        # Gate 5 - coerenza temporale.  Un fronte reale persiste per molte
+        # ore e trasla con continuita'; gli artefatti (brezze, outflow,
+        # rumore di griglia) compaiono e scompaiono.  Ogni candidato deve
+        # ritrovare almeno il 40% della propria linea entro un raggio
+        # proporzionale alla finestra (50 km/h di spostamento massimo)
+        # in almeno una delle ore adiacenti analizzabili.
+        available = np.asarray(self.available_hours)
+        neighbor_hours = []
+        for target in (
+            hour - self.tendency_window_hours,
+            hour + self.tendency_window_hours,
+        ):
+            nearest = int(available[np.argmin(np.abs(available - target))])
+            if nearest != hour and nearest not in neighbor_hours:
+                neighbor_hours.append(nearest)
+
+        match_radius_km = 50.0 * self.tendency_window_hours
+        candidates = []
+        for coordinates, metrics in detection["candidates"]:
+            persistent = not neighbor_hours
+            for neighbor in neighbor_hours:
+                neighbor_lines = [
+                    other_coords
+                    for other_coords, _ in self._detect(neighbor)["candidates"]
+                ]
+                if neighbor_lines and _matched_fraction(
+                    coordinates, neighbor_lines, match_radius_km
+                ) >= 0.4:
+                    persistent = True
+                    break
+            if persistent:
+                candidates.append((coordinates, metrics))
+
+        strength_threshold = detection["threshold"]
+        candidates = sorted(candidates, key=lambda item: item[1]["score"], reverse=True)
         accepted = []
         for coordinates, metrics in candidates:
             centroid = np.mean(coordinates, axis=0)
@@ -691,6 +784,8 @@ class SynopticFrontAnalyzer:
                         "tempGradient": round(metrics["tempGradient"], 1),
                         "windShift": round(metrics["windShift"], 1),
                         "convergence": round(metrics["convergence"], 1),
+                        "vorticity1e5": round(metrics["vorticity"] * 1.0e5, 1),
+                        "frontogenesis": round(metrics["frontogenesis"], 1),
                         "motionKmh": float(round(metrics["motion"], 0)),
                         "lengthKm": round(metrics["length"], 0),
                         **(
