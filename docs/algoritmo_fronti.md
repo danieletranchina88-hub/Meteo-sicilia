@@ -2,7 +2,18 @@
 
 Questo documento spiega la fisica su cui si basa il rilevatore di fronti
 (`scripts/front_analysis.py`) e il perché di ogni criterio. Metodo:
-`theta-e-850-ofa-v8` (ICON-2I: `theta-e-850-icon2i-ofa-v10`).
+`theta-e-850-ofa-v9` (ICON-2I: `theta-e-850-icon2i-ofa-v11`).
+
+**Robustezza numerica (correzioni da code review).** I campioni fuori
+dal dominio restituiscono NaN (non il valore della cella di bordo): un
+candidato con meno del 75% di punti interni viene scartato, per non
+generare falsi fronti ai margini della mappa. Il confronto tra linee usa
+la distanza punto-**segmento** (robusto anche con riferimenti a pochi
+vertici) ed è simmetrico. Il collegamento temporale ha un raggio con
+tetto fisso a 200 km. La copertura è contata sulle scadenze realmente
+disponibili nell'arco della traccia. Quando la guida ECMWF è del tutto
+assente la traccia resta marcata `corroborated: null` e la sua confidenza
+è penalizzata, così l'assenza di conferma è esplicita nell'output.
 
 L'architettura è **multi-evidenza**: nessun singolo campo può "creare" un
 fronte. Un candidato deve superare simultaneamente prove indipendenti su
@@ -143,14 +154,17 @@ I sopravvissuti ricevono una confidenza che pesa: intensità di ∇θe,
 saccatura, lunghezza, velocità di moto, penalità per orografia. Sotto
 0.55 si scarta; al massimo 4 fronti per scadenza, deduplicati.
 
-Il tipo segue l'**avvezione termica cinematica** (metodo OFA standard):
-la componente del vento lungo la normale al fronte (che punta verso
-l'aria calda). Vento verso il caldo = avvezione fredda → **freddo**
-(≥ +5 km/h); vento verso il freddo = avvezione calda → **caldo**
-(≤ −5 km/h); componente ≈ nulla → **stazionario**. La velocità di
-traslazione dell'isolinea (metodo della tendenza di θe) è calcolata come
-riscontro indipendente. I fronti occlusi non sono distinti e ricadono su
-freddo/stazionario.
+Il tipo segue il moto del fronte lungo la sua normale (che punta verso
+l'aria calda), combinando due misure indipendenti con lo stesso segno:
+la **propagazione** dell'isolinea θe (dalla tendenza temporale — il moto
+reale della linea, valido anche quando il vento a 850 hPa scorre
+parallelo al fronte) e l'**avvezione termica cinematica** (metodo OFA —
+la componente del vento lungo la normale). Segno positivo (verso il
+caldo) → **freddo** (≥ +5 km/h); negativo → **caldo** (≤ −5 km/h);
+≈ nullo → **stazionario**. La propagazione è la misura principale
+(l'avvezione da sola, come segnalato in revisione, classifica male i
+fronti che avanzano non paralleli al flusso locale). I fronti occlusi
+non sono distinti e ricadono su freddo/stazionario.
 
 ## Verifica visiva sul sito
 

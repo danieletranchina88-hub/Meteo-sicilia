@@ -15,7 +15,7 @@ import numpy as np
 import xarray as xr
 
 
-FRONT_METHOD = "theta-e-850-ofa-v8"
+FRONT_METHOD = "theta-e-850-ofa-v9"
 
 
 def _box_smooth(field: np.ndarray, radius: int) -> np.ndarray:
@@ -112,20 +112,50 @@ def _line_shape_metrics(coordinates: np.ndarray) -> tuple[float, float]:
     return sinuosity, abs(float(np.degrees(net_turn)))
 
 
+def _points_to_polyline_km(points_km: np.ndarray, line_km: np.ndarray) -> np.ndarray:
+    """Minimum distance (km) from each point to a polyline's SEGMENTS.
+
+    La distanza va misurata dai segmenti, non dai vertici: se la linea di
+    riferimento e' molto semplificata (pochi vertici, come i candidati
+    ECMWF dopo l'RDP), il confronto punto-punto sovrastima enormemente la
+    distanza e respinge fronti in realta' coincidenti.
+    """
+    if len(line_km) == 1:
+        return np.hypot(
+            points_km[:, 0] - line_km[0, 0], points_km[:, 1] - line_km[0, 1]
+        )
+    starts = line_km[:-1]
+    ends = line_km[1:]
+    seg = ends - starts
+    seg_len_sq = np.maximum((seg**2).sum(axis=1), 1.0e-9)
+    rel = points_km[:, None, :] - starts[None, :, :]
+    t = np.clip((rel * seg[None, :, :]).sum(axis=2) / seg_len_sq[None, :], 0.0, 1.0)
+    proj = starts[None, :, :] + t[:, :, None] * seg[None, :, :]
+    dist = np.hypot(
+        points_km[:, None, 0] - proj[:, :, 0],
+        points_km[:, None, 1] - proj[:, :, 1],
+    )
+    return dist.min(axis=1)
+
+
 def _matched_fraction(
     coordinates: np.ndarray,
     reference_lines: list[np.ndarray],
     max_distance_km: float,
 ) -> float:
-    """Fraction of a candidate line lying within reach of any reference line."""
+    """Fraction of a candidate line lying within reach of any reference line.
+
+    Il candidato viene ricampionato a passo fisso (~20 km) e la distanza e'
+    presa dai segmenti della linea di riferimento: robusto anche quando il
+    riferimento ha pochi vertici.
+    """
     mean_latitude = math.radians(float(np.mean(coordinates[:, 1])))
-    candidate_km = _project_km(coordinates, mean_latitude)
+    dense = _resample_line(coordinates, max(2, int(_line_length_km(coordinates) / 20.0)))
+    candidate_km = _project_km(dense, mean_latitude)
     best = np.full(len(candidate_km), np.inf)
     for reference in reference_lines:
         reference_km = _project_km(reference, mean_latitude)
-        dx = candidate_km[:, 0][:, None] - reference_km[:, 0][None, :]
-        dy = candidate_km[:, 1][:, None] - reference_km[:, 1][None, :]
-        best = np.minimum(best, np.min(np.hypot(dx, dy), axis=1))
+        best = np.minimum(best, _points_to_polyline_km(candidate_km, reference_km))
     return float(np.mean(best <= max_distance_km))
 
 
@@ -272,13 +302,6 @@ class SynopticFrontAnalyzer:
                 self.datasets["p"] = open_field(pressure_path, "p")
             except Exception:
                 pass
-        if pressure_path:
-            # La pressione e' una firma in piu', non un requisito: se manca
-            # l'analisi prosegue con le firme termiche e dinamiche.
-            try:
-                self.datasets["p"] = open_field(pressure_path, "p")
-            except Exception:
-                pass
         self.keys = {
             key: next(iter(dataset.data_vars))
             for key, dataset in self.datasets.items()
@@ -389,20 +412,36 @@ class SynopticFrontAnalyzer:
         return east, north
 
     def _sample(self, field: np.ndarray, coordinates: np.ndarray) -> np.ndarray:
+        """Bilinear sample; NaN for points outside the grid.
+
+        I punti fuori dominio devono restituire NaN, non il valore della
+        cella di bordo: un sondaggio del vento/pressione a +/-45-75 km che
+        cade fuori mappa, se "incollato" al bordo, inventa un salto o una
+        convergenza inesistenti e genera falsi fronti ai margini.  Le
+        mediane a valle usano nanmedian, e _candidate_metrics scarta le
+        linee con troppi campioni non validi.
+        """
         x = (coordinates[:, 0] - self.longitudes[0]) / self.delta_longitude
         y = (coordinates[:, 1] - self.latitudes[0]) / self.delta_latitude
-        x = np.clip(x, 0.0, len(self.longitudes) - 1.001)
-        y = np.clip(y, 0.0, len(self.latitudes) - 1.001)
-        x0, y0 = np.floor(x).astype(int), np.floor(y).astype(int)
+        inside = (
+            (x >= 0.0)
+            & (x <= len(self.longitudes) - 1.001)
+            & (y >= 0.0)
+            & (y <= len(self.latitudes) - 1.001)
+        )
+        xc = np.clip(x, 0.0, len(self.longitudes) - 1.001)
+        yc = np.clip(y, 0.0, len(self.latitudes) - 1.001)
+        x0, y0 = np.floor(xc).astype(int), np.floor(yc).astype(int)
         x1 = np.minimum(x0 + 1, field.shape[1] - 1)
         y1 = np.minimum(y0 + 1, field.shape[0] - 1)
-        fx, fy = x - x0, y - y0
-        return (
+        fx, fy = xc - x0, yc - y0
+        result = (
             field[y0, x0] * (1.0 - fx) * (1.0 - fy)
             + field[y0, x1] * fx * (1.0 - fy)
             + field[y1, x0] * (1.0 - fx) * fy
             + field[y1, x1] * fx * fy
         )
+        return np.where(inside, result, np.nan)
 
     @staticmethod
     def _split_valid(segment: np.ndarray, valid: np.ndarray) -> list[np.ndarray]:
@@ -459,6 +498,11 @@ class SynopticFrontAnalyzer:
         pressure_tendency: np.ndarray | None,
     ) -> dict | None:
         line_strength = self._sample(strength, coordinates)
+        # Scarta le linee troppo a ridosso del bordo: se meno del 75% dei
+        # punti e' interno al dominio, le firme laterali (vento, saccatura)
+        # sarebbero dominate da NaN o da estrapolazioni inaffidabili.
+        if float(np.mean(np.isfinite(line_strength))) < 0.75:
+            return None
         gx = self._sample(gradient_east, coordinates)
         gy = self._sample(gradient_north, coordinates)
         magnitude = np.maximum(np.hypot(gx, gy), 1.0e-5)
@@ -525,25 +569,44 @@ class SynopticFrontAnalyzer:
         median_frontogenesis = float(
             np.nanmedian(self._sample(frontogenesis, coordinates))
         )
-        # Classificazione per AVVEZIONE TERMICA CINEMATICA (metodo OFA
-        # standard).  La normale (normal_east, normal_north) punta verso
-        # l'aria calda; la componente del vento lungo la normale e' quindi
-        # l'avvezione proiettata sul fronte:
-        #   vento verso il caldo  -> avvezione fredda -> fronte FREDDO
-        #   vento verso il freddo -> avvezione calda  -> fronte CALDO
-        #   componente ~ nulla     -> fronte STAZIONARIO
+        # Se le firme fondamentali risultano non finite (troppi campioni
+        # fuori dominio) il candidato non e' valutabile: scartare, non
+        # lasciare che i confronti con NaN lo facciano passare.
+        if not all(
+            np.isfinite(value)
+            for value in (
+                median_strength,
+                median_shift,
+                median_convergence,
+                median_gradient,
+                median_dry,
+            )
+        ):
+            return None
+        # Moto del fronte lungo la sua normale (che punta verso l'aria
+        # calda).  Due misure indipendenti, con lo stesso segno per un
+        # fronte reale:
+        #  - PROPAGAZIONE: velocita' di traslazione dell'isolinea theta-e,
+        #    dalla tendenza temporale (-d(theta-e)/dt / |grad|).  E' il moto
+        #    "vero" della linea, valido anche quando il vento a 850 hPa
+        #    scorre parallelo al fronte.
+        #  - AVVEZIONE: componente del vento lungo la normale (metodo OFA):
+        #    vento verso il caldo -> avvezione fredda -> fronte freddo.
+        # Segno positivo (verso il caldo) = FREDDO; negativo = CALDO.
+        propagation_kmh = float(-median_tendency / max(median_gradient, 0.01))
         advection_kmh = float(
             np.nanmedian(center_u * normal_east + center_v * normal_north) * 3.6
         )
-        # La tendenza temporale di theta-e da' la velocita' di traslazione
-        # reale dell'isolinea: riscontro indipendente, e stima piu' onesta
-        # della velocita' effettiva del fronte al suolo.
-        propagation_kmh = float(-median_tendency / max(median_gradient, 0.01))
-        motion_kmh = advection_kmh
+        # La propagazione e' la misura principale del movimento (la review
+        # ha ragione: il vento locale da solo classifica male i fronti che
+        # avanzano non paralleli al flusso); l'avvezione la stabilizza.
+        motion_kmh = 0.6 * np.clip(propagation_kmh, -80.0, 80.0) + 0.4 * np.clip(
+            advection_kmh, -80.0, 80.0
+        )
 
-        if advection_kmh >= 5.0:
+        if motion_kmh >= 5.0:
             front_type = "cold"
-        elif advection_kmh <= -5.0:
+        elif motion_kmh <= -5.0:
             front_type = "warm"
         else:
             front_type = "stationary"
@@ -856,7 +919,16 @@ class SynopticFrontAnalyzer:
             return self.tracks
 
         window = self.tendency_window_hours
-        link_radius_per_hour = 90.0  # spostamento massimo plausibile + margine
+        # Raggio di collegamento: velocita' frontale massima plausibile
+        # (~70 km/h) per l'intervallo, ma con un TETTO fisso a 200 km.  Un
+        # raggio che cresce senza limite (90 km/h x gap = 540 km a 6 h)
+        # fonderebbe fronti diversi dello stesso ciclone; il tetto lo
+        # impedisce.  Serve inoltre che almeno META' della linea coincida
+        # (non il 35%), e la sovrapposizione e' verificata da entrambe le
+        # parti (candidato->traccia e traccia->candidato).
+        def link_radius(gap_hours: int) -> float:
+            return min(200.0, 60.0 + 70.0 * gap_hours)
+
         tracks: list[dict] = []
         for hour in self.available_hours:
             for coordinates, metrics in self._detect(hour)["candidates"]:
@@ -867,14 +939,15 @@ class SynopticFrontAnalyzer:
                     if gap <= 0 or gap > 2 * window:
                         continue
                     last_coords = track["lines"][last_hour][0]
-                    fraction = _matched_fraction(
-                        coordinates, [last_coords], link_radius_per_hour * gap
-                    )
-                    if fraction > best_fraction:
-                        best_track, best_fraction = track, fraction
+                    radius = link_radius(gap)
+                    forward = _matched_fraction(coordinates, [last_coords], radius)
+                    backward = _matched_fraction(last_coords, [coordinates], radius)
+                    overlap = min(forward, backward)
+                    if overlap > best_fraction:
+                        best_track, best_fraction = track, overlap
                 if (
                     best_track is not None
-                    and best_fraction >= 0.35
+                    and best_fraction >= 0.5
                     and hour not in best_track["lines"]
                 ):
                     best_track["lines"][hour] = (coordinates, metrics)
@@ -882,10 +955,7 @@ class SynopticFrontAnalyzer:
                 else:
                     tracks.append({"hours": [hour], "lines": {hour: (coordinates, metrics)}})
 
-        step = min(
-            (b - a for a, b in zip(self.available_hours, self.available_hours[1:])),
-            default=1,
-        )
+        available_sorted = sorted(self.available_hours)
         accepted = []
         for track in tracks:
             hours = track["hours"]
@@ -897,10 +967,13 @@ class SynopticFrontAnalyzer:
             # Copertura: un fronte vero e' rilevato quasi sempre durante la
             # sua vita; un bordo diurno (convezione pomeridiana, brezze)
             # riappare a grappoli con lunghi vuoti notturni.  Richiediamo
-            # che i rilevamenti coprano almeno meta' delle scadenze della
-            # vita della traccia.
-            expected_detections = span / step + 1
-            if len(hours) / expected_detections < 0.5:
+            # che i rilevamenti coprano almeno meta' delle scadenze REALI
+            # nell'arco della traccia (contate sulle scadenze disponibili,
+            # non su un passo assunto: robusto a scadenze irregolari).
+            expected_hours = [
+                h for h in available_sorted if hours[0] <= h <= hours[-1]
+            ]
+            if len(hours) / max(len(expected_hours), 1) < 0.5:
                 continue
             confidences = [track["lines"][h][1]["confidence"] for h in hours]
             if float(np.median(confidences)) < 0.55:
@@ -921,6 +994,12 @@ class SynopticFrontAnalyzer:
             ))
             if median_shift_track < 2.0 and median_conv_track < 0.2:
                 continue
+            # Conferma del modello guida.  Se il riferimento e' disponibile
+            # per l'arco della traccia, richiede consenso; se non lo e'
+            # (fail-open), la traccia passa ma resta marcata come NON
+            # confermata e con doppia severita' sulle firme fisiche, cosi'
+            # l'assenza della guida non spalanca le porte agli artefatti.
+            track["corroborated"] = None
             if self.reference_by_hour:
                 reference_hours = [
                     h
@@ -940,8 +1019,13 @@ class SynopticFrontAnalyzer:
                             float(self.reference_radius_fn(h)),
                         ) >= 0.5:
                             corroborated += 1
-                    if corroborated / len(reference_hours) < 0.5:
+                    track["corroborated"] = corroborated / len(reference_hours) >= 0.5
+                    if not track["corroborated"]:
                         continue
+            # Se la guida e' del tutto assente (corroborated resta None) la
+            # traccia passa sulle sole firme fisiche, ma viene marcata come
+            # non confermata e la sua confidenza e' penalizzata in output:
+            # l'assenza della guida e' resa esplicita, non nascosta.
             # Moto smussato sulla vita della traccia: il tipo del fronte
             # deriva da questo, quindi non puo' sfarfallare tra un'ora e
             # l'altra per rumore.
@@ -998,6 +1082,12 @@ class SynopticFrontAnalyzer:
         else:
             metrics["frontType"] = "stationary"
         metrics["lifetimeH"] = track["span"]
+        # Stato di conferma del modello guida (None = guida assente per
+        # questa traccia).  Se non confermata, penalizza la confidenza.
+        corroborated = track.get("corroborated")
+        metrics["corroborated"] = corroborated
+        if corroborated is None:
+            metrics["confidence"] = float(metrics["confidence"] * 0.9)
         return coordinates, metrics
 
     def analyze(self, hour: int) -> dict:
@@ -1053,6 +1143,11 @@ class SynopticFrontAnalyzer:
                         "lengthKm": round(metrics["length"], 0),
                         "lifetimeH": int(metrics.get("lifetimeH", 0)),
                         "interpolated": bool(metrics.get("interpolated", False)),
+                        "corroborated": (
+                            None
+                            if metrics.get("corroborated") is None
+                            else bool(metrics.get("corroborated"))
+                        ),
                         **(
                             {"pressureTrough": round(metrics["pressureTrough"], 2)}
                             if "pressureTrough" in metrics
