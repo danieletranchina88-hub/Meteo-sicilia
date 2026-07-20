@@ -1292,6 +1292,12 @@
               <button class="layer-card" type="button" data-layer="press" style="--swatch: linear-gradient(#257cc0,#ca783c)">
                 <span class="layer-swatch"></span><span><b>Pressione</b><small>al suolo</small></span>
               </button>
+              <button class="layer-card" type="button" data-layer="theta850" style="--swatch: linear-gradient(#3895d3,#c62f6f)">
+                <span class="layer-swatch"></span><span><b>θe 850 hPa</b><small>masse d'aria · fronti</small></span>
+              </button>
+              <button class="layer-card" type="button" data-layer="t850" style="--swatch: linear-gradient(#3e96dc,#e2603c)">
+                <span class="layer-swatch"></span><span><b>T 850 hPa</b><small>temperatura in quota</small></span>
+              </button>
             </div>
           </section>
 
@@ -1577,6 +1583,19 @@
       ];
       const PRESS_STOPS = buildDiscreteBands(PRESS_ANCHORS, 960, 1048, 2, 1);
 
+      const THETA_ANCHORS = [
+        { v: 296, c: [63, 92, 180] },
+        { v: 304, c: [56, 149, 211] },
+        { v: 312, c: [64, 190, 178] },
+        { v: 320, c: [116, 200, 98] },
+        { v: 328, c: [222, 210, 76] },
+        { v: 336, c: [236, 152, 60] },
+        { v: 344, c: [231, 88, 74] },
+        { v: 352, c: [198, 47, 111] },
+        { v: 360, c: [142, 32, 120] }
+      ];
+      const THETA_STOPS = buildDiscreteBands(THETA_ANCHORS, 296, 360, 2, 1);
+
       const LAYER_INFO = {
         temp: {
           label: "Temperatura a 2 m",
@@ -1654,6 +1673,30 @@
           note: "Fasce e isobare ogni 2 hPa, con centri A/B derivati dal campo.",
           opacity: 0.92,
           terrainOpacity: 0.3
+        },
+        theta850: {
+          label: "θe a 850 hPa",
+          unit: "K",
+          stops: THETA_STOPS,
+          discrete: true,
+          decimals: 1,
+          ticks: [296, 312, 328, 344, 360],
+          note: "Temperatura potenziale equivalente a ~1500 m: è il campo su cui vengono individuati i fronti. I bordi netti tra i colori sono i contrasti tra masse d'aria.",
+          opacity: 0.93,
+          terrainOpacity: 0.3,
+          upper: true
+        },
+        t850: {
+          label: "Temperatura a 850 hPa",
+          unit: "°C",
+          stops: TEMP_BANDS,
+          discrete: true,
+          decimals: 1,
+          ticks: [-20, -10, 0, 5, 10, 15, 20, 25, 30],
+          note: "Temperatura a ~1500 m, sopra lo strato limite: il gradiente qui distingue i fronti veri dai contrasti di sola umidità.",
+          opacity: 0.93,
+          terrainOpacity: 0.3,
+          upper: true
         }
       };
 
@@ -1750,6 +1793,9 @@
       let currentIndex = 0;
       let activeModel = "icon2i";
       let activeLayer = "temp";
+      let upperData = null;
+      let upperIndex = -1;
+      let upperPromise = null;
       let loadingToken = 0;
       let isPlaying = false;
       let playbackDelay = 1200;
@@ -1885,6 +1931,18 @@
 
       function fieldValue(key, gx, gy) {
         if (!currentData) return NaN;
+
+        if (LAYER_INFO[key] && LAYER_INFO[key].upper) {
+          if (!upperData || upperIndex !== currentIndex) return NaN;
+          const surfaceMeta = currentData.meta;
+          const lon = surfaceMeta.lo1 + gx * surfaceMeta.dx;
+          const lat = surfaceMeta.la1 - gy * surfaceMeta.dy;
+          const ugx = (lon - upperData.lo1) / upperData.dx;
+          const ugy = (upperData.la1 - lat) / upperData.dy;
+          return (useNearestCell ? sampleNearest : sampleBilinear)(
+            upperFieldArray(key), ugx, ugy, upperData.nx, upperData.ny
+          );
+        }
 
         if (key === "wind") {
           const vector = windUV(gx, gy);
@@ -2054,10 +2112,44 @@
       }
 
       function hasLayerData(key) {
+        if (LAYER_INFO[key] && LAYER_INFO[key].upper) return activeModel === "icon2i";
         if (!currentData) return true;
         if (key === "feels") return Boolean(currentData.feels_like);
         if (key === "wind") return Boolean(currentData.wind_u && currentData.wind_v);
         return Boolean(getGrid(currentData[key]));
+      }
+
+      function upperFieldArray(key) {
+        if (!upperData) return null;
+        return key === "theta850" ? upperData.thetaE : upperData.t;
+      }
+
+      function requestUpperData() {
+        if (upperPromise) return;
+        const targetIndex = currentIndex;
+        const item = catalog[targetIndex];
+        if (!item) return;
+        const hour = item.hour !== undefined ? item.hour : item.leadHours;
+        upperPromise = fetch(MODEL_INFO[activeModel].directory + "/upper_" + hour + ".json")
+          .then(function (response) {
+            if (!response.ok) throw new Error("Campi 850 hPa non disponibili");
+            return response.json();
+          })
+          .then(function (data) {
+            upperData = data;
+            upperIndex = targetIndex;
+          })
+          .catch(function () {
+            toast("Campi 850 hPa non disponibili per questo modello o run");
+            if (LAYER_INFO[activeLayer] && LAYER_INFO[activeLayer].upper) setLayer("temp");
+          })
+          .finally(function () {
+            upperPromise = null;
+            if (LAYER_INFO[activeLayer] && LAYER_INFO[activeLayer].upper) {
+              renderWeather();
+              refreshSelectedPoint();
+            }
+          });
       }
 
       function prepareData(data) {
@@ -2192,6 +2284,11 @@
         currentData = null;
         currentIndex = 0;
         stepCache.clear();
+        upperData = null;
+        upperIndex = -1;
+        if (LAYER_INFO[activeLayer] && LAYER_INFO[activeLayer].upper && nextModel !== "icon2i") {
+          activeLayer = "temp";
+        }
         updateModelUi();
         updateLayerUi();
 
@@ -2420,17 +2517,25 @@
 
         const meta = currentData.meta;
         const info = LAYER_INFO[activeLayer];
-        const dataWest = meta.lo1 - meta.dx / 2;
-        const dataEast = meta.lo1 + (meta.nx - 1) * meta.dx + meta.dx / 2;
-        const dataNorth = meta.la1 + meta.dy / 2;
-        const dataSouth = meta.la1 - (meta.ny - 1) * meta.dy - meta.dy / 2;
+        const upperActive = Boolean(info && info.upper);
+        if (upperActive && (upperIndex !== currentIndex || !upperData)) {
+          requestUpperData();
+          return;
+        }
+        // I campi a 850 hPa vivono su una griglia propria (dominio piu'
+        // ampio, passo ~19 km): il raster usa la geometria del campo attivo.
+        const fieldMeta = upperActive ? upperData : meta;
+        const dataWest = fieldMeta.lo1 - fieldMeta.dx / 2;
+        const dataEast = fieldMeta.lo1 + (fieldMeta.nx - 1) * fieldMeta.dx + fieldMeta.dx / 2;
+        const dataNorth = fieldMeta.la1 + fieldMeta.dy / 2;
+        const dataSouth = fieldMeta.la1 - (fieldMeta.ny - 1) * fieldMeta.dy - fieldMeta.dy / 2;
         const bounds = map.getBounds();
         const visibleWest = bounds.getWest();
         const visibleEast = bounds.getEast();
         const visibleSouth = bounds.getSouth();
         const visibleNorth = bounds.getNorth();
-        const longitudePadding = Math.max((visibleEast - visibleWest) * RASTER_CONFIG.padding, meta.dx * 2);
-        const latitudePadding = Math.max((visibleNorth - visibleSouth) * RASTER_CONFIG.padding, meta.dy * 2);
+        const longitudePadding = Math.max((visibleEast - visibleWest) * RASTER_CONFIG.padding, fieldMeta.dx * 2);
+        const latitudePadding = Math.max((visibleNorth - visibleSouth) * RASTER_CONFIG.padding, fieldMeta.dy * 2);
         const leftLongitude = Math.max(dataWest, visibleWest - longitudePadding);
         const rightLongitude = Math.min(dataEast, visibleEast + longitudePadding);
         const bottomLatitude = Math.max(dataSouth, visibleSouth - latitudePadding);
@@ -2467,7 +2572,9 @@
         const rasterSampler = useNearestCell ? sampleNearest : sampleBilinear;
         const isWindField = activeLayer === "wind";
         const fieldKey = activeLayer === "feels" ? "feels_like" : activeLayer;
-        const fieldGrid = isWindField ? null : getGrid(currentData[fieldKey]);
+        const fieldGrid = isWindField
+          ? null
+          : getGrid(upperActive ? upperFieldArray(activeLayer) : currentData[fieldKey]);
         const windUGrid = isWindField ? getGrid(currentData.wind_u) : null;
         const windVGrid = isWindField ? getGrid(currentData.wind_v) : null;
 
@@ -2475,19 +2582,19 @@
           const fraction = height > 1 ? y / (height - 1) : 0;
           const mercatorY = topMercator + fraction * (bottomMercator - topMercator);
           const latitude = (2 * Math.atan(Math.exp(mercatorY)) - Math.PI / 2) * 180 / Math.PI;
-          const gy = (meta.la1 - latitude) / meta.dy;
+          const gy = (fieldMeta.la1 - latitude) / fieldMeta.dy;
 
           for (let x = 0; x < width; x += 1) {
             const longitude = leftLongitude + (x / Math.max(width - 1, 1)) * (rightLongitude - leftLongitude);
-            const gx = (longitude - meta.lo1) / meta.dx;
+            const gx = (longitude - fieldMeta.lo1) / fieldMeta.dx;
             let value;
 
             if (isWindField) {
-              const u = rasterSampler(windUGrid, gx, gy, meta.nx, meta.ny);
-              const v = rasterSampler(windVGrid, gx, gy, meta.nx, meta.ny);
+              const u = rasterSampler(windUGrid, gx, gy, fieldMeta.nx, fieldMeta.ny);
+              const v = rasterSampler(windVGrid, gx, gy, fieldMeta.nx, fieldMeta.ny);
               value = Number.isFinite(u) && Number.isFinite(v) ? Math.hypot(u, v) * 3.6 : NaN;
             } else {
-              value = rasterSampler(fieldGrid, gx, gy, meta.nx, meta.ny);
+              value = rasterSampler(fieldGrid, gx, gy, fieldMeta.nx, fieldMeta.ny);
             }
             const pixel = (y * width + x) * 4;
 

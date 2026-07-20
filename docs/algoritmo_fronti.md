@@ -2,7 +2,12 @@
 
 Questo documento spiega la fisica su cui si basa il rilevatore di fronti
 (`scripts/front_analysis.py`) e il perché di ogni filtro. Metodo:
-`theta-e-850-tfp-wind-v3-physgate`.
+`theta-e-850-tfp-wind-v4-ptrough`.
+
+Gli ingredienti usati sono tutti e quattro i campi canonici dell'analisi
+frontale: **temperatura** e **umidità** (θe e ∇T a 850 hPa), **vento**
+(rotazione, convergenza, moto) e **pressione** (saccatura al livello del
+mare).
 
 ## Cos'è un fronte (e cosa non lo è)
 
@@ -55,6 +60,18 @@ risposta del vento non è un fronte.
 Criterio: salto del vento attraverso la linea ≥ 2 m/s **oppure**
 convergenza ≥ 0.2 m/s (misurati ±45 km dalla linea, mediane).
 
+### 3b. Saccatura di pressione (Gate 3)
+Un fronte giace **dentro una saccatura** del campo di pressione al livello
+del mare: allontanandosi dalla linea lungo la normale (±75 km), la
+pressione deve salire. Il segno opposto — una linea adagiata su un
+promontorio anticiclonico — è fisicamente incompatibile con un fronte e
+comporta lo scarto immediato, qualunque cosa dicano gli altri campi.
+
+Criterio: mediana di (p_lati − p_linea) ≥ −0.3 hPa; il valore alimenta
+anche la confidenza (`pressureTrough` nel GeoJSON). Se la pressione non è
+disponibile il criterio resta neutro (l'assenza del dato non è l'assenza
+della saccatura).
+
 ### 4. Moto coerente (classificazione)
 Il fronte si muove con la componente del vento perpendicolare a sé:
 il tipo deriva dalla velocità di propagazione (stimata dalla tendenza
@@ -90,13 +107,26 @@ freddo/stazionario); i fronti in quota senza riscontro a 850 hPa non sono
 rilevati; in estate mediterranea è normale vedere pochi o nessun fronte per
 giorni.
 
+## Verifica visiva sul sito
+
+La mappa offre due campi di ispezione a 850 hPa (file `upper_*.json`,
+griglia ~19 km, caricati solo su richiesta): **θe 850 hPa** — il campo su
+cui i fronti sono individuati, dove i bordi netti tra i colori sono i
+contrasti tra masse d'aria — e **T 850 hPa**, che permette di distinguere
+a vista un fronte vero (gradiente termico in quota) da un confine di sola
+umidità. Un fronte disegnato deve coincidere con un bordo visibile in θe.
+
 ## Validazione
 
 - Scenario sintetico "fronte freddo vero" (contrasto 8 K, rotazione del
-  vento, avanzamento 40 km/h): rilevato, tipo corretto, confidenza 0.84.
+  vento, avanzamento 40 km/h): rilevato, tipo corretto, confidenza 0.83;
+  con una saccatura barica coerente la confidenza sale a 0.87.
 - Scenario sintetico "sacca di umidità marina" (θe forte, T uniforme, vento
   uniforme, stazionaria): l'algoritmo precedente disegnava un falso fronte
   da 705 km; quello attuale la scarta.
+- Scenario sintetico "bordo su promontorio anticiclonico" (firme termiche e
+  di vento presenti, ma pressione in massimo sulla linea): scartato dal
+  Gate 3.
 - Regressione sul caso reale del 20/07/2026 05 UTC (falso fronte a ferro di
   cavallo sull'Adriatico, run ICON-2I 12z del 19/07): sinuosità 3.03 e
   rotazione netta 175° → scartato da due criteri indipendenti; i due fronti

@@ -22,7 +22,7 @@ TEMP_FILE = "temp.grib2"
 FRONT_TEMP_DIR = "temp_front_processing"
 NWP_DIRECTORY_ID = "ICON-2I_SURFACE_PRESSURE_LEVELS"
 NWP_DIRECT_BASE = "https://meteohub.agenziaitaliameteo.it/nwp"
-ICON_FRONT_METHOD = "theta-e-850-tfp-wind-icon2i-v5-physgate"
+ICON_FRONT_METHOD = "theta-e-850-tfp-wind-icon2i-v6-ptrough"
 # ICON-2I risolve strutture di mesoscala (brezze, canalizzazioni orografiche,
 # outflow temporaleschi) che il rilevatore puo' scambiare per fronti sinottici.
 # Un fronte vero e' anche visibile - smussato e spostato di poche decine di km -
@@ -136,13 +136,18 @@ def prepare_icon_front_analyzer(run_dt):
     run_base = f"{NWP_DIRECT_BASE}/{NWP_DIRECTORY_ID}/{run_tag}"
     pressure_file = f"{common}_isobaricInhPa-850.grib"
     surface_file = f"{common}_surface-0.grib"
+    mean_sea_file = f"{common}_meanSea-0.grib"
     requests_to_make = {
         "temperature": (f"{run_base}/T/{pressure_file}", "t850.grib"),
         "humidity": (f"{run_base}/QV/{pressure_file}", "q850.grib"),
         "u_wind": (f"{run_base}/U/{pressure_file}", "u850.grib"),
         "v_wind": (f"{run_base}/V/{pressure_file}", "v850.grib"),
         "orography": (f"{run_base}/HSURF/{surface_file}", "hsurf.grib"),
+        "pressure": (f"{run_base}/PMSL/{mean_sea_file}", "pmsl.grib"),
     }
+    # La pressione arricchisce l'analisi (firma della saccatura) ma non e'
+    # indispensabile: un suo download fallito non blocca i fronti.
+    optional_fields = {"pressure"}
 
     if os.path.exists(FRONT_TEMP_DIR):
         shutil.rmtree(FRONT_TEMP_DIR)
@@ -163,7 +168,13 @@ def prepare_icon_front_analyzer(run_dt):
                 futures[future] = (name, destination)
             for future in as_completed(futures):
                 name, destination = futures[future]
-                future.result()
+                try:
+                    future.result()
+                except Exception as error:
+                    if name in optional_fields:
+                        print(f"   {name} non disponibile: {error}", flush=True)
+                        continue
+                    raise
                 paths[name] = destination
                 print(
                     f"   {name}: {os.path.getsize(destination) / 1048576:.1f} MB",
@@ -176,6 +187,7 @@ def prepare_icon_front_analyzer(run_dt):
             paths["u_wind"],
             paths["v_wind"],
             paths["orography"],
+            pressure_path=paths.get("pressure"),
             downsample=4,
             bounds=(3.0, 22.0, 33.7, 48.9),
             method=ICON_FRONT_METHOD,
@@ -661,6 +673,20 @@ def process_data():
                 # FIX 3: Minificazione del file
                 with open(f"{TEMP_DIR}/{out_name}", 'w') as jf:
                     json.dump(step_data, jf, separators=(',', ':'), allow_nan=False)
+
+                # Campi a 850 hPa (theta-e, T, vento) per il layer di
+                # ispezione dei fronti: file separato, scaricato dal sito
+                # solo quando l'utente attiva la vista 850 hPa.
+                if icon_front_analyzer is not None:
+                    try:
+                        upper = icon_front_analyzer.upper_air(step_hours)
+                        if upper is not None:
+                            upper["runTime"] = iso_z(run_dt)
+                            upper["validTime"] = iso_date
+                            with open(f"{TEMP_DIR}/upper_{step_hours}.json", 'w') as uf:
+                                json.dump(upper, uf, separators=(',', ':'), allow_nan=False)
+                    except Exception as upper_error:
+                        print(f" upper-{step_hours}h:{upper_error}", end="", flush=True)
 
                 if not any(x['hour'] == step_hours for x in catalog):
                     catalog.append({ "file": out_name, "label": f"{valid_dt.strftime('%d/%m %H:00')} UTC", "hour": step_hours, "runTime": iso_z(run_dt), "validTime": iso_date, "leadHours": step_hours })
