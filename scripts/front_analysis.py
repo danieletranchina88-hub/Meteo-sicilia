@@ -15,7 +15,7 @@ import numpy as np
 import xarray as xr
 
 
-FRONT_METHOD = "theta-e-850-tfp-wind-v2"
+FRONT_METHOD = "theta-e-850-tfp-wind-v3-physgate"
 
 
 def _box_smooth(field: np.ndarray, radius: int) -> np.ndarray:
@@ -70,25 +70,70 @@ def _line_length_km(coordinates: np.ndarray) -> float:
     return float(np.sum(np.hypot(dx, dy)))
 
 
-def _line_min_distance_km(coordinates_a: np.ndarray, coordinates_b: np.ndarray) -> float:
-    """Coarse point-to-point minimum distance between two polylines, in km."""
-    mean_latitude = math.radians(
-        float(np.mean(np.concatenate((coordinates_a[:, 1], coordinates_b[:, 1]))))
+def _project_km(coordinates: np.ndarray, mean_latitude_rad: float) -> np.ndarray:
+    """Project lon/lat degrees onto a local flat plane measured in km."""
+    scale_lon = 111.32 * math.cos(mean_latitude_rad)
+    return np.column_stack(
+        (coordinates[:, 0] * scale_lon, coordinates[:, 1] * 111.32)
     )
-    scale_lon = 111.32 * math.cos(mean_latitude)
-    ax = coordinates_a[:, 0] * scale_lon
-    ay = coordinates_a[:, 1] * 111.32
-    bx = coordinates_b[:, 0] * scale_lon
-    by = coordinates_b[:, 1] * 111.32
-    dx = ax[:, None] - bx[None, :]
-    dy = ay[:, None] - by[None, :]
-    return float(np.min(np.hypot(dx, dy)))
+
+
+def _line_shape_metrics(coordinates: np.ndarray) -> tuple[float, float]:
+    """Sinuosity and net heading change (degrees) of a polyline.
+
+    A synoptic front separates two air masses, so it is quasi-linear or
+    gently arced.  A line that folds back on itself (hairpin) or nearly
+    closes (ring) is by construction the rim of a local anomaly - a warm
+    sea pool, a convective cold pool - and can never be a front.
+
+    The turning measure is the NET change between the initial and final
+    heading, not the accumulated one: a long quasi-straight front with
+    small zig-zags accumulates hundreds of degrees without ever folding,
+    while a hairpin nets ~180 regardless of how it is sampled.
+    """
+    if len(coordinates) < 3:
+        return 1.0, 0.0
+    mean_latitude = math.radians(float(np.mean(coordinates[:, 1])))
+    simplified = _rdp(coordinates, 0.05)
+    points_km = _project_km(simplified, mean_latitude)
+    segments = np.diff(points_km, axis=0)
+    lengths = np.hypot(segments[:, 0], segments[:, 1])
+    keep = lengths > 1.0
+    segments, lengths = segments[keep], lengths[keep]
+    path_length = float(np.sum(lengths))
+    endpoint_distance = float(
+        np.hypot(*(points_km[-1] - points_km[0]))
+    )
+    sinuosity = path_length / max(endpoint_distance, 1.0)
+    if len(segments) < 2:
+        return sinuosity, 0.0
+    headings = np.arctan2(segments[:, 1], segments[:, 0])
+    net_turn = (headings[-1] - headings[0] + math.pi) % (2.0 * math.pi) - math.pi
+    return sinuosity, abs(float(np.degrees(net_turn)))
+
+
+def _matched_fraction(
+    coordinates: np.ndarray,
+    reference_lines: list[np.ndarray],
+    max_distance_km: float,
+) -> float:
+    """Fraction of a candidate line lying within reach of any reference line."""
+    mean_latitude = math.radians(float(np.mean(coordinates[:, 1])))
+    candidate_km = _project_km(coordinates, mean_latitude)
+    best = np.full(len(candidate_km), np.inf)
+    for reference in reference_lines:
+        reference_km = _project_km(reference, mean_latitude)
+        dx = candidate_km[:, 0][:, None] - reference_km[:, 0][None, :]
+        dy = candidate_km[:, 1][:, None] - reference_km[:, 1][None, :]
+        best = np.minimum(best, np.min(np.hypot(dx, dy), axis=1))
+    return float(np.mean(best <= max_distance_km))
 
 
 def corroborate_with_reference(
     fronts: dict,
     reference_fronts: dict | None,
     max_distance_km: float = 220.0,
+    min_fraction: float = 0.5,
 ) -> dict:
     """Discard candidate fronts with no counterpart in a coarser, independent analysis.
 
@@ -98,8 +143,11 @@ def corroborate_with_reference(
     thermal/wind thresholds above are tuned. A genuine synoptic front is a
     large-scale feature, so it is also present - smoothed and displaced by at
     most a few tens of km - in an independent, coarser-resolution model run.
-    Requiring that match rejects grid-scale false positives that exist in only
-    one model, at the cost of dropping the rare true front the guide missed.
+
+    The match requires at least ``min_fraction`` of the candidate line to lie
+    within ``max_distance_km`` of a reference front: a single nearby point is
+    not corroboration, otherwise an artefact is "confirmed" by a real front
+    that merely passes in the neighbourhood.
     """
     reference_features = (reference_fronts or {}).get("features") or []
     if not reference_features:
@@ -112,11 +160,8 @@ def corroborate_with_reference(
     kept = []
     for feature in fronts.get("features", []):
         coordinates = np.asarray(feature["geometry"]["coordinates"], dtype=float)
-        best_distance = min(
-            _line_min_distance_km(coordinates, reference_line)
-            for reference_line in reference_lines
-        )
-        if best_distance <= max_distance_km:
+        fraction = _matched_fraction(coordinates, reference_lines, max_distance_km)
+        if fraction >= min_fraction:
             kept.append(feature)
 
     result = dict(fronts)
@@ -359,6 +404,7 @@ class SynopticFrontAnalyzer:
         u_wind: np.ndarray,
         v_wind: np.ndarray,
         threshold: float,
+        dry_gradient: np.ndarray,
     ) -> dict | None:
         line_strength = self._sample(strength, coordinates)
         gx = self._sample(gradient_east, coordinates)
@@ -394,6 +440,7 @@ class SynopticFrontAnalyzer:
         median_convergence = float(np.nanmedian(convergence))
         median_tendency = float(np.nanmedian(line_tendency))
         median_gradient = float(np.nanmedian(magnitude))
+        median_dry = float(np.nanmedian(self._sample(dry_gradient, coordinates)))
         normal_flow_kmh = float(
             np.nanmedian(center_u * normal_east + center_v * normal_north) * 3.6
         )
@@ -409,23 +456,38 @@ class SynopticFrontAnalyzer:
         else:
             front_type = "stationary"
 
+        # Gate 1 - contrasto termico reale in quota.  theta-e mescola
+        # temperatura e umidita': un bordo visibile in theta-e ma privo di
+        # gradiente di T a 850 hPa e' un confine di umidita' (brezza, sacca
+        # d'aria marina, outflow), il cui contrasto vive tutto nel boundary
+        # layer sottostante.  Un fronte sinottico ha sempre baroclinicita'
+        # anche a 850 hPa.
+        if median_dry < 2.0:
+            return None
+
+        # Gate 2 - firma dinamica.  Un fronte giace in una saccatura di
+        # pressione: attraversandolo il vento ruota e converge.  Un bordo
+        # termico senza alcuna risposta del vento non e' un fronte.
+        if median_shift < 2.0 and median_convergence < 0.2:
+            return None
+
         length_km = _line_length_km(coordinates)
         thermal_score = np.clip((median_strength - threshold) / 7.0, 0.0, 1.0)
+        dry_score = np.clip((median_dry - 2.0) / 6.0, 0.0, 1.0)
         shift_score = np.clip((median_shift - 1.0) / 4.5, 0.0, 1.0)
         convergence_score = np.clip((median_convergence + 0.4) / 4.5, 0.0, 1.0)
-        length_score = np.clip((math.sqrt(length_km) - math.sqrt(160.0)) / 18.0, 0.0, 1.0)
+        length_score = np.clip((math.sqrt(length_km) - math.sqrt(200.0)) / 18.0, 0.0, 1.0)
         confidence = (
             0.40
-            + 0.23 * thermal_score
-            + 0.14 * shift_score
+            + 0.18 * thermal_score
+            + 0.10 * dry_score
+            + 0.12 * shift_score
             + 0.10 * convergence_score
             + 0.08 * length_score
             + 0.05 * np.clip(abs(motion_kmh) / 25.0, 0.0, 1.0)
             - 0.38 * terrain_fraction
         )
 
-        if median_shift < 1.1 and median_convergence < 0.1 and median_strength < threshold * 1.3:
-            return None
         if confidence < 0.55:
             return None
 
@@ -433,6 +495,7 @@ class SynopticFrontAnalyzer:
             "frontType": front_type,
             "confidence": float(np.clip(confidence, 0.0, 0.99)),
             "strength": median_strength,
+            "tempGradient": median_dry,
             "windShift": median_shift,
             "convergence": median_convergence,
             "motion": motion_kmh,
@@ -451,6 +514,18 @@ class SynopticFrontAnalyzer:
         strength = gradient_magnitude * 100.0  # K / 100 km
         strength = _box_smooth(strength, self.detail_smooth_radius)
         strength_threshold = max(6.0, float(np.nanpercentile(strength, 88.0)))
+
+        # Gradiente della temperatura secca a 850 hPa (K / 100 km): serve a
+        # distinguere la vera baroclinicita' dai confini di sola umidita'.
+        dry_temperature = _box_smooth(
+            _box_smooth(self._field("t", hour), self.theta_smooth_radius),
+            self.theta_smooth_radius,
+        )
+        dry_east, dry_north = self._gradients(dry_temperature)
+        dry_gradient = _box_smooth(
+            np.hypot(dry_east, dry_north) * 100.0,
+            self.detail_smooth_radius,
+        )
 
         magnitude_east, magnitude_north = self._gradients(gradient_magnitude)
         tfp = -(
@@ -495,7 +570,14 @@ class SynopticFrontAnalyzer:
                 continue
             valid = self._sample(strength, coordinates) >= strength_threshold
             for piece in self._split_valid(coordinates, valid):
-                if _line_length_km(piece) < 160.0:
+                if _line_length_km(piece) < 200.0:
+                    continue
+                # Gate 0 - geometria sinottica.  Un fronte separa due masse
+                # d'aria: e' quasi-lineare o dolcemente arcuato.  Una linea
+                # che si ripiega (forcina) o quasi si chiude (anello) e' il
+                # bordo di un'anomalia locale, non un fronte.
+                sinuosity, net_turn_degrees = _line_shape_metrics(piece)
+                if sinuosity > 1.8 or net_turn_degrees > 150.0:
                     continue
                 piece = self._orient_warm_side_left(piece, gradient_east, gradient_north)
                 metrics = self._candidate_metrics(
@@ -507,6 +589,7 @@ class SynopticFrontAnalyzer:
                     u_wind,
                     v_wind,
                     strength_threshold,
+                    dry_gradient,
                 )
                 if metrics is not None:
                     candidates.append((piece, metrics))
@@ -545,6 +628,7 @@ class SynopticFrontAnalyzer:
                         "frontType": metrics["frontType"],
                         "confidence": round(metrics["confidence"], 2),
                         "strength": round(metrics["strength"], 1),
+                        "tempGradient": round(metrics["tempGradient"], 1),
                         "windShift": round(metrics["windShift"], 1),
                         "convergence": round(metrics["convergence"], 1),
                         "motionKmh": float(round(metrics["motion"], 0)),
