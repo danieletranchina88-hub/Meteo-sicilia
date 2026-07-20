@@ -455,6 +455,8 @@ class SynopticFrontAnalyzer:
         pressure: np.ndarray | None,
         vorticity: np.ndarray,
         frontogenesis: np.ndarray,
+        virtual_temperature: np.ndarray,
+        pressure_tendency: np.ndarray | None,
     ) -> dict | None:
         line_strength = self._sample(strength, coordinates)
         gx = self._sample(gradient_east, coordinates)
@@ -490,6 +492,7 @@ class SynopticFrontAnalyzer:
         # sulla linea stessa.  Il segno opposto (linea su un promontorio
         # anticiclonico) e' fisicamente incompatibile con un fronte.
         pressure_trough = None
+        isallobaric_raw = None
         if pressure is not None:
             lon_offset_p = normal_east * 75.0 / np.maximum(
                 111.32 * np.cos(mean_latitude), 25.0
@@ -502,6 +505,15 @@ class SynopticFrontAnalyzer:
             pressure_trough = float(
                 np.nanmedian((p_cold + p_warm) / 2.0 - p_center)
             )
+            if pressure_tendency is not None:
+                # Coppia isallobarica del passaggio frontale: la pressione
+                # "decresce prima, tocca il minimo durante, aumenta dopo".
+                # Quindi a ogni istante la tendenza barica sul lato che il
+                # fronte sta lasciando supera quella sul lato verso cui si
+                # muove.  Differenza lato freddo - lato caldo, in hPa/h.
+                tendency_cold = self._sample(pressure_tendency, coordinates - offsets_p)
+                tendency_warm = self._sample(pressure_tendency, coordinates + offsets_p)
+                isallobaric_raw = float(np.nanmedian(tendency_cold - tendency_warm))
 
         median_strength = float(np.nanmedian(line_strength))
         median_shift = float(np.nanmedian(wind_shift))
@@ -537,6 +549,22 @@ class SynopticFrontAnalyzer:
         if median_dry < 2.0:
             return None
 
+        # Gate 1b - coerenza termodinamica firmata.  Un fronte e' un
+        # contrasto di DENSITA', e la densita' a pressione fissata dipende
+        # dalla temperatura VIRTUALE (l'aria umida e' piu' leggera): il
+        # lato caldo secondo theta-e deve essere piu' leggero anche in Tv.
+        # Se i segni si oppongono nettamente (aria secca e calda contro
+        # aria umida e fresca a parita' di densita') il bordo e' una
+        # dryline, non una superficie frontale.
+        signed_delta_t = float(
+            np.nanmedian(
+                self._sample(virtual_temperature, warm_points)
+                - self._sample(virtual_temperature, cold_points)
+            )
+        )
+        if signed_delta_t < -0.3:
+            return None
+
         # Gate 2 - firma dinamica.  Un fronte giace in una saccatura di
         # pressione: attraversandolo il vento ruota e converge.  Un bordo
         # termico senza alcuna risposta del vento non e' un fronte.
@@ -568,16 +596,25 @@ class SynopticFrontAnalyzer:
             trough_score = 0.5  # neutro: assenza di dato, non di saccatura
         else:
             trough_score = float(np.clip((pressure_trough + 0.1) / 1.2, 0.0, 1.0))
+        # Coppia isallobarica: per un fronte in moto la tendenza barica sul
+        # lato lasciato deve superare quella sul lato d'avanzamento (in
+        # hPa/3h).  Neutra per i fronti stazionari o senza dato.
+        if isallobaric_raw is None or abs(motion_kmh) < 5.0:
+            isallobaric_score = 0.5
+        else:
+            signed_couplet = math.copysign(1.0, motion_kmh) * isallobaric_raw * 3.0
+            isallobaric_score = float(np.clip((signed_couplet + 0.2) / 1.2, 0.0, 1.0))
         length_score = np.clip((math.sqrt(length_km) - math.sqrt(200.0)) / 18.0, 0.0, 1.0)
         confidence = (
-            0.35
-            + 0.14 * thermal_score
+            0.34
+            + 0.12 * thermal_score
             + 0.08 * dry_score
             + 0.10 * shift_score
             + 0.07 * convergence_score
             + 0.07 * vorticity_score
             + 0.06 * frontogenesis_score
             + 0.07 * trough_score
+            + 0.05 * isallobaric_score
             + 0.06 * length_score
             + 0.03 * np.clip(abs(motion_kmh) / 25.0, 0.0, 1.0)
             - 0.38 * terrain_fraction
@@ -594,6 +631,7 @@ class SynopticFrontAnalyzer:
             "confidence": float(np.clip(confidence, 0.0, 0.99)),
             "strength": median_strength,
             "tempGradient": median_dry,
+            "deltaT": signed_delta_t,
             "windShift": median_shift,
             "convergence": median_convergence,
             "vorticity": median_vorticity,
@@ -605,6 +643,8 @@ class SynopticFrontAnalyzer:
         }
         if pressure_trough is not None:
             metrics["pressureTrough"] = pressure_trough
+        if isallobaric_raw is not None:
+            metrics["isallobaric3h"] = isallobaric_raw * 3.0
         return metrics
 
     def _detect(self, hour: int) -> dict:
@@ -670,6 +710,36 @@ class SynopticFrontAnalyzer:
         )
         elapsed = max(next_hour - previous_hour, 1)
         tendency = (self._theta_e(next_hour) - self._theta_e(previous_hour)) / elapsed
+
+        # Temperatura virtuale (densita' a pressione fissata): l'aria umida
+        # e' piu' leggera, quindi il confronto di densita' tra i due lati
+        # del fronte deve tenere conto dell'umidita'.
+        virtual_temperature = _box_smooth(
+            _box_smooth(
+                self._field("t", hour)
+                * (1.0 + 0.61 * np.clip(self._field("q", hour), 0.0, 0.04)),
+                self.theta_smooth_radius,
+            ),
+            self.theta_smooth_radius,
+        )
+
+        # Tendenza barica (hPa/h) per la coppia isallobarica del passaggio.
+        pressure_tendency = None
+        if pressure is not None and next_hour != previous_hour:
+            try:
+                p_prev = self._field("p", previous_hour)
+                p_next = self._field("p", next_hour)
+                if float(np.nanmedian(p_prev)) > 20000.0:
+                    p_prev = p_prev / 100.0
+                if float(np.nanmedian(p_next)) > 20000.0:
+                    p_next = p_next / 100.0
+                pressure_tendency = _box_smooth(
+                    (p_next - p_prev) / elapsed,
+                    self.theta_smooth_radius,
+                )
+            except Exception:
+                pressure_tendency = None
+
         u_wind = _box_smooth(
             self._field("u", hour),
             self.detail_smooth_radius,
@@ -733,6 +803,8 @@ class SynopticFrontAnalyzer:
                     pressure,
                     vorticity,
                     frontogenesis,
+                    virtual_temperature,
+                    pressure_tendency,
                 )
                 if metrics is not None:
                     candidates.append((piece, metrics))

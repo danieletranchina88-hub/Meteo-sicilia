@@ -46,6 +46,19 @@ gradiente di temperatura a 850 hPa** (mediana |∇T| < 2 K/100 km) è un
 confine di sola umidità — brezza, aria marina notturna, outflow — il cui
 contrasto vive nello strato limite sottostante. Scartato.
 
+### Gate 1b — Coerenza termodinamica firmata (temperatura virtuale)
+Un fronte è un contrasto di **densità**: "la massa d'aria più calda, e
+meno densa, sale sopra quella più fredda". A pressione fissata la densità
+dipende dalla **temperatura virtuale** Tv (l'aria umida è più leggera):
+il lato caldo secondo θe deve risultare più leggero anche in Tv. Se i
+segni si oppongono nettamente (ΔTv < −0.3 K — aria secca e calda contro
+aria umida e fresca) il bordo è una **dryline** o un confine di umidità,
+non una superficie frontale: nel Mediterraneo estivo è il caso tipico del
+bordo tra aria sahariana (calda, secca, θe più bassa) e aria marittima
+(fresca, umidissima, θe più alta), che i metodi su sola θe disegnano come
+"fronte" con orientazione termica invertita. Il ΔTv firmato è esportato
+(`deltaT`).
+
 ### Gate 2 — Risposta del vento
 Un fronte è una discontinuità dinamica: attraversandolo il vento **ruota**
 e **converge**. Salto vettoriale ≥ 2 m/s oppure convergenza ≥ 0.2 m/s
@@ -58,6 +71,14 @@ deve superare quella sulla linea (mediana ≥ −0.3 hPa). Una linea su un
 promontorio anticiclonico è fisicamente impossibile e viene scartata.
 La profondità della saccatura (`pressureTrough`) alimenta la confidenza.
 Se la PMSL manca il criterio resta neutro.
+
+### Coppia isallobarica (peso, non gate)
+Il passaggio frontale ha una sequenza barica precisa: la pressione
+*decresce prima, tocca il minimo durante, aumenta dopo*. Quindi, per un
+fronte in moto, la **tendenza barica sul lato che il fronte sta
+lasciando deve superare quella sul lato d'avanzamento**. La differenza
+firmata (in hPa/3 h, esportata come `isallobaric3h`) pesa sulla
+confidenza dei fronti freddi e caldi; è neutra per gli stazionari.
 
 ### Gate 4 — Vorticità ciclonica
 Un fronte è una **striscia di shear ciclonico** (è il fondamento del
@@ -121,6 +142,11 @@ La mappa offre i campi di ispezione **θe 850 hPa** (il campo su cui i
 fronti sono individuati: i bordi netti tra i colori *sono* i contrasti
 tra masse d'aria) e **T 850 hPa** (per distinguere fronti veri da confini
 di sola umidità), su file `upper_*.json` caricati solo su richiesta.
+Nel pannello dei fronti c'è la **tabella del passaggio** (prima/durante/
+dopo per fronte freddo e caldo: temperatura, pressione, vento, nubi,
+fenomeni), e toccando la mappa il dettaglio del punto riporta il **fronte
+più vicino** con distanza, moto rispetto al punto (in avvicinamento o in
+allontanamento) e vita della traccia.
 
 ## Validazione
 
@@ -132,7 +158,8 @@ Suite sintetica (vecchio vs nuovo rilevatore):
 | Sacca di umidità marina (T e vento uniformi) | falso fronte 705 km | scartato |
 | Bordo su promontorio anticiclonico | — | scartato (Gate 3) |
 | Artefatto presente 1 ora sola | — | scartato (Gate 5) |
-| Firme sul fronte vero | — | ζ = +5.8×10⁻⁵ s⁻¹, frontogenesi +2.9 K/100km/3h |
+| Dryline (θe da umidità, densità invertita) | — | scartato (Gate 1b) |
+| Firme sul fronte vero | — | ζ = +5.8×10⁻⁵ s⁻¹, frontogenesi +2.9 K/100km/3h; con coppia isallobarica coerente la confidenza sale a 0.91 |
 
 Dati reali (run ICON-2I 00z 20/07/2026 scaricato da MeteoHub, tutte le
 73 ore analizzate con entrambe le versioni):
