@@ -15,7 +15,7 @@ import numpy as np
 import xarray as xr
 
 
-FRONT_METHOD = "theta-e-850-tracked-v7"
+FRONT_METHOD = "theta-e-850-ofa-v8"
 
 
 def _box_smooth(field: np.ndarray, radius: int) -> np.ndarray:
@@ -525,17 +525,25 @@ class SynopticFrontAnalyzer:
         median_frontogenesis = float(
             np.nanmedian(self._sample(frontogenesis, coordinates))
         )
-        normal_flow_kmh = float(
+        # Classificazione per AVVEZIONE TERMICA CINEMATICA (metodo OFA
+        # standard).  La normale (normal_east, normal_north) punta verso
+        # l'aria calda; la componente del vento lungo la normale e' quindi
+        # l'avvezione proiettata sul fronte:
+        #   vento verso il caldo  -> avvezione fredda -> fronte FREDDO
+        #   vento verso il freddo -> avvezione calda  -> fronte CALDO
+        #   componente ~ nulla     -> fronte STAZIONARIO
+        advection_kmh = float(
             np.nanmedian(center_u * normal_east + center_v * normal_north) * 3.6
         )
-        propagation_kmh = -median_tendency / max(median_gradient, 0.01)
-        motion_kmh = 0.7 * np.clip(propagation_kmh, -80.0, 80.0) + 0.3 * np.clip(
-            normal_flow_kmh, -80.0, 80.0
-        )
+        # La tendenza temporale di theta-e da' la velocita' di traslazione
+        # reale dell'isolinea: riscontro indipendente, e stima piu' onesta
+        # della velocita' effettiva del fronte al suolo.
+        propagation_kmh = float(-median_tendency / max(median_gradient, 0.01))
+        motion_kmh = advection_kmh
 
-        if motion_kmh >= 5.0:
+        if advection_kmh >= 5.0:
             front_type = "cold"
-        elif motion_kmh <= -5.0:
+        elif advection_kmh <= -5.0:
             front_type = "warm"
         else:
             front_type = "stationary"
@@ -664,7 +672,11 @@ class SynopticFrontAnalyzer:
         gradient_magnitude = np.hypot(gradient_east, gradient_north)
         strength = gradient_magnitude * 100.0  # K / 100 km
         strength = _box_smooth(strength, self.detail_smooth_radius)
-        strength_threshold = max(6.0, float(np.nanpercentile(strength, 88.0)))
+        # Soglia del gradiente OFA standard: 4 K/100 km e' il valore usato
+        # dai centri operativi per separare la zona frontale dalle masse
+        # d'aria omogenee.  Resta adattiva verso l'alto (percentile 85) per
+        # non tracciare troppi rami nelle scene molto barocline.
+        strength_threshold = max(4.0, float(np.nanpercentile(strength, 85.0)))
 
         # Gradiente della temperatura secca a 850 hPa (K / 100 km): serve a
         # distinguere la vera baroclinicita' dai confini di sola umidita'.
@@ -783,7 +795,7 @@ class SynopticFrontAnalyzer:
                 continue
             valid = self._sample(strength, coordinates) >= strength_threshold
             for piece in self._split_valid(coordinates, valid):
-                if _line_length_km(piece) < 200.0:
+                if _line_length_km(piece) < 150.0:
                     continue
                 # Gate 0 - geometria sinottica.  Un fronte separa due masse
                 # d'aria: e' quasi-lineare o dolcemente arcuato.  Una linea

@@ -2,7 +2,7 @@
 
 Questo documento spiega la fisica su cui si basa il rilevatore di fronti
 (`scripts/front_analysis.py`) e il perché di ogni criterio. Metodo:
-`theta-e-850-tracked-v7` (ICON-2I: `theta-e-850-icon2i-tracked-v9`).
+`theta-e-850-ofa-v8` (ICON-2I: `theta-e-850-icon2i-ofa-v10`).
 
 L'architettura è **multi-evidenza**: nessun singolo campo può "creare" un
 fronte. Un candidato deve superare simultaneamente prove indipendenti su
@@ -25,8 +25,10 @@ Si lavora a **850 hPa** (~1.5 km, sopra il rumore dello strato limite)
 sulla **temperatura potenziale equivalente θe** (Bolton), doppiamente
 smussata alla scala sinottica. I candidati sono gli zeri del **Thermal
 Front Parameter** (TFP, Renard & Clarke 1965; Hewson 1998) — il bordo
-caldo della zona baroclina — mascherati dove |∇θe| supera una soglia
-adattiva (percentile 88 della scena, minimo 6 K/100 km) e fuori
+caldo della zona baroclina — estratti come linea di livello zero del TFP
+con Marching Squares (`contourpy`) e mascherati dove |∇θe| supera la
+**soglia OFA standard di 4 K/100 km** (adattiva verso l'alto, percentile
+85, per non tracciare troppi rami nelle scene molto barocline) e fuori
 dall'orografia elevata.
 
 ## Le prove che ogni candidato deve superare
@@ -141,10 +143,14 @@ I sopravvissuti ricevono una confidenza che pesa: intensità di ∇θe,
 saccatura, lunghezza, velocità di moto, penalità per orografia. Sotto
 0.55 si scarta; al massimo 4 fronti per scadenza, deduplicati.
 
-Il tipo segue il moto lungo la normale (tendenza di θe combinata col
-vento normale): ≥ +5 km/h verso l'aria calda → **freddo**; ≤ −5 km/h →
-**caldo**; altrimenti **stazionario** (soglia ≈ ±1.5 m/s di Hewson).
-I fronti occlusi non sono distinti e ricadono su freddo/stazionario.
+Il tipo segue l'**avvezione termica cinematica** (metodo OFA standard):
+la componente del vento lungo la normale al fronte (che punta verso
+l'aria calda). Vento verso il caldo = avvezione fredda → **freddo**
+(≥ +5 km/h); vento verso il freddo = avvezione calda → **caldo**
+(≤ −5 km/h); componente ≈ nulla → **stazionario**. La velocità di
+traslazione dell'isolinea (metodo della tendenza di θe) è calcolata come
+riscontro indipendente. I fronti occlusi non sono distinti e ricadono su
+freddo/stazionario.
 
 ## Verifica visiva sul sito
 
