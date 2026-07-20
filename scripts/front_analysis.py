@@ -15,7 +15,7 @@ import numpy as np
 import xarray as xr
 
 
-FRONT_METHOD = "theta-e-850-tracked-v6"
+FRONT_METHOD = "theta-e-850-tracked-v7"
 
 
 def _box_smooth(field: np.ndarray, radius: int) -> np.ndarray:
@@ -545,8 +545,11 @@ class SynopticFrontAnalyzer:
         # gradiente di T a 850 hPa e' un confine di umidita' (brezza, sacca
         # d'aria marina, outflow), il cui contrasto vive tutto nel boundary
         # layer sottostante.  Un fronte sinottico ha sempre baroclinicita'
-        # anche a 850 hPa.
-        if median_dry < 2.0:
+        # anche a 850 hPa.  (Pavimento fisico per-ora: la soglia piena di
+        # 2 K/100 km e' richiesta come MEDIANA sulla vita della traccia,
+        # cosi' un fronte debole ma reale non viene spezzato dalle ore in
+        # cui oscilla appena sotto soglia.)
+        if median_dry < 1.3:
             return None
 
         # Gate 1b - coerenza termodinamica firmata.  Un fronte e' un
@@ -568,7 +571,8 @@ class SynopticFrontAnalyzer:
         # Gate 2 - firma dinamica.  Un fronte giace in una saccatura di
         # pressione: attraversandolo il vento ruota e converge.  Un bordo
         # termico senza alcuna risposta del vento non e' un fronte.
-        if median_shift < 2.0 and median_convergence < 0.2:
+        # (Anche qui: pavimento per-ora, soglia piena a livello di traccia.)
+        if median_shift < 1.5 and median_convergence < 0.15:
             return None
 
         # Gate 3 - firma barica.  Una linea adagiata su un massimo di
@@ -620,10 +624,9 @@ class SynopticFrontAnalyzer:
             - 0.38 * terrain_fraction
         )
 
-        # Le soglie restano severe per singola ora: la tolleranza contro
-        # lo sfarfallio dei fronti reali non viene da soglie basse, ma dal
-        # tracciamento temporale, che colma i buchi brevi per interpolazione.
-        if confidence < 0.55:
+        # Pavimento per-ora: la soglia di pubblicazione (0.55) e' richiesta
+        # come mediana sulla vita della traccia.
+        if confidence < 0.50:
             return None
 
         metrics = {
@@ -890,6 +893,22 @@ class SynopticFrontAnalyzer:
             confidences = [track["lines"][h][1]["confidence"] for h in hours]
             if float(np.median(confidences)) < 0.55:
                 continue
+            # Le soglie piene di baroclinicita' e risposta del vento valgono
+            # come mediane sulla vita della traccia: severe sul fronte nel
+            # suo complesso, tolleranti verso l'oscillazione della singola
+            # ora (che altrimenti spezzerebbe la traccia).
+            if float(np.median(
+                [track["lines"][h][1]["tempGradient"] for h in hours]
+            )) < 2.0:
+                continue
+            median_shift_track = float(np.median(
+                [track["lines"][h][1]["windShift"] for h in hours]
+            ))
+            median_conv_track = float(np.median(
+                [track["lines"][h][1]["convergence"] for h in hours]
+            ))
+            if median_shift_track < 2.0 and median_conv_track < 0.2:
+                continue
             if self.reference_by_hour:
                 reference_hours = [
                     h
@@ -1045,6 +1064,35 @@ class SynopticFrontAnalyzer:
             },
         }
 
+
+    def candidate_lines(self, hour: int) -> dict:
+        """Candidati di rilevamento (pre-tracciamento) come FeatureCollection.
+
+        Servono da riferimento per la conferma incrociata di un altro
+        modello: i fronti PUBBLICATI sono volutamente pochi (tracciamento
+        severo), ma come guida serve l'insieme piu' ricco di cio' che il
+        modello vede a quella scadenza, altrimenti la conferma diventa
+        quasi sempre non applicabile.
+        """
+        if hour not in self.hour_to_index:
+            return {"type": "FeatureCollection", "features": []}
+        features = []
+        for coordinates, metrics in self._detect(hour)["candidates"]:
+            simplified = _rdp(coordinates, 0.05)
+            features.append(
+                {
+                    "type": "Feature",
+                    "geometry": {
+                        "type": "LineString",
+                        "coordinates": [
+                            [round(float(lon), 2), round(float(lat), 2)]
+                            for lon, lat in simplified
+                        ],
+                    },
+                    "properties": {"frontType": metrics["frontType"]},
+                }
+            )
+        return {"type": "FeatureCollection", "features": features}
 
     def upper_air(self, hour: int, stride: int = 2) -> dict | None:
         """Compact 850-hPa fields for the map's inspection layer.

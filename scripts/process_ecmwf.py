@@ -331,6 +331,9 @@ def process_data():
                     "source": "ECMWF IFS",
                     "level": "850 hPa",
                     "fronts": fronts,
+                    # Candidati pre-tracciamento: riferimento denso per la
+                    # conferma incrociata dei fronti ICON-2I.
+                    "candidates": front_analyzer.candidate_lines(step_hours),
                 }
             )
 
