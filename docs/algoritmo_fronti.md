@@ -35,7 +35,7 @@ dall'orografia elevata.
 
 ### Gate 0 — Geometria sinottica
 Un fronte separa due masse d'aria: quasi-lineare o dolcemente arcuato,
-lungo ≥ 200 km. **Sinuosità** (lunghezza/distanza estremi) ≤ 1.8 e
+lungo ≥ 150 km. **Sinuosità** (lunghezza/distanza estremi) ≤ 1.8 e
 **rotazione netta** della direzione ≤ 150°: una forcina gira di ~180°
 netti, un anello si richiude — sono bordi di anomalie locali (sacche
 d'aria marina, cold pool convettivi), mai fronti. La rotazione è *netta*
