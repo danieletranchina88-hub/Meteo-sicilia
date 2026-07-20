@@ -15,7 +15,7 @@ import numpy as np
 import xarray as xr
 
 
-FRONT_METHOD = "theta-e-850-multievidence-v5"
+FRONT_METHOD = "theta-e-850-tracked-v6"
 
 
 def _box_smooth(field: np.ndarray, radius: int) -> np.ndarray:
@@ -127,6 +127,34 @@ def _matched_fraction(
         dy = candidate_km[:, 1][:, None] - reference_km[:, 1][None, :]
         best = np.minimum(best, np.min(np.hypot(dx, dy), axis=1))
     return float(np.mean(best <= max_distance_km))
+
+
+def _resample_line(coordinates: np.ndarray, count: int = 24) -> np.ndarray:
+    """Resample a polyline to a fixed number of arc-length-spaced points."""
+    if len(coordinates) < 2:
+        return np.repeat(coordinates, count, axis=0)[:count]
+    deltas = np.diff(coordinates, axis=0)
+    lengths = np.hypot(deltas[:, 0], deltas[:, 1])
+    cumulative = np.concatenate(([0.0], np.cumsum(lengths)))
+    total = max(cumulative[-1], 1.0e-9)
+    targets = np.linspace(0.0, total, count)
+    return np.column_stack(
+        (
+            np.interp(targets, cumulative, coordinates[:, 0]),
+            np.interp(targets, cumulative, coordinates[:, 1]),
+        )
+    )
+
+
+def _blend_lines(first: np.ndarray, second: np.ndarray, weight: float) -> np.ndarray:
+    """Linear interpolation between two polylines (used to fill track gaps)."""
+    a = _resample_line(first)
+    b = _resample_line(second)
+    forward = float(np.sum(np.hypot(*(a - b).T)))
+    backward = float(np.sum(np.hypot(*(a - b[::-1]).T)))
+    if backward < forward:
+        b = b[::-1]
+    return (1.0 - weight) * a + weight * b
 
 
 def corroborate_with_reference(
@@ -308,6 +336,9 @@ class SynopticFrontAnalyzer:
             )
         self.theta_cache: OrderedDict[int, np.ndarray] = OrderedDict()
         self.detect_cache: dict[int, dict] = {}
+        self.reference_by_hour: dict[int, dict] = {}
+        self.reference_radius_fn = lambda hour: 220.0
+        self.tracks: list[dict] | None = None
 
     def close(self) -> None:
         for dataset in self.datasets.values():
@@ -552,6 +583,9 @@ class SynopticFrontAnalyzer:
             - 0.38 * terrain_fraction
         )
 
+        # Le soglie restano severe per singola ora: la tolleranza contro
+        # lo sfarfallio dei fronti reali non viene da soglie basse, ma dal
+        # tracciamento temporale, che colma i buchi brevi per interpolazione.
         if confidence < 0.55:
             return None
 
@@ -703,53 +737,179 @@ class SynopticFrontAnalyzer:
                 if metrics is not None:
                     candidates.append((piece, metrics))
 
+        candidates.sort(key=lambda item: item[1]["score"], reverse=True)
         result = {"candidates": candidates, "threshold": strength_threshold}
         self.detect_cache[hour] = result
         return result
+
+    def set_reference(self, reference_by_hour: dict, radius_km_fn=None) -> None:
+        """Guida di un modello indipendente, valutata a livello di traccia.
+
+        ``reference_by_hour`` mappa l'ora di previsione sulla
+        FeatureCollection dei fronti di riferimento alla stessa validita'.
+        La conferma per singola ora creerebbe sfarfallio quando la guida
+        (a passo piu' rado) cambia scadenza: per questo il consenso e'
+        richiesto sull'insieme della vita del fronte, non ora per ora.
+        """
+        self.reference_by_hour = reference_by_hour or {}
+        if radius_km_fn is not None:
+            self.reference_radius_fn = radius_km_fn
+        self.tracks = None
+
+    def _build_tracks(self) -> list[dict]:
+        """Collega i candidati orari in tracce e accetta a livello di traccia.
+
+        Un fronte e' un oggetto che vive nel tempo, non 73 decisioni
+        indipendenti: l'accettazione richiede vita minima, fiducia mediana
+        sull'intera vita e (se disponibile) consenso complessivo del
+        modello guida.  E' questo che garantisce un output coerente:
+        niente fronti che compaiono e scompaiono di ora in ora.
+        """
+        if self.tracks is not None:
+            return self.tracks
+
+        window = self.tendency_window_hours
+        link_radius_per_hour = 90.0  # spostamento massimo plausibile + margine
+        tracks: list[dict] = []
+        for hour in self.available_hours:
+            for coordinates, metrics in self._detect(hour)["candidates"]:
+                best_track, best_fraction = None, 0.0
+                for track in tracks:
+                    last_hour = track["hours"][-1]
+                    gap = hour - last_hour
+                    if gap <= 0 or gap > 2 * window:
+                        continue
+                    last_coords = track["lines"][last_hour][0]
+                    fraction = _matched_fraction(
+                        coordinates, [last_coords], link_radius_per_hour * gap
+                    )
+                    if fraction > best_fraction:
+                        best_track, best_fraction = track, fraction
+                if (
+                    best_track is not None
+                    and best_fraction >= 0.35
+                    and hour not in best_track["lines"]
+                ):
+                    best_track["lines"][hour] = (coordinates, metrics)
+                    best_track["hours"].append(hour)
+                else:
+                    tracks.append({"hours": [hour], "lines": {hour: (coordinates, metrics)}})
+
+        step = min(
+            (b - a for a, b in zip(self.available_hours, self.available_hours[1:])),
+            default=1,
+        )
+        accepted = []
+        for track in tracks:
+            hours = track["hours"]
+            span = hours[-1] - hours[0]
+            # Vita minima: due rilevamenti distinti su un arco di almeno
+            # due finestre (6 h per ICON-2I, 12 h per ECMWF).
+            if len(hours) < 2 or span < 2 * window:
+                continue
+            # Copertura: un fronte vero e' rilevato quasi sempre durante la
+            # sua vita; un bordo diurno (convezione pomeridiana, brezze)
+            # riappare a grappoli con lunghi vuoti notturni.  Richiediamo
+            # che i rilevamenti coprano almeno meta' delle scadenze della
+            # vita della traccia.
+            expected_detections = span / step + 1
+            if len(hours) / expected_detections < 0.5:
+                continue
+            confidences = [track["lines"][h][1]["confidence"] for h in hours]
+            if float(np.median(confidences)) < 0.55:
+                continue
+            if self.reference_by_hour:
+                reference_hours = [
+                    h
+                    for h in hours
+                    if (self.reference_by_hour.get(h) or {}).get("features")
+                ]
+                if reference_hours:
+                    corroborated = 0
+                    for h in reference_hours:
+                        reference_lines = [
+                            np.asarray(f["geometry"]["coordinates"], dtype=float)
+                            for f in self.reference_by_hour[h]["features"]
+                        ]
+                        if _matched_fraction(
+                            track["lines"][h][0],
+                            reference_lines,
+                            float(self.reference_radius_fn(h)),
+                        ) >= 0.5:
+                            corroborated += 1
+                    if corroborated / len(reference_hours) < 0.5:
+                        continue
+            # Moto smussato sulla vita della traccia: il tipo del fronte
+            # deriva da questo, quindi non puo' sfarfallare tra un'ora e
+            # l'altra per rumore.
+            track["smoothed_motion"] = {}
+            for h in hours:
+                neighbourhood = [
+                    track["lines"][k][1]["motion"]
+                    for k in hours
+                    if abs(k - h) <= 2 * window
+                ]
+                track["smoothed_motion"][h] = float(np.median(neighbourhood))
+            track["score"] = float(
+                np.median([track["lines"][h][1]["score"] for h in hours])
+            )
+            track["span"] = span
+            accepted.append(track)
+
+        accepted.sort(key=lambda t: t["score"], reverse=True)
+        self.tracks = accepted
+        return accepted
+
+    def _track_state_at(self, track: dict, hour: int):
+        """Line and metrics of a track at an hour, interpolating short gaps."""
+        hours = track["hours"]
+        if hour in track["lines"]:
+            coordinates, metrics = track["lines"][hour]
+            metrics = dict(metrics)
+            metrics["interpolated"] = False
+        else:
+            if hour < hours[0] or hour > hours[-1]:
+                return None
+            previous_hour = max(h for h in hours if h < hour)
+            next_hour = min(h for h in hours if h > hour)
+            if next_hour - previous_hour > self.tendency_window_hours:
+                return None
+            weight = (hour - previous_hour) / (next_hour - previous_hour)
+            before, before_metrics = track["lines"][previous_hour]
+            after, after_metrics = track["lines"][next_hour]
+            coordinates = _blend_lines(before, after, weight)
+            metrics = dict(before_metrics if weight < 0.5 else after_metrics)
+            metrics["confidence"] = float(
+                min(before_metrics["confidence"], after_metrics["confidence"]) * 0.92
+            )
+            metrics["interpolated"] = True
+
+        motion_hours = sorted(track["smoothed_motion"])
+        nearest = min(motion_hours, key=lambda h: abs(h - hour))
+        smoothed = track["smoothed_motion"][nearest]
+        metrics["motion"] = smoothed
+        if smoothed >= 5.0:
+            metrics["frontType"] = "cold"
+        elif smoothed <= -5.0:
+            metrics["frontType"] = "warm"
+        else:
+            metrics["frontType"] = "stationary"
+        metrics["lifetimeH"] = track["span"]
+        return coordinates, metrics
 
     def analyze(self, hour: int) -> dict:
         if hour not in self.hour_to_index:
             return {"type": "FeatureCollection", "features": []}
 
-        detection = self._detect(hour)
+        strength_threshold = self._detect(hour)["threshold"]
+        entries = []
+        for track in self._build_tracks():
+            state = self._track_state_at(track, hour)
+            if state is not None:
+                entries.append(state)
 
-        # Gate 5 - coerenza temporale.  Un fronte reale persiste per molte
-        # ore e trasla con continuita'; gli artefatti (brezze, outflow,
-        # rumore di griglia) compaiono e scompaiono.  Ogni candidato deve
-        # ritrovare almeno il 40% della propria linea entro un raggio
-        # proporzionale alla finestra (50 km/h di spostamento massimo)
-        # in almeno una delle ore adiacenti analizzabili.
-        available = np.asarray(self.available_hours)
-        neighbor_hours = []
-        for target in (
-            hour - self.tendency_window_hours,
-            hour + self.tendency_window_hours,
-        ):
-            nearest = int(available[np.argmin(np.abs(available - target))])
-            if nearest != hour and nearest not in neighbor_hours:
-                neighbor_hours.append(nearest)
-
-        match_radius_km = 50.0 * self.tendency_window_hours
-        candidates = []
-        for coordinates, metrics in detection["candidates"]:
-            persistent = not neighbor_hours
-            for neighbor in neighbor_hours:
-                neighbor_lines = [
-                    other_coords
-                    for other_coords, _ in self._detect(neighbor)["candidates"]
-                ]
-                if neighbor_lines and _matched_fraction(
-                    coordinates, neighbor_lines, match_radius_km
-                ) >= 0.4:
-                    persistent = True
-                    break
-            if persistent:
-                candidates.append((coordinates, metrics))
-
-        strength_threshold = detection["threshold"]
-        candidates = sorted(candidates, key=lambda item: item[1]["score"], reverse=True)
         accepted = []
-        for coordinates, metrics in candidates:
+        for coordinates, metrics in entries:
             centroid = np.mean(coordinates, axis=0)
             duplicate = False
             for previous_coordinates, previous_metrics in accepted:
@@ -788,6 +948,8 @@ class SynopticFrontAnalyzer:
                         "frontogenesis": round(metrics["frontogenesis"], 1),
                         "motionKmh": float(round(metrics["motion"], 0)),
                         "lengthKm": round(metrics["length"], 0),
+                        "lifetimeH": int(metrics.get("lifetimeH", 0)),
+                        "interpolated": bool(metrics.get("interpolated", False)),
                         **(
                             {"pressureTrough": round(metrics["pressureTrough"], 2)}
                             if "pressureTrough" in metrics

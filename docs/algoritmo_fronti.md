@@ -2,7 +2,7 @@
 
 Questo documento spiega la fisica su cui si basa il rilevatore di fronti
 (`scripts/front_analysis.py`) e il perché di ogni criterio. Metodo:
-`theta-e-850-multievidence-v5` (ICON-2I: `theta-e-850-icon2i-multievidence-v7`).
+`theta-e-850-tracked-v6` (ICON-2I: `theta-e-850-icon2i-tracked-v8`).
 
 L'architettura è **multi-evidenza**: nessun singolo campo può "creare" un
 fronte. Un candidato deve superare simultaneamente prove indipendenti su
@@ -72,23 +72,36 @@ allentandolo (frontolisi). Non è un gate — anche un fronte in decadimento
 è reale — ma pesa sulla confidenza ed è esportata (`frontogenesis`,
 K/100 km/3 h).
 
-### Gate 5 — Coerenza temporale
-Un fronte reale **persiste per molte ore e trasla con continuità**; gli
-artefatti (brezze diurne, outflow, rumore di griglia) compaiono e
-scompaiono. Ogni candidato deve ritrovare almeno il 40% della propria
-linea — entro un raggio di 50 km per ora di finestra (150 km a ±3 h per
-ICON-2I, 300 km a ±6 h per ECMWF) — tra i candidati di almeno una delle
-ore adiacenti dello stesso run. I rilevamenti orari sono in cache, quindi
-il costo aggiuntivo è nullo.
+### Gate 5 — Tracciamento temporale a oggetti
+Un fronte non è una sequenza di decisioni orarie indipendenti: è **un
+oggetto che vive nel tempo**. I candidati delle singole ore vengono
+collegati in **tracce** (associazione per sovrapposizione geometrica tra
+ore consecutive, raggio proporzionale al tempo trascorso) e l'accettazione
+avviene a livello di traccia:
+
+- **vita minima**: due rilevamenti su un arco di almeno 6 h (ICON-2I) /
+  12 h (ECMWF);
+- **copertura ≥ 50%**: un fronte vero è rilevato quasi sempre durante la
+  sua vita; un bordo diurno (convezione pomeridiana, brezze) riappare a
+  grappoli con lunghi vuoti notturni e viene respinto anche se ogni sua
+  singola apparizione sembrava valida;
+- **fiducia mediana ≥ 0.55** sull'intera vita.
+
+La pubblicazione è **continua per costruzione**: i buchi brevi (≤ una
+finestra) vengono colmati interpolando la linea tra le ore adiacenti
+(`interpolated: true` nel GeoJSON), e il tipo deriva dal **moto smussato
+sulla vita della traccia** — un fronte non può sparire per un'ora e
+ricomparire, né cambiare tipo per rumore. La vita della traccia è
+esportata (`lifetimeH`).
 
 ### Gate 6 — Conferma tra modelli (solo ICON-2I)
 Un fronte vero è su larga scala, quindi appare anche in un modello
-indipendente e più rado. Almeno il **50% della linea** ICON-2I deve
-trovarsi entro un raggio (180 km a +0 h, +1.5 km/h di scadenza, max
-320 km) da un fronte della corsa ECMWF alla stessa validità. La frazione
-di linea è essenziale: la vicinanza di un solo punto farebbe "confermare"
-un artefatto da un fronte vero che gli passa accanto. Fail-open se la
-guida manca.
+indipendente e più rado. La conferma è valutata **sull'insieme della
+traccia**: almeno la metà delle sue ore con guida disponibile deve
+trovare il 50% della linea entro il raggio (180 km a +0 h, +1.5 km/h di
+scadenza, max 320 km) da un fronte ECMWF alla stessa validità. Valutarla
+ora per ora creerebbe sfarfallio quando la guida (passo 6 h) cambia
+scadenza. Fail-open se la guida manca.
 
 ## Confidenza e classificazione
 
@@ -121,18 +134,20 @@ Suite sintetica (vecchio vs nuovo rilevatore):
 | Artefatto presente 1 ora sola | — | scartato (Gate 5) |
 | Firme sul fronte vero | — | ζ = +5.8×10⁻⁵ s⁻¹, frontogenesi +2.9 K/100km/3h |
 
-Dati reali (run ICON-2I 00z 20/07/2026 scaricato da MeteoHub, 8 scadenze
-ispezionate su mappa):
+Dati reali (run ICON-2I 00z 20/07/2026 scaricato da MeteoHub, tutte le
+73 ore analizzate con entrambe le versioni):
 
-- il vecchio rilevatore produceva **sempre 4 fronti** (limite saturato) —
-  a luglio, sovra-rilevamento evidente; alle 18 UTC disegnava fronti
-  sulle strisce di θe da convezione pomeridiana lungo l'Appennino;
-- il nuovo ne produce 0-2, tutti su bordi di massa d'aria visibili in θe
-  e dentro saccature: la boundary quasi-stazionaria lungo le Alpi/
-  Dinariche a +06h, nessun fronte sui massimi convettivi pomeridiani a
-  +18h/+36h, e a +72h il fronte caldo sul bordo dell'intrusione fresca
-  adriatica. Regressione confermata anche sul falso "ferro di cavallo"
-  adriatico del 20/07 (sinuosità 3.03 → scartato).
+- il rilevatore originale produceva **sempre 4 fronti** (limite saturato)
+  e alle 18 UTC disegnava fronti sulla convezione pomeridiana appenninica;
+- la versione per-ora corretta produceva 0-3 fronti giusti ma con **7
+  eventi di sfarfallio** in 73 ore (fronte che sparisce e ricompare);
+- la versione a tracciamento mantiene gli stessi fronti (boundary alpina
+  a +06h, zero fronti sui massimi convettivi pomeridiani, fronte caldo
+  sull'intrusione fresca a +72h) con **1 solo evento residuo di
+  discontinuità**, 9 ore colmate per interpolazione e vite delle tracce
+  di 6-31 h — tempi sinottici plausibili. Il criterio di copertura ha
+  inoltre respinto le pseudo-tracce diurne (bordi convettivi che
+  rientravano ogni pomeriggio simulando 72 h di "vita").
 
 ## Limiti dichiarati
 

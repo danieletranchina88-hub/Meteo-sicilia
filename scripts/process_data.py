@@ -22,7 +22,7 @@ TEMP_FILE = "temp.grib2"
 FRONT_TEMP_DIR = "temp_front_processing"
 NWP_DIRECTORY_ID = "ICON-2I_SURFACE_PRESSURE_LEVELS"
 NWP_DIRECT_BASE = "https://meteohub.agenziaitaliameteo.it/nwp"
-ICON_FRONT_METHOD = "theta-e-850-icon2i-multievidence-v7"
+ICON_FRONT_METHOD = "theta-e-850-icon2i-tracked-v8"
 # ICON-2I risolve strutture di mesoscala (brezze, canalizzazioni orografiche,
 # outflow temporaleschi) che il rilevatore puo' scambiare per fronti sinottici.
 # Un fronte vero e' anche visibile - smussato e spostato di poche decine di km -
@@ -455,6 +455,21 @@ def process_data():
     # Serve sia come guida di conferma per i fronti ICON-2I sia come fallback
     # quando l'analisi ICON-2I non e' disponibile.
     front_catalog = load_synoptic_front_catalog()
+    if icon_front_analyzer is not None and front_catalog:
+        # La guida ECMWF viene valutata a livello di traccia temporale
+        # (dentro l'analizzatore), non piu' ora per ora: il consenso e'
+        # richiesto sull'insieme della vita del fronte, cosi' il cambio di
+        # scadenza della guida (passo 6 h) non fa sfarfallare l'output.
+        reference_by_hour = {}
+        for guide_hour in icon_front_analyzer.available_hours:
+            guide_entry = nearest_synoptic_front(
+                front_catalog, run_dt + timedelta(hours=guide_hour)
+            )
+            if guide_entry is not None:
+                reference_by_hour[guide_hour] = guide_entry.get("fronts") or {}
+        icon_front_analyzer.set_reference(
+            reference_by_hour, front_corroboration_radius_km
+        )
 
     for idx, filename in enumerate(file_list):
         print(f"   [{idx+1:02d}] DL {filename}...", end=" ", flush=True)
@@ -619,14 +634,9 @@ def process_data():
 
                 if icon_front_analyzer is not None:
                     try:
+                        # La conferma ECMWF e' gia' dentro l'analizzatore,
+                        # applicata alle tracce temporali complete.
                         fronts = icon_front_analyzer.analyze(step_hours)
-                        guide_entry = nearest_synoptic_front(front_catalog, valid_dt)
-                        if guide_entry is not None:
-                            fronts = corroborate_with_reference(
-                                fronts,
-                                guide_entry.get("fronts"),
-                                max_distance_km=front_corroboration_radius_km(step_hours),
-                            )
                         front_method = ICON_FRONT_METHOD
                         front_source = "ICON-2I"
                         front_level = "850 hPa"
