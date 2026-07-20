@@ -625,6 +625,65 @@
         line-height: 1.45;
       }
 
+      .front-guide {
+        margin-top: 10px;
+        border-radius: 12px;
+        background: rgba(20, 34, 46, 0.6);
+        padding: 8px 10px;
+        font-size: 11px;
+        color: #b8cbd9;
+      }
+
+      .front-guide summary {
+        cursor: pointer;
+        font-weight: 600;
+        color: #dceaf5;
+        font-size: 12px;
+      }
+
+      .front-guide-intro,
+      .front-guide-note {
+        margin: 8px 0 4px;
+        line-height: 1.4;
+        color: #8ea8ba;
+        font-size: 10px;
+      }
+
+      .front-guide-title {
+        margin: 10px 0 4px;
+        font-weight: 700;
+        font-size: 12px;
+      }
+
+      .front-guide-title.cold { color: #5aa7ee; }
+      .front-guide-title.warm { color: #ef6a7c; }
+      .front-guide-title small {
+        display: block;
+        font-weight: 400;
+        color: #8ea8ba;
+        font-size: 9.5px;
+      }
+
+      .front-guide-table {
+        width: 100%;
+        border-collapse: collapse;
+        font-size: 10px;
+      }
+
+      .front-guide-table th,
+      .front-guide-table td {
+        border: 1px solid rgba(142, 168, 186, 0.25);
+        padding: 3px 5px;
+        text-align: left;
+        vertical-align: top;
+      }
+
+      .front-guide-table th {
+        color: #dceaf5;
+        font-weight: 600;
+        background: rgba(30, 48, 64, 0.5);
+      }
+
       #legend-card {
         position: fixed;
         z-index: 34;
@@ -1330,6 +1389,29 @@
                 <span><b>Fronti stimati</b><small id="front-source-label">ICON-2I orario · 850 hPa</small></span><span class="switch"></span>
               </button>
             </div>
+            <details class="front-guide">
+              <summary>Il passaggio di un fronte: cosa aspettarsi</summary>
+              <p class="front-guide-intro">Un fronte è il confine tra due masse d'aria di densità diversa. Il suo passaggio segue una sequenza tipica:</p>
+              <p class="front-guide-title cold">Fronte freddo <small>(l'aria fredda s'incunea sotto quella calda: fenomeni rapidi e violenti)</small></p>
+              <table class="front-guide-table">
+                <tr><th></th><th>Prima</th><th>Durante</th><th>Dopo</th></tr>
+                <tr><th>Temperatura</th><td>caldo</td><td>calo rapido</td><td>stabilmente freddo</td></tr>
+                <tr><th>Pressione</th><td>in calo</td><td>minimo, poi risalita</td><td>in aumento</td></tr>
+                <tr><th>Vento</th><td>SW/S</td><td>raffiche, rotazione</td><td>NW</td></tr>
+                <tr><th>Nubi</th><td>cirri in aumento</td><td>cumulonembi</td><td>cumuli, schiarite</td></tr>
+                <tr><th>Fenomeni</th><td>brevi rovesci</td><td>temporali</td><td>rovesci, poi sereno</td></tr>
+              </table>
+              <p class="front-guide-title warm">Fronte caldo <small>(l'aria calda scorre sopra quella fredda: peggioramento lento ed esteso)</small></p>
+              <table class="front-guide-table">
+                <tr><th></th><th>Prima</th><th>Durante</th><th>Dopo</th></tr>
+                <tr><th>Temperatura</th><td>fresco</td><td>aumento graduale</td><td>più caldo</td></tr>
+                <tr><th>Pressione</th><td>calo regolare</td><td>livellamento</td><td>lieve risalita</td></tr>
+                <tr><th>Vento</th><td>SE/S</td><td>variabile</td><td>SW</td></tr>
+                <tr><th>Nubi</th><td>cirri → strati → nembostrati</td><td>strati bassi</td><td>schiarite con strati</td></tr>
+                <tr><th>Fenomeni</th><td>pioggia debole e diffusa</td><td>pioggia fine e fitta</td><td>in esaurimento</td></tr>
+              </table>
+              <p class="front-guide-note">Il fronte stazionario (simboli alternati) è quasi fermo: tempo simile a un fronte caldo debole sul lato freddo. Sequenze tipiche da letteratura sinottica; l'intensità reale dipende dal singolo caso.</p>
+            </details>
           </section>
 
           <section class="drawer-section">
@@ -1393,6 +1475,7 @@
         <div class="point-detail"><b>Umidità</b><span id="detail-rh">--</span></div>
         <div class="point-detail"><b>Nuvolosità</b><span id="detail-cloud">--</span></div>
         <div class="point-detail"><b>Pressione</b><span id="detail-pressure">--</span></div>
+        <div class="point-detail"><b>Fronte vicino</b><span id="detail-front">--</span></div>
       </div>
     </section>
 
@@ -1776,7 +1859,8 @@
         detailDirection: document.getElementById("detail-direction"),
         detailRh: document.getElementById("detail-rh"),
         detailCloud: document.getElementById("detail-cloud"),
-        detailPressure: document.getElementById("detail-pressure")
+        detailPressure: document.getElementById("detail-pressure"),
+        detailFront: document.getElementById("detail-front")
       };
 
       const rasterCanvas = document.createElement("canvas");
@@ -1958,6 +2042,54 @@
           u: sample(currentData && currentData.wind_u, gx, gy),
           v: sample(currentData && currentData.wind_v, gx, gy)
         };
+      }
+
+      const FRONT_TYPE_NAMES = { cold: "freddo", warm: "caldo", stationary: "stazionario" };
+
+      function nearestFrontText(gx, gy) {
+        const features = currentData && currentData.fronts && currentData.fronts.features;
+        if (!features || !features.length) return "nessuno sulla mappa";
+
+        const meta = currentData.meta;
+        const lon = meta.lo1 + gx * meta.dx;
+        const lat = meta.la1 - gy * meta.dy;
+        const kmLon = 111.32 * Math.cos(lat * Math.PI / 180);
+        const px = lon * kmLon;
+        const py = lat * 111.32;
+
+        let best = null;
+        features.forEach(function (feature) {
+          const coords = feature.geometry.coordinates;
+          for (let i = 0; i < coords.length - 1; i += 1) {
+            const ax = coords[i][0] * kmLon, ay = coords[i][1] * 111.32;
+            const bx = coords[i + 1][0] * kmLon, by = coords[i + 1][1] * 111.32;
+            const dx = bx - ax, dy = by - ay;
+            const lengthSq = dx * dx + dy * dy;
+            const t = lengthSq > 0 ? clamp(((px - ax) * dx + (py - ay) * dy) / lengthSq, 0, 1) : 0;
+            const qx = ax + t * dx, qy = ay + t * dy;
+            const distance = Math.hypot(px - qx, py - qy);
+            if (!best || distance < best.distance) {
+              // Lato del punto rispetto alla linea: il lato caldo è a sinistra.
+              const cross = dx * (py - ay) - dy * (px - ax);
+              best = { distance: distance, feature: feature, warmSide: cross > 0 };
+            }
+          }
+        });
+
+        if (!best || best.distance > 300) return "nessuno entro 300 km";
+
+        const props = best.feature.properties;
+        const typeName = FRONT_TYPE_NAMES[props.frontType] || props.frontType;
+        const motion = Number(props.motionKmh) || 0;
+        let movement = "quasi stazionario";
+        if (Math.abs(motion) >= 5) {
+          const approaching = (motion > 0 && best.warmSide) || (motion < 0 && !best.warmSide);
+          movement = (approaching ? "in avvicinamento" : "in allontanamento") +
+            " (" + Math.abs(Math.round(motion)) + " km/h)";
+        }
+        let text = typeName + " a " + Math.round(best.distance) + " km · " + movement;
+        if (props.lifetimeH) text += " · vita " + props.lifetimeH + " h";
+        return text;
       }
 
       function windDirectionFrom(u, v) {
@@ -3685,6 +3817,7 @@
         ui.detailRh.textContent = formatValue(fieldValue("rh", point.gx, point.gy), 0, "%");
         ui.detailCloud.textContent = formatValue(fieldValue("cloud", point.gx, point.gy), 0, "%");
         ui.detailPressure.textContent = formatValue(fieldValue("press", point.gx, point.gy), 0, "hPa");
+        ui.detailFront.textContent = nearestFrontText(point.gx, point.gy);
 
         ui.readout.classList.add("visible");
         document.body.classList.add("readout-open");
