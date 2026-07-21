@@ -18,8 +18,8 @@ core with the v10 modules:
     classification (``uncertain`` on real conflict), and a
     ``qualityScore`` (a physical-support heuristic, NOT a probability).
 
-The public interface matches v9 exactly - ``available_hours``,
-``set_reference``, ``analyze(hour)``, ``upper_air(hour)``, ``close()`` -
+The public interface matches v9 - ``available_hours``, ``analyze(hour)``,
+``upper_air(hour)``, ``close()`` -
 so ``process_data.py`` can switch to it without any other change.
 
 Product objective (site wording): "una rappresentazione automatica,
@@ -69,11 +69,6 @@ PRESSURE_DISTANCE_KM = 90.0
 TERRAIN_LIMIT_METERS = 900.0
 MAX_TERRAIN_FRACTION = 0.25
 
-# Track-level cross-model requirements.
-REFERENCE_MIN_LINE_MATCH = 0.55
-REFERENCE_MIN_HOUR_FRACTION = 0.60
-REFERENCE_MIN_COVERAGE = 0.50
-
 TRACK_WINDOW_HOURS = 3
 TRACK_GATE_KM = 250.0
 TRACK_MIN_LIFETIME_HOURS = 6
@@ -83,7 +78,6 @@ TRACK_MIN_COVERAGE = 0.5
 MAX_FRONTS_PER_HOUR = 4
 # A track must clear this quality floor to be published at all.
 MIN_PUBLISH_QUALITY = 0.50
-MIN_CROSS_MODEL_QUALITY = 0.58
 
 
 class FrontalAnalysisV10(SynopticFrontAnalyzer):
@@ -91,8 +85,6 @@ class FrontalAnalysisV10(SynopticFrontAnalyzer):
 
     def __init__(self, *args, **kwargs) -> None:
         requested_method = kwargs.get("method")
-        self.require_reference = bool(kwargs.pop("require_reference", False))
-        self.reference_source = str(kwargs.pop("reference_source", "ECMWF IFS"))
         # Reuse the whole v9 loader (open GRIB, validate units/levels,
         # build the grid, dx/dy, available_hours, terrain, upper_air).
         super().__init__(*args, **kwargs)
@@ -255,38 +247,6 @@ class FrontalAnalysisV10(SynopticFrontAnalyzer):
             accepted.append(candidate)
         return accepted
 
-    def _reference_diagnostics(self, track: dict) -> dict:
-        """Compare a whole track with independent-model published fronts."""
-        return ftk.cross_model_diagnostics(
-            track,
-            self.reference_by_hour,
-            self.reference_radius_fn,
-            min_line_match=REFERENCE_MIN_LINE_MATCH,
-            min_hour_fraction=REFERENCE_MIN_HOUR_FRACTION,
-            min_coverage=REFERENCE_MIN_COVERAGE,
-        )
-
-    @staticmethod
-    def _apply_reference_quality(track: dict, reference: dict) -> None:
-        components = dict(track.get("qualityComponents") or {})
-        components["modelAgreement"] = reference["agreement"]
-        track["qualityComponents"] = components
-        track["modelAgreement"] = reference["agreement"]
-        track["corroborated"] = reference["confirmed"]
-        track["referenceCoverage"] = reference["coverage"]
-        track["referenceMatchedHours"] = reference["matchedHourFraction"]
-        track["referenceFrontType"] = reference["referenceFrontType"]
-        track["qualityScore"] = round(float(np.clip(
-            0.25 * float(components.get("thermalSupport") or 0.0)
-            + 0.20 * float(components.get("dynamicSupport") or 0.0)
-            + 0.20 * float(components.get("temporalSupport") or 0.0)
-            + 0.10 * float(components.get("structuralSupport") or 0.0)
-            + 0.15 * float(reference["agreement"])
-            + 0.10 * float(components.get("classificationCertainty") or 0.0),
-            0.0,
-            1.0,
-        )), 2)
-
     def _ensure_tracks(self) -> None:
         if self._v10_by_hour is not None:
             return
@@ -309,21 +269,9 @@ class FrontalAnalysisV10(SynopticFrontAnalyzer):
         )
         filtered_tracks = []
         for track in tracks:
-            reference = self._reference_diagnostics(track)
-            if reference["available"]:
-                self._apply_reference_quality(track, reference)
-            elif self.require_reference:
-                continue
             if track.get("frontType") == "uncertain":
                 continue
-            if self.require_reference and not track.get("corroborated", False):
-                continue
-            quality_floor = (
-                MIN_CROSS_MODEL_QUALITY
-                if self.require_reference
-                else MIN_PUBLISH_QUALITY
-            )
-            if track["qualityScore"] < quality_floor:
+            if track["qualityScore"] < MIN_PUBLISH_QUALITY:
                 continue
             filtered_tracks.append(track)
         tracks = filtered_tracks
@@ -376,14 +324,6 @@ class FrontalAnalysisV10(SynopticFrontAnalyzer):
             "ofaSpeedKmh": track.get("ofaSpeedKmh"),
             "classificationCertainty": track.get("classificationCertainty"),
             "qualityComponents": components,
-            "corroborated": track.get("corroborated"),
-            "modelAgreement": track.get("modelAgreement"),
-            "referenceCoverage": track.get("referenceCoverage"),
-            "referenceMatchedHours": track.get("referenceMatchedHours"),
-            "referenceFrontType": track.get("referenceFrontType"),
-            "referenceSource": (
-                self.reference_source if track.get("corroborated") else None
-            ),
             "diagnostics": track.get("diagnostics", {}),
             "lifetimeH": int(track.get("lifetimeH", 0)),
             "trackId": int(track.get("id", -1)),
@@ -438,14 +378,6 @@ class FrontalAnalysisV10(SynopticFrontAnalyzer):
                 "estimated": True,
             },
         }
-
-    def set_reference(self, reference_by_hour: dict, radius_km_fn=None) -> None:
-        """Set the independent-model guide used as a strict track filter."""
-        self.reference_by_hour = reference_by_hour or {}
-        if radius_km_fn is not None:
-            self.reference_radius_fn = radius_km_fn
-        self._v10_tracks = None
-        self._v10_by_hour = None
 
     def candidate_lines(self, hour: int) -> dict:
         """Return pre-tracking candidates for diagnostics only."""

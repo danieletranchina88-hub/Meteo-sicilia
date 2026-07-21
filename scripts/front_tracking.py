@@ -25,7 +25,7 @@ they conflict -> ``frontType = "uncertain"`` (better honest than wrong).
 
 The published score is a ``qualityScore`` (a physical-support heuristic,
 explicitly NOT a probability) with separate components:
-thermalSupport, dynamicSupport, temporalSupport, modelAgreement,
+thermalSupport, dynamicSupport, temporalSupport, structuralSupport and
 classificationCertainty.
 """
 
@@ -100,108 +100,6 @@ def _symmetric_distance_km(line_a: np.ndarray, line_b: np.ndarray) -> float:
     dba = np.min(np.hypot(b[:, None, 0] - a[None, :, 0],
                           b[:, None, 1] - a[None, :, 1]), axis=1)
     return 0.5 * (float(np.mean(dab)) + float(np.mean(dba)))
-
-
-def _point_to_segments_km(points: np.ndarray, line: np.ndarray) -> np.ndarray:
-    if len(line) < 2:
-        return np.hypot(points[:, 0] - line[0, 0], points[:, 1] - line[0, 1])
-    starts, ends = line[:-1], line[1:]
-    segments = ends - starts
-    length_sq = np.maximum(np.sum(segments * segments, axis=1), 1.0e-9)
-    relative = points[:, None, :] - starts[None, :, :]
-    fraction = np.clip(
-        np.sum(relative * segments[None, :, :], axis=2) / length_sq[None, :],
-        0.0,
-        1.0,
-    )
-    projection = starts[None, :, :] + fraction[:, :, None] * segments[None, :, :]
-    return np.min(np.hypot(
-        points[:, None, 0] - projection[:, :, 0],
-        points[:, None, 1] - projection[:, :, 1],
-    ), axis=1)
-
-
-def _matched_fraction(line: np.ndarray, reference: np.ndarray,
-                      radius_km: float) -> float:
-    """Fraction of ``line`` within radius of reference polyline segments."""
-    mean_lat = math_mean_lat(line, reference)
-    count = max(2, int(_length_km(line) / 20.0))
-    points = _project_km(_resample(line, count), mean_lat)
-    reference_km = _project_km(np.asarray(reference, dtype=float), mean_lat)
-    return float(np.mean(_point_to_segments_km(points, reference_km) <= radius_km))
-
-
-def cross_model_diagnostics(
-    track: dict,
-    reference_by_hour: dict,
-    radius_km_fn,
-    *,
-    min_line_match: float = 0.55,
-    min_hour_fraction: float = 0.60,
-    min_coverage: float = 0.50,
-) -> dict:
-    """Confirm a whole track against published fronts of another model."""
-    guide_hours = [h for h in track["hours"] if h in reference_by_hour]
-    coverage = len(guide_hours) / max(len(track["hours"]), 1)
-    if not guide_hours:
-        return {
-            "available": False,
-            "coverage": 0.0,
-            "agreement": 0.0,
-            "matchedHourFraction": 0.0,
-            "confirmed": False,
-            "referenceFrontType": None,
-        }
-
-    scores = []
-    matched_types = []
-    for hour in guide_hours:
-        features = (reference_by_hour.get(hour) or {}).get("features") or []
-        line = np.asarray(track["lines"][hour], dtype=float)
-        best_score = 0.0
-        best_type = None
-        for feature in features:
-            reference = np.asarray(
-                feature.get("geometry", {}).get("coordinates") or [], dtype=float
-            )
-            if len(reference) < 2:
-                continue
-            radius = float(radius_km_fn(hour))
-            forward = _matched_fraction(line, reference, radius)
-            backward = _matched_fraction(reference, line, radius)
-            score = float(np.sqrt(max(forward, 0.0) * max(backward, 0.0)))
-            if score > best_score:
-                best_score = score
-                best_type = (feature.get("properties") or {}).get("frontType")
-        scores.append(best_score)
-        if best_score >= min_line_match and best_type:
-            matched_types.append(best_type)
-
-    matched_hour_fraction = float(np.mean(np.asarray(scores) >= min_line_match))
-    agreement = float(np.mean(scores))
-    reference_type = None
-    if matched_types:
-        values, counts = np.unique(matched_types, return_counts=True)
-        reference_type = str(values[int(np.argmax(counts))])
-    type_conflict = (
-        track.get("frontType") in {"cold", "warm"}
-        and reference_type in {"cold", "warm"}
-        and track.get("frontType") != reference_type
-    )
-    confirmed = (
-        coverage >= min_coverage
-        and matched_hour_fraction >= min_hour_fraction
-        and float(np.median(scores)) >= min_line_match
-        and not type_conflict
-    )
-    return {
-        "available": True,
-        "coverage": round(coverage, 2),
-        "agreement": round(agreement, 2),
-        "matchedHourFraction": round(matched_hour_fraction, 2),
-        "confirmed": bool(confirmed),
-        "referenceFrontType": reference_type,
-    }
 
 
 def math_mean_lat(*lines: np.ndarray) -> float:
@@ -448,9 +346,6 @@ def _quality_score(track: Track, classification: dict, window_hours: int) -> dic
         "dynamicSupport": round(dynamic, 2),
         "temporalSupport": round(temporal, 2),
         "structuralSupport": round(structural, 2),
-        # Filled only after comparison with an independent model. Never use
-        # the same-model smoothing prior as fake model agreement.
-        "modelAgreement": None,
         "classificationCertainty": round(certainty, 2),
     }
     overall = float(np.clip(

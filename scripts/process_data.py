@@ -22,15 +22,9 @@ TEMP_FILE = "temp.grib2"
 FRONT_TEMP_DIR = "temp_front_processing"
 NWP_DIRECTORY_ID = "ICON-2I_SURFACE_PRESSURE_LEVELS"
 NWP_DIRECT_BASE = "https://meteohub.agenziaitaliameteo.it/nwp"
-ICON_FRONT_METHOD = "thetaw-850-icon2i-ecmwf-consensus-v11"
-# ICON-2I risolve strutture di mesoscala (brezze, canalizzazioni orografiche,
-# outflow temporaleschi) che il rilevatore puo' scambiare per fronti sinottici.
-# Un fronte vero e' anche visibile - smussato e spostato di poche decine di km -
-# nella corsa ECMWF, molto piu' rada: usiamo quella come guida di conferma e
-# scartiamo i candidati ICON-2I privi di riscontro.
-FRONT_CORROBORATION_BASE_KM = 110.0
-FRONT_CORROBORATION_PER_HOUR_KM = 0.75
-FRONT_CORROBORATION_MAX_KM = 165.0
+ICON_FRONT_METHOD = "thetaw-850-icon2i-physical-v11"
+# ECMWF resta un modello/layer separato e un fallback operativo. Non viene
+# usato per accettare o rifiutare i fronti individuati da ICON-2I.
 SYNOPTIC_FRONT_CATALOG = os.path.join(
     "data_weather_ecmwf",
     "fronts_catalog.json",
@@ -193,8 +187,6 @@ def prepare_icon_front_analyzer(run_dt):
             method=ICON_FRONT_METHOD,
             source="ICON-2I",
             tendency_window_hours=3,
-            require_reference=True,
-            reference_source="ECMWF IFS",
         )
         if len(analyzer.available_hours) < 70:
             analyzer.close()
@@ -241,12 +233,6 @@ def nearest_synoptic_front(front_catalog, valid_time):
     )
     difference_hours = abs((candidate_time - valid_time).total_seconds()) / 3600.0
     return candidate if difference_hours <= 3.1 else None
-
-
-def front_corroboration_radius_km(lead_hours):
-    """Allowed ICON-vs-ECMWF front displacement: grows with lead time, capped."""
-    radius = FRONT_CORROBORATION_BASE_KM + FRONT_CORROBORATION_PER_HOUR_KM * lead_hours
-    return float(min(FRONT_CORROBORATION_MAX_KM, radius))
 
 
 def get_latest_run_files():
@@ -457,28 +443,6 @@ def process_data():
     # Serve sia come guida di conferma per i fronti ICON-2I sia come fallback
     # quando l'analisi ICON-2I non e' disponibile.
     front_catalog = load_synoptic_front_catalog()
-    if icon_front_analyzer is not None and front_catalog:
-        # La guida ECMWF viene valutata a livello di traccia temporale
-        # (dentro l'analizzatore), non piu' ora per ora: il consenso e'
-        # richiesto sull'insieme della vita del fronte, cosi' il cambio di
-        # scadenza della guida (passo 6 h) non fa sfarfallare l'output.
-        reference_by_hour = {}
-        for guide_hour in icon_front_analyzer.available_hours:
-            guide_entry = nearest_synoptic_front(
-                front_catalog, run_dt + timedelta(hours=guide_hour)
-            )
-            if guide_entry is not None:
-                # Solo fronti ECMWF gia' sopravvissuti a rilevamento,
-                # tracking e filtri fisici. I candidati grezzi renderebbero
-                # troppo facile confermare un artefatto ICON.
-                reference_by_hour[guide_hour] = (
-                    guide_entry.get("fronts")
-                    or {}
-                )
-        icon_front_analyzer.set_reference(
-            reference_by_hour, front_corroboration_radius_km
-        )
-
     for idx, filename in enumerate(file_list):
         print(f"   [{idx+1:02d}] DL {filename}...", end=" ", flush=True)
 
@@ -642,11 +606,9 @@ def process_data():
 
                 if icon_front_analyzer is not None:
                     try:
-                        # La conferma ECMWF e' gia' dentro l'analizzatore,
-                        # applicata alle tracce temporali complete.
                         fronts = icon_front_analyzer.analyze(step_hours)
                         front_method = ICON_FRONT_METHOD
-                        front_source = "ICON-2I + ECMWF IFS"
+                        front_source = "ICON-2I"
                         front_level = "850 hPa"
                         front_valid_time = iso_date
                     except Exception as front_error:

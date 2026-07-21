@@ -17,10 +17,8 @@ convective outflows and the rim of an orographic air pool can all be very
 sharp.  Persistence and intensity therefore never bypass the synoptic-scale
 prior.
 
-Note on independence: the corridor here comes from a strongly smoothed
-version of the SAME model, so it is a scale prior, not an independent
-model.  Cross-model agreement (ECMWF) remains a separate, weaker
-corroboration handled elsewhere.
+The corridor comes from a strongly smoothed version of the SAME model: it
+is a scale prior, not independent evidence and not a comparison with ECMWF.
 """
 
 from __future__ import annotations

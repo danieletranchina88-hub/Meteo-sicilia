@@ -3,7 +3,7 @@
 Questo documento spiega la fisica del rilevatore di fronti. Dalla **v11**
 il sito usa l'analisi frontale oggettiva (OFA) con nucleo Hewson
 (`scripts/front_analysis_v10.py`, metodo
-`thetaw-850-icon2i-ecmwf-consensus-v11`),
+`thetaw-850-icon2i-physical-v11`),
 che riusa l'infrastruttura dati validata della v9 (lettura GRIB,
 validazione, griglia, campionamento, export 850 hPa) e ne sostituisce il
 nucleo scientifico. La v9 (`scripts/front_analysis.py`) resta come
@@ -12,7 +12,7 @@ descrive la fisica della v9, in gran parte condivisa dalla v10.
 
 ## Architettura v11 (in produzione)
 
-Quattro livelli separati, con test sintetici dedicati:
+Tre livelli separati, con test sintetici dedicati:
 
 1. **Termodinamica** (`thermodynamics.py`) — campo primario θw
    (temperatura potenziale di bulbo umido, Davies-Jones 2008) a 850 hPa.
@@ -37,15 +37,7 @@ Quattro livelli separati, con test sintetici dedicati:
    segnali concordano → tipo netto; se sono in conflitto reale →
    `uncertain` (meglio onesto che sbagliato). Il punteggio pubblicato è un
    `qualityScore` (euristica di supporto fisico, **non** una probabilità)
-   con componenti termiche, dinamiche, temporali e strutturali. La voce
-   `modelAgreement` viene valorizzata solo dal modello indipendente.
-4. **Conferma indipendente ECMWF IFS (obbligatoria)** — ICON-2I rifinisce
-   la geometria oraria, ma non decide da solo se un fronte esiste. Una
-   traccia viene pubblicata soltanto se almeno il 60% delle ore è coerente
-   con un fronte ECMWF già filtrato e tracciato, con almeno il 55% della
-   linea in accordo entro 110–165 km. I candidati ECMWF grezzi non vengono
-   usati come conferma. Se la guida manca, il sistema non pubblica fronti
-   ICON non verificati.
+   con componenti termiche, dinamiche, temporali e strutturali.
 
 Ogni candidato deve inoltre mostrare un gradiente reale di T a 850 hPa,
 una rotazione o convergenza del vento, una forma aperta e sinottica e non
@@ -57,16 +49,14 @@ Il numero di tracce non è prefissato: in condizioni senza strutture
 sinottiche coerenti l'output corretto può essere vuoto. Metodo storico v9:
 `theta-e-850-ofa-v9`.
 
-**Robustezza numerica e consenso v11.** I campioni fuori
+**Robustezza numerica v11.** I campioni fuori
 dal dominio restituiscono NaN (non il valore della cella di bordo): un
 candidato con meno del 75% di punti interni viene scartato, per non
-generare falsi fronti ai margini della mappa. Il confronto tra linee usa
-la distanza punto-**segmento** (robusto anche con riferimenti a pochi
-vertici) ed è simmetrico. Il collegamento temporale ha un raggio con
-tetto fisso a 200 km. La copertura è contata sulle scadenze realmente
-disponibili nell'arco della traccia. Quando la guida ECMWF è del tutto
-assente la traccia resta marcata `corroborated: null` e la sua confidenza
-è penalizzata, così l'assenza di conferma è esplicita nell'output.
+generare falsi fronti ai margini della mappa. Il collegamento temporale ha
+un raggio fisicamente limitato, controlla orientamento, lunghezza e lato
+caldo e richiede persistenza sulla sequenza oraria. ECMWF è mostrato come
+modello separato e può fungere da fallback se ICON non è disponibile, ma
+non accetta né rifiuta i fronti ICON-2I.
 
 ## Stato: v9 baseline congelata
 

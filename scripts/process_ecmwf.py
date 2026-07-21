@@ -25,7 +25,7 @@ FORECAST_STEPS = list(range(0, 121, 6))
 PARAMETERS = ["2t", "2d", "10u", "10v", "msl", "tp", "tcc"]
 FRONT_PARAMETERS = ["t", "q", "u", "v"]
 FRONT_BOUNDS = (3.0, 22.0, 33.0, 50.0)
-ECMWF_FRONT_METHOD = "thetaw-850-ecmwf-ofa-v10-consensus"
+ECMWF_FRONT_METHOD = "thetaw-850-ecmwf-ofa-v10"
 FEELS_LIKE_METHOD = "heat-index-wind-chill-v1"
 
 
@@ -218,7 +218,6 @@ def process_data():
             method=ECMWF_FRONT_METHOD,
             source="ECMWF IFS",
             tendency_window_hours=6,
-            require_reference=False,
         )
 
         if os.path.exists(TEMP_DIR):
