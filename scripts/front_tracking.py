@@ -1,4 +1,4 @@
-"""Global front tracking, motion classification and uncertainty (v12).
+"""Global front tracking, motion classification and uncertainty (v13).
 
 Tracking is a central part of the algorithm, not a persistence filter.
 Candidates from consecutive hours are linked into tracks by a **global**
@@ -254,7 +254,13 @@ def _type_from_speed(speed_kmh: float) -> str:
 
 
 def classify_track(track: Track, window_hours: int, wind_sampler=None) -> dict:
-    """Classify by OFA speed, checked against actual geometric motion."""
+    """Classify only when three independent motion families agree.
+
+    Geometry measures where the analysed boundary actually moved; phase
+    speed follows the theta-w tendency; the wind family combines Hewson OFA
+    speed and flow normal to the air-mass boundary.  Wind is deliberately a
+    single family because its two diagnostics are not independent.
+    """
     hours = track.hours
     geo_speeds = []
     for h_prev, h_next in zip(hours[:-1], hours[1:]):
@@ -276,6 +282,9 @@ def classify_track(track: Track, window_hours: int, wind_sampler=None) -> dict:
     tendency_motion = _finite_median([
         track.lines[h].get("tendencyMotionKmh", np.nan) for h in hours
     ])
+    airmass_motion = _finite_median([
+        track.lines[h].get("airmassMotionKmh", np.nan) for h in hours
+    ])
 
     # Backward-compatible fallback for synthetic callers that provide winds
     # but not precomputed OFA diagnostics.
@@ -290,31 +299,87 @@ def classify_track(track: Track, window_hours: int, wind_sampler=None) -> dict:
             ) * 3.6)
         ofa_motion = _finite_median(fallback)
 
-    signals = [geo_type]
-    if np.isfinite(ofa_motion):
-        signals.append(_type_from_speed(ofa_motion))
-    moving = {value for value in signals if value != "stationary"}
-    if len(moving) > 1:
-        front_type, certainty = "uncertain", 0.15
-    elif moving:
-        front_type = next(iter(moving))
-        certainty = 0.94 if len(set(signals)) == 1 else 0.72
+    ofa_type = _type_from_speed(ofa_motion) if np.isfinite(ofa_motion) else None
+    airmass_type = (
+        _type_from_speed(airmass_motion) if np.isfinite(airmass_motion) else None
+    )
+    wind_parts = [value for value in (ofa_type, airmass_type) if value]
+    wind_moving = {value for value in wind_parts if value != "stationary"}
+    wind_conflict = len(wind_moving) > 1
+    if wind_conflict:
+        wind_type = "uncertain"
+    elif wind_moving:
+        wind_type = next(iter(wind_moving))
+    elif wind_parts:
+        wind_type = "stationary"
     else:
-        front_type = "stationary"
-        certainty = 0.90 if len(signals) > 1 else 0.60
+        wind_type = None
+
+    phase_type = (
+        _type_from_speed(tendency_motion)
+        if np.isfinite(tendency_motion) else None
+    )
+    family_votes = {
+        "geometry": geo_type,
+        "phase": phase_type,
+        "wind": wind_type,
+    }
+    available_votes = [
+        value for value in family_votes.values() if value is not None
+    ]
+    moving = {
+        value for value in available_votes
+        if value not in ("stationary", "uncertain")
+    }
+    has_uncertain = "uncertain" in available_votes
+    counts = {
+        kind: sum(value == kind for value in available_votes)
+        for kind in ("cold", "warm", "stationary")
+    }
+
+    if has_uncertain or len(moving) > 1:
+        front_type, certainty = "uncertain", 0.10
+    elif moving:
+        moving_type = next(iter(moving))
+        opposite = "warm" if moving_type == "cold" else "cold"
+        support = counts[moving_type]
+        # A moving front needs two independent families. A third stationary
+        # family is allowed; an opposite vote is not.
+        if support >= 2 and counts[opposite] == 0:
+            front_type = moving_type
+            certainty = 0.72 + 0.12 * min(support - 2, 1)
+        else:
+            front_type, certainty = "uncertain", 0.24
+    else:
+        if counts["stationary"] >= 2:
+            front_type = "stationary"
+            certainty = 0.76 + 0.08 * min(counts["stationary"] - 2, 1)
+        else:
+            front_type, certainty = "uncertain", 0.24
 
     # Penalise an unstable OFA sign over the track without allowing a weak
     # single hour to flip the median classification.
-    hourly_ofa_types = [
-        _type_from_speed(-float(value) * 3.6)
-        for value in ofa_values if np.isfinite(value)
-    ]
-    if hourly_ofa_types and front_type != "uncertain":
-        agreement = np.mean([
+    hourly_motion_types = []
+    for h in hours:
+        ofa_value = track.lines[h].get("ofaSpeedMps", np.nan)
+        air_value = track.lines[h].get("airmassMotionKmh", np.nan)
+        if np.isfinite(ofa_value):
+            hourly_motion_types.append(_type_from_speed(-float(ofa_value) * 3.6))
+        if np.isfinite(air_value):
+            hourly_motion_types.append(_type_from_speed(float(air_value)))
+    if hourly_motion_types and front_type != "uncertain":
+        agreement = float(np.mean([
             value == front_type or value == "stationary"
-            for value in hourly_ofa_types
-        ])
-        certainty *= 0.55 + 0.45 * float(agreement)
+            for value in hourly_motion_types
+        ]))
+        contradiction = float(np.mean([
+            value not in (front_type, "stationary")
+            for value in hourly_motion_types
+        ]))
+        certainty *= 0.55 + 0.45 * agreement
+        if contradiction > 0.20:
+            front_type = "uncertain"
+            certainty = min(certainty, 0.18)
 
     motion_mad = _finite_median(np.abs(np.asarray(geo_speeds) - geo_motion), 0.0)
     return {
@@ -322,9 +387,43 @@ def classify_track(track: Track, window_hours: int, wind_sampler=None) -> dict:
         "geoMotionKmh": round(geo_motion, 1),
         "ofaSpeedKmh": None if not np.isfinite(ofa_motion) else round(ofa_motion, 1),
         "tendencyMotionKmh": None if not np.isfinite(tendency_motion) else round(tendency_motion, 1),
+        "airmassMotionKmh": None if not np.isfinite(airmass_motion) else round(airmass_motion, 1),
+        "motionVotes": family_votes,
+        "windMotionConflict": bool(wind_conflict),
         "motionMadKmh": round(float(motion_mad), 1),
         "classificationCertainty": round(float(certainty), 2),
     }
+
+
+def classify_track_locally(
+    track: Track, window_hours: int, wind_sampler=None
+) -> dict[int, dict]:
+    """Classify the same identity in a moving temporal window.
+
+    A front may slow down or reverse without ceasing to be the same air-mass
+    boundary. One label for a 20-hour track would therefore be physically
+    misleading. Endpoints use the nearest three detections when available.
+    """
+    radius = max(2, int(window_hours))
+    local: dict[int, dict] = {}
+    for center in track.hours:
+        selected = [h for h in track.hours if abs(h - center) <= radius]
+        if len(selected) < 3:
+            selected = sorted(
+                sorted(track.hours, key=lambda h: (abs(h - center), h))[:3]
+            )
+        if len(selected) < 2:
+            local[center] = {
+                "frontType": "uncertain",
+                "classificationCertainty": 0.0,
+            }
+            continue
+        subset = Track(track.id, selected[0], track.lines[selected[0]])
+        for hour in selected[1:]:
+            subset.hours.append(hour)
+            subset.lines[hour] = track.lines[hour]
+        local[center] = classify_track(subset, window_hours, wind_sampler)
+    return local
 
 
 # --------------------------------------------------------------------------
@@ -346,10 +445,17 @@ def _quality_score(track: Track, classification: dict, window_hours: int) -> dic
     span = hours[-1] - hours[0]
     coverage = float(np.clip(len(hours) / max(span + 1, 1), 0.0, 1.0))
     lifetime = float(np.clip((span - 3.0) / 6.0, 0.0, 1.0))
+    strong_fraction = float(np.mean([
+        track.lines[h].get("gateStatus", "strong") == "strong"
+        for h in hours
+    ]))
     motion_consistency = float(np.clip(
         1.0 - classification.get("motionMadKmh", 0.0) / 25.0, 0.0, 1.0
     ))
-    temporal = 0.50 * coverage + 0.25 * lifetime + 0.25 * motion_consistency
+    temporal = (
+        0.38 * coverage + 0.20 * lifetime
+        + 0.22 * motion_consistency + 0.20 * strong_fraction
+    )
     certainty = float(classification["classificationCertainty"])
     structural = physical_components["structural"]
     components = {
@@ -361,6 +467,7 @@ def _quality_score(track: Track, classification: dict, window_hours: int) -> dic
         "temporalSupport": round(temporal, 2),
         "structuralSupport": round(structural, 2),
         "classificationCertainty": round(certainty, 2),
+        "strongDetectionFraction": round(strong_fraction, 2),
     }
     overall = float(np.clip(
         0.55 * candidate_evidence + 0.25 * temporal
@@ -406,6 +513,7 @@ def track_fronts(
     min_wind_shift_ms: float = 1.5,
     min_convergence_ms: float = 0.15,
     max_terrain_fraction: float = 0.25,
+    min_strong_detections: int = 3,
 ):
     """Link hourly candidates into classified, quality-scored tracks.
 
@@ -433,6 +541,11 @@ def track_fronts(
             track.hours.append(hour)
             track.lines[hour] = candidates[cand_index]
         for cand_index in unmatched:
+            # A weak-but-still-physical segment may continue an established
+            # front, but it cannot create a new one. This is temporal
+            # hysteresis, not interpolation or invented persistence.
+            if candidates[cand_index].get("gateStatus", "strong") != "strong":
+                continue
             track = Track(next_id, hour, candidates[cand_index])
             next_id += 1
             tracks.append(track)
@@ -443,6 +556,21 @@ def track_fronts(
     for track in tracks:
         span = track.hours[-1] - track.hours[0]
         if len(track.hours) < max(2, int(min_detections)) or span < min_lifetime_hours:
+            continue
+        strong_hours = [
+            h for h in track.hours
+            if track.lines[h].get("gateStatus", "strong") == "strong"
+        ]
+        if len(strong_hours) < max(1, int(min_strong_detections)):
+            continue
+        run = longest_marginal_run = 0
+        for h in track.hours:
+            if track.lines[h].get("gateStatus", "strong") == "strong":
+                run = 0
+            else:
+                run += 1
+                longest_marginal_run = max(longest_marginal_run, run)
+        if longest_marginal_run > max(2, window_hours):
             continue
         expected = [h for h in available if track.hours[0] <= h <= track.hours[-1]]
         if len(track.hours) / max(len(expected), 1) < min_coverage:
@@ -455,7 +583,12 @@ def track_fronts(
                 "medianTfpStrength", "medianAbzGradient", "deltaThetaW",
                 "deltaTemperature", "deltaThetaV", "dryThermalGradient",
                 "thermalAlignment", "windShiftMs", "convergenceMs",
+                "thermalContrastFraction", "thermalAlignmentFraction",
+                "windShiftAngleDeg", "windBoundaryFraction",
+                "convergenceFraction", "airmassMotionKmh",
                 "vorticity1e5", "frontogenesis", "pressureTroughHpa",
+                "pressureTroughFraction", "linePressureTendencyHpa3h",
+                "coldPressureTendencyHpa3h", "warmPressureTendencyHpa3h",
                 "lowerLevelSupport", "deltaThetaW925", "omega700PaS",
                 "terrainFraction", "candidateEvidence",
             )
@@ -478,13 +611,27 @@ def track_fronts(
             if np.isfinite(terrain_fraction) and terrain_fraction > max_terrain_fraction:
                 continue
         classification = classify_track(track, window_hours, wind_sampler)
-        quality = _quality_score(track, classification, window_hours)
+        local_classifications = classify_track_locally(
+            track, window_hours, wind_sampler
+        )
+        local_certainties = [
+            value.get("classificationCertainty", 0.0)
+            for value in local_classifications.values()
+            if value.get("frontType") != "uncertain"
+        ]
+        quality_classification = dict(classification)
+        if local_certainties:
+            quality_classification["classificationCertainty"] = float(
+                np.median(local_certainties)
+            )
+        quality = _quality_score(track, quality_classification, window_hours)
         results.append({
             "id": track.id,
             "hours": list(track.hours),
             "lifetimeH": span,
             "lines": {h: track.lines[h]["coordinates"] for h in track.hours},
             "diagnostics": diagnostics,
+            "localClassifications": local_classifications,
             **classification,
             **quality,
         })

@@ -37,6 +37,13 @@ def moving_front_candidates(center_at):
     hourly = {}
     for h in HOURS:
         c = center_at(h)
+        h0 = max(HOURS[0], h - 1)
+        h1 = min(HOURS[-1], h + 1)
+        # Warm side is south, so decreasing latitude is positive warm-ward
+        # motion (cold-front convention used by the tracker).
+        motion_kmh = -(
+            center_at(h1) - center_at(h0)
+        ) * 111.32 / max(h1 - h0, 1)
         theta_w = 300.0 - 12.0 * sigmoid((LATG - c) / 1.2)  # warm south
         cands = fl.locate_fronts(theta_w, LON, LAT)
         for candidate in cands:
@@ -50,6 +57,10 @@ def moving_front_candidates(center_at):
                 "structural": 0.86,
             }
             candidate["synopticSupport"] = 0.90
+            candidate["gateStatus"] = "strong"
+            candidate["tendencyMotionKmh"] = motion_kmh
+            candidate["airmassMotionKmh"] = motion_kmh
+            candidate["ofaSpeedMps"] = -motion_kmh / 3.6
         hourly[h] = cands
     return hourly
 
@@ -111,7 +122,8 @@ if tr_cold:
     comp = tr_cold[0]["qualityComponents"]
     need = {"physicalEvidence", "thermalSupport", "dynamicSupport",
             "pressureSupport", "verticalSupport", "temporalSupport",
-            "structuralSupport", "classificationCertainty"}
+            "structuralSupport", "classificationCertainty",
+            "strongDetectionFraction"}
     print(f"E) componenti qualityScore: {sorted(comp)}")
     if set(comp) != need:
         print("  FAIL: componenti qualityScore mancanti"); ok = False
@@ -128,6 +140,69 @@ tr_gapped = ft.track_fronts(
 print(f"F) buco di 5 ore: {len(tr_gapped)} tracce separate")
 if len(tr_gapped) != 2:
     print("  FAIL: una traccia non deve sopravvivere oltre la finestra di 3 ore")
+    ok = False
+
+# G) Strongly opposing wind must invalidate a cold/warm classification ------
+conflict = moving_front_candidates(lambda h: 45.0 - (h - 6) * 0.30)
+for candidates in conflict.values():
+    for candidate in candidates:
+        candidate["airmassMotionKmh"] = -25.0
+        candidate["ofaSpeedMps"] = 25.0 / 3.6
+tr_conflict = ft.track_fronts(conflict, window_hours=1, min_lifetime_hours=6)
+print(f"G) moto geometrico freddo ma vento caldo: "
+      f"{tr_conflict[0]['frontType'] if tr_conflict else 'nessuna traccia'}")
+if not tr_conflict or tr_conflict[0]["frontType"] != "uncertain":
+    print("  FAIL: una classificazione contraddetta dal vento non va pubblicata")
+    ok = False
+
+# H) One marginal hour may continue a strong identity without deleting it --
+hysteresis = moving_front_candidates(lambda h: 45.0 - (h - 6) * 0.20)
+for candidate in hysteresis[12]:
+    candidate["gateStatus"] = "continuation"
+    candidate["candidateEvidence"] *= 0.88
+tr_hysteresis = ft.track_fronts(
+    hysteresis, window_hours=2, min_lifetime_hours=6,
+    min_strong_detections=3,
+)
+print(f"H) un'ora marginale dentro una traccia: {len(tr_hysteresis)} tracce")
+if len(tr_hysteresis) != 1 or 12 not in tr_hysteresis[0]["hours"]:
+    print("  FAIL: l'isteresi deve evitare una sparizione numerica di un'ora")
+    ok = False
+
+# I) Marginal evidence alone cannot create a front --------------------------
+marginal_only = moving_front_candidates(lambda h: 43.0)
+for candidates in marginal_only.values():
+    for candidate in candidates:
+        candidate["gateStatus"] = "continuation"
+tr_marginal = ft.track_fronts(
+    marginal_only, window_hours=2, min_lifetime_hours=6,
+    min_strong_detections=3,
+)
+print(f"I) sole linee marginali: {len(tr_marginal)} tracce")
+if tr_marginal:
+    print("  FAIL: un candidato marginale non deve creare una nuova identita'")
+    ok = False
+
+# J) One identity may evolve from cold to stationary without a stale label --
+def cold_then_stationary(hour):
+    return 45.0 - min(hour - 6, 6) * 0.28
+
+evolving = moving_front_candidates(cold_then_stationary)
+tr_evolving = ft.track_fronts(
+    evolving, window_hours=2, min_lifetime_hours=6,
+)
+if tr_evolving:
+    local_types = {
+        hour: value["frontType"]
+        for hour, value in tr_evolving[0]["localClassifications"].items()
+    }
+    print(f"J) tipo locale in evoluzione: +7={local_types.get(7)} "
+          f"+17={local_types.get(17)}")
+    if local_types.get(7) != "cold" or local_types.get(17) != "stationary":
+        print("  FAIL: il tipo deve essere locale, non unico per tutta la vita")
+        ok = False
+else:
+    print("J) FAIL: traccia evolutiva assente")
     ok = False
 
 print("\nESITO:", "SUPERATO" if ok else "DA RIVEDERE")

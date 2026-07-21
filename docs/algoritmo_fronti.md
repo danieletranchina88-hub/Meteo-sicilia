@@ -1,4 +1,4 @@
-# Analisi oggettiva dei fronti ICON-2I (v12)
+# Analisi oggettiva dei fronti ICON-2I (v13)
 
 ## Scopo e limite fondamentale
 
@@ -12,7 +12,7 @@ Meteorologico. `qualityScore` e `uncertaintyIndex` descrivono la coerenza
 interna delle prove in un singolo run deterministico: non sono probabilità
 calibrate e non misurano l'errore previsionale assoluto.
 
-Il metodo operativo è `icon2i-ofa-multilevel-physical-v12`.
+Il metodo operativo è `icon2i-ofa-multilevel-strict-v13`.
 
 ## Dati usati
 
@@ -20,21 +20,23 @@ Per ogni run 00/12 UTC e per tutte le 73 scadenze orarie:
 
 - T, QV, U e V a 850 hPa: campi obbligatori e geometria primaria;
 - PMSL: firma di saccatura e tendenza barica, opzionale;
-- T e QV a 925 hPa: coerenza verticale bassa, opzionale;
+- T, QV, U e V a 925 hPa: coerenza verticale e vento più vicino al suolo,
+  opzionali;
 - OMEGA a 700 hPa: attività/ascesa frontale, opzionale;
 - HSURF: controllo orografico.
 
 Il livello 850 hPa riduce il rumore dello strato limite e i contrasti diurni.
-Il livello 925 hPa è solo una verifica morbida perché interseca il terreno già
-attorno a 750 m; sopra 650 m i suoi campioni non definiscono la linea. Omega
-non è richiesto: un fronte maturo o frontolitico può esistere senza forte
-ascesa istantanea.
+Il livello 925 hPa interseca il terreno già attorno a 750 m: sopra 650 m i
+campioni vengono esclusi. Dove almeno il 60% del confronto resta valido, la
+coerenza termica a 925 hPa diventa una porta obbligatoria; altrove non viene
+inventato un dato sostitutivo. Omega resta una prova morbida: un fronte maturo
+o frontolitico può esistere senza forte ascesa istantanea.
 
 La fonte ufficiale descrive ICON-2I come modello deterministico a circa
 2,2 km, dominio 3–22°E / 33–49°N, orizzonte +72 h:
 [MeteoHub — dataset ICON-2I](https://meteohub.agenziaitaliameteo.it/app/datasets).
 
-## 1. Variabile termica primaria
+## 1. Variabili termiche indipendenti
 
 Da pressione, temperatura e umidità specifica si calcolano:
 
@@ -43,9 +45,13 @@ Da pressione, temperatura e umidità specifica si calcolano:
 - temperatura potenziale di bulbo umido `theta_w` con l'approssimazione di
   Davies-Jones (2008).
 
-`theta_w` distingue le masse d'aria meglio della temperatura grezza, ma un
-gradiente igrometrico da solo non basta: il filtro successivo richiede anche
-contrasto di temperatura secca e densità virtuale.
+La geometria viene cercata separatamente sia su `theta_w` sia sulla
+temperatura potenziale secca. `theta_w` distingue bene le masse d'aria umide;
+la seconda ricerca recupera intrusioni fredde secche che un compenso di
+umidità può rendere poco visibili in `theta_w`. I due insiemi vengono uniti e
+deduplicati, ma nessuno dei due può pubblicare una linea senza superare gli
+stessi controlli incrociati di temperatura secca, `theta_w` e densità
+virtuale. Un confine di sola umidità viene quindi respinto.
 
 ## 2. Localizzazione OFA
 
@@ -126,10 +132,26 @@ Sulla linea si calcolano inoltre:
 
 I requisiti duri impongono almeno un vero contrasto secco e di densità,
 allineamento termico plausibile, sufficiente firma OFA e geometria sinottica.
-Pressione, 925 hPa e omega rimangono prove morbide per evitare di cancellare
-fronti reali in casi orografici o in fase frontolitica.
+### Porte logiche non compensabili
 
-Il punteggio di evidenza combina gruppi separati:
+La v13 non decide l'esistenza di un fronte con la sola media dei punteggi.
+Prima del ranking applica porte fisiche obbligatorie lungo l'intero segmento:
+
+- contrasto simultaneo di `theta_w`, temperatura secca e densità virtuale;
+- orientamento corretto del gradiente secco per almeno metà della linea;
+- firma sinottica a due scale e geometria aperta/coerente;
+- discontinuità vettoriale del vento (intensità oppure rotazione);
+- almeno una firma dinamica fra convergenza, vorticità ciclonica e
+  frontogenesi;
+- rifiuto esplicito della divergenza forte non sostenuta dalla dinamica;
+- rifiuto esplicito di una cresta di pressione lungo la linea;
+- coerenza a 925 hPa obbligatoria dove quel livello è realmente sopra il
+  terreno per una parte sufficiente del segmento.
+
+Le statistiche sono calcolate anche come frazioni della linea: un ottimo
+segnale su pochi punti non può nascondere una maggioranza incoerente.
+
+Soltanto dopo queste porte il punteggio di evidenza ordina le linee ammesse:
 
 - 38% termodinamica;
 - 24% dinamica;
@@ -147,6 +169,11 @@ I candidati orari sono associati globalmente con algoritmo ungherese usando
 distanza simmetrica fra linee, orientamento, lunghezza, normale calda e
 posizione prevista. Un'identità non può saltare più di due ore.
 
+Il tipo non viene fissato una volta per l'intera vita della traccia: viene
+ricalcolato in una finestra temporale locale per ogni scadenza. Lo stesso
+confine può quindi passare in modo coerente da freddo a stazionario senza
+sparire e senza conservare un simbolo ormai vecchio.
+
 Per essere pubblicata una traccia deve avere:
 
 - almeno 4 rilevamenti;
@@ -156,15 +183,25 @@ Per essere pubblicata una traccia deve avere:
 - `uncertaintyIndex <= 0.36`;
 - classificazione non conflittuale.
 
-La classificazione confronta due segnali indipendenti:
+La classificazione confronta tre famiglie indipendenti:
 
 1. spostamento geometrico orario verso il lato caldo/freddo;
-2. velocità OFA `V · grad|grad(theta_w)| / |grad|grad(theta_w)||`.
+2. velocità di fase `-d(theta_w)/dt / |grad(theta_w)|`;
+3. famiglia del vento: velocità OFA
+   `V · grad|grad(theta_w)| / |grad|grad(theta_w)||` e componente del vento
+   normale al confine delle masse d'aria. Dove possibile si usa il vento a
+   925 hPa, con fallback a 850 hPa sopra il terreno elevato.
 
 Con soglia 1,5 m/s (5,4 km/h), moto verso l'aria calda = fronte freddo,
-moto verso l'aria fredda = fronte caldo, altrimenti stazionario. Se i due
-segnali danno tipi mobili opposti la traccia è `uncertain` e non viene
-pubblicata. Sono mostrate al massimo quattro linee per ora.
+moto verso l'aria fredda = fronte caldo, altrimenti stazionario. Un tipo
+mobile richiede almeno due famiglie concordi e nessun voto opposto. Una
+contraddizione forte del vento rende la traccia `uncertain`, anche quando la
+linea termica sembra muoversi correttamente.
+
+Si applica inoltre isteresi fisica: soltanto un candidato forte può creare
+una traccia; un candidato marginale ma ancora plausibile può continuarla per
+non più di due ore. Non può nascere una linea da sole evidenze marginali e
+una lunga perdita di segnale termina davvero l'identità.
 
 ## 6. Significato dell'incertezza
 
@@ -193,7 +230,11 @@ La workflow blocca la pubblicazione se falliscono i test sintetici:
 - convergenza con frontogenesi positiva;
 - rotazione rigida con vorticità ma senza falsa deformazione;
 - rifiuto dei confini di sola umidità;
+- rifiuto di gradiente termico con vento divergente/contrario;
+- rifiuto di una linea collocata su una cresta barica;
 - tracciamento, classificazione e separazione delle identità.
+- consenso obbligatorio fra moto geometrico, fase termica e vento;
+- isteresi di una sola ora senza nascita da candidati marginali.
 
 ## Riferimenti primari
 

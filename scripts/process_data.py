@@ -133,8 +133,9 @@ def prepare_icon_front_analyzer(run_dt):
     """Build the ICON-2I-only, hourly, multilayer frontal analysis.
 
     T/QV/U/V at 850 hPa are mandatory because they define the objective
-    frontal geometry.  T/QV 925 hPa and omega 700 hPa are deliberately soft
-    evidence: their absence never turns ICON into an ECMWF-derived product.
+    frontal geometry. T/QV and U/V at 925 hPa test whether both the air-mass
+    boundary and the cross-front flow survive closer to the surface; omega
+    at 700 hPa is a secondary ascent diagnostic.
     """
     run_tag = run_dt.strftime("%Y%m%d%H")
     common = f"ICON_2I_SURFACE_PRESSURE_LEVELS_{run_tag}"
@@ -151,6 +152,8 @@ def prepare_icon_front_analyzer(run_dt):
         "v_wind": (f"{run_base}/V/{pressure_file_850}", "v850.grib"),
         "temperature_925": (f"{run_base}/T/{pressure_file_925}", "t925.grib"),
         "humidity_925": (f"{run_base}/QV/{pressure_file_925}", "q925.grib"),
+        "u_wind_925": (f"{run_base}/U/{pressure_file_925}", "u925.grib"),
+        "v_wind_925": (f"{run_base}/V/{pressure_file_925}", "v925.grib"),
         "omega_700": (f"{run_base}/OMEGA/{pressure_file_700}", "omega700.grib"),
         "orography": (f"{run_base}/HSURF/{surface_file}", "hsurf.grib"),
         "pressure": (f"{run_base}/PMSL/{mean_sea_file}", "pmsl.grib"),
@@ -158,7 +161,8 @@ def prepare_icon_front_analyzer(run_dt):
     # Questi campi aggiungono prove indipendenti, ma non definiscono la linea.
     # Sono opzionali per non inventare dati e non bloccare l'analisi primaria.
     optional_fields = {
-        "pressure", "temperature_925", "humidity_925", "omega_700"
+        "pressure", "temperature_925", "humidity_925",
+        "u_wind_925", "v_wind_925", "omega_700"
     }
 
     if os.path.exists(FRONT_TEMP_DIR):
@@ -202,6 +206,8 @@ def prepare_icon_front_analyzer(run_dt):
             pressure_path=paths.get("pressure"),
             lower_temperature_path=paths.get("temperature_925"),
             lower_humidity_path=paths.get("humidity_925"),
+            lower_u_wind_path=paths.get("u_wind_925"),
+            lower_v_wind_path=paths.get("v_wind_925"),
             omega_700_path=paths.get("omega_700"),
             downsample=4,
             bounds=(3.0, 22.0, 33.7, 48.9),

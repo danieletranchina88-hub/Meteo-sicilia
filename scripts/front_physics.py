@@ -111,17 +111,22 @@ def candidate_evidence(metrics: dict) -> dict:
         weights=[1.1, 1.2, 1.3, 1.2, 1.0, 0.8],
     ))
 
-    wind_shift = smoothstep(metrics.get("windShiftMs"), 1.2, 7.0)
-    convergence = smoothstep(metrics.get("convergenceMs"), 0.05, 2.0)
+    wind_shift = max(
+        smoothstep(metrics.get("windShiftMs"), 1.5, 7.0),
+        smoothstep(metrics.get("windShiftAngleDeg"), 8.0, 42.0),
+    )
+    convergence = max(
+        smoothstep(metrics.get("convergenceMs"), 0.05, 2.0),
+        smoothstep(metrics.get("convergenceFraction"), 0.42, 0.78),
+    )
     vorticity = smoothstep(metrics.get("vorticity1e5"), -0.5, 4.0)
     frontogenesis = smoothstep(metrics.get("frontogenesis"), -0.6, 2.8)
-    dynamic_members = sorted(
-        [wind_shift, convergence, vorticity, frontogenesis], reverse=True
-    )
-    # A mature or frontolysing front need not satisfy every dynamic signal.
-    # Requiring several independent members but not all avoids both a single-
-    # signal false positive and a frontogenesis-only false negative.
-    dynamic = float(np.mean(dynamic_members[:3]))
+    # Do not let vorticity/frontogenesis hide a wind field that does not
+    # contain a boundary.  Wind rotation/shear and mass convergence form one
+    # pillar; deformation/vorticity form the second.
+    wind_pillar = 0.58 * wind_shift + 0.42 * convergence
+    deformation_pillar = 0.55 * frontogenesis + 0.45 * vorticity
+    dynamic = float(0.62 * wind_pillar + 0.38 * deformation_pillar)
 
     pressure_value = _finite(metrics.get("pressureTroughHpa"))
     pressure = (
@@ -177,23 +182,154 @@ def candidate_evidence(metrics: dict) -> dict:
     }
 
 
-def candidate_is_plausible(metrics: dict, evidence: dict | None = None) -> bool:
-    """Conservative core gates; optional diagnostics stay soft evidence."""
+def candidate_gate_report(metrics: dict, evidence: dict | None = None) -> dict:
+    """Apply non-compensating physical gates to a frontal segment.
+
+    The score above ranks candidates *after* these checks.  It must never
+    allow a large thermal gradient to compensate a divergent/unaligned wind
+    field or a pressure ridge.  ``strongPass`` can create a new track;
+    ``continuationPass`` can only maintain an already established track for
+    a short period while a diagnostic fluctuates around its threshold.
+    """
     evidence = evidence or candidate_evidence(metrics)
-    components = evidence["evidenceComponents"]
-    required = (
-        _finite(metrics.get("deltaTemperature"), -999.0) >= 0.45
-        and _finite(metrics.get("deltaThetaV"), -999.0) >= 0.20
-        and _finite(metrics.get("dryThermalGradient"), -999.0) >= 0.75
-        and _finite(metrics.get("thermalAlignment"), -999.0) >= -0.05
-        and _finite(metrics.get("terrainFraction"), 1.0) <= 0.70
-        and _finite(metrics.get("locatorConfidence"), 0.0) >= 0.15
+    reasons: list[str] = []
+
+    delta_tw = _finite(metrics.get("deltaThetaW"), -999.0)
+    delta_t = _finite(metrics.get("deltaTemperature"), -999.0)
+    delta_tv = _finite(metrics.get("deltaThetaV"), -999.0)
+    dry_gradient = _finite(metrics.get("dryThermalGradient"), -999.0)
+    alignment = _finite(metrics.get("thermalAlignment"), -999.0)
+    thermal_fraction = _finite(metrics.get("thermalContrastFraction"), 0.0)
+    alignment_fraction = _finite(metrics.get("thermalAlignmentFraction"), 0.0)
+    locator = _finite(metrics.get("locatorConfidence"), 0.0)
+    synoptic = _finite(metrics.get("synopticSupport"), 0.0)
+    terrain = _finite(metrics.get("terrainFraction"), 1.0)
+
+    wind_shift = _finite(metrics.get("windShiftMs"), -999.0)
+    wind_angle = _finite(metrics.get("windShiftAngleDeg"), -999.0)
+    convergence = _finite(metrics.get("convergenceMs"), -999.0)
+    convergence_fraction = _finite(metrics.get("convergenceFraction"), 0.0)
+    vorticity = _finite(metrics.get("vorticity1e5"), -999.0)
+    frontogenesis = _finite(metrics.get("frontogenesis"), -999.0)
+
+    pressure_trough = _finite(metrics.get("pressureTroughHpa"))
+    pressure_fraction = _finite(metrics.get("pressureTroughFraction"))
+    lower_valid = _finite(metrics.get("lowerValidFraction"), 0.0)
+    lower_support = _finite(metrics.get("lowerLevelSupport"))
+    lower_contrast = _finite(metrics.get("deltaThetaW925"))
+
+    thermal_core = (
+        delta_tw >= 1.20
+        and delta_t >= 0.60
+        and delta_tv >= 0.25
+        and dry_gradient >= 0.80
+        and alignment >= 0.05
+        and thermal_fraction >= 0.48
+        and alignment_fraction >= 0.48
     )
-    return bool(
-        required
-        and components["thermal"] >= 0.34
-        and components["dynamic"] >= 0.18
-        and components["structural"] >= 0.32
-        and evidence["candidateEvidence"] >= 0.36
+    if not thermal_core:
+        reasons.append("thermal-core")
+
+    structure_core = (
+        locator >= 0.15 and synoptic >= 0.58 and terrain <= 0.65
+    )
+    if not structure_core:
+        reasons.append("synoptic-structure")
+
+    wind_boundary = wind_shift >= 1.8 or wind_angle >= 10.0
+    if not wind_boundary:
+        reasons.append("wind-boundary")
+
+    dynamic_core = (
+        convergence >= 0.12
+        or convergence_fraction >= 0.52
+        or vorticity >= 0.80
+        or frontogenesis >= 0.25
+    )
+    if not dynamic_core:
+        reasons.append("dynamic-core")
+
+    # Strong cross-frontal divergence contradicts a material boundary unless
+    # a clearly cyclonic/deforming flow independently supports it.
+    divergent_contradiction = (
+        convergence < -0.75
+        and convergence_fraction < 0.32
+        and vorticity < 1.8
+        and frontogenesis < 1.0
+    )
+    if divergent_contradiction:
+        reasons.append("divergent-wind")
+
+    pressure_contradiction = (
+        np.isfinite(pressure_trough) and pressure_trough < -0.25
+    ) or (
+        np.isfinite(pressure_fraction) and pressure_fraction < 0.28
+        and pressure_trough < 0.05
+    )
+    if pressure_contradiction:
+        reasons.append("pressure-ridge")
+
+    # Where 925 hPa is actually above ground over most of the line, the same
+    # air-mass boundary must also be visible in the lower troposphere.
+    lower_contradiction = (
+        lower_valid >= 0.60
+        and (
+            not np.isfinite(lower_support)
+            or not np.isfinite(lower_contrast)
+            or lower_support < 0.25
+            or lower_contrast < 0.50
+        )
+    )
+    if lower_contradiction:
+        reasons.append("lower-level-incoherence")
+
+    continuation_pass = bool(
+        thermal_core
+        and structure_core
+        and not divergent_contradiction
+        and not pressure_contradiction
+        and not lower_contradiction
+        and (wind_boundary or dynamic_core)
     )
 
+    strong_thermal = (
+        delta_tw >= 1.55
+        and delta_t >= 0.80
+        and delta_tv >= 0.35
+        and dry_gradient >= 0.95
+        and alignment >= 0.12
+        and thermal_fraction >= 0.56
+        and alignment_fraction >= 0.54
+    )
+    strong_dynamic = wind_boundary and dynamic_core and (
+        convergence >= -0.20 or convergence_fraction >= 0.44
+    )
+    pressure_support = (
+        not np.isfinite(pressure_trough)
+        or pressure_trough >= 0.0
+        or (
+            pressure_trough >= -0.10
+            and np.isfinite(pressure_fraction)
+            and pressure_fraction >= 0.48
+        )
+    )
+    strong_pass = bool(
+        continuation_pass
+        and strong_thermal
+        and strong_dynamic
+        and pressure_support
+        and evidence["candidateEvidence"] >= 0.43
+    )
+    return {
+        "strongPass": strong_pass,
+        "continuationPass": continuation_pass,
+        "gateStatus": "strong" if strong_pass else (
+            "continuation" if continuation_pass else "rejected"
+        ),
+        "rejectionReasons": reasons,
+    }
+
+
+def candidate_is_plausible(metrics: dict, evidence: dict | None = None) -> bool:
+    """Backward-compatible boolean view of the non-compensating gates."""
+    return candidate_gate_report(metrics, evidence)["continuationPass"]

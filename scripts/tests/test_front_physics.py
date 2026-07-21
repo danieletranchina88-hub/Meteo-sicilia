@@ -75,9 +75,13 @@ strong = {
     "locatorConfidence": 0.9, "deltaThetaW": 5.0,
     "deltaTemperature": 3.2, "deltaThetaV": 2.5,
     "dryThermalGradient": 3.2, "thermalAlignment": 0.85,
+    "thermalContrastFraction": 0.88, "thermalAlignmentFraction": 0.90,
     "windShiftMs": 8.0, "convergenceMs": 2.2,
+    "windShiftAngleDeg": 42.0, "windBoundaryFraction": 0.86,
+    "convergenceFraction": 0.82,
     "vorticity1e5": 5.0, "frontogenesis": 3.2,
-    "pressureTroughHpa": 2.0, "lowerLevelSupport": 0.85,
+    "pressureTroughHpa": 2.0, "pressureTroughFraction": 0.82,
+    "lowerValidFraction": 0.85, "lowerLevelSupport": 0.85,
     "deltaThetaW925": 3.5, "omega700PaS": -0.25,
     "synopticSupport": 0.95, "lengthKm": 900.0,
     "sinuosity": 1.1, "terrainFraction": 0.05,
@@ -87,9 +91,13 @@ weak.update({
     "locatorConfidence": 0.16, "deltaThetaW": 1.3,
     "deltaTemperature": 0.5, "deltaThetaV": 0.22,
     "dryThermalGradient": 0.8, "thermalAlignment": 0.0,
+    "thermalContrastFraction": 0.42, "thermalAlignmentFraction": 0.40,
     "windShiftMs": 1.3, "convergenceMs": 0.06,
+    "windShiftAngleDeg": 7.0, "windBoundaryFraction": 0.35,
+    "convergenceFraction": 0.40,
     "vorticity1e5": -0.4, "frontogenesis": -0.5,
-    "pressureTroughHpa": -0.1, "lowerLevelSupport": 0.36,
+    "pressureTroughHpa": -0.1, "pressureTroughFraction": 0.40,
+    "lowerValidFraction": 0.80, "lowerLevelSupport": 0.36,
     "deltaThetaW925": 0.8, "omega700PaS": 0.02,
     "synopticSupport": 0.57, "lengthKm": 240.0,
     "sinuosity": 2.2, "terrainFraction": 0.6,
@@ -113,6 +121,34 @@ dryline_score = fp.candidate_evidence(dryline)
 print(f"5) confine solo igrometrico plausibile={fp.candidate_is_plausible(dryline, dryline_score)}")
 if fp.candidate_is_plausible(dryline, dryline_score):
     print("  FAIL: un gradiente solo di umidita' non e' un fronte termico")
+    ok = False
+
+# 6) A strong thermal line with divergent, unrotated flow is not a front.
+wrong_wind = dict(strong)
+wrong_wind.update({
+    "windShiftMs": 0.8,
+    "windShiftAngleDeg": 4.0,
+    "windBoundaryFraction": 0.20,
+    "convergenceMs": -1.4,
+    "convergenceFraction": 0.18,
+    "vorticity1e5": 0.2,
+    "frontogenesis": -0.4,
+})
+wrong_report = fp.candidate_gate_report(wrong_wind)
+print(f"6) gradiente con vento contrario: {wrong_report['gateStatus']} "
+      f"{wrong_report['rejectionReasons']}")
+if wrong_report["continuationPass"]:
+    print("  FAIL: il gradiente termico non puo' compensare vento divergente")
+    ok = False
+
+# 7) A pressure ridge across the line is an explicit contradiction.
+ridge = dict(strong)
+ridge.update({"pressureTroughHpa": -0.7, "pressureTroughFraction": 0.18})
+ridge_report = fp.candidate_gate_report(ridge)
+print(f"7) gradiente sopra promontorio barico: {ridge_report['gateStatus']} "
+      f"{ridge_report['rejectionReasons']}")
+if ridge_report["continuationPass"]:
+    print("  FAIL: un promontorio barico netto deve respingere la linea")
     ok = False
 
 print("\nESITO:", "SUPERATO" if ok else "DA RIVEDERE")

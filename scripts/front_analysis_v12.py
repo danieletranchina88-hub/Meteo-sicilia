@@ -1,4 +1,4 @@
-"""ICON-2I objective synoptic-front analysis, physical rebuild (v12).
+"""ICON-2I objective synoptic-front analysis, strict physical engine (v13).
 
 The detector is intentionally conservative.  It identifies the warm-air
 edge of baroclinic zones in wet-bulb potential temperature at 850 hPa, then
@@ -23,7 +23,7 @@ import thermodynamics as thermo
 from front_analysis import SynopticFrontAnalyzer, _blend_lines, _line_length_km, _rdp
 
 
-FRONT_METHOD = "icon2i-ofa-multilevel-physical-v12"
+FRONT_METHOD = "icon2i-ofa-multilevel-strict-v13"
 ANALYSIS_PRESSURE_PA = 85_000.0
 LOWER_PRESSURE_PA = 92_500.0
 
@@ -75,6 +75,8 @@ class IconSynopticFrontAnalyzer(SynopticFrontAnalyzer):
         *args,
         lower_temperature_path: str | None = None,
         lower_humidity_path: str | None = None,
+        lower_u_wind_path: str | None = None,
+        lower_v_wind_path: str | None = None,
         omega_700_path: str | None = None,
         **kwargs,
     ) -> None:
@@ -104,6 +106,31 @@ class IconSynopticFrontAnalyzer(SynopticFrontAnalyzer):
                         raise ValueError("T925 non espressa in kelvin")
                     if key == "q925" and not 0.0 <= median < 0.1:
                         raise ValueError("QV925 non espressa in kg/kg")
+                    self.datasets[key] = opened
+                    self.keys[key] = variable
+                    added.append(key)
+                    opened = None
+            except Exception:
+                if opened is not None:
+                    opened.close()
+                for key in added:
+                    self.datasets.pop(key).close()
+                    self.keys.pop(key, None)
+
+        if lower_u_wind_path and lower_v_wind_path:
+            added = []
+            opened = None
+            try:
+                for key, path in (
+                    ("u925", lower_u_wind_path),
+                    ("v925", lower_v_wind_path),
+                ):
+                    opened = self._open_field(path, key)
+                    self._validate_optional_dataset(opened, key, 925.0)
+                    variable = next(iter(opened.data_vars))
+                    values = np.asarray(opened[variable].values, dtype=float)
+                    if np.nanpercentile(np.abs(values), 99.9) > 150.0:
+                        raise ValueError(f"{key} fuori scala m/s")
                     self.datasets[key] = opened
                     self.keys[key] = variable
                     added.append(key)
@@ -162,6 +189,10 @@ class IconSynopticFrontAnalyzer(SynopticFrontAnalyzer):
     @property
     def has_lower_level(self) -> bool:
         return "t925" in self.datasets and "q925" in self.datasets
+
+    @property
+    def has_lower_wind(self) -> bool:
+        return "u925" in self.datasets and "v925" in self.datasets
 
     @staticmethod
     def _offset_points(
@@ -277,7 +308,7 @@ class IconSynopticFrontAnalyzer(SynopticFrontAnalyzer):
 
     def _detect_hour(self, hour: int) -> list[dict]:
         theta_w = self._theta_w(hour)
-        candidates = fd.detect_fronts_two_scale(
+        wet_candidates = fd.detect_fronts_two_scale(
             theta_w,
             self.longitudes,
             self.latitudes,
@@ -290,13 +321,78 @@ class IconSynopticFrontAnalyzer(SynopticFrontAnalyzer):
             refine_min_length_km=220.0,
             boundary_margin_km=70.0,
         )
-        candidates = [self._orient_warm_left(item) for item in candidates]
         lower_candidates = self._lower_candidates(hour)
         lower_lines = [np.asarray(item["coordinates"], dtype=float) for item in lower_candidates]
 
         grid_metrics = fl.grid_metrics(self.longitudes, self.latitudes)
-        temperature = fl.smooth_km(self._field("t", hour), REFINE_SIGMA_KM, grid_metrics)
+        raw_temperature = self._field("t", hour)
+        temperature = fl.smooth_km(raw_temperature, REFINE_SIGMA_KM, grid_metrics)
         humidity = fl.smooth_km(self._field("q", hour), REFINE_SIGMA_KM, grid_metrics)
+        dry_theta = raw_temperature * (
+            100_000.0 / ANALYSIS_PRESSURE_PA
+        ) ** thermo.KAPPA
+        dry_candidates = fd.detect_fronts_two_scale(
+            dry_theta,
+            self.longitudes,
+            self.latitudes,
+            synoptic_sigma_km=SYNOPTIC_SIGMA_KM,
+            refine_sigma_km=REFINE_SIGMA_KM,
+            derivative_sigma_km=DERIVATIVE_SIGMA_KM,
+            corridor_km=110.0,
+            min_synoptic_support=0.60,
+            synoptic_min_length_km=350.0,
+            refine_min_length_km=220.0,
+            boundary_margin_km=70.0,
+        )
+
+        # A theta-w locator is sensitive to the physically useful moisture
+        # contrast; a dry-theta locator recovers a genuine dry cold-air
+        # intrusion that humidity can partly cancel.  Neither source can
+        # publish alone: the strict cross-front gates below still require
+        # independent dry, moist and density contrasts.
+        wet_lines = [np.asarray(c["coordinates"], dtype=float) for c in wet_candidates]
+        dry_lines = [np.asarray(c["coordinates"], dtype=float) for c in dry_candidates]
+        combined = []
+        for source_name, source_items, other_lines in (
+            ("thetaW", wet_candidates, dry_lines),
+            ("dryTheta", dry_candidates, wet_lines),
+        ):
+            for item in source_items:
+                candidate = dict(item)
+                candidate["thermalLocator"] = source_name
+                candidate["crossThermalSupport"] = round(
+                    fd.line_support_fraction(
+                        np.asarray(candidate["coordinates"], dtype=float),
+                        other_lines,
+                        80.0,
+                    ) if other_lines else 0.0,
+                    2,
+                )
+                combined.append(self._orient_warm_left(candidate))
+        combined.sort(
+            key=lambda c: (
+                0.65 * float(c.get("locatorConfidence", 0.0))
+                + 0.35 * float(c.get("crossThermalSupport", 0.0)),
+                float(c.get("lengthKm", 0.0)),
+            ),
+            reverse=True,
+        )
+        candidates = []
+        for candidate in combined:
+            line = np.asarray(candidate["coordinates"], dtype=float)
+            duplicate = False
+            for kept in candidates:
+                kept_line = np.asarray(kept["coordinates"], dtype=float)
+                overlap = min(
+                    fd.line_support_fraction(line, [kept_line], 55.0),
+                    fd.line_support_fraction(kept_line, [line], 55.0),
+                )
+                if overlap >= 0.68:
+                    duplicate = True
+                    break
+            if not duplicate:
+                candidates.append(candidate)
+
         theta_v = temperature * (1.0 + 0.61 * humidity) * (
             100_000.0 / ANALYSIS_PRESSURE_PA
         ) ** thermo.KAPPA
@@ -306,6 +402,14 @@ class IconSynopticFrontAnalyzer(SynopticFrontAnalyzer):
         raw_u, raw_v = self._field("u", hour), self._field("v", hour)
         u_wind = fl.smooth_km(raw_u, REFINE_SIGMA_KM, grid_metrics)
         v_wind = fl.smooth_km(raw_v, REFINE_SIGMA_KM, grid_metrics)
+        lower_u_wind = lower_v_wind = None
+        if self.has_lower_wind:
+            lower_u_wind = fl.smooth_km(
+                self._field("u925", hour), REFINE_SIGMA_KM, grid_metrics
+            )
+            lower_v_wind = fl.smooth_km(
+                self._field("v925", hour), REFINE_SIGMA_KM, grid_metrics
+            )
         kinematics = fp.kinematic_fields(
             theta_w, raw_u, raw_v, grid_metrics, smoothing_km=REFINE_SIGMA_KM
         )
@@ -364,13 +468,67 @@ class IconSynopticFrontAnalyzer(SynopticFrontAnalyzer):
             warm_theta_w = self._sample(theta_w, warm)
             cold_theta_w = self._sample(theta_w, cold)
 
+            delta_temperature_points = warm_temp - cold_temp
+            delta_theta_v_points = warm_theta_v - cold_theta_v
+            delta_theta_w_points = warm_theta_w - cold_theta_w
+
             gx = self._sample(temp_east, coordinates)
             gy = self._sample(temp_north, coordinates)
             gmag = np.maximum(np.hypot(gx, gy), 1.0e-9)
             alignment = (gx * normal[:, 0] + gy * normal[:, 1]) / gmag
 
+            thermal_point_valid = (
+                validity
+                & np.isfinite(delta_temperature_points)
+                & np.isfinite(delta_theta_v_points)
+                & np.isfinite(delta_theta_w_points)
+            )
+            thermal_contrast_fraction = float(np.mean(
+                thermal_point_valid
+                & (delta_temperature_points >= 0.60)
+                & (delta_theta_v_points >= 0.25)
+                & (delta_theta_w_points >= 1.20)
+            ))
+            thermal_alignment_fraction = float(np.mean(
+                np.isfinite(alignment) & (alignment >= 0.10)
+            ))
+
             warm_u, warm_v = self._sample(u_wind, warm), self._sample(v_wind, warm)
             cold_u, cold_v = self._sample(u_wind, cold), self._sample(v_wind, cold)
+            center_u = self._sample(u_wind, coordinates)
+            center_v = self._sample(v_wind, coordinates)
+            lower_wind_fraction = 0.0
+            if lower_u_wind is not None and lower_v_wind is not None:
+                terrain_line = self._sample(self.terrain, coordinates)
+                terrain_warm = self._sample(self.terrain, warm)
+                terrain_cold = self._sample(self.terrain, cold)
+                lower_center_u = self._sample(lower_u_wind, coordinates)
+                lower_center_v = self._sample(lower_v_wind, coordinates)
+                lower_warm_u = self._sample(lower_u_wind, warm)
+                lower_warm_v = self._sample(lower_v_wind, warm)
+                lower_cold_u = self._sample(lower_u_wind, cold)
+                lower_cold_v = self._sample(lower_v_wind, cold)
+                usable_center = (
+                    (terrain_line < 650.0)
+                    & np.isfinite(lower_center_u) & np.isfinite(lower_center_v)
+                )
+                usable_warm = (
+                    (terrain_warm < 650.0)
+                    & np.isfinite(lower_warm_u) & np.isfinite(lower_warm_v)
+                )
+                usable_cold = (
+                    (terrain_cold < 650.0)
+                    & np.isfinite(lower_cold_u) & np.isfinite(lower_cold_v)
+                )
+                lower_wind_fraction = float(np.mean(
+                    usable_center & usable_warm & usable_cold
+                ))
+                center_u = np.where(usable_center, lower_center_u, center_u)
+                center_v = np.where(usable_center, lower_center_v, center_v)
+                warm_u = np.where(usable_warm, lower_warm_u, warm_u)
+                warm_v = np.where(usable_warm, lower_warm_v, warm_v)
+                cold_u = np.where(usable_cold, lower_cold_u, cold_u)
+                cold_v = np.where(usable_cold, lower_cold_v, cold_v)
             wind_valid = (
                 np.isfinite(warm_u) & np.isfinite(warm_v)
                 & np.isfinite(cold_u) & np.isfinite(cold_v)
@@ -378,26 +536,49 @@ class IconSynopticFrontAnalyzer(SynopticFrontAnalyzer):
             if float(np.mean(wind_valid)) < 0.70:
                 continue
             wind_shift = np.hypot(warm_u - cold_u, warm_v - cold_v)
+            warm_speed = np.hypot(warm_u, warm_v)
+            cold_speed = np.hypot(cold_u, cold_v)
+            directional_valid = wind_valid & (warm_speed >= 1.5) & (cold_speed >= 1.5)
+            wind_dot = warm_u * cold_u + warm_v * cold_v
+            wind_cross = warm_u * cold_v - warm_v * cold_u
+            wind_angle = np.degrees(np.arctan2(np.abs(wind_cross), wind_dot))
             convergence = (
                 (cold_u - warm_u) * normal[:, 0]
                 + (cold_v - warm_v) * normal[:, 1]
             )
-
-            center_u = self._sample(u_wind, coordinates)
-            center_v = self._sample(v_wind, coordinates)
+            wind_boundary_fraction = float(np.mean(
+                wind_valid & (
+                    (wind_shift >= 1.8)
+                    | (directional_valid & (wind_angle >= 10.0))
+                )
+            ))
+            convergence_fraction = float(np.mean(
+                wind_valid & (convergence >= 0.10)
+            ))
+            normal_airmass_flow = center_u * normal[:, 0] + center_v * normal[:, 1]
             ofa_speed = center_u * hewson[:, 0] + center_v * hewson[:, 1]
 
             metrics = {
                 **candidate,
-                "deltaThetaW": _finite_median(warm_theta_w - cold_theta_w),
-                "deltaTemperature": _finite_median(warm_temp - cold_temp),
-                "deltaThetaV": _finite_median(warm_theta_v - cold_theta_v),
+                "deltaThetaW": _finite_median(delta_theta_w_points),
+                "deltaTemperature": _finite_median(delta_temperature_points),
+                "deltaThetaV": _finite_median(delta_theta_v_points),
+                "thermalContrastFraction": thermal_contrast_fraction,
+                "thermalAlignmentFraction": thermal_alignment_fraction,
                 "dryThermalGradient": _finite_median(
                     self._sample(dry_gradient, coordinates)
                 ),
                 "thermalAlignment": _finite_median(alignment),
                 "windShiftMs": _finite_median(wind_shift[wind_valid]),
+                "windShiftAngleDeg": _finite_median(
+                    wind_angle[directional_valid]
+                ),
+                "windBoundaryFraction": wind_boundary_fraction,
                 "convergenceMs": _finite_median(convergence[wind_valid]),
+                "convergenceFraction": convergence_fraction,
+                # Positive points from cold toward warm: cold-air advance.
+                "airmassMotionKmh": _finite_median(normal_airmass_flow) * 3.6,
+                "lowerWindFraction": lower_wind_fraction,
                 "vorticity1e5": _finite_median(
                     self._sample(kinematics["vorticity1e5"], coordinates)
                 ),
@@ -442,19 +623,38 @@ class IconSynopticFrontAnalyzer(SynopticFrontAnalyzer):
                     coordinates, -normal, PRESSURE_CROSS_KM
                 )
                 center_p = self._sample(pressure, coordinates)
-                side_p = 0.5 * (
-                    self._sample(pressure, far_warm)
-                    + self._sample(pressure, far_cold)
+                warm_p = self._sample(pressure, far_warm)
+                cold_p = self._sample(pressure, far_cold)
+                side_p = 0.5 * (warm_p + cold_p)
+                trough_points = side_p - center_p
+                pressure_valid = (
+                    np.isfinite(trough_points) & np.isfinite(center_p)
                 )
-                metrics["pressureTroughHpa"] = _finite_median(side_p - center_p)
+                metrics["pressureTroughHpa"] = _finite_median(
+                    trough_points[pressure_valid]
+                )
+                metrics["pressureTroughFraction"] = float(np.mean(
+                    pressure_valid & (trough_points >= 0.0)
+                ))
                 if pressure_tendency is not None:
+                    line_pt = self._sample(pressure_tendency, coordinates)
                     cold_pt = self._sample(pressure_tendency, far_cold)
                     warm_pt = self._sample(pressure_tendency, far_warm)
-                    metrics["isallobaricSupportHpa3h"] = abs(
-                        _finite_median((cold_pt - warm_pt) * 3.0)
+                    metrics["linePressureTendencyHpa3h"] = _finite_median(
+                        line_pt * 3.0
+                    )
+                    metrics["coldPressureTendencyHpa3h"] = _finite_median(
+                        cold_pt * 3.0
+                    )
+                    metrics["warmPressureTendencyHpa3h"] = _finite_median(
+                        warm_pt * 3.0
+                    )
+                    metrics["isallobaricSupportHpa3h"] = _finite_median(
+                        (cold_pt - warm_pt) * 3.0
                     )
             else:
                 metrics["pressureTroughHpa"] = np.nan
+                metrics["pressureTroughFraction"] = np.nan
 
             if omega is not None:
                 line_omega = self._sample(omega, coordinates)
@@ -464,18 +664,29 @@ class IconSynopticFrontAnalyzer(SynopticFrontAnalyzer):
                 )
 
             if theta_w_925 is not None:
+                lower_warm = self._sample(theta_w_925, warm)
+                lower_cold = self._sample(theta_w_925, cold)
+                lower_valid = np.isfinite(lower_warm) & np.isfinite(lower_cold)
+                metrics["lowerValidFraction"] = float(np.mean(lower_valid))
                 metrics["lowerLevelSupport"] = fd.line_support_fraction(
                     coordinates, lower_lines, 130.0
                 ) if lower_lines else 0.0
                 metrics["deltaThetaW925"] = _finite_median(
-                    self._sample(theta_w_925, warm)
-                    - self._sample(theta_w_925, cold)
+                    (lower_warm - lower_cold)[lower_valid]
                 )
+            else:
+                metrics["lowerValidFraction"] = 0.0
 
             evidence = fp.candidate_evidence(metrics)
             metrics.update(evidence)
-            if not fp.candidate_is_plausible(metrics, evidence):
+            gates = fp.candidate_gate_report(metrics, evidence)
+            metrics.update(gates)
+            if not gates["continuationPass"]:
                 continue
+            if gates["gateStatus"] == "continuation":
+                metrics["candidateEvidence"] = round(
+                    float(metrics["candidateEvidence"]) * 0.88, 3
+                )
             accepted.append(metrics)
         return accepted
 
@@ -514,9 +725,15 @@ class IconSynopticFrontAnalyzer(SynopticFrontAnalyzer):
         )
         tracks = [
             track for track in raw_tracks
-            if track.get("frontType") != "uncertain"
-            and track.get("qualityScore", 0.0) >= MIN_PUBLISH_QUALITY
+            if track.get("qualityScore", 0.0) >= MIN_PUBLISH_QUALITY
             and track.get("uncertaintyIndex", 1.0) <= MAX_PUBLISH_UNCERTAINTY
+            and sum(
+                value.get("frontType") != "uncertain"
+                for value in track.get("localClassifications", {}).values()
+            ) >= max(
+                TRACK_MIN_DETECTIONS,
+                int(np.ceil(0.55 * len(track.get("hours", [])))),
+            )
         ]
         self.analysis_summary = {
             "hours": len(self.available_hours),
@@ -526,6 +743,7 @@ class IconSynopticFrontAnalyzer(SynopticFrontAnalyzer):
             "publishedTracks": len(tracks),
             "detectionErrors": len(detection_errors),
             "lowerLevel925": self.has_lower_level,
+            "lowerWind925": self.has_lower_wind,
             "omega700": "omega700" in self.datasets,
             "pressure": "p" in self.datasets,
         }
@@ -543,22 +761,41 @@ class IconSynopticFrontAnalyzer(SynopticFrontAnalyzer):
             hour: [] for hour in self.available_hours
         }
         for track in tracks:
-            properties = self._track_properties(track)
             expanded = dict(track["lines"])
+            local = dict(track.get("localClassifications", {}))
             detected = sorted(track["lines"])
             for first, second in zip(detected[:-1], detected[1:]):
                 gap = second - first
                 if gap != 2:
                     continue
                 missing = first + 1
-                if missing in self.hour_to_index:
+                first_type = local.get(first, {}).get("frontType")
+                second_type = local.get(second, {}).get("frontType")
+                if (
+                    missing in self.hour_to_index
+                    and first_type == second_type
+                    and first_type != "uncertain"
+                ):
                     expanded[missing] = _blend_lines(
                         np.asarray(track["lines"][first], dtype=float),
                         np.asarray(track["lines"][second], dtype=float),
                         0.5,
                     )
+                    local[missing] = dict(local[first])
+                    local[missing]["classificationCertainty"] = round(
+                        min(
+                            float(local[first].get("classificationCertainty", 0.0)),
+                            float(local[second].get("classificationCertainty", 0.0)),
+                        ) * 0.92,
+                        2,
+                    )
             for hour, coordinates in expanded.items():
-                hour_properties = dict(properties)
+                classification = local.get(hour, {})
+                if classification.get("frontType") in (None, "uncertain"):
+                    continue
+                hour_properties = self._track_properties(
+                    track, classification
+                )
                 hour_properties["interpolated"] = hour not in track["lines"]
                 if hour_properties["interpolated"]:
                     hour_properties["uncertaintyIndex"] = round(
@@ -569,21 +806,28 @@ class IconSynopticFrontAnalyzer(SynopticFrontAnalyzer):
                 ))
         self._by_hour = by_hour
 
-    def _track_properties(self, track: dict) -> dict:
+    def _track_properties(
+        self, track: dict, classification: dict | None = None
+    ) -> dict:
+        classification = classification or track
         return {
-            "frontType": track["frontType"],
+            "frontType": classification["frontType"],
             "confidence": round(float(track["qualityScore"]), 2),
             "qualityScore": round(float(track["qualityScore"]), 2),
             "uncertaintyIndex": round(float(track["uncertaintyIndex"]), 2),
             "uncertaintyClass": track.get("uncertaintyClass", "low"),
-            "motionKmh": round(float(track.get("geoMotionKmh", 0.0)), 1),
-            "geoMotionKmh": _json_number(track.get("geoMotionKmh"), 1),
-            "ofaSpeedKmh": _json_number(track.get("ofaSpeedKmh"), 1),
+            "motionKmh": round(float(classification.get("geoMotionKmh", 0.0)), 1),
+            "geoMotionKmh": _json_number(classification.get("geoMotionKmh"), 1),
+            "ofaSpeedKmh": _json_number(classification.get("ofaSpeedKmh"), 1),
             "tendencyMotionKmh": _json_number(
-                track.get("tendencyMotionKmh"), 1
+                classification.get("tendencyMotionKmh"), 1
             ),
+            "airmassMotionKmh": _json_number(
+                classification.get("airmassMotionKmh"), 1
+            ),
+            "motionVotes": dict(classification.get("motionVotes", {})),
             "classificationCertainty": _json_number(
-                track.get("classificationCertainty"), 2
+                classification.get("classificationCertainty"), 2
             ),
             "qualityComponents": _json_mapping(
                 track.get("qualityComponents", {}), 2
@@ -601,6 +845,7 @@ class IconSynopticFrontAnalyzer(SynopticFrontAnalyzer):
             "source": self.source,
             "level": "850 hPa",
             "lowerLevelSupport": "925 hPa" if self.has_lower_level else None,
+            "classificationWind": "925/850 hPa" if self.has_lower_wind else "850 hPa",
             "estimated": True,
             "uncertainty": "diagnostic-not-probabilistic",
         }
