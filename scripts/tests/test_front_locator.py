@@ -1,4 +1,4 @@
-"""Synthetic verification of front_locator.py (v10, Sansom-Catto TFL).
+"""Synthetic verification of front_locator.py (v12, Sansom-Catto TFL).
 
 Eight mandatory checks before touching real data:
  1 straight ideal front       -> exactly one line on the warm edge
@@ -9,7 +9,7 @@ Eight mandatory checks before touching real data:
  6 noise vs smoothing         -> stable
  7 latitude-axis inversion    -> geometrically identical result
  8 two resolutions            -> similar position after physical smoothing
-Plus the critical TFP sign test (warm side positive).
+Plus the critical standard TFP sign test (warm edge negative).
 """
 
 import os
@@ -51,14 +51,14 @@ def run(name, field, lon=LON, lat=LAT, **kw):
 ok = True
 
 # --- TFP SIGN (the critical correctness test) ------------------------------
-print("SEGNO TFP (fronte caldo-sud / freddo-nord, deve essere >0 sul lato caldo):")
+print("SEGNO TFP standard (fronte caldo-sud / freddo-nord: bordo caldo < 0):")
 cands = run("  fronte dritto", theta_w_straight())
 if not cands:
     print("  FAIL: nessuna linea sul fronte ideale"); ok = False
 else:
     c = cands[0]
-    if c["medianTfp"] <= 0:
-        print(f"  FAIL: TFP mediano {c['medianTfp']:.3f} non positivo sul lato caldo"); ok = False
+    if c["medianTfp"] >= 0:
+        print(f"  FAIL: TFP mediano {c['medianTfp']:.6f} non negativo sul bordo caldo"); ok = False
     # la linea deve stare sul bordo caldo (lato sud, lat < centro) della zona
     mean_lat = float(np.mean(c["coordinates"][:, 1]))
     print(f"  linea a lat media {mean_lat:.2f} (centro zona 42.0; bordo caldo < 42)")

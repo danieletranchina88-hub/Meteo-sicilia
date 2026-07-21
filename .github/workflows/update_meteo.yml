@@ -11,8 +11,10 @@ on:
       - 'scripts/process_data.py'
       - 'scripts/front_analysis.py'
       - 'scripts/front_analysis_v10.py'
+      - 'scripts/front_analysis_v12.py'
       - 'scripts/front_detection.py'
       - 'scripts/front_locator.py'
+      - 'scripts/front_physics.py'
       - 'scripts/front_tracking.py'
       - 'scripts/thermodynamics.py'
       - 'scripts/tests/**'
@@ -28,7 +30,7 @@ concurrency:
 jobs:
   build:
     runs-on: ubuntu-latest
-    timeout-minutes: 60
+    timeout-minutes: 90
     permissions:
       contents: write
 
@@ -63,13 +65,20 @@ jobs:
           git config http.lowSpeedLimit 1000
           git config http.lowSpeedTime 60
 
+      - name: Verifica nucleo scientifico dei fronti
+        run: |
+          python scripts/tests/test_front_locator.py
+          python scripts/tests/test_front_detection.py
+          python scripts/tests/test_front_physics.py
+          python scripts/tests/test_front_tracking.py
+
       - name: Run ECMWF IFS processor
         continue-on-error: true
         run: python scripts/process_ecmwf.py
 
       # I dati non vivono piu' su main: se il processore ECMWF e' fallito,
-      # recupera l'ultima copia pubblicata cosi' il sito conserva il layer
-      # ECMWF e l'analisi ICON-2I mantiene la guida per filtrare i fronti.
+      # recupera l'ultima copia pubblicata cosi' il sito conserva il modello
+      # globale. ECMWF non partecipa in alcun modo all'analisi dei fronti.
       - name: Recupera dati ECMWF precedenti se il processore è fallito
         run: |
           if [ -d data_weather_ecmwf ] && [ -n "$(ls -A data_weather_ecmwf)" ]; then
@@ -80,9 +89,9 @@ jobs:
           if git fetch --depth 1 origin gh-pages; then
             git checkout FETCH_HEAD -- data_weather_ecmwf 2>/dev/null \
               && git reset -q -- data_weather_ecmwf \
-              || echo "Nessuna copia ECMWF su gh-pages: si prosegue senza guida."
+              || echo "Nessuna copia ECMWF su gh-pages: si prosegue senza modello globale."
           else
-            echo "Fetch di gh-pages non riuscito: si prosegue senza guida ECMWF."
+            echo "Fetch di gh-pages non riuscito: si prosegue senza modello ECMWF."
           fi
 
       - name: Run ICON-2I processor

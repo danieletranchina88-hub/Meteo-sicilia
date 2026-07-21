@@ -1,26 +1,23 @@
-"""Synoptic front locator (v10 core) - Sansom & Catto formulation.
+"""Resolution-aware objective front locator (Hewson / Sansom-Catto).
 
 Contour-then-mask objective front location on the wet-bulb potential
 temperature field theta_w, following the modern, portable version of the
-Hewson (1998) method used by Sansom & Catto (2020):
+Hewson (1998) method used by Sansom & Catto (2024):
 
-    theta_w (raw)
-      -> physical km smoothing (NaN-aware)
-      -> metric gradient  ->  |grad theta_w|
-      -> TFL = laplacian(|grad theta_w|)
-      -> zero contour of TFL           (contour, not mask, first)
-      -> sample TFP and ABZ on the contour points
-      -> mask (TFP > 0 warm side, ABZ gradient strong) and split
-      -> minimum length filter
+    theta_w -> smoothing in physical kilometres -> TFL zero contour
+            -> standard-signed TFP and adjacent-baroclinic-zone filters
+            -> fuzzy evidence + minimum geodesic length
 
 This module produces only thermodynamic *candidates* with diagnostics.
 It does NOT classify cold/warm/stationary, does not assign a final
 confidence, and does not track in time - those belong to later modules.
 
-References
-----------
-Hewson (1998), Met. Apps 5, 37-65.
-Sansom & Catto (2020), GMD - contour-then-mask, TFL zero contour + TFP/ABZ.
+The TFP keeps the conventional sign used by Hewson (1998): it is negative
+on the warm-air edge of a frontal zone.  Distances, derivatives and
+thresholds are expressed in physical units, so changing ICON's grid spacing
+does not silently retune the detector.
+
+References: Hewson (1998), Sansom & Catto (2024), Beckert et al. (2023).
 """
 
 from __future__ import annotations
@@ -126,8 +123,11 @@ def smooth_km(field: np.ndarray, sigma_km: float, metrics: dict) -> np.ndarray:
 # --------------------------------------------------------------------------
 def gradient(field: np.ndarray, metrics: dict) -> tuple[np.ndarray, np.ndarray]:
     """East (d/dx) and north (d/dy) derivatives, per km."""
-    east = np.gradient(field, axis=1) / metrics["dx_km_col"]
-    north = np.gradient(field, axis=0) / metrics["dy_km"]
+    # Second-order one-sided differences at the domain edge follow the
+    # numerical update recommended by Sansom & Catto (2024).
+    edge_order = 2 if min(field.shape) >= 3 else 1
+    east = np.gradient(field, axis=1, edge_order=edge_order) / metrics["dx_km_col"]
+    north = np.gradient(field, axis=0, edge_order=edge_order) / metrics["dy_km"]
     return east, north
 
 
@@ -197,17 +197,23 @@ def locate_fronts(
     *,
     synoptic_sigma_km: float = 50.0,
     derivative_sigma_km: float = 20.0,
-    tfp_threshold: float = 0.0,
-    abz_gradient_threshold: float = 1.5,
-    abz_distance_km: float = 120.0,
+    tfp_threshold: float = -1.5e-5,
+    tfp_full_strength: float = -4.0e-5,
+    abz_gradient_threshold: float = 0.75,
+    abz_gradient_full_strength: float = 1.20,
     min_length_km: float = 250.0,
+    boundary_margin_km: float = 60.0,
+    adaptive_thresholds: bool = True,
     locator_method: str = LOCATOR_LAPLACIAN,
     return_fields: bool = False,
 ):
     """Locate synoptic front candidates on theta_w (single time step).
 
-    theta_w in K.  Thresholds: ``abz_gradient_threshold`` in K/100 km,
-    ``abz_distance_km`` the physical step into the adjacent baroclinic zone.
+    theta_w in K. ``tfp_threshold`` is in K/km^2 (negative on the warm
+    edge); ``abz_gradient_threshold`` is in K/100 km.  The optional adaptive
+    step can only make the published literature floors stricter, never
+    looser, using the 25th TFP and 50th gradient quantiles of the current
+    synoptic domain.
     Returns a list of candidate dicts (geometry + diagnostics, no
     classification).  With ``return_fields`` also returns the diagnostic
     fields for inspection/plotting.
@@ -244,38 +250,68 @@ def locate_fronts(
     # 3) TFL = laplacian(|grad theta_w|), zero contour locates the ridge
     tfl = laplacian(grad_mag, metrics)
 
-    # 4) TFP = -grad(|grad theta_w|) . grad(theta_w)/|grad theta_w|
-    #    Positive on the WARM side of the baroclinic zone (verified by test).
+    # 4) Standard thermal front parameter (Hewson eq. 9).  It is NEGATIVE
+    #    on the warm side of the baroclinic zone.
     gm_e, gm_n = gradient(grad_mag, metrics)
     safe_mag = np.maximum(grad_mag, 1.0e-9)
-    tfp = -(gm_e * grad_e + gm_n * grad_n) / safe_mag
+    tfp = (gm_e * grad_e + gm_n * grad_n) / safe_mag
 
     # gradient magnitude expressed in K/100 km for thresholds/diagnostics
     grad_mag_100 = grad_mag * 100.0
 
-    # 5) contour TFL = 0 FIRST, then sample/mask (contour-then-mask)
+    # Hewson's ABZ estimate is local: |grad theta_w| plus 1/sqrt(2) of a
+    # grid length times |grad |grad theta_w||.  The previous implementation
+    # sampled 120 km away, which could cross the whole frontal zone and was
+    # not the published method.
+    local_grid_km = np.sqrt(metrics["dx_km_col"] * metrics["dy_km"])
+    abz_step_km = local_grid_km / np.sqrt(2.0)
+    abz_gradient = (
+        grad_mag + abz_step_km * np.hypot(gm_e, gm_n)
+    ) * 100.0
+
+    valid_calibration = (
+        np.isfinite(tfp) & np.isfinite(abz_gradient)
+        & np.isfinite(field)
+    )
+    effective_tfp = float(tfp_threshold)
+    effective_gradient = float(abz_gradient_threshold)
+    if adaptive_thresholds and np.count_nonzero(valid_calibration) >= 100:
+        q_tfp = float(np.nanquantile(tfp[valid_calibration], 0.25))
+        q_grad = float(np.nanquantile(abz_gradient[valid_calibration], 0.50))
+        # Clamp to the fuzzy interval: adaptive calibration removes excess
+        # high-resolution structure without making calm runs manufacture a
+        # front from a vanishing gradient.
+        effective_tfp = max(float(tfp_full_strength), min(effective_tfp, q_tfp))
+        effective_gradient = min(
+            float(abz_gradient_full_strength),
+            max(effective_gradient, q_grad),
+        )
+
+    # 5) contour TFL = 0 FIRST, then sample/mask (contour-then-mask).
     generator = contourpy.contour_generator(
         x=lon, y=lat, z=np.where(np.isfinite(tfl), tfl, np.nan),
         line_type="Separate",
     )
-    def abz_gradient_at(points: np.ndarray) -> np.ndarray:
-        """Sample |grad theta_w| one ABZ step into the baroclinic zone.
+    def fuzzy(value, weak, strong, increasing=True):
+        denominator = max(abs(strong - weak), 1.0e-12)
+        if increasing:
+            return np.clip((value - weak) / denominator, 0.0, 1.0)
+        return np.clip((weak - value) / denominator, 0.0, 1.0)
 
-        The step follows the direction of grad(|grad theta_w|) - toward the
-        crest of the gradient, i.e. into the zone behind the warm edge - by
-        a physical distance ``abz_distance_km``.
-        """
-        step_e = _sample(gm_e, points, lon, lat, dlon, dlat)
-        step_n = _sample(gm_n, points, lon, lat, dlon, dlat)
-        step_mag = np.maximum(np.hypot(step_e, step_n), 1.0e-12)
-        dir_e, dir_n = step_e / step_mag, step_n / step_mag
-        mean_lat = np.deg2rad(points[:, 1])
-        lon_off = dir_e * abz_distance_km / np.maximum(
-            EARTH_KM_PER_DEG * np.cos(mean_lat), 25.0
+    def inside_margin(points: np.ndarray) -> np.ndarray:
+        if boundary_margin_km <= 0.0:
+            return np.ones(len(points), dtype=bool)
+        latitude = points[:, 1]
+        lon_margin = boundary_margin_km / np.maximum(
+            EARTH_KM_PER_DEG * np.cos(np.deg2rad(latitude)), 25.0
         )
-        lat_off = dir_n * abz_distance_km / EARTH_KM_PER_DEG
-        abz_points = points + np.column_stack((lon_off, lat_off))
-        return _sample(grad_mag_100, abz_points, lon, lat, dlon, dlat)
+        lat_margin = boundary_margin_km / EARTH_KM_PER_DEG
+        return (
+            (points[:, 0] >= lon[0] + lon_margin)
+            & (points[:, 0] <= lon[-1] - lon_margin)
+            & (latitude >= lat[0] + lat_margin)
+            & (latitude <= lat[-1] - lat_margin)
+        )
 
     candidates = []
     for segment in generator.lines(0.0):
@@ -284,22 +320,23 @@ def locate_fronts(
             continue
 
         line_tfp = _sample(tfp, coordinates, lon, lat, dlon, dlat)
-        abz_grad = abz_gradient_at(coordinates)
+        abz_grad = _sample(abz_gradient, coordinates, lon, lat, dlon, dlat)
 
-        # contour-then-mask: keep the points on the warm side (TFP>threshold)
+        # contour-then-mask: keep the points on the warm edge (TFP<0)
         # with a genuine baroclinic zone behind them.
         keep = (
             np.isfinite(line_tfp)
             & np.isfinite(abz_grad)
-            & (line_tfp > tfp_threshold)
-            & (abz_grad > abz_gradient_threshold)
+            & inside_margin(coordinates)
+            & (line_tfp < effective_tfp)
+            & (abz_grad > effective_gradient)
         )
         for piece in _split_where(coordinates, keep):
             if _line_length_km(piece) < min_length_km:
                 continue
             piece_tfp = _sample(tfp, piece, lon, lat, dlon, dlat)
             piece_grad = _sample(grad_mag_100, piece, lon, lat, dlon, dlat)
-            piece_abz = abz_gradient_at(piece)
+            piece_abz = _sample(abz_gradient, piece, lon, lat, dlon, dlat)
             # Warm-ward unit normal (grad theta_w points to warm) and the
             # Hewson frontal-speed direction (grad |grad theta_w|), attached
             # per point so downstream modules can compute geometric motion,
@@ -312,15 +349,31 @@ def locate_fronts(
             hn = _sample(gm_n, piece, lon, lat, dlon, dlat)
             hmag = np.maximum(np.hypot(he, hn), 1.0e-12)
             hewson_dir = np.column_stack((he / hmag, hn / hmag))
+            tfp_score = fuzzy(
+                piece_tfp,
+                float(tfp_threshold),
+                float(tfp_full_strength),
+                increasing=False,
+            )
+            gradient_score = fuzzy(
+                piece_abz,
+                float(abz_gradient_threshold),
+                float(abz_gradient_full_strength),
+            )
+            locator_score = float(np.nanmedian(np.minimum(tfp_score, gradient_score)))
             candidates.append({
                 "coordinates": piece,
                 "warmNormal": warm_normal,
                 "hewsonDir": hewson_dir,
                 "medianTfp": float(np.nanmedian(piece_tfp)),
+                "medianTfpStrength": float(np.nanmedian(-piece_tfp * 10_000.0)),
                 "medianThetaWGradient": float(np.nanmedian(piece_grad)),
                 "medianAbzGradient": float(np.nanmedian(piece_abz)),
                 "peakAbzGradient": float(np.nanmax(piece_abz)),
                 "lengthKm": _line_length_km(piece),
+                "locatorConfidence": locator_score,
+                "effectiveTfpThreshold": effective_tfp,
+                "effectiveGradientThreshold": effective_gradient,
                 "locatorMethod": locator_method,
             })
 
@@ -331,5 +384,8 @@ def locate_fronts(
             "grad_mag_100": grad_mag_100,
             "tfl": tfl,
             "tfp": tfp,
+            "abz_gradient": abz_gradient,
+            "effective_tfp_threshold": effective_tfp,
+            "effective_gradient_threshold": effective_gradient,
         }
     return candidates

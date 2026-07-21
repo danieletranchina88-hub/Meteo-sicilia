@@ -9,7 +9,8 @@ import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timedelta, timezone
 
-from front_analysis_v10 import FrontalAnalysisV10
+from front_analysis_v12 import FRONT_METHOD as ICON_FRONT_METHOD
+from front_analysis_v12 import FrontalAnalysisV12
 
 # --- CONFIGURAZIONE ---
 DATASET_ID = "ICON_2I_SURFACE_PRESSURE_LEVELS"
@@ -22,13 +23,6 @@ TEMP_FILE = "temp.grib2"
 FRONT_TEMP_DIR = "temp_front_processing"
 NWP_DIRECTORY_ID = "ICON-2I_SURFACE_PRESSURE_LEVELS"
 NWP_DIRECT_BASE = "https://meteohub.agenziaitaliameteo.it/nwp"
-ICON_FRONT_METHOD = "thetaw-850-icon2i-physical-v11"
-# ECMWF resta un modello/layer separato e un fallback operativo. Non viene
-# usato per accettare o rifiutare i fronti individuati da ICON-2I.
-SYNOPTIC_FRONT_CATALOG = os.path.join(
-    "data_weather_ecmwf",
-    "fronts_catalog.json",
-)
 
 # ============================================================
 # ITALIA (inclusi Sicilia + Sardegna)
@@ -124,31 +118,43 @@ def download_grib_file(url, destination):
 
 
 def prepare_icon_front_analyzer(run_dt):
-    """Download ICON-2I T/QV/U/V at 850 hPa and build an hourly analyzer."""
+    """Build the ICON-2I-only, hourly, multilayer frontal analysis.
+
+    T/QV/U/V at 850 hPa are mandatory because they define the objective
+    frontal geometry.  T/QV 925 hPa and omega 700 hPa are deliberately soft
+    evidence: their absence never turns ICON into an ECMWF-derived product.
+    """
     run_tag = run_dt.strftime("%Y%m%d%H")
     common = f"ICON_2I_SURFACE_PRESSURE_LEVELS_{run_tag}"
     run_base = f"{NWP_DIRECT_BASE}/{NWP_DIRECTORY_ID}/{run_tag}"
-    pressure_file = f"{common}_isobaricInhPa-850.grib"
+    pressure_file_850 = f"{common}_isobaricInhPa-850.grib"
+    pressure_file_925 = f"{common}_isobaricInhPa-925.grib"
+    pressure_file_700 = f"{common}_isobaricInhPa-700.grib"
     surface_file = f"{common}_surface-0.grib"
     mean_sea_file = f"{common}_meanSea-0.grib"
     requests_to_make = {
-        "temperature": (f"{run_base}/T/{pressure_file}", "t850.grib"),
-        "humidity": (f"{run_base}/QV/{pressure_file}", "q850.grib"),
-        "u_wind": (f"{run_base}/U/{pressure_file}", "u850.grib"),
-        "v_wind": (f"{run_base}/V/{pressure_file}", "v850.grib"),
+        "temperature": (f"{run_base}/T/{pressure_file_850}", "t850.grib"),
+        "humidity": (f"{run_base}/QV/{pressure_file_850}", "q850.grib"),
+        "u_wind": (f"{run_base}/U/{pressure_file_850}", "u850.grib"),
+        "v_wind": (f"{run_base}/V/{pressure_file_850}", "v850.grib"),
+        "temperature_925": (f"{run_base}/T/{pressure_file_925}", "t925.grib"),
+        "humidity_925": (f"{run_base}/QV/{pressure_file_925}", "q925.grib"),
+        "omega_700": (f"{run_base}/OMEGA/{pressure_file_700}", "omega700.grib"),
         "orography": (f"{run_base}/HSURF/{surface_file}", "hsurf.grib"),
         "pressure": (f"{run_base}/PMSL/{mean_sea_file}", "pmsl.grib"),
     }
-    # La pressione arricchisce l'analisi (firma della saccatura) ma non e'
-    # indispensabile: un suo download fallito non blocca i fronti.
-    optional_fields = {"pressure"}
+    # Questi campi aggiungono prove indipendenti, ma non definiscono la linea.
+    # Sono opzionali per non inventare dati e non bloccare l'analisi primaria.
+    optional_fields = {
+        "pressure", "temperature_925", "humidity_925", "omega_700"
+    }
 
     if os.path.exists(FRONT_TEMP_DIR):
         shutil.rmtree(FRONT_TEMP_DIR)
     os.makedirs(FRONT_TEMP_DIR)
     paths = {}
     print(
-        "2a. Scarico ICON-2I T/QV/U/V a 850 hPa per 73 ore…",
+        "2a. Scarico ICON-2I 850 hPa e diagnostica opzionale 925/700 hPa…",
         flush=True,
     )
 
@@ -175,13 +181,16 @@ def prepare_icon_front_analyzer(run_dt):
                     flush=True,
                 )
 
-        analyzer = FrontalAnalysisV10(
+        analyzer = FrontalAnalysisV12(
             paths["temperature"],
             paths["humidity"],
             paths["u_wind"],
             paths["v_wind"],
             paths["orography"],
             pressure_path=paths.get("pressure"),
+            lower_temperature_path=paths.get("temperature_925"),
+            lower_humidity_path=paths.get("humidity_925"),
+            omega_700_path=paths.get("omega_700"),
             downsample=4,
             bounds=(3.0, 22.0, 33.7, 48.9),
             method=ICON_FRONT_METHOD,
@@ -193,46 +202,26 @@ def prepare_icon_front_analyzer(run_dt):
             raise ValueError(
                 f"solo {len(analyzer.available_hours)} scadenze ICON-2I disponibili"
             )
+        # Il primo accesso esegue e valida l'intera sequenza oraria. Meglio
+        # interrompere il deploy che pubblicare silenziosamente un layer
+        # frontale tecnicamente vuoto o parziale.
+        analyzer.analyze(analyzer.available_hours[0])
+        summary = analyzer.analysis_summary or {}
+        if summary.get("publishedTracks", 0) < 1:
+            analyzer.close()
+            raise ValueError(
+                "nessuna traccia frontale a bassa incertezza nel run completo"
+            )
         print(
-            f"   Analisi ICON-2I pronta: {len(analyzer.available_hours)} ore.",
+            "   Analisi ICON-2I pronta: "
+            f"{len(analyzer.available_hours)} ore, "
+            f"{summary.get('publishedTracks')} tracce pubblicabili.",
             flush=True,
         )
         return analyzer
     except Exception as error:
-        print(f"   ICON-2I 850 hPa non disponibile: {error}", flush=True)
+        print(f"   Analisi frontale ICON-2I non disponibile: {error}", flush=True)
         return None
-
-
-def load_synoptic_front_catalog():
-    """Load the small ECMWF 850-hPa guide produced earlier in the workflow."""
-    try:
-        with open(SYNOPTIC_FRONT_CATALOG, encoding="utf-8") as source:
-            items = json.load(source)
-        prepared = []
-        for item in items:
-            valid_time = datetime.fromisoformat(
-                item["validTime"].replace("Z", "+00:00")
-            ).astimezone(timezone.utc)
-            prepared.append((valid_time, item))
-        print(
-            f"2a. Guida fronti ECMWF disponibile ({len(prepared)} scadenze).",
-            flush=True,
-        )
-        return prepared
-    except Exception as error:
-        print(f"2a. Guida fronti non disponibile: {error}", flush=True)
-        return []
-
-
-def nearest_synoptic_front(front_catalog, valid_time):
-    if not front_catalog:
-        return None
-    candidate_time, candidate = min(
-        front_catalog,
-        key=lambda pair: abs((pair[0] - valid_time).total_seconds()),
-    )
-    difference_hours = abs((candidate_time - valid_time).total_seconds()) / 3600.0
-    return candidate if difference_hours <= 3.1 else None
 
 
 def get_latest_run_files():
@@ -440,9 +429,11 @@ def process_data():
 
     catalog = []
     icon_front_analyzer = prepare_icon_front_analyzer(run_dt)
-    # Serve sia come guida di conferma per i fronti ICON-2I sia come fallback
-    # quando l'analisi ICON-2I non e' disponibile.
-    front_catalog = load_synoptic_front_catalog()
+    if icon_front_analyzer is None:
+        raise RuntimeError(
+            "analisi frontale ICON-2I obbligatoria non disponibile; "
+            "mantengo l'ultima pubblicazione valida"
+        )
     for idx, filename in enumerate(file_list):
         print(f"   [{idx+1:02d}] DL {filename}...", end=" ", flush=True)
 
@@ -597,7 +588,6 @@ def process_data():
                 # EXPORT JSON
                 valid_dt = run_dt + timedelta(hours=step_hours)
                 iso_date = iso_z(valid_dt)
-                front_entry = None
                 fronts = {"type": "FeatureCollection", "features": []}
                 front_method = None
                 front_source = None
@@ -617,14 +607,6 @@ def process_data():
                             end="",
                             flush=True,
                         )
-                else:
-                    front_entry = nearest_synoptic_front(front_catalog, valid_dt)
-                    if front_entry is not None:
-                        fronts = front_entry.get("fronts", fronts)
-                        front_method = front_entry.get("method")
-                        front_source = front_entry.get("source")
-                        front_level = front_entry.get("level")
-                        front_valid_time = front_entry.get("validTime")
 
                 header = {
                     "nx": nx, "ny": ny, "lo1": lo1, "la1": la1, "lo2": lo2, "la2": la2,

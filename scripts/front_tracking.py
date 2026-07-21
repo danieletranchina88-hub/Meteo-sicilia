@@ -1,4 +1,4 @@
-"""Geometric front tracking and consensus classification (v10, phase 3).
+"""Global front tracking, motion classification and uncertainty (v12).
 
 Tracking is a central part of the algorithm, not a persistence filter.
 Candidates from consecutive hours are linked into tracks by a **global**
@@ -8,25 +8,24 @@ warm-side consistency. Births and deaths are represented explicitly; a
 split or merge is intentionally treated as the end of one identity and the
 birth of another, rather than being claimed as a continuously tracked front.
 
-Classification is decided by **consensus** of three independent signals,
+Classification is decided by **consensus** of two independent signals,
 not a fixed blend:
 
  1. geometric motion  - the real displacement of the line between hours,
     measured locally along the line and projected on the warm-ward normal
     (positive toward warm = cold front).  This is the primary signal and
     needs no wind.
- 2. normal advection  - wind component across the front (physical check),
-    available when a wind sampler is provided.
- 3. OFA frontal speed - Hewson's V . grad|grad theta_w| / |grad|grad|
-    (thermodynamic type), also wind-based.
+ 2. OFA frontal speed - Hewson's V . grad|grad theta_w| / |grad|grad|
+    (thermodynamic type), precomputed on each line. A wind sampler supplies
+    exactly this signal only for backward-compatible synthetic callers.
 
 When the available signals agree -> confident cold/warm/stationary; when
 they conflict -> ``frontType = "uncertain"`` (better honest than wrong).
 
-The published score is a ``qualityScore`` (a physical-support heuristic,
-explicitly NOT a probability) with separate components:
-thermalSupport, dynamicSupport, temporalSupport, structuralSupport and
-classificationCertainty.
+Hewson's 850-hPa front speed is the thermodynamic classification signal;
+observed line displacement is an independent temporal check.  A cold/warm
+sign conflict is never averaged away: the track becomes ``uncertain`` and
+is not published by the operational analyzer.
 """
 
 from __future__ import annotations
@@ -35,7 +34,7 @@ import numpy as np
 from scipy.optimize import linear_sum_assignment
 
 EARTH_KM_PER_DEG = 111.32
-COLD_WARM_THRESHOLD_KMH = 5.0
+COLD_WARM_THRESHOLD_KMH = 5.4  # 1.5 m/s, Hewson/Berry/Sansom-Catto
 
 
 def _finite_median(values, default=np.nan) -> float:
@@ -255,7 +254,7 @@ def _type_from_speed(speed_kmh: float) -> str:
 
 
 def classify_track(track: Track, window_hours: int, wind_sampler=None) -> dict:
-    """Consensus cold/warm/stationary + certainty for a whole track."""
+    """Classify by OFA speed, checked against actual geometric motion."""
     hours = track.hours
     geo_speeds = []
     for h_prev, h_next in zip(hours[:-1], hours[1:]):
@@ -268,53 +267,63 @@ def classify_track(track: Track, window_hours: int, wind_sampler=None) -> dict:
     geo_motion = float(np.median(geo_speeds)) if geo_speeds else 0.0
     geo_type = _type_from_speed(geo_motion)
 
-    votes = [geo_type]
-    adv_motion = None
-    ofa_motion = None
-    if wind_sampler is not None:
-        adv_list, ofa_list = [], []
+    ofa_values = [
+        track.lines[h].get("ofaSpeedMps", np.nan) for h in hours
+    ]
+    # Standard OFA speed is negative for cold fronts.  Convert to the common
+    # convention used here: positive motion points toward warm air (cold).
+    ofa_motion = -_finite_median(ofa_values) * 3.6
+    tendency_motion = _finite_median([
+        track.lines[h].get("tendencyMotionKmh", np.nan) for h in hours
+    ])
+
+    # Backward-compatible fallback for synthetic callers that provide winds
+    # but not precomputed OFA diagnostics.
+    if not np.isfinite(ofa_motion) and wind_sampler is not None:
+        fallback = []
         for hour in hours:
             candidate = track.lines[hour]
-            points = candidate["coordinates"]
-            u, v = wind_sampler(hour, points)
-            warm = candidate["warmNormal"]
+            u, v = wind_sampler(hour, candidate["coordinates"])
             hewson = candidate["hewsonDir"]
-            # advection toward warm (km/h): wind . warm_normal.
-            # Positive = wind toward warm = cold advection = cold front.
-            adv_list.append(np.nanmedian(u * warm[:, 0] + v * warm[:, 1]) * 3.6)
-            # OFA (Hewson) frontal-speed projection.  hewson_dir points
-            # toward the crest of |grad theta_w|, i.e. toward the COLD side,
-            # so the sign is negated to keep the same convention (positive =
-            # toward warm = cold front) as the other two signals.
-            ofa_list.append(-np.nanmedian(u * hewson[:, 0] + v * hewson[:, 1]) * 3.6)
-        adv_motion = float(np.nanmedian(adv_list))
-        ofa_motion = float(np.nanmedian(ofa_list))
-        votes.append(_type_from_speed(adv_motion))
-        votes.append(_type_from_speed(ofa_motion))
+            fallback.append(-np.nanmedian(
+                u * hewson[:, 0] + v * hewson[:, 1]
+            ) * 3.6)
+        ofa_motion = _finite_median(fallback)
 
-    # consensus
-    unique = set(votes)
-    if len(unique) == 1:
-        front_type = votes[0]
-        certainty = 1.0 if wind_sampler is not None else 0.6
+    signals = [geo_type]
+    if np.isfinite(ofa_motion):
+        signals.append(_type_from_speed(ofa_motion))
+    moving = {value for value in signals if value != "stationary"}
+    if len(moving) > 1:
+        front_type, certainty = "uncertain", 0.15
+    elif moving:
+        front_type = next(iter(moving))
+        certainty = 0.94 if len(set(signals)) == 1 else 0.72
     else:
-        # geometric motion is authoritative on movement; disagreement only
-        # about magnitude (stationary vs moving) keeps the moving type at
-        # reduced certainty, a genuine cold/warm conflict is 'uncertain'.
-        if "cold" in unique and "warm" in unique:
-            front_type = "uncertain"
-            certainty = 0.2
-        else:
-            front_type = geo_type if geo_type != "stationary" else next(
-                t for t in votes if t != "stationary"
-            )
-            certainty = 0.5
+        front_type = "stationary"
+        certainty = 0.90 if len(signals) > 1 else 0.60
+
+    # Penalise an unstable OFA sign over the track without allowing a weak
+    # single hour to flip the median classification.
+    hourly_ofa_types = [
+        _type_from_speed(-float(value) * 3.6)
+        for value in ofa_values if np.isfinite(value)
+    ]
+    if hourly_ofa_types and front_type != "uncertain":
+        agreement = np.mean([
+            value == front_type or value == "stationary"
+            for value in hourly_ofa_types
+        ])
+        certainty *= 0.55 + 0.45 * float(agreement)
+
+    motion_mad = _finite_median(np.abs(np.asarray(geo_speeds) - geo_motion), 0.0)
     return {
         "frontType": front_type,
         "geoMotionKmh": round(geo_motion, 1),
-        "advectionKmh": None if adv_motion is None else round(adv_motion, 1),
-        "ofaSpeedKmh": None if ofa_motion is None else round(ofa_motion, 1),
-        "classificationCertainty": round(certainty, 2),
+        "ofaSpeedKmh": None if not np.isfinite(ofa_motion) else round(ofa_motion, 1),
+        "tendencyMotionKmh": None if not np.isfinite(tendency_motion) else round(tendency_motion, 1),
+        "motionMadKmh": round(float(motion_mad), 1),
+        "classificationCertainty": round(float(certainty), 2),
     }
 
 
@@ -323,36 +332,61 @@ def classify_track(track: Track, window_hours: int, wind_sampler=None) -> dict:
 # --------------------------------------------------------------------------
 def _quality_score(track: Track, classification: dict, window_hours: int) -> dict:
     hours = track.hours
-    grads = [track.lines[h]["medianThetaWGradient"] for h in hours]
-    dry_gradients = [track.lines[h].get("dryThermalGradient", 0.0) for h in hours]
-    wind_shift = [track.lines[h].get("windShiftMs", 0.0) for h in hours]
-    convergence = [max(track.lines[h].get("convergenceMs", 0.0), 0.0) for h in hours]
-    support = [track.lines[h].get("synopticSupport", 0.0) for h in hours]
-
-    moist_thermal = float(np.clip(np.median(grads) / 5.0, 0.0, 1.0))
-    dry_thermal = float(np.clip(np.median(dry_gradients) / 3.0, 0.0, 1.0))
-    thermal = 0.6 * moist_thermal + 0.4 * dry_thermal
-    shift_support = float(np.clip(np.median(wind_shift) / 6.0, 0.0, 1.0))
-    convergence_support = float(np.clip(np.median(convergence) / 2.0, 0.0, 1.0))
-    dynamic = max(shift_support, convergence_support)
+    candidate_evidence = _finite_median([
+        track.lines[h].get("candidateEvidence", np.nan) for h in hours
+    ], 0.0)
+    component_names = ("thermal", "dynamic", "pressure", "vertical", "activity", "structural")
+    physical_components = {
+        name: _finite_median([
+            track.lines[h].get("evidenceComponents", {}).get(name, np.nan)
+            for h in hours
+        ], 0.0)
+        for name in component_names
+    }
     span = hours[-1] - hours[0]
-    expected = span / max(window_hours, 1) + 1
-    temporal = float(np.clip(len(hours) / max(expected, 1.0), 0.0, 1.0))
-    structural = float(np.clip(np.median(support), 0.0, 1.0))
-    certainty = classification["classificationCertainty"]
-
+    coverage = float(np.clip(len(hours) / max(span + 1, 1), 0.0, 1.0))
+    lifetime = float(np.clip((span - 3.0) / 6.0, 0.0, 1.0))
+    motion_consistency = float(np.clip(
+        1.0 - classification.get("motionMadKmh", 0.0) / 25.0, 0.0, 1.0
+    ))
+    temporal = 0.50 * coverage + 0.25 * lifetime + 0.25 * motion_consistency
+    certainty = float(classification["classificationCertainty"])
+    structural = physical_components["structural"]
     components = {
-        "thermalSupport": round(thermal, 2),
-        "dynamicSupport": round(dynamic, 2),
+        "physicalEvidence": round(candidate_evidence, 2),
+        "thermalSupport": round(physical_components["thermal"], 2),
+        "dynamicSupport": round(physical_components["dynamic"], 2),
+        "pressureSupport": round(physical_components["pressure"], 2),
+        "verticalSupport": round(physical_components["vertical"], 2),
         "temporalSupport": round(temporal, 2),
         "structuralSupport": round(structural, 2),
         "classificationCertainty": round(certainty, 2),
     }
     overall = float(np.clip(
-        0.3 * thermal + 0.2 * dynamic + 0.25 * temporal
-        + 0.15 * structural + 0.1 * certainty, 0.0, 1.0
+        0.55 * candidate_evidence + 0.25 * temporal
+        + 0.12 * structural + 0.08 * certainty,
+        0.0, 1.0,
     ))
-    return {"qualityScore": round(overall, 2), "qualityComponents": components}
+    # Diagnostic uncertainty also accounts for a weak core dimension: a
+    # high temporal score cannot hide poor thermodynamic or dynamic support.
+    core_penalty = max(
+        0.0,
+        0.50 - min(
+            physical_components["thermal"],
+            physical_components["dynamic"],
+            structural,
+        ),
+    ) * 0.35
+    uncertainty = float(np.clip(1.0 - overall + core_penalty, 0.0, 1.0))
+    uncertainty_class = "low" if uncertainty <= 0.36 else (
+        "moderate" if uncertainty <= 0.52 else "high"
+    )
+    return {
+        "qualityScore": round(overall, 2),
+        "uncertaintyIndex": round(uncertainty, 2),
+        "uncertaintyClass": uncertainty_class,
+        "qualityComponents": components,
+    }
 
 
 # --------------------------------------------------------------------------
@@ -364,6 +398,7 @@ def track_fronts(
     window_hours: int = 3,
     gate_km: float = 250.0,
     min_lifetime_hours: int = 6,
+    min_detections: int = 2,
     min_coverage: float = 0.5,
     wind_sampler=None,
     require_physical_support: bool = False,
@@ -407,27 +442,23 @@ def track_fronts(
     results = []
     for track in tracks:
         span = track.hours[-1] - track.hours[0]
-        if len(track.hours) < 2 or span < min_lifetime_hours:
+        if len(track.hours) < max(2, int(min_detections)) or span < min_lifetime_hours:
             continue
         expected = [h for h in available if track.hours[0] <= h <= track.hours[-1]]
         if len(track.hours) / max(len(expected), 1) < min_coverage:
             continue
         diagnostics = {
-            "dryThermalGradient": _finite_median([
-                track.lines[h].get("dryThermalGradient", np.nan) for h in track.hours
-            ]),
-            "windShiftMs": _finite_median([
-                track.lines[h].get("windShiftMs", np.nan) for h in track.hours
-            ]),
-            "convergenceMs": _finite_median([
-                track.lines[h].get("convergenceMs", np.nan) for h in track.hours
-            ]),
-            "pressureTroughHpa": _finite_median([
-                track.lines[h].get("pressureTroughHpa", np.nan) for h in track.hours
-            ]),
-            "terrainFraction": _finite_median([
-                track.lines[h].get("terrainFraction", np.nan) for h in track.hours
-            ]),
+            key: _finite_median([
+                track.lines[h].get(key, np.nan) for h in track.hours
+            ])
+            for key in (
+                "medianTfpStrength", "medianAbzGradient", "deltaThetaW",
+                "deltaTemperature", "deltaThetaV", "dryThermalGradient",
+                "thermalAlignment", "windShiftMs", "convergenceMs",
+                "vorticity1e5", "frontogenesis", "pressureTroughHpa",
+                "lowerLevelSupport", "deltaThetaW925", "omega700PaS",
+                "terrainFraction", "candidateEvidence",
+            )
         }
         if require_physical_support:
             dry_gradient = diagnostics["dryThermalGradient"]

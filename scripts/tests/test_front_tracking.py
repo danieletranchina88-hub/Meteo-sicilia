@@ -1,11 +1,11 @@
-"""Synthetic verification of front_tracking.py (v10 phase 3).
+"""Synthetic verification of front_tracking.py (v12).
 
 Checks:
  A) a front moving toward the warm air over several hours -> ONE track,
     classified 'cold' by geometric motion;
  B) a stationary front -> 'stationary';
  C) two separate fronts -> two tracks, no identity swap;
- D) wind cross-check raises certainty when it agrees;
+ D) OFA/wind cross-check raises certainty when it agrees;
  E) qualityScore components are present.
 """
 
@@ -39,6 +39,17 @@ def moving_front_candidates(center_at):
         c = center_at(h)
         theta_w = 300.0 - 12.0 * sigmoid((LATG - c) / 1.2)  # warm south
         cands = fl.locate_fronts(theta_w, LON, LAT)
+        for candidate in cands:
+            candidate["candidateEvidence"] = 0.82
+            candidate["evidenceComponents"] = {
+                "thermal": 0.88,
+                "dynamic": 0.76,
+                "pressure": 0.70,
+                "vertical": 0.74,
+                "activity": 0.60,
+                "structural": 0.86,
+            }
+            candidate["synopticSupport"] = 0.90
         hourly[h] = cands
     return hourly
 
@@ -91,14 +102,15 @@ def wind_toward_warm(hour, points):
 tr_cold_wind = ft.track_fronts(cold, window_hours=1, min_lifetime_hours=6,
                                wind_sampler=wind_toward_warm)
 print(f"D) con vento concorde: certezza={tr_cold_wind[0]['classificationCertainty']} "
-      f"tipo={tr_cold_wind[0]['frontType']} adv={tr_cold_wind[0]['advectionKmh']}km/h")
+      f"tipo={tr_cold_wind[0]['frontType']} OFA={tr_cold_wind[0]['ofaSpeedKmh']}km/h")
 if tr_cold_wind and tr_cold_wind[0]["classificationCertainty"] < 0.9:
     print("  NOTA: certezza non massima nonostante consenso")
 
 # E) quality components ------------------------------------------------------
 if tr_cold:
     comp = tr_cold[0]["qualityComponents"]
-    need = {"thermalSupport", "dynamicSupport", "temporalSupport",
+    need = {"physicalEvidence", "thermalSupport", "dynamicSupport",
+            "pressureSupport", "verticalSupport", "temporalSupport",
             "structuralSupport", "classificationCertainty"}
     print(f"E) componenti qualityScore: {sorted(comp)}")
     if set(comp) != need:

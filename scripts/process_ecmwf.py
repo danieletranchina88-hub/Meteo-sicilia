@@ -8,13 +8,9 @@ import numpy as np
 import xarray as xr
 from ecmwf.opendata import Client
 
-from front_analysis import FRONT_METHOD, SynopticFrontAnalyzer
-
-
 FINAL_DIR = "data_weather_ecmwf"
 TEMP_DIR = "temp_processing_ecmwf"
 GRIB_FILE = "temp_ecmwf.grib2"
-FRONT_GRIB_FILE = "temp_ecmwf_front_850.grib2"
 
 LAT_MIN, LAT_MAX = 35.0, 48.5
 LON_MIN, LON_MAX = 6.0, 19.5
@@ -23,8 +19,6 @@ LON_MIN, LON_MAX = 6.0, 19.5
 # sinottico, ma leggero da pubblicare tramite GitHub Pages.
 FORECAST_STEPS = list(range(0, 121, 6))
 PARAMETERS = ["2t", "2d", "10u", "10v", "msl", "tp", "tcc"]
-FRONT_PARAMETERS = ["t", "q", "u", "v"]
-FRONT_BOUNDS = (3.0, 22.0, 33.0, 50.0)
 FEELS_LIKE_METHOD = "heat-index-wind-chill-v1"
 
 
@@ -111,8 +105,6 @@ def download_latest_forecast():
         try:
             if os.path.exists(GRIB_FILE):
                 os.remove(GRIB_FILE)
-            if os.path.exists(FRONT_GRIB_FILE):
-                os.remove(FRONT_GRIB_FILE)
             print(f"Scarico ECMWF IFS dalla sorgente {source}...", flush=True)
             client = Client(source=source)
             result = client.retrieve(
@@ -122,17 +114,6 @@ def download_latest_forecast():
                 param=PARAMETERS,
                 target=GRIB_FILE,
             )
-            print("Scarico T/Q/U/V ECMWF a 850 hPa per i fronti...", flush=True)
-            front_result = client.retrieve(
-                stream="oper",
-                type="fc",
-                step=FORECAST_STEPS,
-                param=FRONT_PARAMETERS,
-                levelist=[850],
-                target=FRONT_GRIB_FILE,
-            )
-            if front_result.datetime != result.datetime:
-                raise RuntimeError("Run ECMWF di superficie e quota non coerenti")
             run_time = result.datetime
             if run_time.tzinfo is None:
                 run_time = run_time.replace(tzinfo=timezone.utc)
@@ -191,7 +172,6 @@ def crop_field(dataset, step_hours):
 
 def process_data():
     datasets = {}
-    front_analyzer = None
     try:
         run_time = download_latest_forecast()
         print(f"Run ECMWF selezionato: {iso_z(run_time)}", flush=True)
@@ -199,33 +179,11 @@ def process_data():
         for short_name in PARAMETERS:
             datasets[short_name] = open_parameter(short_name)
 
-        front_analyzer = SynopticFrontAnalyzer(
-            FRONT_GRIB_FILE,
-            FRONT_GRIB_FILE,
-            FRONT_GRIB_FILE,
-            FRONT_GRIB_FILE,
-            pressure_path=GRIB_FILE,
-            downsample=1,
-            bounds=FRONT_BOUNDS,
-            filters={
-                "t": {"shortName": "t"},
-                "q": {"shortName": "q"},
-                "u": {"shortName": "u"},
-                "v": {"shortName": "v"},
-                "p": {"shortName": "msl"},
-            },
-            method=FRONT_METHOD,
-            source="ECMWF IFS",
-            tendency_window_hours=6,
-        )
-
         if os.path.exists(TEMP_DIR):
             shutil.rmtree(TEMP_DIR)
         os.makedirs(TEMP_DIR)
 
         catalog = []
-        fronts_catalog = []
-
         for step_hours in FORECAST_STEPS:
             print(f"Elaboro ECMWF +{step_hours:03d}h...", flush=True)
 
@@ -264,7 +222,6 @@ def process_data():
             total_cloud = np.clip(total_cloud, 0.0, 100.0)
 
             valid_time = run_time + timedelta(hours=step_hours)
-            fronts = front_analyzer.analyze(step_hours)
             header = {
                 "nx": int(nx),
                 "ny": int(ny),
@@ -282,10 +239,10 @@ def process_data():
                 "leadHours": int(step_hours),
                 "rainAccumulation": "from-run",
                 "feelsLikeMethod": FEELS_LIKE_METHOD,
-                "frontMethod": FRONT_METHOD,
-                "frontSource": "ECMWF IFS",
-                "frontLevel": "850 hPa",
-                "frontValidTime": iso_z(valid_time),
+                "frontMethod": None,
+                "frontSource": None,
+                "frontLevel": None,
+                "frontValidTime": None,
             }
 
             step_data = {
@@ -304,7 +261,10 @@ def process_data():
                 "press": clean_for_json(pressure_hpa, 1),
                 "rh": clean_for_json(humidity, 0),
                 "cloud": clean_for_json(total_cloud, 0),
-                "fronts": fronts,
+                # ECMWF remains an independent surface model.  Synoptic
+                # fronts are produced exclusively by the hourly ICON-2I
+                # physical analysis, never copied or compared across models.
+                "fronts": {"type": "FeatureCollection", "features": []},
             }
 
             file_name = f"step_{step_hours}.json"
@@ -322,29 +282,8 @@ def process_data():
                     "model": "ECMWF IFS",
                 }
             )
-            fronts_catalog.append(
-                {
-                    "validTime": iso_z(valid_time),
-                    "runTime": iso_z(run_time),
-                    "leadHours": int(step_hours),
-                    "method": FRONT_METHOD,
-                    "source": "ECMWF IFS",
-                    "level": "850 hPa",
-                    "fronts": fronts,
-                    # Candidati pre-tracciamento conservati per diagnostica.
-                    "candidates": front_analyzer.candidate_lines(step_hours),
-                }
-            )
-
         with open(os.path.join(TEMP_DIR, "catalog.json"), "w", encoding="utf-8") as output:
             json.dump(catalog, output, separators=(",", ":"), allow_nan=False)
-
-        with open(
-            os.path.join(TEMP_DIR, "fronts_catalog.json"),
-            "w",
-            encoding="utf-8",
-        ) as output:
-            json.dump(fronts_catalog, output, separators=(",", ":"), allow_nan=False)
 
         if os.path.exists(FINAL_DIR):
             shutil.rmtree(FINAL_DIR)
@@ -362,12 +301,8 @@ def process_data():
                 dataset.close()
             except Exception:
                 pass
-        if front_analyzer is not None:
-            front_analyzer.close()
         if os.path.exists(GRIB_FILE):
             os.remove(GRIB_FILE)
-        if os.path.exists(FRONT_GRIB_FILE):
-            os.remove(FRONT_GRIB_FILE)
 
 
 if __name__ == "__main__":
