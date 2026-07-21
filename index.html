@@ -1352,7 +1352,7 @@
                 <span class="layer-swatch"></span><span><b>Pressione</b><small>al suolo</small></span>
               </button>
               <button class="layer-card" type="button" data-layer="theta850" style="--swatch: linear-gradient(#3895d3,#c62f6f)">
-                <span class="layer-swatch"></span><span><b>θe 850 hPa</b><small>masse d'aria · fronti</small></span>
+                <span class="layer-swatch"></span><span><b>θw 850 hPa</b><small>masse d'aria · fronti</small></span>
               </button>
               <button class="layer-card" type="button" data-layer="t850" style="--swatch: linear-gradient(#3e96dc,#e2603c)">
                 <span class="layer-swatch"></span><span><b>T 850 hPa</b><small>temperatura in quota</small></span>
@@ -1667,17 +1667,17 @@
       const PRESS_STOPS = buildDiscreteBands(PRESS_ANCHORS, 960, 1048, 2, 1);
 
       const THETA_ANCHORS = [
-        { v: 296, c: [63, 92, 180] },
-        { v: 304, c: [56, 149, 211] },
-        { v: 312, c: [64, 190, 178] },
-        { v: 320, c: [116, 200, 98] },
-        { v: 328, c: [222, 210, 76] },
-        { v: 336, c: [236, 152, 60] },
-        { v: 344, c: [231, 88, 74] },
-        { v: 352, c: [198, 47, 111] },
-        { v: 360, c: [142, 32, 120] }
+        { v: 270, c: [43, 54, 154] },
+        { v: 276, c: [67, 87, 197] },
+        { v: 282, c: [54, 147, 213] },
+        { v: 288, c: [55, 192, 191] },
+        { v: 294, c: [74, 190, 119] },
+        { v: 300, c: [177, 207, 77] },
+        { v: 306, c: [239, 194, 61] },
+        { v: 312, c: [237, 109, 57] },
+        { v: 318, c: [190, 42, 118] }
       ];
-      const THETA_STOPS = buildDiscreteBands(THETA_ANCHORS, 296, 360, 2, 1);
+      const THETA_STOPS = buildDiscreteBands(THETA_ANCHORS, 270, 318, 2, 1);
 
       const LAYER_INFO = {
         temp: {
@@ -1758,13 +1758,13 @@
           terrainOpacity: 0.3
         },
         theta850: {
-          label: "θe a 850 hPa",
+          label: "θw a 850 hPa",
           unit: "K",
           stops: THETA_STOPS,
           discrete: true,
           decimals: 1,
-          ticks: [296, 312, 328, 344, 360],
-          note: "Temperatura potenziale equivalente a ~1500 m: è il campo su cui vengono individuati i fronti. I bordi netti tra i colori sono i contrasti tra masse d'aria.",
+          ticks: [270, 278, 286, 294, 302, 310, 318],
+          note: "Temperatura potenziale di bulbo umido a 850 hPa: è il campo primario usato dal rilevatore dei fronti.",
           opacity: 0.93,
           terrainOpacity: 0.3,
           upper: true
@@ -2044,7 +2044,12 @@
         };
       }
 
-      const FRONT_TYPE_NAMES = { cold: "freddo", warm: "caldo", stationary: "stazionario" };
+      const FRONT_TYPE_NAMES = {
+        cold: "freddo",
+        warm: "caldo",
+        stationary: "stazionario",
+        uncertain: "incerto"
+      };
 
       function nearestFrontText(gx, gy) {
         const features = currentData && currentData.fronts && currentData.fronts.features;
@@ -2253,7 +2258,7 @@
 
       function upperFieldArray(key) {
         if (!upperData) return null;
-        return key === "theta850" ? upperData.thetaE : upperData.t;
+        return key === "theta850" ? (upperData.thetaW || upperData.thetaE) : upperData.t;
       }
 
       function requestUpperData() {
@@ -2570,9 +2575,11 @@
         if (frontSourceLabel) {
           const source = currentData && currentData.meta && currentData.meta.frontSource;
           const level = currentData && currentData.meta && currentData.meta.frontLevel;
-          frontSourceLabel.textContent = source === "ICON-2I"
-            ? "ICON-2I orario · " + (level || "850 hPa")
-            : "guida " + (source || "sinottica") + " · " + (level || "850 hPa");
+          frontSourceLabel.textContent = source === "ICON-2I + ECMWF IFS"
+            ? "consenso ICON-2I + ECMWF · " + (level || "850 hPa")
+            : source === "ICON-2I"
+              ? "ICON-2I orario · " + (level || "850 hPa")
+              : "guida " + (source || "sinottica") + " · " + (level || "850 hPa");
         }
       }
 
@@ -3580,6 +3587,17 @@
         vectorContext.lineWidth = 5.4;
         vectorContext.stroke();
 
+        if (frontType === "uncertain") {
+          vectorContext.save();
+          vectorContext.setLineDash([8, 7]);
+          vectorContext.strokeStyle = "#30343b";
+          vectorContext.lineWidth = 2.7;
+          vectorContext.stroke();
+          vectorContext.restore();
+          vectorContext.globalAlpha = 1;
+          return;
+        }
+
         if (frontType !== "stationary") {
           vectorContext.strokeStyle = frontType === "cold" ? "#0875df" : "#e32638";
           vectorContext.lineWidth = 2.9;
@@ -3628,9 +3646,9 @@
           const coordinates = feature.geometry && feature.geometry.coordinates;
           if (!coordinates || coordinates.length < 2) return;
           const properties = feature.properties || {};
-          const frontType = ["cold", "warm", "stationary"].includes(properties.frontType)
+          const frontType = ["cold", "warm", "stationary", "uncertain"].includes(properties.frontType)
             ? properties.frontType
-            : "stationary";
+            : "uncertain";
           const confidence = Number(properties.confidence);
           const alpha = Number.isFinite(confidence) ? clamp(0.72 + confidence * 0.28, 0.78, 1) : 0.92;
           const points = coordinates.map(function (coordinate) {
@@ -3644,9 +3662,9 @@
               drawFrontTriangle(x, y, angle, "#0875df", alpha);
             } else if (frontType === "warm") {
               drawFrontSemicircle(x, y, angle, "#e32638", alpha);
-            } else if (index % 2 === 0) {
+            } else if (frontType === "stationary" && index % 2 === 0) {
               drawFrontTriangle(x, y, angle, "#0875df", alpha);
-            } else {
+            } else if (frontType === "stationary") {
               drawFrontSemicircle(x, y, angle, "#e32638", alpha);
             }
           });

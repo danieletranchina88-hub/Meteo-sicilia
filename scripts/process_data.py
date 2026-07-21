@@ -22,15 +22,15 @@ TEMP_FILE = "temp.grib2"
 FRONT_TEMP_DIR = "temp_front_processing"
 NWP_DIRECTORY_ID = "ICON-2I_SURFACE_PRESSURE_LEVELS"
 NWP_DIRECT_BASE = "https://meteohub.agenziaitaliameteo.it/nwp"
-ICON_FRONT_METHOD = "thetaw-850-icon2i-ofa-v10-hewson"
+ICON_FRONT_METHOD = "thetaw-850-icon2i-ecmwf-consensus-v11"
 # ICON-2I risolve strutture di mesoscala (brezze, canalizzazioni orografiche,
 # outflow temporaleschi) che il rilevatore puo' scambiare per fronti sinottici.
 # Un fronte vero e' anche visibile - smussato e spostato di poche decine di km -
 # nella corsa ECMWF, molto piu' rada: usiamo quella come guida di conferma e
 # scartiamo i candidati ICON-2I privi di riscontro.
-FRONT_CORROBORATION_BASE_KM = 180.0
-FRONT_CORROBORATION_PER_HOUR_KM = 1.5
-FRONT_CORROBORATION_MAX_KM = 320.0
+FRONT_CORROBORATION_BASE_KM = 110.0
+FRONT_CORROBORATION_PER_HOUR_KM = 0.75
+FRONT_CORROBORATION_MAX_KM = 165.0
 SYNOPTIC_FRONT_CATALOG = os.path.join(
     "data_weather_ecmwf",
     "fronts_catalog.json",
@@ -193,6 +193,8 @@ def prepare_icon_front_analyzer(run_dt):
             method=ICON_FRONT_METHOD,
             source="ICON-2I",
             tendency_window_hours=3,
+            require_reference=True,
+            reference_source="ECMWF IFS",
         )
         if len(analyzer.available_hours) < 70:
             analyzer.close()
@@ -466,12 +468,11 @@ def process_data():
                 front_catalog, run_dt + timedelta(hours=guide_hour)
             )
             if guide_entry is not None:
-                # Preferisce i candidati pre-tracciamento (riferimento
-                # denso); i fronti pubblicati restano come ripiego per i
-                # cataloghi generati da versioni precedenti.
+                # Solo fronti ECMWF gia' sopravvissuti a rilevamento,
+                # tracking e filtri fisici. I candidati grezzi renderebbero
+                # troppo facile confermare un artefatto ICON.
                 reference_by_hour[guide_hour] = (
-                    guide_entry.get("candidates")
-                    or guide_entry.get("fronts")
+                    guide_entry.get("fronts")
                     or {}
                 )
         icon_front_analyzer.set_reference(
@@ -645,7 +646,7 @@ def process_data():
                         # applicata alle tracce temporali complete.
                         fronts = icon_front_analyzer.analyze(step_hours)
                         front_method = ICON_FRONT_METHOD
-                        front_source = "ICON-2I"
+                        front_source = "ICON-2I + ECMWF IFS"
                         front_level = "850 hPa"
                         front_valid_time = iso_date
                     except Exception as front_error:

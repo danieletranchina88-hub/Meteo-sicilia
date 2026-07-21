@@ -99,7 +99,7 @@ if tr_cold_wind and tr_cold_wind[0]["classificationCertainty"] < 0.9:
 if tr_cold:
     comp = tr_cold[0]["qualityComponents"]
     need = {"thermalSupport", "dynamicSupport", "temporalSupport",
-            "modelAgreement", "classificationCertainty"}
+            "structuralSupport", "modelAgreement", "classificationCertainty"}
     print(f"E) componenti qualityScore: {sorted(comp)}")
     if set(comp) != need:
         print("  FAIL: componenti qualityScore mancanti"); ok = False

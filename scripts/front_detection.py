@@ -11,10 +11,11 @@ filter:
       -> keep the refined candidates that lie inside a synoptic corridor
          (the refined geometry replaces the coarse one - ICON refines it)
 
-Refined candidates with no synoptic support are dropped, EXCEPT
-exceptionally strong ones, which are kept but flagged
-``synopticSupport = 0`` and ``corroborated = False`` (persistence, which
-would fully justify such a candidate, is added in phase 3).
+Refined candidates with no synoptic support are dropped.  A very strong
+gradient is not, by itself, evidence of a synoptic front: sea-breeze lines,
+convective outflows and the rim of an orographic air pool can all be very
+sharp.  Persistence and intensity therefore never bypass the synoptic-scale
+prior.
 
 Note on independence: the corridor here comes from a strongly smoothed
 version of the SAME model, so it is a scale prior, not an independent
@@ -79,6 +80,27 @@ def _synoptic_support(
     return float(np.mean(best <= corridor_km))
 
 
+def _shape_metrics(coordinates: np.ndarray) -> tuple[float, float]:
+    """Return sinuosity and total turning of an open synoptic line."""
+    points = _resample_km(np.asarray(coordinates, dtype=float), 30.0)
+    if len(points) < 3:
+        return 1.0, 0.0
+    mean_lat = np.deg2rad(float(np.mean(points[:, 1])))
+    projected = np.column_stack((
+        points[:, 0] * EARTH_KM_PER_DEG * np.cos(mean_lat),
+        points[:, 1] * EARTH_KM_PER_DEG,
+    ))
+    segments = np.diff(projected, axis=0)
+    lengths = np.hypot(segments[:, 0], segments[:, 1])
+    path_length = float(np.sum(lengths))
+    endpoint = float(np.hypot(*(projected[-1] - projected[0])))
+    sinuosity = path_length / max(endpoint, 1.0)
+    headings = np.unwrap(np.arctan2(segments[:, 1], segments[:, 0]))
+    net_turn = abs(float(np.degrees(headings[-1] - headings[0])))
+    net_turn = min(net_turn % 360.0, 360.0 - (net_turn % 360.0))
+    return sinuosity, net_turn
+
+
 def detect_fronts_two_scale(
     theta_w: np.ndarray,
     longitudes: np.ndarray,
@@ -92,7 +114,6 @@ def detect_fronts_two_scale(
     synoptic_min_length_km: float = 400.0,
     refine_min_length_km: float = 250.0,
     abz_gradient_threshold: float = 1.5,
-    exceptional_gradient_factor: float = 2.5,
     return_synoptic: bool = False,
 ):
     """Two-scale detection: refined candidates constrained by a synoptic prior.
@@ -117,21 +138,20 @@ def detect_fronts_two_scale(
     )
     synoptic_lines = [c["coordinates"] for c in synoptic]
 
-    strong = abz_gradient_threshold * exceptional_gradient_factor
     final = []
     for candidate in refined:
+        sinuosity, net_turn = _shape_metrics(candidate["coordinates"])
+        if sinuosity > 1.8 or net_turn > 145.0:
+            continue
+        candidate["sinuosity"] = round(sinuosity, 2)
+        candidate["netTurnDeg"] = round(net_turn, 1)
         support = _synoptic_support(candidate["coordinates"], synoptic_lines, corridor_km)
         candidate["synopticSupport"] = round(support, 2)
         if support >= min_synoptic_support:
             candidate["corroborated"] = True
             final.append(candidate)
-        elif candidate["medianThetaWGradient"] >= strong:
-            # Eccezionalmente forte ma senza struttura sinottica: tenuto ma
-            # marcato non corroborato (la persistenza, in fase 3, decidera'
-            # se e' un fronte reale o un artefatto mesoscalare).
-            candidate["corroborated"] = False
-            final.append(candidate)
-        # altrimenti scartato: nessuna struttura sinottica, non eccezionale.
+        # Nessuna eccezione basata sulla sola intensita': un confine locale
+        # puo' essere piu' netto di un fronte sinottico autentico.
 
     final.sort(key=lambda c: c["lengthKm"], reverse=True)
     if return_synoptic:

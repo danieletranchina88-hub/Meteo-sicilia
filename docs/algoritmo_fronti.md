@@ -1,17 +1,18 @@
 # Rilevamento oggettivo dei fronti — fisica e algoritmo
 
-Questo documento spiega la fisica del rilevatore di fronti. Dalla **v10**
-il sito usa l'analisi frontale oggettiva (OFA) con nucleo Hewson completo
-(`scripts/front_analysis_v10.py`, metodo `thetaw-850-icon2i-ofa-v10-hewson`),
+Questo documento spiega la fisica del rilevatore di fronti. Dalla **v11**
+il sito usa l'analisi frontale oggettiva (OFA) con nucleo Hewson
+(`scripts/front_analysis_v10.py`, metodo
+`thetaw-850-icon2i-ecmwf-consensus-v11`),
 che riusa l'infrastruttura dati validata della v9 (lettura GRIB,
 validazione, griglia, campionamento, export 850 hPa) e ne sostituisce il
 nucleo scientifico. La v9 (`scripts/front_analysis.py`) resta come
 baseline euristica di confronto. La parte inferiore di questo documento
 descrive la fisica della v9, in gran parte condivisa dalla v10.
 
-## Architettura v10 (in produzione)
+## Architettura v11 (in produzione)
 
-Tre moduli separati, ciascuno con test sintetici dedicati:
+Quattro livelli separati, con test sintetici dedicati:
 
 1. **Termodinamica** (`thermodynamics.py`) — campo primario θw
    (temperatura potenziale di bulbo umido, Davies-Jones 2008) a 850 hPa.
@@ -28,22 +29,35 @@ Tre moduli separati, ciascuno con test sintetici dedicati:
    **non** viene pubblicato come fronte: è così che si eliminano i falsi
    fronti da alta risoluzione.
 3. **Tracking geometrico globale** (`front_tracking.py`) — associazione
-   **Hungarian** su tutta la previsione (nascita/morte/split/merge), moto
+   **Hungarian** su tutta la previsione (nascita/morte; split e merge
+   terminano una identità e ne iniziano un'altra), moto
    geometrico della linea lungo la normale verso il caldo come segnale
    **primario** di classificazione, con avvezione del vento e velocità OFA
    (Hewson) come riscontri. Classificazione per **consenso**: se i tre
    segnali concordano → tipo netto; se sono in conflitto reale →
    `uncertain` (meglio onesto che sbagliato). Il punteggio pubblicato è un
    `qualityScore` (euristica di supporto fisico, **non** una probabilità)
-   con cinque componenti: thermalSupport, dynamicSupport, temporalSupport,
-   modelAgreement, classificationCertainty.
+   con componenti termiche, dinamiche, temporali e strutturali. La voce
+   `modelAgreement` viene valorizzata solo dal modello indipendente.
+4. **Conferma indipendente ECMWF IFS (obbligatoria)** — ICON-2I rifinisce
+   la geometria oraria, ma non decide da solo se un fronte esiste. Una
+   traccia viene pubblicata soltanto se almeno il 60% delle ore è coerente
+   con un fronte ECMWF già filtrato e tracciato, con almeno il 55% della
+   linea in accordo entro 110–165 km. I candidati ECMWF grezzi non vengono
+   usati come conferma. Se la guida manca, il sistema non pubblica fronti
+   ICON non verificati.
 
-Confronto sullo stesso run reale ICON-2I (73 ore): la v10 produce un
-insieme coerente e stabile di ~10 tracce (vita 8–33 h) con classificazione
-fisica, senza salti bruschi tra ore adiacenti; i fronti seguono zone
-barocline reali di θw. Metodo storico v9: `theta-e-850-ofa-v9`.
+Ogni candidato deve inoltre mostrare un gradiente reale di T a 850 hPa,
+una rotazione o convergenza del vento, una forma aperta e sinottica e non
+può seguire prevalentemente terreno oltre 900 m. Un gradiente intenso non
+può bypassare questi filtri: brezze, dryline e outflow possono essere più
+netti di un fronte vero.
 
-**Robustezza numerica (correzioni da code review).** I campioni fuori
+Il numero di tracce non è prefissato: in condizioni senza strutture
+sinottiche coerenti l'output corretto può essere vuoto. Metodo storico v9:
+`theta-e-850-ofa-v9`.
+
+**Robustezza numerica e consenso v11.** I campioni fuori
 dal dominio restituiscono NaN (non il valore della cella di bordo): un
 candidato con meno del 75% di punti interni viene scartato, per non
 generare falsi fronti ai margini della mappa. Il confronto tra linee usa

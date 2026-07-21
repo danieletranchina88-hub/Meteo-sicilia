@@ -4,8 +4,9 @@ Tracking is a central part of the algorithm, not a persistence filter.
 Candidates from consecutive hours are linked into tracks by a **global**
 (Hungarian) assignment on a geometric cost that uses the track's predicted
 position, symmetric line-to-line distance, orientation, length change and
-warm-side consistency.  Births, deaths, and (structurally) splits/merges
-and occlusions are handled explicitly.
+warm-side consistency. Births and deaths are represented explicitly; a
+split or merge is intentionally treated as the end of one identity and the
+birth of another, rather than being claimed as a continuously tracked front.
 
 Classification is decided by **consensus** of three independent signals,
 not a fixed blend:
@@ -37,6 +38,12 @@ EARTH_KM_PER_DEG = 111.32
 COLD_WARM_THRESHOLD_KMH = 5.0
 
 
+def _finite_median(values, default=np.nan) -> float:
+    array = np.asarray(values, dtype=float)
+    finite = array[np.isfinite(array)]
+    return float(np.median(finite)) if finite.size else float(default)
+
+
 # --------------------------------------------------------------------------
 # geometry helpers
 # --------------------------------------------------------------------------
@@ -60,6 +67,18 @@ def _resample(coordinates: np.ndarray, count: int = 32) -> np.ndarray:
     ))
 
 
+def _aligned_resample(reference: np.ndarray, candidate: np.ndarray,
+                      count: int = 32) -> tuple[np.ndarray, np.ndarray]:
+    """Resample two lines and orient the second like the first."""
+    first = _resample(reference, count)
+    second = _resample(candidate, count)
+    forward = float(np.mean(np.hypot(*(first - second).T)))
+    backward = float(np.mean(np.hypot(*(first - second[::-1]).T)))
+    if backward < forward:
+        second = second[::-1]
+    return first, second
+
+
 def _length_km(coordinates: np.ndarray) -> float:
     if len(coordinates) < 2:
         return 0.0
@@ -81,6 +100,108 @@ def _symmetric_distance_km(line_a: np.ndarray, line_b: np.ndarray) -> float:
     dba = np.min(np.hypot(b[:, None, 0] - a[None, :, 0],
                           b[:, None, 1] - a[None, :, 1]), axis=1)
     return 0.5 * (float(np.mean(dab)) + float(np.mean(dba)))
+
+
+def _point_to_segments_km(points: np.ndarray, line: np.ndarray) -> np.ndarray:
+    if len(line) < 2:
+        return np.hypot(points[:, 0] - line[0, 0], points[:, 1] - line[0, 1])
+    starts, ends = line[:-1], line[1:]
+    segments = ends - starts
+    length_sq = np.maximum(np.sum(segments * segments, axis=1), 1.0e-9)
+    relative = points[:, None, :] - starts[None, :, :]
+    fraction = np.clip(
+        np.sum(relative * segments[None, :, :], axis=2) / length_sq[None, :],
+        0.0,
+        1.0,
+    )
+    projection = starts[None, :, :] + fraction[:, :, None] * segments[None, :, :]
+    return np.min(np.hypot(
+        points[:, None, 0] - projection[:, :, 0],
+        points[:, None, 1] - projection[:, :, 1],
+    ), axis=1)
+
+
+def _matched_fraction(line: np.ndarray, reference: np.ndarray,
+                      radius_km: float) -> float:
+    """Fraction of ``line`` within radius of reference polyline segments."""
+    mean_lat = math_mean_lat(line, reference)
+    count = max(2, int(_length_km(line) / 20.0))
+    points = _project_km(_resample(line, count), mean_lat)
+    reference_km = _project_km(np.asarray(reference, dtype=float), mean_lat)
+    return float(np.mean(_point_to_segments_km(points, reference_km) <= radius_km))
+
+
+def cross_model_diagnostics(
+    track: dict,
+    reference_by_hour: dict,
+    radius_km_fn,
+    *,
+    min_line_match: float = 0.55,
+    min_hour_fraction: float = 0.60,
+    min_coverage: float = 0.50,
+) -> dict:
+    """Confirm a whole track against published fronts of another model."""
+    guide_hours = [h for h in track["hours"] if h in reference_by_hour]
+    coverage = len(guide_hours) / max(len(track["hours"]), 1)
+    if not guide_hours:
+        return {
+            "available": False,
+            "coverage": 0.0,
+            "agreement": 0.0,
+            "matchedHourFraction": 0.0,
+            "confirmed": False,
+            "referenceFrontType": None,
+        }
+
+    scores = []
+    matched_types = []
+    for hour in guide_hours:
+        features = (reference_by_hour.get(hour) or {}).get("features") or []
+        line = np.asarray(track["lines"][hour], dtype=float)
+        best_score = 0.0
+        best_type = None
+        for feature in features:
+            reference = np.asarray(
+                feature.get("geometry", {}).get("coordinates") or [], dtype=float
+            )
+            if len(reference) < 2:
+                continue
+            radius = float(radius_km_fn(hour))
+            forward = _matched_fraction(line, reference, radius)
+            backward = _matched_fraction(reference, line, radius)
+            score = float(np.sqrt(max(forward, 0.0) * max(backward, 0.0)))
+            if score > best_score:
+                best_score = score
+                best_type = (feature.get("properties") or {}).get("frontType")
+        scores.append(best_score)
+        if best_score >= min_line_match and best_type:
+            matched_types.append(best_type)
+
+    matched_hour_fraction = float(np.mean(np.asarray(scores) >= min_line_match))
+    agreement = float(np.mean(scores))
+    reference_type = None
+    if matched_types:
+        values, counts = np.unique(matched_types, return_counts=True)
+        reference_type = str(values[int(np.argmax(counts))])
+    type_conflict = (
+        track.get("frontType") in {"cold", "warm"}
+        and reference_type in {"cold", "warm"}
+        and track.get("frontType") != reference_type
+    )
+    confirmed = (
+        coverage >= min_coverage
+        and matched_hour_fraction >= min_hour_fraction
+        and float(np.median(scores)) >= min_line_match
+        and not type_conflict
+    )
+    return {
+        "available": True,
+        "coverage": round(coverage, 2),
+        "agreement": round(agreement, 2),
+        "matchedHourFraction": round(matched_hour_fraction, 2),
+        "confirmed": bool(confirmed),
+        "referenceFrontType": reference_type,
+    }
 
 
 def math_mean_lat(*lines: np.ndarray) -> float:
@@ -158,8 +279,7 @@ class Track:
         dt_hist = self.hours[-1] - self.hours[-2]
         dt_pred = hour - self.hours[-1]
         # rigid translation by the median point displacement
-        a = _resample(prev)
-        b = _resample(last)
+        a, b = _aligned_resample(prev, last)
         shift = np.median(b - a, axis=0) * (dt_pred / max(dt_hist, 1))
         return last + shift
 
@@ -169,12 +289,38 @@ def _assignment_cost(track: Track, candidate: dict, hour: int,
     predicted = track.predicted_line(hour)
     line = candidate["coordinates"]
     distance = _symmetric_distance_km(predicted, line)
-    if distance > gate_km:
+    gap_hours = max(hour - track.last_hour(), 1)
+    # An hourly front cannot jump 250 km. Keep a hard ceiling for sparse
+    # 6-hour steps while using a physical gate for ICON's hourly sequence.
+    physical_gate = min(gate_km, 45.0 + 35.0 * gap_hours)
+    if distance > physical_gate:
         return np.inf
     orient = _orientation_diff(predicted, line)
+    if orient > 70.0:
+        return np.inf
     length_prev = track.lines[track.hours[-1]]["lengthKm"]
     length_change = abs(candidate["lengthKm"] - length_prev) / max(length_prev, 1.0)
-    return distance + 3.0 * orient + 60.0 * min(length_change, 2.0)
+    previous_normal = _resample_vectors(
+        track.lines[track.hours[-1]]["warmNormal"], 32
+    )
+    candidate_normal = _resample_vectors(candidate["warmNormal"], 32)
+    predicted_points = _resample(predicted, 32)
+    candidate_points = _resample(line, 32)
+    forward = float(np.mean(np.hypot(*(predicted_points - candidate_points).T)))
+    backward = float(np.mean(np.hypot(*(predicted_points - candidate_points[::-1]).T)))
+    if backward < forward:
+        candidate_normal = candidate_normal[::-1]
+    normal_alignment = float(np.nanmedian(
+        np.sum(previous_normal * candidate_normal, axis=1)
+    ))
+    if not np.isfinite(normal_alignment) or normal_alignment < 0.0:
+        return np.inf
+    return (
+        distance
+        + 2.0 * orient
+        + 60.0 * min(length_change, 2.0)
+        + 55.0 * (1.0 - np.clip(normal_alignment, 0.0, 1.0))
+    )
 
 
 def _global_assign(tracks: list[Track], candidates: list[dict], hour: int,
@@ -280,28 +426,36 @@ def classify_track(track: Track, window_hours: int, wind_sampler=None) -> dict:
 def _quality_score(track: Track, classification: dict, window_hours: int) -> dict:
     hours = track.hours
     grads = [track.lines[h]["medianThetaWGradient"] for h in hours]
-    abz = [track.lines[h]["medianAbzGradient"] for h in hours]
-    support = [track.lines[h].get("synopticSupport", 0.5) for h in hours]
-    corroborated = [bool(track.lines[h].get("corroborated", False)) for h in hours]
+    dry_gradients = [track.lines[h].get("dryThermalGradient", 0.0) for h in hours]
+    wind_shift = [track.lines[h].get("windShiftMs", 0.0) for h in hours]
+    convergence = [max(track.lines[h].get("convergenceMs", 0.0), 0.0) for h in hours]
+    support = [track.lines[h].get("synopticSupport", 0.0) for h in hours]
 
-    thermal = float(np.clip(np.median(grads) / 6.0, 0.0, 1.0))
-    dynamic = float(np.clip(np.median(abz) / 6.0, 0.0, 1.0))
+    moist_thermal = float(np.clip(np.median(grads) / 5.0, 0.0, 1.0))
+    dry_thermal = float(np.clip(np.median(dry_gradients) / 3.0, 0.0, 1.0))
+    thermal = 0.6 * moist_thermal + 0.4 * dry_thermal
+    shift_support = float(np.clip(np.median(wind_shift) / 6.0, 0.0, 1.0))
+    convergence_support = float(np.clip(np.median(convergence) / 2.0, 0.0, 1.0))
+    dynamic = max(shift_support, convergence_support)
     span = hours[-1] - hours[0]
     expected = span / max(window_hours, 1) + 1
     temporal = float(np.clip(len(hours) / max(expected, 1.0), 0.0, 1.0))
-    agreement = float(np.clip(0.5 * np.median(support) + 0.5 * np.mean(corroborated), 0.0, 1.0))
+    structural = float(np.clip(np.median(support), 0.0, 1.0))
     certainty = classification["classificationCertainty"]
 
     components = {
         "thermalSupport": round(thermal, 2),
         "dynamicSupport": round(dynamic, 2),
         "temporalSupport": round(temporal, 2),
-        "modelAgreement": round(agreement, 2),
+        "structuralSupport": round(structural, 2),
+        # Filled only after comparison with an independent model. Never use
+        # the same-model smoothing prior as fake model agreement.
+        "modelAgreement": None,
         "classificationCertainty": round(certainty, 2),
     }
     overall = float(np.clip(
         0.3 * thermal + 0.2 * dynamic + 0.25 * temporal
-        + 0.15 * agreement + 0.1 * certainty, 0.0, 1.0
+        + 0.15 * structural + 0.1 * certainty, 0.0, 1.0
     ))
     return {"qualityScore": round(overall, 2), "qualityComponents": components}
 
@@ -317,6 +471,11 @@ def track_fronts(
     min_lifetime_hours: int = 6,
     min_coverage: float = 0.5,
     wind_sampler=None,
+    require_physical_support: bool = False,
+    min_dry_gradient: float = 1.2,
+    min_wind_shift_ms: float = 1.5,
+    min_convergence_ms: float = 0.15,
+    max_terrain_fraction: float = 0.25,
 ):
     """Link hourly candidates into classified, quality-scored tracks.
 
@@ -354,6 +513,40 @@ def track_fronts(
         expected = [h for h in available if track.hours[0] <= h <= track.hours[-1]]
         if len(track.hours) / max(len(expected), 1) < min_coverage:
             continue
+        diagnostics = {
+            "dryThermalGradient": _finite_median([
+                track.lines[h].get("dryThermalGradient", np.nan) for h in track.hours
+            ]),
+            "windShiftMs": _finite_median([
+                track.lines[h].get("windShiftMs", np.nan) for h in track.hours
+            ]),
+            "convergenceMs": _finite_median([
+                track.lines[h].get("convergenceMs", np.nan) for h in track.hours
+            ]),
+            "pressureTroughHpa": _finite_median([
+                track.lines[h].get("pressureTroughHpa", np.nan) for h in track.hours
+            ]),
+            "terrainFraction": _finite_median([
+                track.lines[h].get("terrainFraction", np.nan) for h in track.hours
+            ]),
+        }
+        if require_physical_support:
+            dry_gradient = diagnostics["dryThermalGradient"]
+            wind_shift_value = diagnostics["windShiftMs"]
+            convergence_value = diagnostics["convergenceMs"]
+            terrain_fraction = diagnostics["terrainFraction"]
+            if not np.isfinite(dry_gradient) or dry_gradient < min_dry_gradient:
+                continue
+            if (
+                (not np.isfinite(wind_shift_value) or wind_shift_value < min_wind_shift_ms)
+                and (
+                    not np.isfinite(convergence_value)
+                    or convergence_value < min_convergence_ms
+                )
+            ):
+                continue
+            if np.isfinite(terrain_fraction) and terrain_fraction > max_terrain_fraction:
+                continue
         classification = classify_track(track, window_hours, wind_sampler)
         quality = _quality_score(track, classification, window_hours)
         results.append({
@@ -361,6 +554,7 @@ def track_fronts(
             "hours": list(track.hours),
             "lifetimeH": span,
             "lines": {h: track.lines[h]["coordinates"] for h in track.hours},
+            "diagnostics": diagnostics,
             **classification,
             **quality,
         })

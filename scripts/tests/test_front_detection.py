@@ -2,8 +2,7 @@
 
 Checks the structural prior: a refined candidate that coincides with a
 synoptic-scale front is kept; an isolated mesoscale gradient far from any
-synoptic structure is removed (unless exceptionally strong, in which case
-kept but flagged not corroborated).
+synoptic structure is removed even when its local gradient is very strong.
 """
 
 import os
@@ -55,6 +54,18 @@ if any(c.get("corroborated") for c in kept_near_patch):
     print("  FAIL: il patch isolato e' stato corroborato come sinottico"); ok = False
 else:
     print("  OK: il patch isolato non e' corroborato (rimosso o flaggato)")
+
+# --- 3) closed thermal anomaly must not become a synoptic front ------------
+radius = np.hypot(
+    (LONG - 12.0) * np.cos(np.deg2rad(41.0)),
+    LATG - 41.0,
+)
+closed_pool = 300.0 - 14.0 * np.exp(-((radius / 2.8) ** 2))
+final3 = fd.detect_fronts_two_scale(closed_pool, LON, LAT)
+print(f"3) anomalia termica chiusa: {len(final3)} fronti finali")
+if final3:
+    print("  FAIL: un anello/cold pool e' stato pubblicato come fronte")
+    ok = False
 
 print("\nESITO:", "SUPERATO" if ok else "DA RIVEDERE")
 raise SystemExit(0 if ok else 1)
