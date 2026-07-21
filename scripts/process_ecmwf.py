@@ -8,7 +8,7 @@ import numpy as np
 import xarray as xr
 from ecmwf.opendata import Client
 
-from front_analysis_v10 import FrontalAnalysisV10
+from front_analysis import FRONT_METHOD, SynopticFrontAnalyzer
 
 
 FINAL_DIR = "data_weather_ecmwf"
@@ -25,7 +25,6 @@ FORECAST_STEPS = list(range(0, 121, 6))
 PARAMETERS = ["2t", "2d", "10u", "10v", "msl", "tp", "tcc"]
 FRONT_PARAMETERS = ["t", "q", "u", "v"]
 FRONT_BOUNDS = (3.0, 22.0, 33.0, 50.0)
-ECMWF_FRONT_METHOD = "thetaw-850-ecmwf-ofa-v10"
 FEELS_LIKE_METHOD = "heat-index-wind-chill-v1"
 
 
@@ -200,7 +199,7 @@ def process_data():
         for short_name in PARAMETERS:
             datasets[short_name] = open_parameter(short_name)
 
-        front_analyzer = FrontalAnalysisV10(
+        front_analyzer = SynopticFrontAnalyzer(
             FRONT_GRIB_FILE,
             FRONT_GRIB_FILE,
             FRONT_GRIB_FILE,
@@ -215,7 +214,7 @@ def process_data():
                 "v": {"shortName": "v"},
                 "p": {"shortName": "msl"},
             },
-            method=ECMWF_FRONT_METHOD,
+            method=FRONT_METHOD,
             source="ECMWF IFS",
             tendency_window_hours=6,
         )
@@ -283,7 +282,7 @@ def process_data():
                 "leadHours": int(step_hours),
                 "rainAccumulation": "from-run",
                 "feelsLikeMethod": FEELS_LIKE_METHOD,
-                "frontMethod": ECMWF_FRONT_METHOD,
+                "frontMethod": FRONT_METHOD,
                 "frontSource": "ECMWF IFS",
                 "frontLevel": "850 hPa",
                 "frontValidTime": iso_z(valid_time),
@@ -328,12 +327,11 @@ def process_data():
                     "validTime": iso_z(valid_time),
                     "runTime": iso_z(run_time),
                     "leadHours": int(step_hours),
-                    "method": ECMWF_FRONT_METHOD,
+                    "method": FRONT_METHOD,
                     "source": "ECMWF IFS",
                     "level": "850 hPa",
                     "fronts": fronts,
-                    # Conservati solo per diagnosi; ICON usa esclusivamente
-                    # i fronti ECMWF pubblicati, non questi candidati grezzi.
+                    # Candidati pre-tracciamento conservati per diagnostica.
                     "candidates": front_analyzer.candidate_lines(step_hours),
                 }
             )
