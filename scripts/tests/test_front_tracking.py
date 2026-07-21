@@ -104,5 +104,19 @@ if tr_cold:
     if set(comp) != need:
         print("  FAIL: componenti qualityScore mancanti"); ok = False
 
+# F) a gap longer than the tracking window starts a new identity ------------
+gapped = {
+    hour: candidates
+    for hour, candidates in cold.items()
+    if hour <= 9 or hour >= 14
+}
+tr_gapped = ft.track_fronts(
+    gapped, window_hours=3, min_lifetime_hours=3, min_coverage=0.5
+)
+print(f"F) buco di 5 ore: {len(tr_gapped)} tracce separate")
+if len(tr_gapped) != 2:
+    print("  FAIL: una traccia non deve sopravvivere oltre la finestra di 3 ore")
+    ok = False
+
 print("\nESITO:", "SUPERATO" if ok else "DA RIVEDERE")
 raise SystemExit(0 if ok else 1)

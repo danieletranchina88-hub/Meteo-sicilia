@@ -383,7 +383,11 @@ def track_fronts(
     tracks: list[Track] = []
     active: list[Track] = []
     next_id = 0
-    max_gap = 2 * window_hours
+    # A front absent longer than the declared tracking window is a new
+    # identity, not the continuation of the old one. This prevents an
+    # hourly line from disappearing for 4-6 hours and reappearing with the
+    # same track id and an inflated lifetime.
+    max_gap = window_hours
 
     for hour in hours:
         candidates = list(hourly_candidates[hour])
