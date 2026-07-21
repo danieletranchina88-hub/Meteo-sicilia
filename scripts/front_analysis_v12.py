@@ -986,6 +986,19 @@ class IconSynopticFrontAnalyzer(SynopticFrontAnalyzer):
                 thermodynamic = self._thermodynamics(hour, 925)
                 pressure = LOWER_PRESSURE_PA
 
+                # 925 hPa is close to 700–800 m: over higher terrain this
+                # pressure surface is underground or extrapolated and must
+                # not be displayed as an atmospheric observation.
+                below_ground = self.terrain > 650.0
+                temperature = np.where(below_ground, np.nan, temperature)
+                humidity = np.where(below_ground, np.nan, humidity)
+                u_wind = np.where(below_ground, np.nan, u_wind)
+                v_wind = np.where(below_ground, np.nan, v_wind)
+                thermodynamic = {
+                    name: np.where(below_ground, np.nan, values)
+                    for name, values in thermodynamic.items()
+                }
+
             payload = {
                 "level": f"{level_hpa} hPa",
                 "nx": int(len(self.longitudes[::stride])),

@@ -35,7 +35,9 @@ del livello e pressione di saturazione di Bolton. I livelli in quota vengono
 esportati su una griglia di ispezione alleggerita (~19 km), sufficiente per la
 lettura sinottica e molto più leggera sul cellulare. Se un run non contiene
 un livello opzionale, l'interfaccia non lo sostituisce né lo interpola: torna
-al suolo e avvisa l'utente.
+al suolo e avvisa l'utente. A 925 hPa le celle sopra 650 m di orografia sono
+mascherate: a quella quota la superficie di pressione può trovarsi dentro il
+rilievo, quindi un valore visualizzato sarebbe fisicamente fuorviante.
 
 Il livello 850 hPa riduce il rumore dello strato limite e i contrasti diurni.
 Il livello 925 hPa interseca il terreno già attorno a 750 m: sopra 650 m i
