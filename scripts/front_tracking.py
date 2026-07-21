@@ -581,9 +581,10 @@ def track_fronts(
             ])
             for key in (
                 "medianTfpStrength", "medianAbzGradient", "deltaThetaW",
-                "deltaTemperature", "deltaThetaV", "dryThermalGradient",
+                "deltaThetaE", "deltaTemperature", "deltaThetaV", "dryThermalGradient",
                 "thermalAlignment", "windShiftMs", "convergenceMs",
                 "thermalContrastFraction", "thermalAlignmentFraction",
+                "crossDistanceThermalSupport",
                 "windShiftAngleDeg", "windBoundaryFraction",
                 "convergenceFraction", "airmassMotionKmh",
                 "vorticity1e5", "frontogenesis", "pressureTroughHpa",
@@ -625,12 +626,18 @@ def track_fronts(
                 np.median(local_certainties)
             )
         quality = _quality_score(track, quality_classification, window_hours)
+        diagnoses = [
+            str(track.lines[h].get("diagnosis", "synoptic-front"))
+            for h in track.hours
+        ]
+        dominant_diagnosis = max(set(diagnoses), key=diagnoses.count)
         results.append({
             "id": track.id,
             "hours": list(track.hours),
             "lifetimeH": span,
             "lines": {h: track.lines[h]["coordinates"] for h in track.hours},
             "diagnostics": diagnostics,
+            "diagnosis": dominant_diagnosis,
             "localClassifications": local_classifications,
             **classification,
             **quality,

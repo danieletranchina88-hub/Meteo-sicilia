@@ -1,4 +1,4 @@
-# Analisi oggettiva dei fronti ICON-2I (v13)
+# Analisi oggettiva dei fronti ICON-2I (v14)
 
 ## Scopo e limite fondamentale
 
@@ -12,7 +12,7 @@ Meteorologico. `qualityScore` e `uncertaintyIndex` descrivono la coerenza
 interna delle prove in un singolo run deterministico: non sono probabilità
 calibrate e non misurano l'errore previsionale assoluto.
 
-Il metodo operativo è `icon2i-ofa-multilevel-strict-v13`.
+Il metodo operativo è `icon2i-ofa-physics-guided-v14`.
 
 ## Dati usati
 
@@ -111,12 +111,15 @@ sinuosi, duplicati paralleli e linee prevalentemente sopra terreno elevato.
 
 ## 4. Controlli fisici indipendenti
 
-Ogni linea viene orientata in modo univoco con l'aria calda a sinistra. A
-circa 55 km sui due lati si misurano:
+Ogni linea viene orientata in modo univoco con l'aria calda a sinistra. Le
+masse d'aria vengono campionate a **30, 55 e 85 km** su entrambi i lati: la
+mediana evita che una singola coppia cada su una brezza, una valle o un
+artefatto di griglia. Si misurano:
 
 - salto di `theta_w`;
 - salto di temperatura secca;
-- salto di temperatura potenziale virtuale, proxy della densità;
+- salto di temperatura potenziale virtuale, proxy della densità, e di
+  `theta_e` come controllo del contrasto umido;
 - allineamento fra normale frontale e gradiente secco;
 - rotazione del vento e convergenza normale.
 
@@ -130,23 +133,32 @@ Sulla linea si calcolano inoltre:
 - profondità della saccatura PMSL a ±100 km e tendenza isallobarica;
 - supporto 925 hPa e omega 700 hPa, quando disponibili.
 
-I requisiti duri impongono almeno un vero contrasto secco e di densità,
-allineamento termico plausibile, sufficiente firma OFA e geometria sinottica.
-### Porte logiche non compensabili
+I requisiti duri impongono un vero contrasto secco e di densità, persistenza
+del contrasto alle tre distanze, allineamento termico plausibile e geometria
+sinottica.
+### Diagnosi differenziale e porte logiche
 
-La v13 non decide l'esistenza di un fronte con la sola media dei punteggi.
-Prima del ranking applica porte fisiche obbligatorie lungo l'intero segmento:
+La v14 non decide l'esistenza di un fronte con la sola media dei punteggi.
+Prima del ranking distingue in modo esplicito le ipotesi: fronte sinottico,
+confine di umidità/dryline, segnale orografico, confine mesoscalare (brezza o
+outflow) e gradiente debole sotto promontorio. Solo l'ipotesi sinottica può
+entrare nel tracciamento.
+
+Le porte non compensabili sono volutamente poche:
 
 - contrasto simultaneo di `theta_w`, temperatura secca e densità virtuale;
 - orientamento corretto del gradiente secco per almeno metà della linea;
 - firma sinottica a due scale e geometria aperta/coerente;
-- discontinuità vettoriale del vento (intensità oppure rotazione);
-- almeno una firma dinamica fra convergenza, vorticità ciclonica e
-  frontogenesi;
 - rifiuto esplicito della divergenza forte non sostenuta dalla dinamica;
-- rifiuto esplicito di una cresta di pressione lungo la linea;
-- coerenza a 925 hPa obbligatoria dove quel livello è realmente sopra il
-  terreno per una parte sufficiente del segmento.
+- rifiuto dei confini spiegati meglio da umidità sola, orografia o
+  convergenza locale senza corridoio sinottico.
+
+Vento, frontogenesi, saccatura barica, 925 hPa e omega a 700 hPa sono prove
+indipendenti che aumentano o riducono la fiducia. Una cresta barica o una
+temporanea incoerenza a 925 hPa non cancella da sola una linea termicamente
+coerente: può impedirne la nascita come traccia forte e mantenerla soltanto
+come continuazione già verificata. Il vento resta decisivo per etichettare il
+tipo freddo/caldo, non per nascondere un confine di masse d'aria reale.
 
 Le statistiche sono calcolate anche come frazioni della linea: un ottimo
 segnale su pochi punti non può nascondere una maggioranza incoerente.
@@ -179,8 +191,8 @@ Per essere pubblicata una traccia deve avere:
 - almeno 4 rilevamenti;
 - durata di almeno 3 ore;
 - copertura temporale almeno 72%;
-- `qualityScore >= 0.64`;
-- `uncertaintyIndex <= 0.36`;
+- `qualityScore >= 0.61`;
+- `uncertaintyIndex <= 0.39`;
 - classificazione non conflittuale.
 
 La classificazione confronta tre famiglie indipendenti:
@@ -231,7 +243,8 @@ La workflow blocca la pubblicazione se falliscono i test sintetici:
 - rotazione rigida con vorticità ma senza falsa deformazione;
 - rifiuto dei confini di sola umidità;
 - rifiuto di gradiente termico con vento divergente/contrario;
-- rifiuto di una linea collocata su una cresta barica;
+- promontorio barico che indebolisce una linea ma non cancella un fronte
+  termicamente coerente già tracciato;
 - tracciamento, classificazione e separazione delle identità.
 - consenso obbligatorio fra moto geometrico, fase termica e vento;
 - isteresi di una sola ora senza nascita da candidati marginali.

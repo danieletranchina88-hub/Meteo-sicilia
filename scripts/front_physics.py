@@ -105,10 +105,19 @@ def candidate_evidence(metrics: dict) -> dict:
     virtual_contrast = smoothstep(metrics.get("deltaThetaV"), 0.20, 2.2)
     dry_gradient = smoothstep(metrics.get("dryThermalGradient"), 0.75, 3.0)
     alignment = smoothstep(metrics.get("thermalAlignment"), 0.05, 0.75)
+    # A genuine air-mass boundary should survive sampling on both sides at
+    # several physical distances.  Missing legacy data is deliberately
+    # neutral rather than negative: this module is also used by unit tests
+    # and by older archived analysis files.
+    cross_distance_value = _finite(metrics.get("crossDistanceThermalSupport"))
+    cross_distance = (
+        smoothstep(cross_distance_value, 0.36, 0.84)
+        if np.isfinite(cross_distance_value) else 0.50
+    )
     thermal = float(np.average(
         [locator, theta_w_contrast, dry_contrast, virtual_contrast,
-         dry_gradient, alignment],
-        weights=[1.1, 1.2, 1.3, 1.2, 1.0, 0.8],
+         dry_gradient, alignment, cross_distance],
+        weights=[1.1, 1.2, 1.3, 1.2, 1.0, 0.8, 1.0],
     ))
 
     wind_shift = max(
@@ -182,14 +191,62 @@ def candidate_evidence(metrics: dict) -> dict:
     }
 
 
-def candidate_gate_report(metrics: dict, evidence: dict | None = None) -> dict:
-    """Apply non-compensating physical gates to a frontal segment.
+def candidate_hypothesis(metrics: dict) -> tuple[str, list[str]]:
+    """Return the most plausible physical interpretation of a candidate.
 
-    The score above ranks candidates *after* these checks.  It must never
-    allow a large thermal gradient to compensate a divergent/unaligned wind
-    field or a pressure ridge.  ``strongPass`` can create a new track;
-    ``continuationPass`` can only maintain an already established track for
-    a short period while a diagnostic fluctuates around its threshold.
+    This is deliberately a small, explainable differential diagnosis.  It
+    does not claim to identify every mesoscale phenomenon; it identifies the
+    common ways high-resolution model fields imitate a synoptic front.
+    """
+    reasons: list[str] = []
+    delta_t = _finite(metrics.get("deltaTemperature"), 0.0)
+    delta_tv = _finite(metrics.get("deltaThetaV"), 0.0)
+    dry_gradient = _finite(metrics.get("dryThermalGradient"), 0.0)
+    delta_theta_e = _finite(metrics.get("deltaThetaE"))
+    theta_w = _finite(metrics.get("deltaThetaW"), 0.0)
+    synoptic = _finite(metrics.get("synopticSupport"), 0.0)
+    terrain = _finite(metrics.get("terrainFraction"), 1.0)
+    length = _finite(metrics.get("lengthKm"), 0.0)
+    convergence = _finite(metrics.get("convergenceMs"), 0.0)
+    wind_shift = _finite(metrics.get("windShiftMs"), 0.0)
+    pressure_trough = _finite(metrics.get("pressureTroughHpa"))
+
+    # A sharp theta-e / humidity jump with no dry or density separation is a
+    # dryline or moisture boundary, not a cold/warm synoptic front.
+    if (
+        np.isfinite(delta_theta_e)
+        and delta_theta_e >= 2.5
+        and (delta_t < 0.55 or delta_tv < 0.22 or dry_gradient < 0.70)
+    ):
+        return "moisture-boundary", ["theta-e senza separazione termica/densita"]
+
+    if terrain > 0.62 and synoptic < 0.62:
+        return "orographic-boundary", ["segnale confinato su rilievi"]
+
+    # Short, locally convergent features are frequently sea-breeze/outflow
+    # boundaries at ICON-2I resolution.  They are withheld from the
+    # synoptic overlay unless the broad-scale corridor also supports them.
+    if length < 330.0 and synoptic < 0.58 and convergence >= 0.12 and wind_shift >= 1.5:
+        return "mesoscale-boundary", ["convergenza locale senza corridoio sinottico"]
+
+    if (
+        np.isfinite(pressure_trough)
+        and pressure_trough < -0.45
+        and theta_w < 1.8
+        and synoptic < 0.65
+    ):
+        return "ridge-boundary", ["gradiente debole sotto promontorio barico"]
+
+    return "synoptic-front", reasons
+
+
+def candidate_gate_report(metrics: dict, evidence: dict | None = None) -> dict:
+    """Apply a small set of non-compensating physical gates.
+
+    Thermodynamic air-mass separation and a synoptic-scale corridor are the
+    hard requirements.  Wind, pressure and 925-hPa coherence remain explicit
+    diagnostics: they strengthen confidence and the frontal type, but do not
+    make a physically coherent boundary vanish for one forecast hour.
     """
     evidence = evidence or candidate_evidence(metrics)
     reasons: list[str] = []
@@ -217,6 +274,9 @@ def candidate_gate_report(metrics: dict, evidence: dict | None = None) -> dict:
     lower_valid = _finite(metrics.get("lowerValidFraction"), 0.0)
     lower_support = _finite(metrics.get("lowerLevelSupport"))
     lower_contrast = _finite(metrics.get("deltaThetaW925"))
+    cross_distance_raw = _finite(metrics.get("crossDistanceThermalSupport"))
+    cross_distance = cross_distance_raw if np.isfinite(cross_distance_raw) else 0.0
+    diagnosis, diagnosis_reasons = candidate_hypothesis(metrics)
 
     thermal_core = (
         delta_tw >= 1.20
@@ -226,6 +286,7 @@ def candidate_gate_report(metrics: dict, evidence: dict | None = None) -> dict:
         and alignment >= 0.05
         and thermal_fraction >= 0.48
         and alignment_fraction >= 0.48
+        and (cross_distance >= 0.34 or not np.isfinite(cross_distance_raw))
     )
     if not thermal_core:
         reasons.append("thermal-core")
@@ -267,7 +328,7 @@ def candidate_gate_report(metrics: dict, evidence: dict | None = None) -> dict:
         and pressure_trough < 0.05
     )
     if pressure_contradiction:
-        reasons.append("pressure-ridge")
+        reasons.append("pressure-ridge-warning")
 
     # Where 925 hPa is actually above ground over most of the line, the same
     # air-mass boundary must also be visible in the lower troposphere.
@@ -281,15 +342,16 @@ def candidate_gate_report(metrics: dict, evidence: dict | None = None) -> dict:
         )
     )
     if lower_contradiction:
-        reasons.append("lower-level-incoherence")
+        reasons.append("lower-level-incoherence-warning")
+
+    if diagnosis != "synoptic-front":
+        reasons.append(diagnosis)
 
     continuation_pass = bool(
         thermal_core
         and structure_core
         and not divergent_contradiction
-        and not pressure_contradiction
-        and not lower_contradiction
-        and (wind_boundary or dynamic_core)
+        and diagnosis == "synoptic-front"
     )
 
     strong_thermal = (
@@ -300,6 +362,7 @@ def candidate_gate_report(metrics: dict, evidence: dict | None = None) -> dict:
         and alignment >= 0.12
         and thermal_fraction >= 0.56
         and alignment_fraction >= 0.54
+        and cross_distance >= 0.50
     )
     strong_dynamic = wind_boundary and dynamic_core and (
         convergence >= -0.20 or convergence_fraction >= 0.44
@@ -316,9 +379,9 @@ def candidate_gate_report(metrics: dict, evidence: dict | None = None) -> dict:
     strong_pass = bool(
         continuation_pass
         and strong_thermal
-        and strong_dynamic
         and pressure_support
-        and evidence["candidateEvidence"] >= 0.43
+        and not lower_contradiction
+        and evidence["candidateEvidence"] >= (0.43 if strong_dynamic else 0.53)
     )
     return {
         "strongPass": strong_pass,
@@ -327,6 +390,12 @@ def candidate_gate_report(metrics: dict, evidence: dict | None = None) -> dict:
             "continuation" if continuation_pass else "rejected"
         ),
         "rejectionReasons": reasons,
+        "diagnosis": diagnosis,
+        "diagnosisReasons": diagnosis_reasons,
+        "windBoundary": wind_boundary,
+        "dynamicSupport": dynamic_core,
+        "pressureRidge": pressure_contradiction,
+        "lowerLevelIncoherent": lower_contradiction,
     }
 
 

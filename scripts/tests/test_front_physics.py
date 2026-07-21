@@ -76,6 +76,7 @@ strong = {
     "deltaTemperature": 3.2, "deltaThetaV": 2.5,
     "dryThermalGradient": 3.2, "thermalAlignment": 0.85,
     "thermalContrastFraction": 0.88, "thermalAlignmentFraction": 0.90,
+    "crossDistanceThermalSupport": 0.88, "deltaThetaE": 5.0,
     "windShiftMs": 8.0, "convergenceMs": 2.2,
     "windShiftAngleDeg": 42.0, "windBoundaryFraction": 0.86,
     "convergenceFraction": 0.82,
@@ -141,14 +142,22 @@ if wrong_report["continuationPass"]:
     print("  FAIL: il gradiente termico non puo' compensare vento divergente")
     ok = False
 
-# 7) A pressure ridge across the line is an explicit contradiction.
+# 7) A pressure ridge prevents a strong birth but does not erase a mature,
+# thermally coherent synoptic boundary for one analysis hour.
 ridge = dict(strong)
 ridge.update({"pressureTroughHpa": -0.7, "pressureTroughFraction": 0.18})
 ridge_report = fp.candidate_gate_report(ridge)
 print(f"7) gradiente sopra promontorio barico: {ridge_report['gateStatus']} "
       f"{ridge_report['rejectionReasons']}")
-if ridge_report["continuationPass"]:
-    print("  FAIL: un promontorio barico netto deve respingere la linea")
+if not ridge_report["continuationPass"] or ridge_report["strongPass"]:
+    print("  FAIL: il promontorio deve indebolire, non cancellare, una linea coerente")
+    ok = False
+
+# 8) Theta-e alone must be diagnosed as a humidity boundary, not published.
+diagnosis, _ = fp.candidate_hypothesis(dryline)
+print(f"8) diagnosi del confine igrometrico: {diagnosis}")
+if diagnosis != "moisture-boundary":
+    print("  FAIL: il classificatore differenziale non riconosce la dryline")
     ok = False
 
 print("\nESITO:", "SUPERATO" if ok else "DA RIVEDERE")

@@ -1,4 +1,4 @@
-"""ICON-2I objective synoptic-front analysis, strict physical engine (v13).
+"""ICON-2I objective synoptic-front analysis, physics-guided engine (v14).
 
 The detector is intentionally conservative.  It identifies the warm-air
 edge of baroclinic zones in wet-bulb potential temperature at 850 hPa, then
@@ -23,7 +23,7 @@ import thermodynamics as thermo
 from front_analysis import SynopticFrontAnalyzer, _blend_lines, _line_length_km, _rdp
 
 
-FRONT_METHOD = "icon2i-ofa-multilevel-strict-v13"
+FRONT_METHOD = "icon2i-ofa-physics-guided-v14"
 ANALYSIS_PRESSURE_PA = 85_000.0
 LOWER_PRESSURE_PA = 92_500.0
 
@@ -31,6 +31,7 @@ SYNOPTIC_SIGMA_KM = 100.0
 REFINE_SIGMA_KM = 45.0
 DERIVATIVE_SIGMA_KM = 15.0
 CROSS_FRONT_KM = 55.0
+CROSS_FRONT_DISTANCES_KM = (30.0, 55.0, 85.0)
 PRESSURE_CROSS_KM = 100.0
 
 TRACK_WINDOW_HOURS = 2
@@ -38,8 +39,8 @@ TRACK_GATE_KM = 170.0
 TRACK_MIN_LIFETIME_HOURS = 3
 TRACK_MIN_DETECTIONS = 4
 TRACK_MIN_COVERAGE = 0.72
-MIN_PUBLISH_QUALITY = 0.64
-MAX_PUBLISH_UNCERTAINTY = 0.36
+MIN_PUBLISH_QUALITY = 0.61
+MAX_PUBLISH_UNCERTAINTY = 0.39
 MAX_FRONTS_PER_HOUR = 4
 
 
@@ -83,7 +84,7 @@ class IconSynopticFrontAnalyzer(SynopticFrontAnalyzer):
         requested_method = kwargs.get("method")
         super().__init__(*args, **kwargs)
         self.method = str(requested_method or FRONT_METHOD)
-        self._theta_w_cache: dict[tuple[int, int], np.ndarray] = {}
+        self._thermodynamic_cache: dict[tuple[int, int], dict[str, np.ndarray]] = {}
         self._pressure_cache: dict[int, np.ndarray] = {}
         self._tracks: list[dict] | None = None
         self._by_hour: dict[int, list[tuple[np.ndarray, dict]]] | None = None
@@ -229,9 +230,9 @@ class IconSynopticFrontAnalyzer(SynopticFrontAnalyzer):
             )[::-1].copy()
         return candidate
 
-    def _theta_w(self, hour: int, level_hpa: int = 850) -> np.ndarray:
+    def _thermodynamics(self, hour: int, level_hpa: int = 850) -> dict[str, np.ndarray]:
         key = (level_hpa, hour)
-        cached = self._theta_w_cache.get(key)
+        cached = self._thermodynamic_cache.get(key)
         if cached is not None:
             return cached
         if level_hpa == 925:
@@ -250,9 +251,16 @@ class IconSynopticFrontAnalyzer(SynopticFrontAnalyzer):
             humidity,
             method="davies_jones",
         )
-        result = np.where(fields["out_of_domain"], np.nan, fields["theta_w"])
-        self._theta_w_cache[key] = result
+        invalid = fields["out_of_domain"]
+        result = {
+            name: np.where(invalid, np.nan, np.asarray(fields[name], dtype=float))
+            for name in ("theta_w", "theta", "theta_e")
+        }
+        self._thermodynamic_cache[key] = result
         return result
+
+    def _theta_w(self, hour: int, level_hpa: int = 850) -> np.ndarray:
+        return self._thermodynamics(hour, level_hpa)["theta_w"]
 
     def _pressure_hpa(self, hour: int) -> np.ndarray | None:
         if "p" not in self.datasets:
@@ -307,7 +315,8 @@ class IconSynopticFrontAnalyzer(SynopticFrontAnalyzer):
         )
 
     def _detect_hour(self, hour: int) -> list[dict]:
-        theta_w = self._theta_w(hour)
+        thermodynamics = self._thermodynamics(hour)
+        theta_w = thermodynamics["theta_w"]
         wet_candidates = fd.detect_fronts_two_scale(
             theta_w,
             self.longitudes,
@@ -328,9 +337,8 @@ class IconSynopticFrontAnalyzer(SynopticFrontAnalyzer):
         raw_temperature = self._field("t", hour)
         temperature = fl.smooth_km(raw_temperature, REFINE_SIGMA_KM, grid_metrics)
         humidity = fl.smooth_km(self._field("q", hour), REFINE_SIGMA_KM, grid_metrics)
-        dry_theta = raw_temperature * (
-            100_000.0 / ANALYSIS_PRESSURE_PA
-        ) ** thermo.KAPPA
+        dry_theta = thermodynamics["theta"]
+        theta_e = thermodynamics["theta_e"]
         dry_candidates = fd.detect_fronts_two_scale(
             dry_theta,
             self.longitudes,
@@ -450,27 +458,61 @@ class IconSynopticFrontAnalyzer(SynopticFrontAnalyzer):
             if len(coordinates) < 4 or normal.shape != coordinates.shape:
                 continue
 
-            warm = self._offset_points(coordinates, normal, CROSS_FRONT_KM)
-            cold = self._offset_points(coordinates, -normal, CROSS_FRONT_KM)
-            validity = (
-                np.isfinite(self._sample(theta_w, warm))
-                & np.isfinite(self._sample(theta_w, cold))
-                & np.isfinite(self._sample(temperature, warm))
-                & np.isfinite(self._sample(temperature, cold))
-            )
-            if float(np.mean(validity)) < 0.75:
+            # Sample the air masses at three metric distances.  A single
+            # 55-km pair can accidentally cross a local perturbation; the
+            # median of 30/55/85 km is much more stable while retaining the
+            # 55-km pair for flow, pressure and motion diagnostics.
+            samples: dict[float, tuple[np.ndarray, np.ndarray]] = {}
+            temperature_deltas = []
+            theta_v_deltas = []
+            theta_w_deltas = []
+            theta_e_deltas = []
+            distance_supports = []
+            central_validity = None
+            for distance in CROSS_FRONT_DISTANCES_KM:
+                warm_at_distance = self._offset_points(coordinates, normal, distance)
+                cold_at_distance = self._offset_points(coordinates, -normal, distance)
+                samples[distance] = (warm_at_distance, cold_at_distance)
+                warm_temp_d = self._sample(temperature, warm_at_distance)
+                cold_temp_d = self._sample(temperature, cold_at_distance)
+                warm_theta_v_d = self._sample(theta_v, warm_at_distance)
+                cold_theta_v_d = self._sample(theta_v, cold_at_distance)
+                warm_theta_w_d = self._sample(theta_w, warm_at_distance)
+                cold_theta_w_d = self._sample(theta_w, cold_at_distance)
+                warm_theta_e_d = self._sample(theta_e, warm_at_distance)
+                cold_theta_e_d = self._sample(theta_e, cold_at_distance)
+                valid_d = (
+                    np.isfinite(warm_theta_w_d) & np.isfinite(cold_theta_w_d)
+                    & np.isfinite(warm_temp_d) & np.isfinite(cold_temp_d)
+                    & np.isfinite(warm_theta_v_d) & np.isfinite(cold_theta_v_d)
+                )
+                delta_temp_d = warm_temp_d - cold_temp_d
+                delta_theta_v_d = warm_theta_v_d - cold_theta_v_d
+                delta_theta_w_d = warm_theta_w_d - cold_theta_w_d
+                delta_theta_e_d = warm_theta_e_d - cold_theta_e_d
+                support_d = float(np.mean(
+                    valid_d
+                    & (delta_temp_d >= 0.60)
+                    & (delta_theta_v_d >= 0.25)
+                    & (delta_theta_w_d >= 1.20)
+                ))
+                distance_supports.append(support_d)
+                temperature_deltas.append(delta_temp_d)
+                theta_v_deltas.append(delta_theta_v_d)
+                theta_w_deltas.append(delta_theta_w_d)
+                theta_e_deltas.append(delta_theta_e_d)
+                if distance == CROSS_FRONT_KM:
+                    central_validity = valid_d
+
+            validity = central_validity
+            if validity is None or float(np.mean(validity)) < 0.75:
                 continue
-
-            warm_temp = self._sample(temperature, warm)
-            cold_temp = self._sample(temperature, cold)
-            warm_theta_v = self._sample(theta_v, warm)
-            cold_theta_v = self._sample(theta_v, cold)
-            warm_theta_w = self._sample(theta_w, warm)
-            cold_theta_w = self._sample(theta_w, cold)
-
-            delta_temperature_points = warm_temp - cold_temp
-            delta_theta_v_points = warm_theta_v - cold_theta_v
-            delta_theta_w_points = warm_theta_w - cold_theta_w
+            warm, cold = samples[CROSS_FRONT_KM]
+            delta_temperature_points = np.nanmedian(np.stack(temperature_deltas), axis=0)
+            delta_theta_v_points = np.nanmedian(np.stack(theta_v_deltas), axis=0)
+            delta_theta_w_points = np.nanmedian(np.stack(theta_w_deltas), axis=0)
+            delta_theta_e_points = np.nanmedian(np.stack(theta_e_deltas), axis=0)
+            cross_distance_support = float(np.mean(distance_supports))
 
             gx = self._sample(temp_east, coordinates)
             gy = self._sample(temp_north, coordinates)
@@ -561,10 +603,13 @@ class IconSynopticFrontAnalyzer(SynopticFrontAnalyzer):
             metrics = {
                 **candidate,
                 "deltaThetaW": _finite_median(delta_theta_w_points),
+                "deltaThetaE": _finite_median(delta_theta_e_points),
                 "deltaTemperature": _finite_median(delta_temperature_points),
                 "deltaThetaV": _finite_median(delta_theta_v_points),
                 "thermalContrastFraction": thermal_contrast_fraction,
                 "thermalAlignmentFraction": thermal_alignment_fraction,
+                "crossDistanceThermalSupport": cross_distance_support,
+                "crossDistanceKm": list(CROSS_FRONT_DISTANCES_KM),
                 "dryThermalGradient": _finite_median(
                     self._sample(dry_gradient, coordinates)
                 ),
@@ -833,6 +878,7 @@ class IconSynopticFrontAnalyzer(SynopticFrontAnalyzer):
                 track.get("qualityComponents", {}), 2
             ),
             "diagnostics": _json_mapping(track.get("diagnostics", {}), 4),
+            "diagnosis": track.get("diagnosis", "synoptic-front"),
             "lifetimeH": int(track.get("lifetimeH", 0)),
             "trackId": int(track.get("id", -1)),
             "method": self.method,
