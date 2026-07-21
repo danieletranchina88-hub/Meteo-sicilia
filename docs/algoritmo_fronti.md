@@ -15,6 +15,41 @@ disponibili nell'arco della traccia. Quando la guida ECMWF è del tutto
 assente la traccia resta marcata `corroborated: null` e la sua confidenza
 è penalizzata, così l'assenza di conferma è esplicita nell'output.
 
+## Stato: v9 baseline congelata
+
+Questa è la **baseline euristica v9**, chiusa e congelata. È un
+prototipo avanzato basato su θe + TFP=0 + gate multipli: fisicamente
+sensato e temporalmente stabile, ma con due limiti concettuali noti
+rispetto al metodo OFA completo — il localizzatore è `TFP=0` (asse del
+massimo gradiente) invece di TFL+ABZ (bordo caldo della zona baroclina),
+e il campo primario è θe (più sensibile ai confini di umidità) invece di
+θw. Lo sviluppo prosegue su una **v10** con nucleo Hewson completo (θw
+primaria, TFL+TFP+ABZ, smoothing calibrato in km, rilevamento a due scale,
+tracking geometrico globale) in moduli separati, con la v9 mantenuta come
+riferimento di confronto.
+
+**Chiusura v9 (robustezza finale, nessun nuovo criterio):**
+- guardia di finitezza estesa a *tutte* le metriche (pressione,
+  vorticità, frontogenesi, ΔTv, moto): un candidato con una firma NaN
+  viene scartato, non fatto passare da un confronto con NaN;
+- `_box_smooth` NaN-aware (media di finestra solo sui punti finiti): un
+  NaN in ingresso non contamina più l'intero quadrante — protezione per
+  GRIB con valori mancanti (i dati ICON-2I attuali non ne hanno);
+- validazione esplicita dei GRIB all'apertura: livello 850 hPa, unità di
+  T (kelvin), q (kg/kg, non g/kg), orografia (metri, non geopotenziale),
+  e corrispondenza delle scadenze fra T/Q/U/V. Un input incoerente
+  produce un errore chiaro invece di un risultato silenziosamente errato.
+
+## Obiettivo dichiarato del prodotto
+
+*Generare una rappresentazione automatica, fisicamente coerente e
+temporalmente stabile delle principali strutture frontali sinottiche
+previste dai modelli* — **non** riprodurre esattamente le linee
+soggettive di un meteorologo (analisti esperti collocano diversamente
+fronti deboli, occlusioni, split e sistemi mediterranei). Sul sito la
+dicitura corretta è "fronti sinottici stimati automaticamente", non
+"fronti ufficiali".
+
 L'architettura è **multi-evidenza**: nessun singolo campo può "creare" un
 fronte. Un candidato deve superare simultaneamente prove indipendenti su
 **temperatura, umidità, vento e pressione**, più la coerenza nel tempo e
