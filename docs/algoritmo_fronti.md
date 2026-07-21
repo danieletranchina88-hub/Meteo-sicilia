@@ -1,8 +1,47 @@
 # Rilevamento oggettivo dei fronti — fisica e algoritmo
 
-Questo documento spiega la fisica su cui si basa il rilevatore di fronti
-(`scripts/front_analysis.py`) e il perché di ogni criterio. Metodo:
-`theta-e-850-ofa-v9` (ICON-2I: `theta-e-850-icon2i-ofa-v11`).
+Questo documento spiega la fisica del rilevatore di fronti. Dalla **v10**
+il sito usa l'analisi frontale oggettiva (OFA) con nucleo Hewson completo
+(`scripts/front_analysis_v10.py`, metodo `thetaw-850-icon2i-ofa-v10-hewson`),
+che riusa l'infrastruttura dati validata della v9 (lettura GRIB,
+validazione, griglia, campionamento, export 850 hPa) e ne sostituisce il
+nucleo scientifico. La v9 (`scripts/front_analysis.py`) resta come
+baseline euristica di confronto. La parte inferiore di questo documento
+descrive la fisica della v9, in gran parte condivisa dalla v10.
+
+## Architettura v10 (in produzione)
+
+Tre moduli separati, ciascuno con test sintetici dedicati:
+
+1. **Termodinamica** (`thermodynamics.py`) — campo primario θw
+   (temperatura potenziale di bulbo umido, Davies-Jones 2008) a 850 hPa.
+   θw è quasi-conservativa e, a differenza di θe, meno sensibile ai soli
+   confini di umidità: riduce alla radice i "fronti" da dryline. Validata
+   contro MetPy (polinomio 0.0000 mK, catena completa 0.023 K).
+2. **Rilevamento a due scale** (`front_detection.py`) — un campo θw
+   fortemente smussato (~150 km) fornisce il **corridoio sinottico**
+   (prior strutturale); un campo leggermente smussato (~50 km) dà la
+   **geometria rifinita**. Il localizzatore è il **Thermal Front Locator**
+   di Sansom–Catto (TFL = ∇²|∇θw|, contorno zero) mascherato dal **TFP**
+   (segno = lato caldo) e dalla **zona baroclina adiacente (ABZ)**. Un
+   candidato ICON-2I di mesoscala isolato, privo di supporto sinottico,
+   **non** viene pubblicato come fronte: è così che si eliminano i falsi
+   fronti da alta risoluzione.
+3. **Tracking geometrico globale** (`front_tracking.py`) — associazione
+   **Hungarian** su tutta la previsione (nascita/morte/split/merge), moto
+   geometrico della linea lungo la normale verso il caldo come segnale
+   **primario** di classificazione, con avvezione del vento e velocità OFA
+   (Hewson) come riscontri. Classificazione per **consenso**: se i tre
+   segnali concordano → tipo netto; se sono in conflitto reale →
+   `uncertain` (meglio onesto che sbagliato). Il punteggio pubblicato è un
+   `qualityScore` (euristica di supporto fisico, **non** una probabilità)
+   con cinque componenti: thermalSupport, dynamicSupport, temporalSupport,
+   modelAgreement, classificationCertainty.
+
+Confronto sullo stesso run reale ICON-2I (73 ore): la v10 produce un
+insieme coerente e stabile di ~10 tracce (vita 8–33 h) con classificazione
+fisica, senza salti bruschi tra ore adiacenti; i fronti seguono zone
+barocline reali di θw. Metodo storico v9: `theta-e-850-ofa-v9`.
 
 **Robustezza numerica (correzioni da code review).** I campioni fuori
 dal dominio restituiscono NaN (non il valore della cella di bordo): un
@@ -23,10 +62,10 @@ sensato e temporalmente stabile, ma con due limiti concettuali noti
 rispetto al metodo OFA completo — il localizzatore è `TFP=0` (asse del
 massimo gradiente) invece di TFL+ABZ (bordo caldo della zona baroclina),
 e il campo primario è θe (più sensibile ai confini di umidità) invece di
-θw. Lo sviluppo prosegue su una **v10** con nucleo Hewson completo (θw
-primaria, TFL+TFP+ABZ, smoothing calibrato in km, rilevamento a due scale,
-tracking geometrico globale) in moduli separati, con la v9 mantenuta come
-riferimento di confronto.
+θw. La **v10** con nucleo Hewson completo (θw primaria, TFL+TFP+ABZ,
+smoothing calibrato in km, rilevamento a due scale, tracking geometrico
+globale) è **completata e in produzione** (vedi *Architettura v10* in
+apertura); la v9 resta come riferimento di confronto.
 
 **Chiusura v9 (robustezza finale, nessun nuovo criterio):**
 - guardia di finitezza estesa a *tutte* le metriche (pressione,

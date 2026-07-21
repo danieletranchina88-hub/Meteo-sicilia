@@ -9,7 +9,7 @@ import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timedelta, timezone
 
-from front_analysis import SynopticFrontAnalyzer, corroborate_with_reference
+from front_analysis_v10 import FrontalAnalysisV10
 
 # --- CONFIGURAZIONE ---
 DATASET_ID = "ICON_2I_SURFACE_PRESSURE_LEVELS"
@@ -22,7 +22,7 @@ TEMP_FILE = "temp.grib2"
 FRONT_TEMP_DIR = "temp_front_processing"
 NWP_DIRECTORY_ID = "ICON-2I_SURFACE_PRESSURE_LEVELS"
 NWP_DIRECT_BASE = "https://meteohub.agenziaitaliameteo.it/nwp"
-ICON_FRONT_METHOD = "theta-e-850-icon2i-ofa-v11"
+ICON_FRONT_METHOD = "thetaw-850-icon2i-ofa-v10-hewson"
 # ICON-2I risolve strutture di mesoscala (brezze, canalizzazioni orografiche,
 # outflow temporaleschi) che il rilevatore puo' scambiare per fronti sinottici.
 # Un fronte vero e' anche visibile - smussato e spostato di poche decine di km -
@@ -181,7 +181,7 @@ def prepare_icon_front_analyzer(run_dt):
                     flush=True,
                 )
 
-        analyzer = SynopticFrontAnalyzer(
+        analyzer = FrontalAnalysisV10(
             paths["temperature"],
             paths["humidity"],
             paths["u_wind"],
