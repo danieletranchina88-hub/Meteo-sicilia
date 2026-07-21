@@ -943,15 +943,78 @@ class IconSynopticFrontAnalyzer(SynopticFrontAnalyzer):
         return {"type": "FeatureCollection", "features": features}
 
     def upper_air(self, hour: int, stride: int = 2) -> dict | None:
+        """Export map-ready 850/925-hPa fields used by the level selector.
+
+        The browser receives a compact, coarsened inspection grid rather than
+        the full ICON mesh.  Relative humidity is derived from the native
+        specific humidity with the same Bolton-consistent vapour-pressure
+        relation used by the thermodynamic diagnostic module.
+        """
         result = super().upper_air(hour, stride=stride)
         if result is None:
             return None
-        coarse = np.flipud(self._theta_w(hour)[::stride, ::stride])
-        result["thetaW"] = [
-            None if not np.isfinite(value) else float(value)
-            for value in np.round(coarse.astype(float), 1).ravel()
-        ]
-        result["thetaE"] = result["thetaW"]
+
+        def prepare(field: np.ndarray, decimals: int) -> list:
+            coarse = np.flipud(field[::stride, ::stride])
+            values = np.round(coarse.astype(float), decimals).ravel()
+            return [None if not np.isfinite(value) else float(value) for value in values]
+
+        def relative_humidity(temperature: np.ndarray, humidity: np.ndarray, pressure_pa: float) -> np.ndarray:
+            q = np.asarray(humidity, dtype=float)
+            mixing_ratio = q / np.maximum(1.0 - q, 1.0e-9)
+            vapour_pressure = pressure_pa * mixing_ratio / (thermo.EPSILON + mixing_ratio)
+            saturation = thermo.saturation_vapour_pressure_pa(temperature)
+            with np.errstate(divide="ignore", invalid="ignore"):
+                rh = 100.0 * vapour_pressure / saturation
+            return np.where(np.isfinite(rh), np.clip(rh, 0.0, 100.0), np.nan)
+
+        def level_payload(level_hpa: int) -> dict | None:
+            if level_hpa == 850:
+                temperature = self._field("t", hour)
+                humidity = self._field("q", hour)
+                u_wind = self._field("u", hour)
+                v_wind = self._field("v", hour)
+                thermodynamic = self._thermodynamics(hour)
+                pressure = ANALYSIS_PRESSURE_PA
+            elif not (self.has_lower_level and self.has_lower_wind):
+                return None
+            else:
+                temperature = self._field("t925", hour)
+                humidity = self._field("q925", hour)
+                u_wind = self._field("u925", hour)
+                v_wind = self._field("v925", hour)
+                thermodynamic = self._thermodynamics(hour, 925)
+                pressure = LOWER_PRESSURE_PA
+
+            payload = {
+                "level": f"{level_hpa} hPa",
+                "nx": int(len(self.longitudes[::stride])),
+                "ny": int(len(self.latitudes[::stride])),
+                "lo1": float(self.longitudes[0]),
+                "la1": float(self.latitudes[-1]),
+                "lo2": float(self.longitudes[-1]),
+                "la2": float(self.latitudes[0]),
+                "dx": float(self.delta_longitude * stride),
+                "dy": float(self.delta_latitude * stride),
+                "t": prepare(temperature - thermo.CELSIUS0, 1),
+                "rh": prepare(relative_humidity(temperature, humidity, pressure), 0),
+                "u": prepare(u_wind, 1),
+                "v": prepare(v_wind, 1),
+                "thetaW": prepare(thermodynamic["theta_w"], 1),
+                "thetaE": prepare(thermodynamic["theta_e"], 1),
+            }
+            return payload
+
+        levels = {"850": level_payload(850)}
+        lower = level_payload(925)
+        if lower is not None:
+            levels["925"] = lower
+
+        # Preserve the former top-level 850-hPa schema so old cached pages
+        # and the dedicated theta-w front layer remain compatible.
+        primary = levels["850"]
+        result.update(primary)
+        result["levels"] = levels
         result["primaryThermalField"] = "thetaW"
         return result
 

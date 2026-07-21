@@ -25,6 +25,18 @@ Per ogni run 00/12 UTC e per tutte le 73 scadenze orarie:
 - OMEGA a 700 hPa: attività/ascesa frontale, opzionale;
 - HSURF: controllo orografico.
 
+## Livelli disponibili nella mappa
+
+La tendina della mappa ICON-2I consente di vedere **temperatura, vento e
+umidità relativa** su tre quote reali: suolo (T 2 m, vento 10 m e RH
+superficiale), 925 hPa e 850 hPa. Per 925/850 hPa il sito usa direttamente
+T, QV, U e V dei file MeteoHub; l'umidità relativa è ricavata da QV, pressione
+del livello e pressione di saturazione di Bolton. I livelli in quota vengono
+esportati su una griglia di ispezione alleggerita (~19 km), sufficiente per la
+lettura sinottica e molto più leggera sul cellulare. Se un run non contiene
+un livello opzionale, l'interfaccia non lo sostituisce né lo interpola: torna
+al suolo e avvisa l'utente.
+
 Il livello 850 hPa riduce il rumore dello strato limite e i contrasti diurni.
 Il livello 925 hPa interseca il terreno già attorno a 750 m: sopra 650 m i
 campioni vengono esclusi. Dove almeno il 60% del confronto resta valido, la

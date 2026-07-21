@@ -527,6 +527,51 @@
         color: rgba(255, 255, 255, 0.78);
       }
 
+      .level-picker {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 10px;
+        margin-top: 9px;
+        padding: 8px 9px;
+        border: 1px solid rgba(148, 203, 228, 0.18);
+        border-radius: 12px;
+        background: rgba(255, 255, 255, 0.045);
+      }
+
+      .level-picker label {
+        display: grid;
+        gap: 2px;
+        min-width: 0;
+        color: #dcebf5;
+        font-size: 10px;
+        font-weight: 820;
+      }
+
+      .level-picker label small {
+        color: var(--deep-muted);
+        font-size: 8px;
+        font-weight: 650;
+      }
+
+      .level-picker select {
+        min-width: 92px;
+        min-height: 34px;
+        padding: 0 9px;
+        border: 1px solid rgba(108, 207, 240, 0.42);
+        border-radius: 9px;
+        outline: none;
+        background: #112536;
+        color: #f3fbff;
+        font: inherit;
+        font-size: 10px;
+        font-weight: 850;
+      }
+
+      .level-picker.disabled {
+        opacity: 0.45;
+      }
+
       .gps-button {
         display: flex;
         width: 100%;
@@ -1358,6 +1403,16 @@
                 <span class="layer-swatch"></span><span><b>T 850 hPa</b><small>temperatura in quota</small></span>
               </button>
             </div>
+            <div id="level-picker" class="level-picker">
+              <label for="level-select">Quota di temperatura, vento e umidità
+                <small>ICON‑2I · livelli barici reali</small>
+              </label>
+              <select id="level-select" aria-label="Quota del campo meteorologico">
+                <option value="surface">Suolo</option>
+                <option value="925">925 hPa</option>
+                <option value="850">850 hPa</option>
+              </select>
+            </div>
           </section>
 
           <section class="drawer-section">
@@ -1860,7 +1915,9 @@
         detailRh: document.getElementById("detail-rh"),
         detailCloud: document.getElementById("detail-cloud"),
         detailPressure: document.getElementById("detail-pressure"),
-        detailFront: document.getElementById("detail-front")
+        detailFront: document.getElementById("detail-front"),
+        levelPicker: document.getElementById("level-picker"),
+        levelSelect: document.getElementById("level-select")
       };
 
       const rasterCanvas = document.createElement("canvas");
@@ -1877,6 +1934,7 @@
       let currentIndex = 0;
       let activeModel = "icon2i";
       let activeLayer = "temp";
+      let selectedLevel = "surface";
       let upperData = null;
       let upperIndex = -1;
       let upperPromise = null;
@@ -2016,16 +2074,22 @@
       function fieldValue(key, gx, gy) {
         if (!currentData) return NaN;
 
-        if (LAYER_INFO[key] && LAYER_INFO[key].upper) {
+        if (usesUpperData(key)) {
           if (!upperData || upperIndex !== currentIndex) return NaN;
+          const levelData = upperLevelData(key);
+          if (!levelData) return NaN;
           const surfaceMeta = currentData.meta;
           const lon = surfaceMeta.lo1 + gx * surfaceMeta.dx;
           const lat = surfaceMeta.la1 - gy * surfaceMeta.dy;
-          const ugx = (lon - upperData.lo1) / upperData.dx;
-          const ugy = (upperData.la1 - lat) / upperData.dy;
-          return (useNearestCell ? sampleNearest : sampleBilinear)(
-            upperFieldArray(key), ugx, ugy, upperData.nx, upperData.ny
-          );
+          const ugx = (lon - levelData.lo1) / levelData.dx;
+          const ugy = (levelData.la1 - lat) / levelData.dy;
+          const sampler = useNearestCell ? sampleNearest : sampleBilinear;
+          if (key === "wind") {
+            const u = sampler(levelData.u, ugx, ugy, levelData.nx, levelData.ny);
+            const v = sampler(levelData.v, ugx, ugy, levelData.nx, levelData.ny);
+            return Number.isFinite(u) && Number.isFinite(v) ? Math.hypot(u, v) * 3.6 : NaN;
+          }
+          return sampler(upperFieldArray(key), ugx, ugy, levelData.nx, levelData.ny);
         }
 
         if (key === "wind") {
@@ -2038,10 +2102,32 @@
       }
 
       function windUV(gx, gy) {
+        if (selectedLevel !== "surface" && upperData && upperIndex === currentIndex) {
+          const levelData = upperLevelData("wind");
+          if (levelData) {
+            const meta = currentData.meta;
+            const lon = meta.lo1 + gx * meta.dx;
+            const lat = meta.la1 - gy * meta.dy;
+            const ugx = (lon - levelData.lo1) / levelData.dx;
+            const ugy = (levelData.la1 - lat) / levelData.dy;
+            const sampler = useNearestCell ? sampleNearest : sampleBilinear;
+            return {
+              u: sampler(levelData.u, ugx, ugy, levelData.nx, levelData.ny),
+              v: sampler(levelData.v, ugx, ugy, levelData.nx, levelData.ny)
+            };
+          }
+        }
         return {
           u: sample(currentData && currentData.wind_u, gx, gy),
           v: sample(currentData && currentData.wind_v, gx, gy)
         };
+      }
+
+      function windField() {
+        const upper = selectedLevel !== "surface" ? upperLevelData("wind") : null;
+        if (upper) return { meta: upper, u: upper.u, v: upper.v };
+        if (!currentData) return null;
+        return { meta: currentData.meta, u: currentData.wind_u, v: currentData.wind_v };
       }
 
       const FRONT_TYPE_NAMES = {
@@ -2254,16 +2340,62 @@
       }
 
       function hasLayerData(key) {
-        if (LAYER_INFO[key] && LAYER_INFO[key].upper) return activeModel === "icon2i";
+        if (usesUpperData(key)) return activeModel === "icon2i";
         if (!currentData) return true;
         if (key === "feels") return Boolean(currentData.feels_like);
         if (key === "wind") return Boolean(currentData.wind_u && currentData.wind_v);
         return Boolean(getGrid(currentData[key]));
       }
 
-      function upperFieldArray(key) {
+      function selectedPressureLevel(key) {
+        if (key === "theta850" || key === "t850") return "850";
+        return ["temp", "wind", "rh"].includes(key) ? selectedLevel : "surface";
+      }
+
+      function usesUpperData(key) {
+        return selectedPressureLevel(key) !== "surface";
+      }
+
+      function upperLevelData(key) {
         if (!upperData) return null;
-        return key === "theta850" ? (upperData.thetaW || upperData.thetaE) : upperData.t;
+        const level = selectedPressureLevel(key);
+        if (level === "surface") return null;
+        return upperData.levels && upperData.levels[level]
+          ? upperData.levels[level]
+          : (level === "850" ? upperData : null);
+      }
+
+      function upperFieldArray(key) {
+        const levelData = upperLevelData(key);
+        if (!levelData) return null;
+        if (key === "theta850") return levelData.thetaW || levelData.thetaE;
+        if (key === "temp" || key === "t850") return levelData.t;
+        return levelData[key];
+      }
+
+      function activeLayerInfo(key) {
+        const info = LAYER_INFO[key];
+        if (!info) return info;
+        const level = selectedPressureLevel(key);
+        if (level === "surface") return info;
+        const label = key === "temp"
+          ? "Temperatura a " + level + " hPa"
+          : key === "wind"
+            ? "Vento a " + level + " hPa"
+            : key === "rh"
+              ? "Umidità relativa a " + level + " hPa"
+              : info.label;
+        return {
+          ...info,
+          label: label,
+          note: key === "temp"
+            ? "Temperatura ICON‑2I sul livello barico selezionato."
+            : key === "wind"
+              ? "Intensità del vento ICON‑2I sul livello barico selezionato."
+              : key === "rh"
+                ? "Umidità relativa ricavata da temperatura e umidità specifica ICON‑2I al livello selezionato."
+                : info.note
+        };
       }
 
       function requestUpperData() {
@@ -2278,16 +2410,24 @@
             return response.json();
           })
           .then(function (data) {
+            const requestedLevel = selectedPressureLevel(activeLayer);
+            if (requestedLevel !== "surface" && requestedLevel !== "850" &&
+              (!data.levels || !data.levels[requestedLevel])) {
+              throw new Error("Livello " + requestedLevel + " hPa assente");
+            }
             upperData = data;
             upperIndex = targetIndex;
           })
           .catch(function () {
-            toast("Campi 850 hPa non disponibili per questo modello o run");
-            if (LAYER_INFO[activeLayer] && LAYER_INFO[activeLayer].upper) setLayer("temp");
+            toast("Campi in quota non disponibili per questo modello o run");
+            if (usesUpperData(activeLayer)) {
+              selectedLevel = "surface";
+              setLayer("temp");
+            }
           })
           .finally(function () {
             upperPromise = null;
-            if (LAYER_INFO[activeLayer] && LAYER_INFO[activeLayer].upper) {
+            if (usesUpperData(activeLayer)) {
               renderWeather();
               refreshSelectedPoint();
             }
@@ -2422,14 +2562,16 @@
         stopParticles();
         showFronts = false;
         activeModel = nextModel;
+        if (nextModel !== "icon2i") selectedLevel = "surface";
         catalog = [];
         currentData = null;
         currentIndex = 0;
         stepCache.clear();
         upperData = null;
         upperIndex = -1;
-        if (LAYER_INFO[activeLayer] && LAYER_INFO[activeLayer].upper && nextModel !== "icon2i") {
+        if (usesUpperData(activeLayer) && nextModel !== "icon2i") {
           activeLayer = "temp";
+          selectedLevel = "surface";
         }
         updateModelUi();
         updateLayerUi();
@@ -2528,7 +2670,7 @@
       }
 
       function updateLegend() {
-        const info = LAYER_INFO[activeLayer];
+        const info = activeLayerInfo(activeLayer);
         const minimum = info.stops[0].v;
         const maximum = info.stops[info.stops.length - 1].v;
 
@@ -2554,6 +2696,12 @@
           button.classList.toggle("disabled", !hasLayerData(key));
           button.setAttribute("aria-pressed", key === activeLayer ? "true" : "false");
         });
+
+        const levelRelevant = ["temp", "wind", "rh"].includes(activeLayer);
+        const levelAvailable = activeModel === "icon2i";
+        ui.levelPicker.classList.toggle("disabled", !levelRelevant || !levelAvailable);
+        ui.levelSelect.disabled = !levelRelevant || !levelAvailable;
+        ui.levelSelect.value = selectedLevel;
 
         const states = {
           flow: showParticles,
@@ -2613,6 +2761,24 @@
         closeDrawerOnMobile();
       }
 
+      function setLevel(nextLevel) {
+        if (!["surface", "925", "850"].includes(nextLevel)) return;
+        if (activeModel !== "icon2i" && nextLevel !== "surface") {
+          selectedLevel = "surface";
+          toast("Le quote 925/850 hPa sono disponibili con ICON‑2I");
+          updateLayerUi();
+          return;
+        }
+        selectedLevel = nextLevel;
+        if (usesUpperData(activeLayer)) requestUpperData();
+        updateLayerUi();
+        updateLegend();
+        renderWeather();
+        resetParticles();
+        requestVectorRender();
+        refreshSelectedPoint();
+      }
+
       function setToggle(name) {
         if (name === "flow") {
           showParticles = !showParticles;
@@ -2663,15 +2829,16 @@
         if (!mapLoaded || !currentData || !map.getSource("weather")) return;
 
         const meta = currentData.meta;
-        const info = LAYER_INFO[activeLayer];
-        const upperActive = Boolean(info && info.upper);
+        const info = activeLayerInfo(activeLayer);
+        const upperActive = usesUpperData(activeLayer);
         if (upperActive && (upperIndex !== currentIndex || !upperData)) {
           requestUpperData();
           return;
         }
         // I campi a 850 hPa vivono su una griglia propria (dominio piu'
         // ampio, passo ~19 km): il raster usa la geometria del campo attivo.
-        const fieldMeta = upperActive ? upperData : meta;
+        const fieldMeta = upperActive ? upperLevelData(activeLayer) : meta;
+        if (!fieldMeta) return;
         const dataWest = fieldMeta.lo1 - fieldMeta.dx / 2;
         const dataEast = fieldMeta.lo1 + (fieldMeta.nx - 1) * fieldMeta.dx + fieldMeta.dx / 2;
         const dataNorth = fieldMeta.la1 + fieldMeta.dy / 2;
@@ -2722,8 +2889,9 @@
         const fieldGrid = isWindField
           ? null
           : getGrid(upperActive ? upperFieldArray(activeLayer) : currentData[fieldKey]);
-        const windUGrid = isWindField ? getGrid(currentData.wind_u) : null;
-        const windVGrid = isWindField ? getGrid(currentData.wind_v) : null;
+        const windLevel = upperActive ? upperLevelData("wind") : null;
+        const windUGrid = isWindField ? getGrid(windLevel ? windLevel.u : currentData.wind_u) : null;
+        const windVGrid = isWindField ? getGrid(windLevel ? windLevel.v : currentData.wind_v) : null;
 
         for (let y = 0; y < height; y += 1) {
           const fraction = height > 1 ? y / (height - 1) : 0;
@@ -3251,7 +3419,9 @@
       function respawnParticle(particle, randomAge) {
         if (!currentData || !map) return;
 
-        const meta = currentData.meta;
+        const field = windField();
+        if (!field) return;
+        const meta = field.meta;
         const bounds = map.getBounds();
         const west = Math.max(bounds.getWest(), meta.lo1);
         const east = Math.min(bounds.getEast(), meta.lo1 + (meta.nx - 1) * meta.dx);
@@ -3299,7 +3469,8 @@
       }
 
       function animateParticles(timestamp) {
-        if (!showParticles || !currentData || !map || !currentData.wind_u || !currentData.wind_v) {
+        const wind = windField();
+        if (!showParticles || !currentData || !map || !wind || !wind.u || !wind.v) {
           particleFrame = null;
           particleContext.clearRect(0, 0, window.innerWidth, window.innerHeight);
           return;
@@ -3332,7 +3503,7 @@
         particleContext.lineCap = "round";
         particleContext.lineJoin = "round";
 
-        const meta = currentData.meta;
+        const meta = wind.meta;
         const visualScale = 6900 * clamp(Math.pow(2, 6 - map.getZoom()), 0.22, 3.4);
         const buckets = {};
 
@@ -3347,8 +3518,8 @@
             return;
           }
 
-          const u = sampleBilinear(currentData.wind_u, gx, gy, meta.nx, meta.ny);
-          const v = sampleBilinear(currentData.wind_v, gx, gy, meta.nx, meta.ny);
+          const u = sampleBilinear(wind.u, gx, gy, meta.nx, meta.ny);
+          const v = sampleBilinear(wind.v, gx, gy, meta.nx, meta.ny);
           const speed = Math.hypot(u, v);
           const speedKmh = speed * 3.6;
 
@@ -3721,7 +3892,9 @@
         drawFrontsCanvas();
         if (!showVectors) return;
 
-        const meta = currentData.meta;
+        const wind = windField();
+        if (!wind || !wind.u || !wind.v) return;
+        const meta = wind.meta;
         const mobile = window.innerWidth < 900;
         const spacing = clamp((mobile ? 69 : 84) + (6 - map.getZoom()) * 3, mobile ? 58 : 66, mobile ? 86 : 102);
         const topInset = mobile ? 118 : 54;
@@ -3739,8 +3912,8 @@
 
             if (gx < 0 || gy < 0 || gx >= meta.nx - 1 || gy >= meta.ny - 1) continue;
 
-            const u = sampleBilinear(currentData.wind_u, gx, gy, meta.nx, meta.ny);
-            const v = sampleBilinear(currentData.wind_v, gx, gy, meta.nx, meta.ny);
+            const u = sampleBilinear(wind.u, gx, gy, meta.nx, meta.ny);
+            const v = sampleBilinear(wind.v, gx, gy, meta.nx, meta.ny);
             const speed = Math.hypot(u, v) * 3.6;
             if (!Number.isFinite(speed) || speed < 1.5) continue;
 
@@ -3821,7 +3994,7 @@
         const point = pointFromCoordinates(selectedPoint.lng, selectedPoint.lat);
         if (!point) return;
 
-        const info = LAYER_INFO[activeLayer];
+        const info = activeLayerInfo(activeLayer);
         const selectedValue = fieldValue(activeLayer, point.gx, point.gy);
         const wind = windUV(point.gx, point.gy);
         const windDirection = windDirectionFrom(wind.u, wind.v);
@@ -4271,6 +4444,10 @@
         button.addEventListener("click", function () {
           setLayer(button.dataset.layer);
         });
+      });
+
+      ui.levelSelect.addEventListener("change", function () {
+        setLevel(ui.levelSelect.value);
       });
 
       document.querySelectorAll("[data-toggle]").forEach(function (button) {
