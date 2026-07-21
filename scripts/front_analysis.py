@@ -18,21 +18,42 @@ import xarray as xr
 FRONT_METHOD = "theta-e-850-ofa-v9"
 
 
-def _box_smooth(field: np.ndarray, radius: int) -> np.ndarray:
-    """Fast edge-preserving box mean without a scipy dependency."""
-    if radius <= 0:
-        return np.asarray(field, dtype=float)
-    values = np.asarray(field, dtype=float)
-    padded = np.pad(values, ((radius, radius), (radius, radius)), mode="edge")
+def _box_sum(padded: np.ndarray, width: int) -> np.ndarray:
+    """Sliding-window sum via integral image (summed-area table)."""
     integral = np.pad(padded, ((1, 0), (1, 0)), mode="constant")
     integral = integral.cumsum(axis=0).cumsum(axis=1)
-    width = radius * 2 + 1
     return (
         integral[width:, width:]
         - integral[:-width, width:]
         - integral[width:, :-width]
         + integral[:-width, :-width]
-    ) / float(width * width)
+    )
+
+
+def _box_smooth(field: np.ndarray, radius: int) -> np.ndarray:
+    """Fast edge-preserving box mean, NaN-aware.
+
+    La media di finestra e' calcolata solo sui punti finiti: un singolo
+    NaN in ingresso NON contamina piu' l'intero quadrante (il vecchio
+    integral image con cumsum propagava il NaN a valle).  Una cella resta
+    NaN solo se meno di un quarto della finestra e' valido.  Sui campi
+    senza NaN il risultato coincide con la media di box classica.
+    """
+    if radius <= 0:
+        return np.asarray(field, dtype=float)
+    values = np.asarray(field, dtype=float)
+    valid = np.isfinite(values)
+    filled = np.where(valid, values, 0.0)
+    width = radius * 2 + 1
+    padded_values = np.pad(filled, ((radius, radius), (radius, radius)), mode="edge")
+    padded_valid = np.pad(
+        valid.astype(float), ((radius, radius), (radius, radius)), mode="edge"
+    )
+    window_sum = _box_sum(padded_values, width)
+    window_count = _box_sum(padded_valid, width)
+    with np.errstate(invalid="ignore", divide="ignore"):
+        mean = window_sum / np.maximum(window_count, 1.0)
+    return np.where(window_count >= 0.25 * width * width, mean, np.nan)
 
 
 def _equivalent_potential_temperature(temp_k: np.ndarray, q: np.ndarray) -> np.ndarray:
@@ -287,6 +308,8 @@ class SynopticFrontAnalyzer:
                 backend_kwargs=backend_kwargs,
             )
 
+        self._open_field = open_field
+
         self.datasets = {
             "t": open_field(temperature_path, "t"),
             "q": open_field(humidity_path, "q"),
@@ -306,6 +329,7 @@ class SynopticFrontAnalyzer:
             key: next(iter(dataset.data_vars))
             for key, dataset in self.datasets.items()
         }
+        self._validate_inputs()
         factor = max(1, int(downsample))
         self.factor = factor
         source_dataset = self.datasets["t"]
@@ -362,6 +386,76 @@ class SynopticFrontAnalyzer:
         self.reference_by_hour: dict[int, dict] = {}
         self.reference_radius_fn = lambda hour: 220.0
         self.tracks: list[dict] | None = None
+
+    def _validate_inputs(self) -> None:
+        """Validazione esplicita dei GRIB: livello, unita', scadenze.
+
+        Meglio un errore chiaro all'ingresso che un risultato apparentemente
+        valido ma corrotto da un'unita' sbagliata (q in g/kg mascherata dal
+        clipping, geopotenziale usato come quota, ecc.).
+        """
+        def level_of(dataset: xr.Dataset):
+            for candidate in ("isobaricInhPa", "level"):
+                if candidate in dataset.coords:
+                    values = np.atleast_1d(dataset.coords[candidate].values)
+                    if values.size == 1:
+                        return float(values.item())
+            return None
+
+        # Livello 850 hPa per i campi in quota.
+        for key in ("t", "q", "u", "v"):
+            level = level_of(self.datasets[key])
+            if level is not None and abs(level - 850.0) > 1.0:
+                raise ValueError(
+                    f"Campo '{key}' a {level:.0f} hPa invece di 850 hPa"
+                )
+
+        # Temperatura in kelvin (non gia' in Celsius).
+        t = self.datasets["t"][self.keys["t"]]
+        t_med = float(np.nanmedian(np.asarray(t.values, dtype=float)))
+        if not (180.0 < t_med < 330.0):
+            raise ValueError(
+                f"Temperatura 850 hPa con mediana {t_med:.1f}: attesa in kelvin"
+            )
+
+        # Umidita' specifica in kg/kg: in g/kg la mediana sarebbe ~1-15,
+        # e il clipping a 0.04 la maschererebbe producendo theta-e sbagliata.
+        q = self.datasets["q"][self.keys["q"]]
+        q_med = float(np.nanmedian(np.asarray(q.values, dtype=float)))
+        if q_med > 0.1:
+            raise ValueError(
+                f"Umidita' specifica con mediana {q_med:.3f}: attesa in kg/kg "
+                "(sembra g/kg)"
+            )
+
+        # Orografia in metri: il geopotenziale (m^2/s^2) sarebbe ~10x e
+        # spingerebbe l'intero dominio sopra le soglie orografiche.
+        if "h" in self.datasets:
+            h = self.datasets["h"][self.keys["h"]]
+            h_max = float(np.nanmax(np.asarray(h.values, dtype=float)))
+            if h_max > 9000.0:
+                raise ValueError(
+                    f"Orografia con massimo {h_max:.0f}: attesa in metri "
+                    "(sembra geopotenziale m^2/s^2)"
+                )
+
+        # Le scadenze di T/Q/U/V devono coincidere: indici condivisi
+        # altrimenti leggerebbero l'ora sbagliata per umidita' o vento.
+        def steps_of(dataset: xr.Dataset):
+            if "step" not in dataset.coords and "step" not in dataset.dims:
+                return None
+            return np.atleast_1d(np.asarray(dataset["step"].values))
+
+        reference_steps = steps_of(self.datasets["t"])
+        if reference_steps is not None:
+            for key in ("q", "u", "v"):
+                other = steps_of(self.datasets[key])
+                if other is None or other.shape != reference_steps.shape or not np.array_equal(
+                    other, reference_steps
+                ):
+                    raise ValueError(
+                        f"Scadenze del campo '{key}' non coincidono con T"
+                    )
 
     def close(self) -> None:
         for dataset in self.datasets.values():
@@ -546,9 +640,12 @@ class SynopticFrontAnalyzer:
             p_center = self._sample(pressure, coordinates)
             p_cold = self._sample(pressure, coordinates - offsets_p)
             p_warm = self._sample(pressure, coordinates + offsets_p)
-            pressure_trough = float(
+            trough_value = float(
                 np.nanmedian((p_cold + p_warm) / 2.0 - p_center)
             )
+            # NaN (tutti i sondaggi laterali fuori dominio) -> None, non un
+            # valore che sfuggirebbe ai confronti dei gate.
+            pressure_trough = trough_value if np.isfinite(trough_value) else None
             if pressure_tendency is not None:
                 # Coppia isallobarica del passaggio frontale: la pressione
                 # "decresce prima, tocca il minimo durante, aumenta dopo".
@@ -557,7 +654,8 @@ class SynopticFrontAnalyzer:
                 # muove.  Differenza lato freddo - lato caldo, in hPa/h.
                 tendency_cold = self._sample(pressure_tendency, coordinates - offsets_p)
                 tendency_warm = self._sample(pressure_tendency, coordinates + offsets_p)
-                isallobaric_raw = float(np.nanmedian(tendency_cold - tendency_warm))
+                iso_value = float(np.nanmedian(tendency_cold - tendency_warm))
+                isallobaric_raw = iso_value if np.isfinite(iso_value) else None
 
         median_strength = float(np.nanmedian(line_strength))
         median_shift = float(np.nanmedian(wind_shift))
@@ -569,17 +667,22 @@ class SynopticFrontAnalyzer:
         median_frontogenesis = float(
             np.nanmedian(self._sample(frontogenesis, coordinates))
         )
-        # Se le firme fondamentali risultano non finite (troppi campioni
-        # fuori dominio) il candidato non e' valutabile: scartare, non
-        # lasciare che i confronti con NaN lo facciano passare.
+        # Se una qualsiasi firma sempre-presente risulta non finita (troppi
+        # campioni fuori dominio) il candidato non e' valutabile: scartare,
+        # non lasciare che i confronti con NaN lo facciano passare.  I
+        # valori opzionali (pressione, isallobarica) sono gia' normalizzati
+        # a None a monte; signed_delta_t e' controllato al Gate 1b.
         if not all(
             np.isfinite(value)
             for value in (
                 median_strength,
                 median_shift,
                 median_convergence,
+                median_tendency,
                 median_gradient,
                 median_dry,
+                median_vorticity,
+                median_frontogenesis,
             )
         ):
             return None
@@ -600,6 +703,8 @@ class SynopticFrontAnalyzer:
         # La propagazione e' la misura principale del movimento (la review
         # ha ragione: il vento locale da solo classifica male i fronti che
         # avanzano non paralleli al flusso); l'avvezione la stabilizza.
+        if not (np.isfinite(propagation_kmh) and np.isfinite(advection_kmh)):
+            return None
         motion_kmh = 0.6 * np.clip(propagation_kmh, -80.0, 80.0) + 0.4 * np.clip(
             advection_kmh, -80.0, 80.0
         )
@@ -636,7 +741,8 @@ class SynopticFrontAnalyzer:
                 - self._sample(virtual_temperature, cold_points)
             )
         )
-        if signed_delta_t < -0.3:
+        # Non finito (sondaggi laterali Tv fuori dominio) -> non valutabile.
+        if not np.isfinite(signed_delta_t) or signed_delta_t < -0.3:
             return None
 
         # Gate 2 - firma dinamica.  Un fronte giace in una saccatura di
