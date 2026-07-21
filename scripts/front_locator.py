@@ -300,8 +300,22 @@ def locate_fronts(
             piece_tfp = _sample(tfp, piece, lon, lat, dlon, dlat)
             piece_grad = _sample(grad_mag_100, piece, lon, lat, dlon, dlat)
             piece_abz = abz_gradient_at(piece)
+            # Warm-ward unit normal (grad theta_w points to warm) and the
+            # Hewson frontal-speed direction (grad |grad theta_w|), attached
+            # per point so downstream modules can compute geometric motion,
+            # normal advection and the OFA speed without the full field.
+            ge = _sample(grad_e, piece, lon, lat, dlon, dlat)
+            gn = _sample(grad_n, piece, lon, lat, dlon, dlat)
+            gmag = np.maximum(np.hypot(ge, gn), 1.0e-12)
+            warm_normal = np.column_stack((ge / gmag, gn / gmag))
+            he = _sample(gm_e, piece, lon, lat, dlon, dlat)
+            hn = _sample(gm_n, piece, lon, lat, dlon, dlat)
+            hmag = np.maximum(np.hypot(he, hn), 1.0e-12)
+            hewson_dir = np.column_stack((he / hmag, hn / hmag))
             candidates.append({
                 "coordinates": piece,
+                "warmNormal": warm_normal,
+                "hewsonDir": hewson_dir,
                 "medianTfp": float(np.nanmedian(piece_tfp)),
                 "medianThetaWGradient": float(np.nanmedian(piece_grad)),
                 "medianAbzGradient": float(np.nanmedian(piece_abz)),
