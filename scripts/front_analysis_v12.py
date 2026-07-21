@@ -49,6 +49,24 @@ def _finite_median(values, default=np.nan) -> float:
     return float(np.median(finite)) if finite.size else float(default)
 
 
+def _json_number(value, digits: int | None = None):
+    """Return a finite builtin float or JSON null, never NaN/Infinity."""
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return None
+    if not np.isfinite(number):
+        return None
+    return round(number, digits) if digits is not None else number
+
+
+def _json_mapping(values: dict, digits: int | None = None) -> dict:
+    return {
+        key: _json_number(value, digits)
+        for key, value in values.items()
+    }
+
+
 class IconSynopticFrontAnalyzer(SynopticFrontAnalyzer):
     """OFA front detector assembled around the validated ICON GRIB loader."""
 
@@ -559,12 +577,18 @@ class IconSynopticFrontAnalyzer(SynopticFrontAnalyzer):
             "uncertaintyIndex": round(float(track["uncertaintyIndex"]), 2),
             "uncertaintyClass": track.get("uncertaintyClass", "low"),
             "motionKmh": round(float(track.get("geoMotionKmh", 0.0)), 1),
-            "geoMotionKmh": track.get("geoMotionKmh"),
-            "ofaSpeedKmh": track.get("ofaSpeedKmh"),
-            "tendencyMotionKmh": track.get("tendencyMotionKmh"),
-            "classificationCertainty": track.get("classificationCertainty"),
-            "qualityComponents": track.get("qualityComponents", {}),
-            "diagnostics": track.get("diagnostics", {}),
+            "geoMotionKmh": _json_number(track.get("geoMotionKmh"), 1),
+            "ofaSpeedKmh": _json_number(track.get("ofaSpeedKmh"), 1),
+            "tendencyMotionKmh": _json_number(
+                track.get("tendencyMotionKmh"), 1
+            ),
+            "classificationCertainty": _json_number(
+                track.get("classificationCertainty"), 2
+            ),
+            "qualityComponents": _json_mapping(
+                track.get("qualityComponents", {}), 2
+            ),
+            "diagnostics": _json_mapping(track.get("diagnostics", {}), 4),
             "lifetimeH": int(track.get("lifetimeH", 0)),
             "trackId": int(track.get("id", -1)),
             "method": self.method,

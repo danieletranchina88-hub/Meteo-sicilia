@@ -117,6 +117,18 @@ def download_grib_file(url, destination):
             time.sleep(attempt * 2)
 
 
+def write_json_atomic(path, payload):
+    """Write a complete strict JSON document or leave no target at all."""
+    partial = path + ".part"
+    try:
+        with open(partial, "w", encoding="utf-8") as output:
+            json.dump(payload, output, separators=(",", ":"), allow_nan=False)
+        os.replace(partial, path)
+    finally:
+        if os.path.exists(partial):
+            os.remove(partial)
+
+
 def prepare_icon_front_analyzer(run_dt):
     """Build the ICON-2I-only, hourly, multilayer frontal analysis.
 
@@ -428,6 +440,7 @@ def process_data():
     os.makedirs(TEMP_DIR)
 
     catalog = []
+    step_errors = []
     icon_front_analyzer = prepare_icon_front_analyzer(run_dt)
     if icon_front_analyzer is None:
         raise RuntimeError(
@@ -476,6 +489,7 @@ def process_data():
         steps = range(ds_wind.sizes.get('step', 1))
 
         for i in steps:
+            step_hours = None
             try:
                 if ds_wind.sizes.get('step', 1) > 1:
                     dw_step = ds_wind.isel(step=i)
@@ -633,8 +647,7 @@ def process_data():
 
                 out_name = f"step_{step_hours}.json"
                 # FIX 3: Minificazione del file
-                with open(f"{TEMP_DIR}/{out_name}", 'w') as jf:
-                    json.dump(step_data, jf, separators=(',', ':'), allow_nan=False)
+                write_json_atomic(f"{TEMP_DIR}/{out_name}", step_data)
 
                 # Campi a 850 hPa (theta-e, T, vento) per il layer di
                 # ispezione dei fronti: file separato, scaricato dal sito
@@ -645,8 +658,9 @@ def process_data():
                         if upper is not None:
                             upper["runTime"] = iso_z(run_dt)
                             upper["validTime"] = iso_date
-                            with open(f"{TEMP_DIR}/upper_{step_hours}.json", 'w') as uf:
-                                json.dump(upper, uf, separators=(',', ':'), allow_nan=False)
+                            write_json_atomic(
+                                f"{TEMP_DIR}/upper_{step_hours}.json", upper
+                            )
                     except Exception as upper_error:
                         print(f" upper-{step_hours}h:{upper_error}", end="", flush=True)
 
@@ -654,7 +668,13 @@ def process_data():
                     catalog.append({ "file": out_name, "label": f"{valid_dt.strftime('%d/%m %H:00')} UTC", "hour": step_hours, "runTime": iso_z(run_dt), "validTime": iso_date, "leadHours": step_hours })
 
             except Exception as e:
-                print(f"!", end="", flush=True)
+                step_errors.append((step_hours, str(e)))
+                print(
+                    f" step-{step_hours if step_hours is not None else '?'}:"
+                    f"{type(e).__name__}:{e}",
+                    end="",
+                    flush=True,
+                )
                 continue
 
         print(" -> Done")
@@ -668,8 +688,18 @@ def process_data():
 
     if catalog:
         catalog.sort(key=lambda x: x['hour'])
-        with open(f"{TEMP_DIR}/catalog.json", 'w') as f:
-            json.dump(catalog, f, separators=(',', ':'), allow_nan=False)
+        expected_hours = set(icon_front_analyzer.available_hours)
+        actual_hours = {int(item["hour"]) for item in catalog}
+        missing_hours = sorted(expected_hours - actual_hours)
+        if step_errors or missing_hours:
+            preview = "; ".join(
+                f"+{hour}h {message}" for hour, message in step_errors[:5]
+            )
+            raise RuntimeError(
+                f"output ICON incompleto: {len(step_errors)} errori, "
+                f"ore mancanti {missing_hours}; {preview}"
+            )
+        write_json_atomic(f"{TEMP_DIR}/catalog.json", catalog)
 
         if os.path.exists(FINAL_DIR): shutil.rmtree(FINAL_DIR)
         shutil.move(TEMP_DIR, FINAL_DIR)
