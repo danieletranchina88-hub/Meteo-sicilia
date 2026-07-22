@@ -224,6 +224,21 @@ mobile richiede almeno due famiglie concordi e nessun voto opposto. Una
 contraddizione forte del vento rende la traccia `uncertain`, anche quando la
 linea termica sembra muoversi correttamente.
 
+### Occlusione
+
+L'occlusione non è decisa dal gradiente di una singola ora, ma dal contesto
+spaziale (documento sez. 14): sui fronti già pubblicati e sul campo PMSL si
+cerca un **minimo barico reale** (prominenza ≥ 2 hPa sull'anello circostante)
+a cui siano ancorati **sia un fronte freddo sia un fronte caldo** che si
+incontrano in un **punto di tripla giunzione**. Ciò che distingue
+l'occlusione dall'onda aperta è che il punto triplo è **spostato dal minimo**
+e il fronte freddo **si avvolge** dal punto triplo fino al centro depressione:
+quel ramo avvolto diventa un fronte separato di tipo `occluded` (simbolo viola,
+triangolo e semicerchio alternati sullo stesso lato). Il criterio è
+volutamente conservativo — un fronte freddo isolato o un'onda aperta (con
+entrambi i fronti che partono dal minimo, senza ramo avvolto) **non** produce
+un'occlusione.
+
 Ogni candidato che raggiunge il tracciamento ha già superato le porte
 fisiche dure (contrasto termico/densità, corridoio sinottico, diagnosi
 `synoptic-front`): è un segmento frontale reale, non rumore. Può quindi
@@ -294,7 +309,10 @@ La workflow blocca la pubblicazione se falliscono i test sintetici:
 - tracciamento, classificazione e separazione delle identità.
 - consenso obbligatorio fra moto geometrico, fase termica e vento;
 - continuità di una traccia lunga a prevalenza "continuazione" e persistenza
-  visibile di un fronte quasi stazionario passato ogni porta fisica.
+  visibile di un fronte quasi stazionario passato ogni porta fisica;
+- riconoscimento dell'onda in occlusione e rifiuto di onda aperta / fronte
+  freddo isolato come falsa occlusione;
+- presenza e buona forma dell'array `explanation` su ogni fronte pubblicato.
 
 ## Riferimenti primari
 

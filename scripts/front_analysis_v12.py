@@ -17,6 +17,7 @@ import numpy as np
 
 import front_detection as fd
 import front_locator as fl
+import front_occlusion as focc
 import front_physics as fp
 import front_tracking as ftk
 import thermodynamics as thermo
@@ -873,7 +874,66 @@ class IconSynopticFrontAnalyzer(SynopticFrontAnalyzer):
                 by_hour.setdefault(hour, []).append((
                     np.asarray(coordinates, dtype=float), hour_properties
                 ))
+        self._occlusion_hours = self._apply_occlusions(by_hour)
         self._by_hour = by_hour
+
+    def _apply_occlusions(self, by_hour: dict) -> int:
+        """Relabel the wrapped cold-front branch of an occluding wave.
+
+        Spatial+temporal context (a real MSLP low with a cold and a warm front
+        meeting at a triple point) decides the occlusion, per documento sez.
+        14. The cold front is trimmed at the triple point and the branch that
+        wraps toward the low centre becomes a separate ``occluded`` feature.
+        """
+        occluded_hours = 0
+        for hour, entries in by_hour.items():
+            if len(entries) < 2:
+                continue
+            features = [{"coordinates": coords, "frontType": props["frontType"]}
+                        for coords, props in entries]
+            pressure = self._pressure_hpa(hour)
+            occlusions = focc.detect_occlusion(
+                features, pressure, self.longitudes, self.latitudes
+            )
+            if not occlusions:
+                continue
+            for occ in occlusions:
+                fi = occ["featureIndex"]
+                coords, props = entries[fi]
+                coords = np.asarray(coords, dtype=float)
+                triple, low_idx = occ["tripleIndex"], occ["lowIndex"]
+                if triple <= low_idx:
+                    occluded_part = coords[triple:low_idx + 1]
+                    cold_part = coords[:triple + 1]
+                else:
+                    occluded_part = coords[low_idx:triple + 1]
+                    cold_part = coords[triple:]
+                if len(occluded_part) < 3:
+                    continue
+                occ_props = dict(props)
+                occ_props["frontType"] = "occluded"
+                occ_props["occlusion"] = {
+                    "lowPressureHpa": round(occ["low"]["pressure"], 1),
+                    "triplePoint": occ["triplePoint"],
+                    "wrapKm": occ["wrapKm"],
+                }
+                occ_props["explanation"] = [
+                    "fronte freddo che raggiunge il fronte caldo attorno al "
+                    f"minimo barico ({round(occ['low']['pressure'])} hPa)",
+                    "settore caldo ristretto al punto di tripla giunzione",
+                ] + [
+                    reason for reason in props.get("explanation", [])
+                    if "persistente" in reason
+                ]
+                # The trailing cold front keeps its identity only if a real
+                # segment survives past the triple point.
+                if len(cold_part) >= 3:
+                    entries[fi] = (np.asarray(cold_part, dtype=float), props)
+                    entries.append((occluded_part, occ_props))
+                else:
+                    entries[fi] = (occluded_part, occ_props)
+                occluded_hours += 1
+        return occluded_hours
 
     def _track_properties(
         self, track: dict, classification: dict | None = None
