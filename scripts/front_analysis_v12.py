@@ -834,10 +834,34 @@ class IconSynopticFrontAnalyzer(SynopticFrontAnalyzer):
                         ) * 0.92,
                         2,
                     )
+            # A published track is a single continuous boundary. An isolated
+            # hour whose local motion is ambiguous ("uncertain") must NOT punch
+            # a hole in the middle of the track: that is the "front disappears
+            # for one hour" artefact. Such hours are displayed with the track's
+            # dominant published type, so the line stays continuous while its
+            # reduced certainty is still recorded.
+            local_types = [
+                value.get("frontType")
+                for value in local.values()
+                if value.get("frontType") not in (None, "uncertain")
+            ]
+            dominant_type = track.get("frontType")
+            if dominant_type in (None, "uncertain"):
+                dominant_type = (
+                    max(set(local_types), key=local_types.count)
+                    if local_types else None
+                )
             for hour, coordinates in expanded.items():
-                classification = local.get(hour, {})
+                classification = dict(local.get(hour, {}))
                 if classification.get("frontType") in (None, "uncertain"):
-                    continue
+                    if dominant_type is None:
+                        continue
+                    classification["frontType"] = dominant_type
+                    classification["classificationCertainty"] = round(
+                        float(classification.get("classificationCertainty", 0.0)),
+                        2,
+                    )
+                    classification["typeInferredFromTrack"] = True
                 hour_properties = self._track_properties(
                     track, classification
                 )

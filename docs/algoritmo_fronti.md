@@ -224,10 +224,26 @@ mobile richiede almeno due famiglie concordi e nessun voto opposto. Una
 contraddizione forte del vento rende la traccia `uncertain`, anche quando la
 linea termica sembra muoversi correttamente.
 
-Si applica inoltre isteresi fisica: soltanto un candidato forte può creare
-una traccia; un candidato marginale ma ancora plausibile può continuarla per
-non più di due ore. Non può nascere una linea da sole evidenze marginali e
-una lunga perdita di segnale termina davvero l'identità.
+Ogni candidato che raggiunge il tracciamento ha già superato le porte
+fisiche dure (contrasto termico/densità, corridoio sinottico, diagnosi
+`synoptic-front`): è un segmento frontale reale, non rumore. Può quindi
+**dare origine a una traccia** anche quando è di grado "continuazione" e non
+"forte" — altrimenti un fronte sinottico lento e quasi stazionario, che
+raramente raggiunge il grado forte, non nascerebbe mai e verrebbe perso. La
+persistenza spuria è comunque scartata dalle soglie di durata, numero di
+rilevamenti e copertura. Non si impone più un limite alla lunghezza dei
+tratti "continuazione" consecutivi: un confine coerente e ben coperto per
+molte ore non viene cancellato solo perché di rado tocca il grado forte; il
+`qualityScore` lo pondera senza eliminarlo. Una lunga perdita di segnale
+(oltre la finestra di tracciamento) termina davvero l'identità.
+
+L'incertezza diagnostica penalizza le dimensioni di **esistenza** deboli —
+contrasto termico e coerenza strutturale — ma non la dinamica: un fronte
+quasi stazionario ha per natura vento trasversale e convergenza deboli e non
+deve per questo risultare "incerto" ed essere scartato. All'interno di una
+traccia pubblicata, un'ora la cui classificazione locale è ambigua viene
+mostrata con il tipo dominante della traccia, così la linea resta continua
+invece di sparire per una singola ora.
 
 ## 6. Significato dell'incertezza
 
@@ -261,7 +277,8 @@ La workflow blocca la pubblicazione se falliscono i test sintetici:
   termicamente coerente già tracciato;
 - tracciamento, classificazione e separazione delle identità.
 - consenso obbligatorio fra moto geometrico, fase termica e vento;
-- isteresi di una sola ora senza nascita da candidati marginali.
+- continuità di una traccia lunga a prevalenza "continuazione" e persistenza
+  visibile di un fronte quasi stazionario passato ogni porta fisica.
 
 ## Riferimenti primari
 
