@@ -191,53 +191,178 @@ def candidate_evidence(metrics: dict) -> dict:
     }
 
 
-def candidate_hypothesis(metrics: dict) -> tuple[str, list[str]]:
-    """Return the most plausible physical interpretation of a candidate.
+_HYPOTHESIS_LABEL = {
+    "synoptic-front": "fronte sinottico",
+    "moisture-boundary": "confine di umidità / dryline",
+    "mesoscale-boundary": "confine mesoscalare (brezza)",
+    "outflow-boundary": "outflow convettivo / cold pool",
+    "orographic-boundary": "segnale orografico",
+    "noise": "gradiente debole / rumore",
+}
 
-    This is deliberately a small, explainable differential diagnosis.  It
-    does not claim to identify every mesoscale phenomenon; it identifies the
-    common ways high-resolution model fields imitate a synoptic front.
+
+def _neutral(value, weak, strong, fallback=0.5):
+    """Fuzzy membership, but a genuinely missing field stays neutral."""
+    v = _finite(value, np.nan)
+    return smoothstep(v, weak, strong) if np.isfinite(v) else float(fallback)
+
+
+def differential_diagnosis(metrics: dict) -> dict:
+    """Weigh competing physical hypotheses like a human forecaster.
+
+    Instead of a chain of thresholds, this observes *all* the characteristics
+    of the case and scores each archetype the way a meteorologist compares
+    what he sees against what each phenomenon should look like: a synoptic
+    front, a moisture boundary/dryline, a sea-breeze/mesoscale line, a
+    convective outflow, an orographic signal, or plain weak noise. The best
+    supported hypothesis is the verdict; the full ranking and the reasons the
+    winner beat the runner-up are returned so the decision is transparent.
+
+    Supports are internal physical-consistency scores in [0, 1], NOT
+    probabilities: they say how well the case matches each archetype.
     """
+    # --- observed characteristics (soft memberships) --------------------
+    theta_w = smoothstep(metrics.get("deltaThetaW"), 1.0, 4.5)
+    dry = smoothstep(metrics.get("deltaTemperature"), 0.5, 3.0)
+    density = smoothstep(metrics.get("deltaThetaV"), 0.2, 2.2)
+    dry_gradient = smoothstep(metrics.get("dryThermalGradient"), 0.7, 3.0)
+    theta_e = _neutral(metrics.get("deltaThetaE"), 1.5, 6.0, 0.0)
+    synoptic = smoothstep(metrics.get("synopticSupport"), 0.55, 0.95)
+    length = smoothstep(metrics.get("lengthKm"), 250.0, 800.0)
+    short = 1.0 - length
+    terrain = smoothstep(metrics.get("terrainFraction"), 0.25, 0.70)
+    sinuosity = smoothstep(metrics.get("sinuosity"), 1.4, 2.6)
+    wind = max(smoothstep(metrics.get("windShiftMs"), 1.5, 7.0),
+               smoothstep(metrics.get("windShiftAngleDeg"), 8.0, 42.0))
+    convergence = max(smoothstep(metrics.get("convergenceMs"), 0.05, 2.0),
+                      smoothstep(metrics.get("convergenceFraction"), 0.42, 0.78))
+    vorticity = smoothstep(metrics.get("vorticity1e5"), -0.5, 4.0)
+    frontogenesis = smoothstep(metrics.get("frontogenesis"), -0.6, 2.8)
+    ascent = _neutral(metrics.get("omega700PaS"), -0.03, -0.20, 0.5)
+    if np.isfinite(_finite(metrics.get("omega700PaS"), np.nan)):
+        ascent = smoothstep(-_finite(metrics.get("omega700PaS")), -0.03, 0.20)
+    lower = _neutral(metrics.get("lowerLevelSupport"), 0.35, 0.80, 0.5)
+    lower_contrast = _neutral(metrics.get("deltaThetaW925"), 0.7, 3.2, 0.5)
+    vertical = 0.58 * lower + 0.42 * lower_contrast
+    trough = _neutral(metrics.get("pressureTroughHpa"), -0.15, 1.8, 0.45)
+
+    dynamic = 0.48 * wind + 0.30 * convergence + 0.12 * vorticity + 0.10 * frontogenesis
+    thermal_core = min(theta_w, dry, density)  # AND-like: all three present
+
+    # --- temporal evolution: a front persists and moves coherently, a
+    # mesoscale/outflow boundary is transient and erratic (documento sez. 12).
+    persistence = _neutral(metrics.get("lifetimeH"), 3.0, 15.0, 0.5)
+    coverage_t = _neutral(metrics.get("temporalCoverage"), 0.5, 0.95, 0.5)
+    mad = _finite(metrics.get("motionMadKmh"), np.nan)
+    motion_coherence = (
+        1.0 - smoothstep(mad, 6.0, 26.0) if np.isfinite(mad) else 0.5
+    )
+    temporal = 0.45 * persistence + 0.30 * coverage_t + 0.25 * motion_coherence
+    transient = 1.0 - persistence
+
+    # --- hypothesis supports --------------------------------------------
+    synoptic_front = (
+        0.28 * thermal_core + 0.12 * dry_gradient + 0.18 * synoptic
+        + 0.09 * length + 0.11 * vertical + 0.08 * dynamic + 0.04 * trough
+        + 0.10 * temporal
+    ) * (1.0 - 0.5 * terrain)
+
+    # Sharp theta-w/theta-e but no dry or density separation and shallow.
+    moisture = (
+        max(theta_e, theta_w)
+        * (1.0 - dry) * (1.0 - density) * (1.0 - dry_gradient)
+    )
+    moisture = 0.65 * moisture + 0.20 * (1.0 - vertical) + 0.15 * (1.0 - synoptic)
+
+    # Short, locally convergent, shallow, transient, no synoptic corridor.
+    mesoscale = (0.30 * short + 0.22 * convergence + 0.20 * (1.0 - synoptic)
+                 + 0.16 * (1.0 - vertical) + 0.12 * transient) * max(convergence, wind)
+
+    # Short, curved/closed, convective ascent, transient, no corridor.
+    outflow = (0.24 * short + 0.22 * sinuosity + 0.18 * convergence
+               + 0.16 * ascent + 0.10 * (1.0 - synoptic)
+               + 0.10 * transient) * max(convergence, ascent)
+
+    orographic = (0.6 * terrain + 0.4 * (1.0 - synoptic)) * terrain
+
+    noise = (1.0 - max(theta_w, dry, synoptic, dynamic)) * (0.6 + 0.4 * transient)
+
+    supports = {
+        "synoptic-front": synoptic_front,
+        "moisture-boundary": moisture,
+        "mesoscale-boundary": mesoscale,
+        "outflow-boundary": outflow,
+        "orographic-boundary": orographic,
+        "noise": noise,
+    }
+    ranked = sorted(supports.items(), key=lambda kv: kv[1], reverse=True)
+    best, top = ranked[0]
+    # A located candidate that already passed TFL/TFP/ABZ is a *plausible*
+    # front. Like a forecaster, we keep the synoptic-front reading unless a
+    # competing explanation CLEARLY wins - a narrowly higher "noise" score
+    # must not veto a genuine but modest boundary. This margin is what keeps
+    # real fronts from being dropped while still catching clear drylines,
+    # orographic and mesoscale look-alikes.
+    sf = supports["synoptic-front"]
+    # The air-mass thermal contrast (theta_w AND dry T AND density together)
+    # is what makes a front a front. When it is essentially absent the
+    # candidate is not a synoptic front even if structure/vertical scores are
+    # high; otherwise a located, plausible candidate keeps the front reading
+    # unless a rival CLEARLY dominates.
+    thermal_present = thermal_core >= 0.20
+    if best != "synoptic-front" and (
+        (top >= sf + 0.12 and sf < 0.55)
+        or (not thermal_present and top >= sf)
+    ):
+        verdict = best
+    else:
+        verdict = "synoptic-front"
+    alt_name = next(k for k, _ in ranked if k != verdict)
+    runner = alt_name
+    margin = float(supports[verdict] - supports[alt_name])
+
+    # Why the winner beat the field (human-readable discriminators).
     reasons: list[str] = []
-    delta_t = _finite(metrics.get("deltaTemperature"), 0.0)
-    delta_tv = _finite(metrics.get("deltaThetaV"), 0.0)
-    dry_gradient = _finite(metrics.get("dryThermalGradient"), 0.0)
-    delta_theta_e = _finite(metrics.get("deltaThetaE"))
-    theta_w = _finite(metrics.get("deltaThetaW"), 0.0)
-    synoptic = _finite(metrics.get("synopticSupport"), 0.0)
-    terrain = _finite(metrics.get("terrainFraction"), 1.0)
-    length = _finite(metrics.get("lengthKm"), 0.0)
-    convergence = _finite(metrics.get("convergenceMs"), 0.0)
-    wind_shift = _finite(metrics.get("windShiftMs"), 0.0)
-    pressure_trough = _finite(metrics.get("pressureTroughHpa"))
+    if verdict == "synoptic-front":
+        if thermal_core >= 0.5:
+            reasons.append("contrasto simultaneo di θw, temperatura secca e densità")
+        if synoptic >= 0.5:
+            reasons.append("struttura coerente alla scala sinottica")
+        if vertical >= 0.5:
+            reasons.append("contrasto che si estende in verticale (925 hPa)")
+        if dynamic >= 0.5:
+            reasons.append("risposta dinamica del vento coerente")
+        if persistence >= 0.55 and motion_coherence >= 0.5:
+            reasons.append("persistente e in moto coerente nel tempo")
+        elif persistence >= 0.55:
+            reasons.append("persistente nel tempo")
+        reasons.append(
+            f"spiega il quadro meglio del caso «{_HYPOTHESIS_LABEL[runner]}»"
+        )
+    elif verdict == "moisture-boundary":
+        reasons.append("forte gradiente di umidità ma contrasto termico/densità debole")
+    elif verdict == "mesoscale-boundary":
+        reasons.append("corta, convergente e senza corridoio sinottico")
+    elif verdict == "outflow-boundary":
+        reasons.append("corta, curva e con ascesa convettiva locale")
+    elif verdict == "orographic-boundary":
+        reasons.append("segnale confinato sui rilievi, senza struttura sinottica")
+    else:
+        reasons.append("prove fisiche complessivamente deboli")
 
-    # A sharp theta-e / humidity jump with no dry or density separation is a
-    # dryline or moisture boundary, not a cold/warm synoptic front.
-    if (
-        np.isfinite(delta_theta_e)
-        and delta_theta_e >= 2.5
-        and (delta_t < 0.55 or delta_tv < 0.22 or dry_gradient < 0.70)
-    ):
-        return "moisture-boundary", ["theta-e senza separazione termica/densita"]
+    return {
+        "verdict": verdict,
+        "margin": round(margin, 3),
+        "supports": {k: round(float(v), 3) for k, v in supports.items()},
+        "ranking": [k for k, _ in ranked],
+        "reasons": reasons,
+    }
 
-    if terrain > 0.62 and synoptic < 0.62:
-        return "orographic-boundary", ["segnale confinato su rilievi"]
 
-    # Short, locally convergent features are frequently sea-breeze/outflow
-    # boundaries at ICON-2I resolution.  They are withheld from the
-    # synoptic overlay unless the broad-scale corridor also supports them.
-    if length < 330.0 and synoptic < 0.58 and convergence >= 0.12 and wind_shift >= 1.5:
-        return "mesoscale-boundary", ["convergenza locale senza corridoio sinottico"]
-
-    if (
-        np.isfinite(pressure_trough)
-        and pressure_trough < -0.45
-        and theta_w < 1.8
-        and synoptic < 0.65
-    ):
-        return "ridge-boundary", ["gradiente debole sotto promontorio barico"]
-
-    return "synoptic-front", reasons
+def candidate_hypothesis(metrics: dict) -> tuple[str, list[str]]:
+    """Backward-compatible view of the reasoning engine: (verdict, reasons)."""
+    report = differential_diagnosis(metrics)
+    return report["verdict"], report["reasons"]
 
 
 _DIAGNOSIS_LABEL = {

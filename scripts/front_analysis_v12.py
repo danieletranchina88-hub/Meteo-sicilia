@@ -935,6 +935,37 @@ class IconSynopticFrontAnalyzer(SynopticFrontAnalyzer):
                 occluded_hours += 1
         return occluded_hours
 
+    @staticmethod
+    def _front_reasoning(track: dict) -> dict:
+        """Compact, human-facing view of the multi-hypothesis reasoning.
+
+        Feeds the reasoning engine both the spatial diagnostics AND the
+        temporal evolution of the track (lifetime, coverage, motion
+        consistency), so the verdict weighs how the feature behaves over time
+        — a front persists and moves coherently — exactly as a forecaster
+        would. Exposes the verdict, by how much it beat the field, the best
+        competing hypothesis and why.
+        """
+        diagnostics = dict(track.get("diagnostics", {}))
+        hours = track.get("hours", [])
+        span = (max(hours) - min(hours)) if hours else 0
+        diagnostics["lifetimeH"] = track.get("lifetimeH", span)
+        diagnostics["temporalCoverage"] = (
+            len(hours) / max(span + 1, 1) if hours else 0.0
+        )
+        diagnostics["motionMadKmh"] = track.get("motionMadKmh", np.nan)
+        report = fp.differential_diagnosis(diagnostics)
+        top_two = report["ranking"][:2]
+        return {
+            "verdict": report["verdict"],
+            "margin": report["margin"],
+            "alternatives": [
+                {"hypothesis": name, "support": report["supports"][name]}
+                for name in top_two
+            ],
+            "reasons": report["reasons"],
+        }
+
     def _track_properties(
         self, track: dict, classification: dict | None = None
     ) -> dict:
@@ -963,6 +994,7 @@ class IconSynopticFrontAnalyzer(SynopticFrontAnalyzer):
             ),
             "diagnostics": _json_mapping(track.get("diagnostics", {}), 4),
             "diagnosis": track.get("diagnosis", "synoptic-front"),
+            "reasoning": self._front_reasoning(track),
             "explanation": fp.frontal_explanation(
                 track.get("diagnostics", {}),
                 classification,

@@ -599,6 +599,7 @@ def track_fronts(
                 "coldPressureTendencyHpa3h", "warmPressureTendencyHpa3h",
                 "lowerLevelSupport", "deltaThetaW925", "omega700PaS",
                 "terrainFraction", "candidateEvidence",
+                "synopticSupport", "lengthKm", "sinuosity",
             )
         }
         if require_physical_support:

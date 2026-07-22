@@ -182,5 +182,36 @@ if not any("umidità" in r for r in moist):
     print("  FAIL: la diagnosi alternativa non e' esposta nella spiegazione")
     ok = False
 
+# 10) The reasoning engine weighs ALL hypotheses and gives a motivated verdict.
+strong_report = fp.differential_diagnosis(strong)
+print(f"10) verdetto forte: {strong_report['verdict']} "
+      f"margine={strong_report['margin']} supporti={strong_report['supports']}")
+if strong_report["verdict"] != "synoptic-front" or strong_report["margin"] <= 0:
+    print("  FAIL: un caso frontale forte deve vincere come fronte sinottico")
+    ok = False
+if set(strong_report["supports"]) != {
+    "synoptic-front", "moisture-boundary", "mesoscale-boundary",
+    "outflow-boundary", "orographic-boundary", "noise",
+}:
+    print("  FAIL: il motore non valuta tutte le ipotesi")
+    ok = False
+# The dryline is beaten by moisture-boundary, not by synoptic-front.
+dry_report = fp.differential_diagnosis(dryline)
+if dry_report["verdict"] != "moisture-boundary":
+    print(f"  FAIL: la dryline non e' diagnosticata correttamente ({dry_report['verdict']})")
+    ok = False
+# A short, convergent, shallow, non-synoptic line reads as mesoscale, not a front.
+breeze = {
+    "deltaThetaW": 1.4, "deltaTemperature": 0.6, "deltaThetaV": 0.3,
+    "dryThermalGradient": 0.8, "lengthKm": 180.0, "synopticSupport": 0.30,
+    "convergenceMs": 1.2, "windShiftMs": 3.0, "lowerLevelSupport": 0.2,
+    "deltaThetaW925": 0.4, "terrainFraction": 0.1, "sinuosity": 1.3,
+}
+breeze_verdict = fp.differential_diagnosis(breeze)["verdict"]
+print(f"    verdetto brezza corta: {breeze_verdict}")
+if breeze_verdict == "synoptic-front":
+    print("  FAIL: una linea corta e locale non deve vincere come fronte sinottico")
+    ok = False
+
 print("\nESITO:", "SUPERATO" if ok else "DA RIVEDERE")
 raise SystemExit(0 if ok else 1)
