@@ -622,9 +622,22 @@ def segment_types_for_track(
     variation.
     """
     min_run = max(2, int(round(min_segment_fraction * count)))
+    # Track-level dominant type: the anchor for hours whose own local
+    # classification is "uncertain" (which the viewer already displays with
+    # the dominant type). Without this, an uncertain hour would not anchor the
+    # segments and a spurious opposite-type patch could survive.
+    local_types = [
+        value.get("frontType") for value in local.values()
+        if value.get("frontType") in ("cold", "warm", "stationary")
+    ]
+    dominant_type = (
+        max(set(local_types), key=local_types.count) if local_types else "uncertain"
+    )
     result: dict[int, list[dict]] = {}
     for hour in track.hours:
         anchor = local.get(hour, {}).get("frontType", "uncertain")
+        if anchor not in ("cold", "warm", "stationary"):
+            anchor = dominant_type
         speeds = _point_motion_kmh(track, hour, count)
         if speeds is None or not np.all(np.isfinite(speeds)):
             result[hour] = [{"start": 0.0, "end": 1.0,
