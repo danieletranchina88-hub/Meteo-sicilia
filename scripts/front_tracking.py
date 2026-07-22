@@ -514,8 +514,157 @@ def classify_track_locally(
         for hour in selected[1:]:
             subset.hours.append(hour)
             subset.lines[hour] = track.lines[hour]
-        local[center] = classify_track(subset, window_hours, wind_sampler)
+            local[center] = classify_track(subset, window_hours, wind_sampler)
     return _viterbi_smooth_types(local)
+
+
+# --------------------------------------------------------------------------
+# Per-segment (spatial) classification along a single line
+# --------------------------------------------------------------------------
+def _point_motion_kmh(track: Track, hour: int, count: int = 40) -> np.ndarray | None:
+    """Signed motion (km/h) of each point of the line at ``hour``.
+
+    Uses the geometric displacement of the line toward the warm air between
+    ``hour`` and its temporal neighbour, measured **per point** (not a
+    median). Positive = toward warm (cold-front character). No wind needed.
+    """
+    hours = track.hours
+    if len(hours) < 2:
+        return None
+    index = hours.index(hour)
+    if index + 1 < len(hours):
+        h_from, h_to = hour, hours[index + 1]
+    else:
+        h_from, h_to = hours[index - 1], hour
+    line_from = np.asarray(track.lines[h_from]["coordinates"], dtype=float)
+    line_to = np.asarray(track.lines[h_to]["coordinates"], dtype=float)
+    warm = np.asarray(track.lines[hour]["warmNormal"], dtype=float)
+    mean_lat = math_mean_lat(line_from, line_to)
+    a = _project_km(_resample(line_from, count), mean_lat)
+    b = _project_km(_resample(line_to, count), mean_lat)
+    normal = _resample_vectors(warm, count)
+    scale_lon = EARTH_KM_PER_DEG * np.cos(mean_lat)
+    normal_km = np.column_stack((normal[:, 0] * scale_lon,
+                                 normal[:, 1] * EARTH_KM_PER_DEG))
+    normal_km /= np.maximum(np.hypot(normal_km[:, 0], normal_km[:, 1])[:, None], 1.0e-9)
+    displacement = np.empty(count)
+    for i, point in enumerate(a):
+        j = int(np.argmin(np.hypot(b[:, 0] - point[0], b[:, 1] - point[1])))
+        displacement[i] = float(np.dot(b[j] - point, normal_km[i]))
+    return displacement / max(abs(h_to - h_from), 1.0e-6)
+
+
+def _mode_filter(labels: list[str], radius: int = 2) -> list[str]:
+    out = list(labels)
+    n = len(labels)
+    for i in range(n):
+        window = labels[max(0, i - radius):min(n, i + radius + 1)]
+        out[i] = max(set(window), key=window.count)
+    return out
+
+
+def _merge_short_runs(labels: list[str], min_run: int) -> list[list]:
+    """Run-length encode and absorb runs shorter than ``min_run`` into the
+    longer neighbour, so a single line is not chopped into tiny segments and a
+    stray cold point inside a warm stretch cannot survive."""
+    def runs_of(seq):
+        segments, i = [], 0
+        while i < len(seq):
+            j = i
+            while j < len(seq) and seq[j] == seq[i]:
+                j += 1
+            segments.append([i, j, seq[i]])
+            i = j
+        return segments
+
+    segments = runs_of(labels)
+    changed = True
+    while changed and len(segments) > 1:
+        changed = False
+        for k, seg in enumerate(segments):
+            if seg[1] - seg[0] >= min_run:
+                continue
+            left = segments[k - 1] if k > 0 else None
+            right = segments[k + 1] if k + 1 < len(segments) else None
+            if left and right:
+                target = left if (left[1] - left[0]) >= (right[1] - right[0]) else right
+            else:
+                target = left or right
+            for idx in range(seg[0], seg[1]):
+                labels[idx] = target[2]
+            changed = True
+            break
+        if changed:
+            segments = runs_of(labels)
+    return segments
+
+
+def segment_types_for_track(
+    track: Track, local: dict[int, dict],
+    *, count: int = 40, min_segment_fraction: float = 0.22,
+) -> dict[int, list[dict]]:
+    """Classify each hour's line into contiguous cold/warm/stationary segments.
+
+    A long boundary can be cold on one end and quasi-stationary on the other
+    at the SAME hour. This returns, per hour, segments as normalised
+    arc-length ranges [start, end] with a type and certainty, so the geometry
+    stays one continuous line while the character varies along it. Falls back
+    to a single segment (the hour's temporal type) where per-point motion is
+    unavailable.
+
+    The per-point motion of a single hour is noisier than the whole-line
+    consensus, so a segment is **anchored** to the hour's consensus type: a
+    point may become *stationary* (a slowing stretch, physical and common),
+    but it may not flip to the *opposite* moving type (warm on a cold front)
+    unless its local motion is strong and sustained. This removes spurious
+    "warm patch on a cold front" artefacts while keeping real cold->stationary
+    variation.
+    """
+    min_run = max(2, int(round(min_segment_fraction * count)))
+    # Track-level dominant type: the anchor for hours whose own local
+    # classification is "uncertain" (which the viewer already displays with
+    # the dominant type). Without this, an uncertain hour would not anchor the
+    # segments and a spurious opposite-type patch could survive.
+    local_types = [
+        value.get("frontType") for value in local.values()
+        if value.get("frontType") in ("cold", "warm", "stationary")
+    ]
+    dominant_type = (
+        max(set(local_types), key=local_types.count) if local_types else "uncertain"
+    )
+    result: dict[int, list[dict]] = {}
+    for hour in track.hours:
+        anchor = local.get(hour, {}).get("frontType", "uncertain")
+        if anchor not in ("cold", "warm", "stationary"):
+            anchor = dominant_type
+        speeds = _point_motion_kmh(track, hour, count)
+        if speeds is None or not np.all(np.isfinite(speeds)):
+            result[hour] = [{"start": 0.0, "end": 1.0,
+                             "type": anchor, "certainty": 0.3}]
+            continue
+        raw = [_type_from_speed(float(s)) for s in speeds]
+        if anchor in ("cold", "warm"):
+            # A single frontal identity does not flip to the OPPOSITE moving
+            # type along its length: that would be another front (or an
+            # occlusion, handled separately). Its character may only weaken to
+            # stationary. So the opposite reading -- noise of one hour's
+            # geometry -- is demoted to stationary; the dominant moving type
+            # and stationary stretches survive.
+            opposite = "warm" if anchor == "cold" else "cold"
+            raw = ["stationary" if label == opposite else label for label in raw]
+        smoothed = _mode_filter(raw, radius=2)
+        segments = _merge_short_runs(smoothed, min_run)
+        pieces = []
+        for start, stop, label in segments:
+            agree = float(np.mean([raw[i] == label for i in range(start, stop)]))
+            pieces.append({
+                "start": round(start / count, 3),
+                "end": round(stop / count, 3),
+                "type": label,
+                "certainty": round(agree, 2),
+            })
+        result[hour] = pieces
+    return result
 
 
 # --------------------------------------------------------------------------
@@ -731,6 +880,7 @@ def track_fronts(
             for h in track.hours
         ]
         dominant_diagnosis = max(set(diagnoses), key=diagnoses.count)
+        segment_types = segment_types_for_track(track, local_classifications)
         results.append({
             "id": track.id,
             "hours": list(track.hours),
@@ -739,6 +889,7 @@ def track_fronts(
             "diagnostics": diagnostics,
             "diagnosis": dominant_diagnosis,
             "localClassifications": local_classifications,
+            "segmentTypes": segment_types,
             **classification,
             **quality,
         })

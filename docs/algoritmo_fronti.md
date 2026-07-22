@@ -343,6 +343,56 @@ espone, oltre a `qualityScore`/`uncertaintyIndex` e ai `diagnostics` numerici:
 La spiegazione non introduce nuova fisica: rende leggibile ciò che i punteggi
 codificano, così l'utente vede *perché* una linea è un fronte.
 
+## 6c. Campo continuo di supporto (Fase B, ispirato a Biard & Kunkel 2019)
+
+Biard e Kunkel (2019) lasciano che una rete neurale produca un campo di
+probabilità per-pixel da cui poi estraggono le linee. `front_support.py` ne
+adotta l'**idea architetturale** — un campo continuo che separa l'**esistenza**
+di una struttura frontale dal suo **tipo** — ma lo costruisce
+**analiticamente dalla fisica**, non da una rete addestrata: nessun machine
+learning. Ogni componente è una membership normalizzata in [0, 1] di una
+diagnostica già affidabile:
+
+- `thermal`, `abz`, `tfp` (nucleo termodinamico); `dry_thermal`, `moisture`;
+- `dynamic` (convergenza, vorticità, frontogenesi); `pressure` (saccatura);
+- `vertical` (925 hPa); `synoptic` (gradiente alla scala 100 km).
+
+Con penalità esplicite: `terrain`, `edge` (bordo dominio), `missing_data`
+(NaN gestiti esplicitamente, mai azzerati in silenzio), `moisture_boundary`
+(gradiente di sola umidità), `local_scale` (struttura solo mesoscalare senza
+supporto sinottico). La combinazione pesata è `any_front_support` ∈ [0, 1],
+un supporto fisico **non** una probabilità: dice *quanto* i campi sostengono
+la presenza di un fronte, indipendentemente da freddo/caldo/stazionario.
+
+In Fase B il campo è un **diagnostico** calcolato su richiesta
+(`support_field(hour)`): non cambia i fronti pubblicati. In Fase C guiderà
+l'estrazione della linea come percorso a costo minimo dentro il corridoio
+TFL–TFP–ABZ. Nessun candidato scartato sparisce in silenzio:
+`rejected_candidates(hour)` esporta le linee respinte con `rejectedAs` e i
+motivi, e `analysis_summary.rejectedByReason` ne conta le cause.
+
+**Classificazione per-segmento (`segmentTypes`).** La stessa struttura può
+essere freddo attivo su un tratto e quasi stazionaria su un altro **alla
+stessa ora**: la geometria resta *una* linea continua (l'esistenza è tracciata
+indipendentemente dal tipo), ma il carattere può variare lungo di essa. Ogni
+punto è classificato dal suo **moto geometrico locale**, poi si uniscono
+tratti adiacenti coerenti in segmenti espressi come frazioni di arco
+`[start, end]` con tipo e certezza.
+
+Vincolo fisico: **una singola identità frontale non diventa il tipo opposto**
+lungo la sua lunghezza — un fronte freddo che diventasse caldo sarebbe un
+altro fronte, o un'occlusione (gestita a parte). Il carattere può solo
+indebolirsi verso *stazionario*. Poiché il moto per-punto di una sola ora è
+rumoroso, ogni lettura del tipo opposto viene declassata a stazionario e le
+ore incerte si ancorano al tipo dominante della traccia. Restano quindi le
+variazioni reali (es. freddo→stazionario) senza falsi tratti opposti.
+
+Il campo `segmentTypes` è **additivo**: il singolo `frontType` dominante resta
+per retro-compatibilità. Il viewer disegna ogni segmento con i propri simboli
+(il tratto di linea è ritagliato per frazione d'arco `[start, end]`), con
+ripiego al tipo unico quando `segmentTypes` è assente — così una stessa linea
+mostra il fronte freddo che sfuma in stazionario, senza spezzare la geometria.
+
 ## 7. Test automatici
 
 La workflow blocca la pubblicazione se falliscono i test sintetici:

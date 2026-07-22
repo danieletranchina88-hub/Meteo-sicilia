@@ -3841,6 +3841,64 @@
         vectorContext.globalAlpha = 1;
       }
 
+      // Extract the sub-polyline between two arc-length fractions [t0, t1] of
+      // a projected front line, interpolating the boundary vertices so a
+      // segment starts and ends exactly where its fraction says.
+      function frontSlice(points, t0, t1) {
+        if (points.length < 2) return points.slice();
+        const cumulative = [0];
+        for (let i = 1; i < points.length; i += 1) {
+          cumulative.push(cumulative[i - 1] +
+            Math.hypot(points[i].x - points[i - 1].x, points[i].y - points[i - 1].y));
+        }
+        const total = cumulative[cumulative.length - 1] || 1;
+        const d0 = t0 * total;
+        const d1 = t1 * total;
+        function pointAt(distance) {
+          for (let i = 1; i < cumulative.length; i += 1) {
+            if (cumulative[i] >= distance) {
+              const span = cumulative[i] - cumulative[i - 1] || 1;
+              const f = (distance - cumulative[i - 1]) / span;
+              return {
+                x: points[i - 1].x + (points[i].x - points[i - 1].x) * f,
+                y: points[i - 1].y + (points[i].y - points[i - 1].y) * f,
+              };
+            }
+          }
+          return points[points.length - 1];
+        }
+        const out = [pointAt(d0)];
+        for (let i = 0; i < points.length; i += 1) {
+          if (cumulative[i] > d0 && cumulative[i] < d1) out.push(points[i]);
+        }
+        out.push(pointAt(d1));
+        return out;
+      }
+
+      // Draw one line (or one segment) with the symbols of a given front type.
+      function drawFrontStyled(points, frontType, alpha) {
+        if (points.length < 2) return;
+        strokeFrontLine(points, frontType, alpha);
+        walkFront(points, window.innerWidth < 900 ? 48 : 54, 25, function (x, y, angle, index) {
+          if (x < -18 || x > window.innerWidth + 18 || y < 70 || y > window.innerHeight + 18) return;
+          if (frontType === "cold") {
+            drawFrontTriangle(x, y, angle, "#0875df", alpha);
+          } else if (frontType === "warm") {
+            drawFrontSemicircle(x, y, angle, "#e32638", alpha);
+          } else if (frontType === "occluded") {
+            if (index % 2 === 0) {
+              drawFrontTriangle(x, y, angle, "#8b3fd0", alpha);
+            } else {
+              drawOccludedSemicircle(x, y, angle, "#8b3fd0", alpha);
+            }
+          } else if (frontType === "stationary" && index % 2 === 0) {
+            drawFrontTriangle(x, y, angle, "#0875df", alpha);
+          } else if (frontType === "stationary") {
+            drawFrontSemicircle(x, y, angle, "#e32638", alpha);
+          }
+        });
+      }
+
       function drawFrontsCanvas() {
         if (!showFronts || !currentData || !map || !currentData.fronts) return;
         const features = currentData.fronts.features || [];
@@ -3861,25 +3919,23 @@
             return map.project(coordinate);
           });
 
-          strokeFrontLine(points, frontType, alpha);
-          walkFront(points, window.innerWidth < 900 ? 48 : 54, 25, function (x, y, angle, index) {
-            if (x < -18 || x > window.innerWidth + 18 || y < 70 || y > window.innerHeight + 18) return;
-            if (frontType === "cold") {
-              drawFrontTriangle(x, y, angle, "#0875df", alpha);
-            } else if (frontType === "warm") {
-              drawFrontSemicircle(x, y, angle, "#e32638", alpha);
-            } else if (frontType === "occluded") {
-              if (index % 2 === 0) {
-                drawFrontTriangle(x, y, angle, "#8b3fd0", alpha);
-              } else {
-                drawOccludedSemicircle(x, y, angle, "#8b3fd0", alpha);
-              }
-            } else if (frontType === "stationary" && index % 2 === 0) {
-              drawFrontTriangle(x, y, angle, "#0875df", alpha);
-            } else if (frontType === "stationary") {
-              drawFrontSemicircle(x, y, angle, "#e32638", alpha);
-            }
-          });
+          // A single front line may carry per-segment character (cold on one
+          // end, quasi-stationary on the other). Draw each segment with its
+          // own symbols; fall back to the single dominant type otherwise.
+          const segments = Array.isArray(properties.segmentTypes)
+            ? properties.segmentTypes : null;
+          if (segments && segments.length) {
+            segments.forEach(function (seg) {
+              const t0 = Number(seg.start) || 0;
+              const t1 = Number(seg.end);
+              if (!(t1 > t0)) return;
+              const segType = ["cold", "warm", "stationary", "occluded"].includes(seg.type)
+                ? seg.type : frontType;
+              drawFrontStyled(frontSlice(points, t0, t1), segType, alpha);
+            });
+          } else {
+            drawFrontStyled(points, frontType, alpha);
+          }
         });
 
         vectorContext.restore();

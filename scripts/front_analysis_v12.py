@@ -22,6 +22,7 @@ import front_detection as fd
 import front_locator as fl
 import front_occlusion as focc
 import front_physics as fp
+import front_support as fsup
 import front_tracking as ftk
 import thermodynamics as thermo
 from front_analysis import SynopticFrontAnalyzer, _blend_lines, _line_length_km, _rdp
@@ -133,6 +134,11 @@ class IconSynopticFrontAnalyzer(SynopticFrontAnalyzer):
         self._tracks: list[dict] | None = None
         self._by_hour: dict[int, list[tuple[np.ndarray, dict]]] | None = None
         self.analysis_summary: dict | None = None
+        # Fase B diagnostics: computed on demand / recorded as a side effect,
+        # never changing the published fronts.
+        self._support_cache: dict[int, dict] = {}
+        self._pipeline_diag: dict[int, dict] = {}
+        self._rejected: dict[int, list[dict]] = {}
         # Climatological detection thresholds for the run's month (falls back
         # to the detector's fixed fuzzy defaults when the climatology is absent
         # or does not cover this month).
@@ -509,6 +515,8 @@ class IconSynopticFrontAnalyzer(SynopticFrontAnalyzer):
             theta_w_925[self.terrain > 650.0] = np.nan
 
         accepted = []
+        rejected: list[dict] = []
+        reject_counts: dict[str, int] = {}
         for source in candidates:
             candidate = dict(source)
             coordinates = np.asarray(candidate["coordinates"], dtype=float)
@@ -786,12 +794,30 @@ class IconSynopticFrontAnalyzer(SynopticFrontAnalyzer):
             gates = fp.candidate_gate_report(metrics, evidence)
             metrics.update(gates)
             if not gates["continuationPass"]:
+                # A rejected candidate is recorded, not silently dropped, so
+                # the reason is inspectable (diagnostic mode / QC).
+                rejected.append({
+                    "coordinates": np.asarray(candidate["coordinates"], dtype=float),
+                    "rejectedAs": gates.get("diagnosis", "unknown"),
+                    "reasons": list(gates.get("rejectionReasons", [])),
+                    "candidateEvidence": metrics.get("candidateEvidence"),
+                })
+                for reason in gates.get("rejectionReasons", []) or ["unspecified"]:
+                    reject_counts[reason] = reject_counts.get(reason, 0) + 1
                 continue
             if gates["gateStatus"] == "continuation":
                 metrics["candidateEvidence"] = round(
                     float(metrics["candidateEvidence"]) * 0.88, 3
                 )
             accepted.append(metrics)
+
+        self._rejected[hour] = rejected
+        self._pipeline_diag[hour] = {
+            "candidateLines": len(candidates),
+            "finalPolylines": len(accepted),
+            "rejectedLines": len(rejected),
+            "rejected": reject_counts,
+        }
         return accepted
 
     def _ensure_tracks(self) -> None:
@@ -853,6 +879,7 @@ class IconSynopticFrontAnalyzer(SynopticFrontAnalyzer):
             "thresholdClimatology": (
                 self.run_month if self._threshold_climatology else None
             ),
+            "rejectedByReason": self._aggregate_rejections(),
         }
         print(
             "   Front QC: "
@@ -927,6 +954,12 @@ class IconSynopticFrontAnalyzer(SynopticFrontAnalyzer):
                 hour_properties = self._track_properties(
                     track, classification
                 )
+                # Per-segment character along the line (existence stays one
+                # continuous track; the type may vary west->east). Additive:
+                # the single frontType remains for backward compatibility.
+                segments = track.get("segmentTypes", {}).get(hour)
+                if segments:
+                    hour_properties["segmentTypes"] = segments
                 hour_properties["interpolated"] = hour not in track["lines"]
                 if hour_properties["interpolated"]:
                     hour_properties["uncertaintyIndex"] = round(
@@ -1103,6 +1136,88 @@ class IconSynopticFrontAnalyzer(SynopticFrontAnalyzer):
             "type": "FeatureCollection",
             "features": features,
             "properties": base_properties,
+        }
+
+    def _aggregate_rejections(self) -> dict:
+        """Total rejected candidates per reason across all forecast hours."""
+        totals: dict[str, int] = {}
+        for diag in self._pipeline_diag.values():
+            for reason, count in diag.get("rejected", {}).items():
+                totals[reason] = totals.get(reason, 0) + count
+        return totals
+
+    def _support_config(self) -> dict | None:
+        """Feed the climatological refined ABZ/TFP into the support field."""
+        clim = self._threshold_climatology
+        if not clim:
+            return None
+        return {
+            "abz_weak": clim["refined_abz_weak"],
+            "abz_full": clim["refined_abz_full"],
+            "tfp_weak": clim["refined_tfp_weak"],
+            "tfp_full": clim["refined_tfp_full"],
+        }
+
+    def support_field(self, hour: int) -> dict:
+        """Continuous any_front_support field for one hour (Fase B, diagnostic).
+
+        Computed on demand and cached, so it does not add cost to the normal
+        publish path. It does NOT change the published fronts; in Fase C it
+        will drive least-cost line extraction.
+        """
+        cached = self._support_cache.get(hour)
+        if cached is not None:
+            return cached
+        thermodynamics = self._thermodynamics(hour)
+        theta_w_925 = None
+        if self.has_lower_level:
+            try:
+                theta_w_925 = self._theta_w(hour, 925).copy()
+                theta_w_925[self.terrain > 650.0] = np.nan
+            except Exception:
+                theta_w_925 = None
+        field = fsup.physical_support_field(
+            thermodynamics["theta_w"], thermodynamics["theta"],
+            thermodynamics["theta_e"],
+            self._field("u", hour), self._field("v", hour),
+            self.longitudes, self.latitudes,
+            terrain=self.terrain,
+            pressure_hpa=self._pressure_hpa(hour),
+            theta_w_925=theta_w_925,
+            synoptic_sigma_km=SYNOPTIC_SIGMA_KM,
+            refine_sigma_km=REFINE_SIGMA_KM,
+            derivative_sigma_km=DERIVATIVE_SIGMA_KM,
+            config=self._support_config(),
+        )
+        self._support_cache[hour] = field
+        return field
+
+    def rejected_candidates(self, hour: int) -> dict:
+        """Diagnostic export of candidates rejected by the gates, with reasons.
+
+        No candidate disappears silently: each rejected line carries the
+        winning alternative hypothesis (``rejectedAs``) and the failed gates.
+        """
+        self._ensure_tracks()
+        features = []
+        for item in self._rejected.get(hour, []):
+            coordinates = _rdp(np.asarray(item["coordinates"], dtype=float), 0.05)
+            features.append({
+                "type": "Feature",
+                "geometry": {
+                    "type": "LineString",
+                    "coordinates": np.round(coordinates, 2).tolist(),
+                },
+                "properties": {
+                    "rejectedAs": item["rejectedAs"],
+                    "reasons": item["reasons"],
+                    "candidateEvidence": item.get("candidateEvidence"),
+                },
+            })
+        return {
+            "type": "FeatureCollection",
+            "features": features,
+            "properties": {"pipeline": self._pipeline_diag.get(hour, {})},
         }
 
     def candidate_lines(self, hour: int) -> dict:
