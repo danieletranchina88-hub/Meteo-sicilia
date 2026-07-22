@@ -602,7 +602,6 @@ def _merge_short_runs(labels: list[str], min_run: int) -> list[list]:
 def segment_types_for_track(
     track: Track, local: dict[int, dict],
     *, count: int = 40, min_segment_fraction: float = 0.22,
-    strong_opposite_kmh: float = 11.0,
 ) -> dict[int, list[dict]]:
     """Classify each hour's line into contiguous cold/warm/stationary segments.
 
@@ -645,13 +644,14 @@ def segment_types_for_track(
             continue
         raw = [_type_from_speed(float(s)) for s in speeds]
         if anchor in ("cold", "warm"):
+            # A single frontal identity does not flip to the OPPOSITE moving
+            # type along its length: that would be another front (or an
+            # occlusion, handled separately). Its character may only weaken to
+            # stationary. So the opposite reading -- noise of one hour's
+            # geometry -- is demoted to stationary; the dominant moving type
+            # and stationary stretches survive.
             opposite = "warm" if anchor == "cold" else "cold"
-            raw = [
-                "stationary" if (label == opposite
-                                 and abs(float(speed)) < strong_opposite_kmh)
-                else label
-                for label, speed in zip(raw, speeds)
-            ]
+            raw = ["stationary" if label == opposite else label for label in raw]
         smoothed = _mode_filter(raw, radius=2)
         segments = _merge_short_runs(smoothed, min_run)
         pieces = []
