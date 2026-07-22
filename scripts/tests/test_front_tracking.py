@@ -227,5 +227,36 @@ if "warm" not in out2:
     print("  FAIL: una fase calda reale e prolungata non deve sparire")
     ok = False
 
+# L) Per-segment classification: one line, cold on the east half (moves toward
+# warm) and stationary on the west half (does not move).
+lons = np.linspace(8.0, 20.0, 25)
+warm_normal = np.tile([0.0, -1.0], (len(lons), 1))  # warm to the south
+
+
+def _cand(lat_of_lon):
+    coords = np.column_stack((lons, np.array([lat_of_lon(x) for x in lons])))
+    return {"coordinates": coords, "warmNormal": warm_normal.copy(),
+            "lengthKm": 900.0}
+
+
+seg_track = ft.Track(0, 0, _cand(lambda x: 42.0))
+seg_track.hours.append(1)
+# east (lon>=14) shifts ~33 km south (toward warm -> cold); west stays
+seg_track.lines[1] = _cand(lambda x: 41.7 if x >= 14.0 else 42.0)
+seg_local = {0: {"frontType": "cold", "classificationCertainty": 0.6},
+             1: {"frontType": "cold", "classificationCertainty": 0.6}}
+segs = ft.segment_types_for_track(seg_track, seg_local)[0]
+labels = [s["type"] for s in segs]
+print(f"L) segmenti su una linea mista: {[(s['type'], s['start'], s['end']) for s in segs]}")
+if not ("cold" in labels and "stationary" in labels):
+    print("  FAIL: la linea mista deve avere un tratto freddo e uno stazionario")
+    ok = False
+# the segments must tile [0,1] contiguously without gaps or overlaps
+edges = [(s["start"], s["end"]) for s in segs]
+if edges[0][0] != 0.0 or edges[-1][1] != 1.0 or any(
+        abs(edges[i][1] - edges[i + 1][0]) > 1e-6 for i in range(len(edges) - 1)):
+    print("  FAIL: i segmenti non coprono la linea in modo contiguo")
+    ok = False
+
 print("\nESITO:", "SUPERATO" if ok else "DA RIVEDERE")
 raise SystemExit(0 if ok else 1)

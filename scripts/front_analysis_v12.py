@@ -954,6 +954,12 @@ class IconSynopticFrontAnalyzer(SynopticFrontAnalyzer):
                 hour_properties = self._track_properties(
                     track, classification
                 )
+                # Per-segment character along the line (existence stays one
+                # continuous track; the type may vary west->east). Additive:
+                # the single frontType remains for backward compatibility.
+                segments = track.get("segmentTypes", {}).get(hour)
+                if segments:
+                    hour_properties["segmentTypes"] = segments
                 hour_properties["interpolated"] = hour not in track["lines"]
                 if hour_properties["interpolated"]:
                     hour_properties["uncertaintyIndex"] = round(

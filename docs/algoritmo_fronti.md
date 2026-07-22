@@ -371,6 +371,17 @@ TFL–TFP–ABZ. Nessun candidato scartato sparisce in silenzio:
 `rejected_candidates(hour)` esporta le linee respinte con `rejectedAs` e i
 motivi, e `analysis_summary.rejectedByReason` ne conta le cause.
 
+**Classificazione per-segmento (`segmentTypes`).** La stessa struttura può
+essere freddo su un tratto e quasi stazionaria su un altro **alla stessa
+ora**: la geometria resta *una* linea continua (l'esistenza è tracciata
+indipendentemente dal tipo), ma il carattere può variare lungo di essa. Ogni
+punto della linea è classificato dal suo **moto geometrico locale** (verso il
+caldo/freddo), poi si uniscono tratti adiacenti coerenti in segmenti espressi
+come frazioni di arco `[start, end]` con tipo e certezza. Il campo
+`segmentTypes` è **additivo**: il singolo `frontType` dominante resta per
+retro-compatibilità. Il rendering dei segmenti sul viewer è un passo isolato
+(mai detector e viewer insieme).
+
 ## 7. Test automatici
 
 La workflow blocca la pubblicazione se falliscono i test sintetici:
