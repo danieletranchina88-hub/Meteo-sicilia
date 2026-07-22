@@ -22,6 +22,7 @@ import front_detection as fd
 import front_locator as fl
 import front_occlusion as focc
 import front_physics as fp
+import front_ridge as fridge
 import front_support as fsup
 import front_tracking as ftk
 import thermodynamics as thermo
@@ -87,6 +88,13 @@ TRACK_MIN_COVERAGE = 0.72
 MIN_PUBLISH_QUALITY = 0.61
 MAX_PUBLISH_UNCERTAINTY = 0.39
 MAX_FRONTS_PER_HOUR = 4
+
+# Fase C/E: la geometria pubblicata segue la cresta di any_front_support
+# (least-cost path in front_ridge), non piu' il solo contorno TFL. Attivato
+# dopo il benchmark Fase E (supporto medio 0.43->0.50, tortuosita' non
+# peggiore). Un solo interruttore, reversibile: False torna ai contorni.
+REFINE_PUBLISHED_GEOMETRY = True
+GEOMETRY_CORRIDOR_KM = 120.0
 
 
 def _finite_median(values, default=np.nan) -> float:
@@ -965,9 +973,10 @@ class IconSynopticFrontAnalyzer(SynopticFrontAnalyzer):
                     hour_properties["uncertaintyIndex"] = round(
                         min(1.0, hour_properties["uncertaintyIndex"] + 0.06), 2
                     )
-                by_hour.setdefault(hour, []).append((
-                    np.asarray(coordinates, dtype=float), hour_properties
-                ))
+                geometry = self._refine_geometry(
+                    hour, np.asarray(coordinates, dtype=float)
+                )
+                by_hour.setdefault(hour, []).append((geometry, hour_properties))
         self._occlusion_hours = self._apply_occlusions(by_hour)
         self._by_hour = by_hour
 
@@ -1158,12 +1167,39 @@ class IconSynopticFrontAnalyzer(SynopticFrontAnalyzer):
             "tfp_full": clim["refined_tfp_full"],
         }
 
-    def support_field(self, hour: int) -> dict:
-        """Continuous any_front_support field for one hour (Fase B, diagnostic).
+    def _refine_geometry(self, hour: int, coordinates: np.ndarray) -> np.ndarray:
+        """Snap a published front line onto the crest of any_front_support.
 
-        Computed on demand and cached, so it does not add cost to the normal
-        publish path. It does NOT change the published fronts; in Fase C it
-        will drive least-cost line extraction.
+        Fase C/E: instead of drawing the raw TFL contour, follow the least-cost
+        path along the continuous support field inside a corridor around the
+        contour. Benchmarked (Fase E) as better-or-equal to the contour, so it
+        is on by default; ``REFINE_PUBLISHED_GEOMETRY = False`` reverts. The
+        step is conservative by construction (bounded corridor) and fully
+        guarded: any failure or a degenerate result falls back to the contour,
+        so publication can never regress to an empty or broken line.
+        """
+        if not REFINE_PUBLISHED_GEOMETRY or len(coordinates) < 2:
+            return coordinates
+        try:
+            support = self.support_field(hour)
+            refined = fridge.refine_line(
+                support, self.longitudes, self.latitudes, coordinates,
+                corridor_km=GEOMETRY_CORRIDOR_KM,
+            )
+        except Exception:
+            return coordinates
+        refined = np.asarray(refined, dtype=float)
+        if refined.ndim != 2 or len(refined) < 2 or not np.all(np.isfinite(refined)):
+            return coordinates
+        return refined
+
+    def support_field(self, hour: int) -> dict:
+        """Continuous any_front_support field for one hour (Fase B).
+
+        Computed on demand and cached once per hour. With
+        ``REFINE_PUBLISHED_GEOMETRY`` on (Fase C/E) it drives the least-cost
+        line extraction that shapes the published geometry; it does not add or
+        remove fronts, only refines where each existing line is drawn.
         """
         cached = self._support_cache.get(hour)
         if cached is not None:

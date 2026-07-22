@@ -364,12 +364,35 @@ supporto sinottico). La combinazione pesata è `any_front_support` ∈ [0, 1],
 un supporto fisico **non** una probabilità: dice *quanto* i campi sostengono
 la presenza di un fronte, indipendentemente da freddo/caldo/stazionario.
 
-In Fase B il campo è un **diagnostico** calcolato su richiesta
-(`support_field(hour)`): non cambia i fronti pubblicati. In Fase C guiderà
-l'estrazione della linea come percorso a costo minimo dentro il corridoio
-TFL–TFP–ABZ. Nessun candidato scartato sparisce in silenzio:
-`rejected_candidates(hour)` esporta le linee respinte con `rejectedAs` e i
-motivi, e `analysis_summary.rejectedByReason` ne conta le cause.
+Nessun candidato scartato sparisce in silenzio: `rejected_candidates(hour)`
+esporta le linee respinte con `rejectedAs` e i motivi, e
+`analysis_summary.rejectedByReason` ne conta le cause.
+
+### Geometria a cresta (Fase C/E, `front_ridge.py`)
+
+La linea pubblicata non è più il solo contorno TFL: segue la **cresta** di
+`any_front_support`. Dato un candidato TFL–TFP–ABZ, si apre un **corridoio** di
+±120 km attorno alla linea e si cerca il **percorso a costo minimo** (Dijkstra
+su griglia 8-connessa, `scipy`; nessuna nuova dipendenza, nessun ML) che resta
+sul supporto più alto. Il costo per cella è `log((1+ε)/(supporto+ε))` più
+penalità esplicite di terreno e bordo dominio; stare sulla cresta è economico,
+attraversare un buco di supporto o il terreno è caro. Il percorso ottimo su
+griglia è a gradini (svolte a 45/90°): uno smoothing di **Chaikin** rimuove la
+scala di griglia senza staccarsi dalla cresta, poi un piccolo RDP declutter.
+
+L'estrazione è **subordinata alla fisica**: non inventa una linea dove il
+supporto è alto, rifinisce *dove disegnare* un fronte già rilevato, dentro un
+corridoio limitato. È **completamente protetta** — qualsiasi errore o risultato
+degenere ripiega sul contorno originale, quindi la pubblicazione non può mai
+regredire a una linea vuota o rotta. Il numero di fronti, i tipi e i segmenti
+restano invariati: cambia solo la posizione della linea.
+
+L'attivazione (`REFINE_PUBLISHED_GEOMETRY = True`) è avvenuta dopo il
+**benchmark Fase E** su 3 run reali (24 linee, metrica equa a passo uniforme):
+supporto medio lungo la linea 0.43 → 0.50, frazione su supporto forte 0.50 →
+0.67, tortuosità 7.27 → 6.77 °/20 km. La cresta non regredisce su nessun
+criterio e migliora nettamente il supporto fisico; l'interruttore resta
+reversibile (`False` torna ai contorni).
 
 **Classificazione per-segmento (`segmentTypes`).** La stessa struttura può
 essere freddo attivo su un tratto e quasi stazionaria su un altro **alla
@@ -418,7 +441,10 @@ La workflow blocca la pubblicazione se falliscono i test sintetici:
   fra mesi) e loro applicazione nel rilevatore;
 - il motore differenziale valuta tutte le ipotesi e sceglie il verdetto;
 - stabilità temporale del tipo (Viterbi): rimozione del flip caldo↔freddo,
-  conservazione di una fase reale prolungata.
+  conservazione di una fase reale prolungata;
+- estrazione a cresta (`front_ridge`): la linea rifinita segue il crinale del
+  supporto staccandosi da una guess storta, una banda larga dà una sola linea,
+  il percorso evita una penalità di terreno a parità di supporto.
 
 ## Riferimenti primari
 
