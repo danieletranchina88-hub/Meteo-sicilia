@@ -160,5 +160,27 @@ if diagnosis != "moisture-boundary":
     print("  FAIL: il classificatore differenziale non riconosce la dryline")
     ok = False
 
+# 9) A published front must expose a human-readable, non-empty explanation
+# that verbalises the numeric evidence (transparency, not a black box).
+strong_diag = {
+    "deltaThetaW": 3.0, "medianAbzGradient": 4.0, "deltaTemperature": 2.0,
+    "deltaThetaV": 1.5, "windShiftAngleDeg": 35.0, "convergenceMs": 0.6,
+    "vorticity1e5": 3.0, "frontogenesis": 1.5, "lowerLevelSupport": 0.6,
+    "deltaThetaW925": 2.0,
+}
+explanation = fp.frontal_explanation(
+    strong_diag, {"frontType": "cold", "motionVotes": {"geometry": "cold", "wind": "cold"}},
+    "synoptic-front", lifetime_h=18,
+)
+print(f"9) spiegazione ({len(explanation)} voci): {explanation[0]}")
+if not explanation or any(not isinstance(r, str) for r in explanation):
+    print("  FAIL: spiegazione mancante o malformata")
+    ok = False
+# A weak humidity boundary must flag the differential diagnosis in words.
+moist = fp.frontal_explanation({"deltaThetaW": 0.6}, {}, "moisture-boundary")
+if not any("umidità" in r for r in moist):
+    print("  FAIL: la diagnosi alternativa non e' esposta nella spiegazione")
+    ok = False
+
 print("\nESITO:", "SUPERATO" if ok else "DA RIVEDERE")
 raise SystemExit(0 if ok else 1)

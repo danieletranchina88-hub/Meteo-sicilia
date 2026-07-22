@@ -474,13 +474,18 @@ def _quality_score(track: Track, classification: dict, window_hours: int) -> dic
         + 0.12 * structural + 0.08 * certainty,
         0.0, 1.0,
     ))
-    # Diagnostic uncertainty also accounts for a weak core dimension: a
-    # high temporal score cannot hide poor thermodynamic or dynamic support.
+    # Diagnostic uncertainty also accounts for a weak *existence* dimension:
+    # a high temporal score cannot hide a poor thermal contrast or an
+    # incoherent structure. Dynamics are deliberately excluded here - a
+    # genuine quasi-stationary front legitimately has weak cross-front wind
+    # and convergence, and must not be labelled "uncertain" (and dropped)
+    # for that. Weak dynamics already lower qualityScore through the dynamic
+    # evidence component; they must not additionally erase a thermally and
+    # structurally solid boundary.
     core_penalty = max(
         0.0,
         0.50 - min(
             physical_components["thermal"],
-            physical_components["dynamic"],
             structural,
         ),
     ) * 0.35
@@ -513,7 +518,7 @@ def track_fronts(
     min_wind_shift_ms: float = 1.5,
     min_convergence_ms: float = 0.15,
     max_terrain_fraction: float = 0.25,
-    min_strong_detections: int = 3,
+    min_strong_detections: int = 1,
 ):
     """Link hourly candidates into classified, quality-scored tracks.
 
@@ -541,11 +546,15 @@ def track_fronts(
             track.hours.append(hour)
             track.lines[hour] = candidates[cand_index]
         for cand_index in unmatched:
-            # A weak-but-still-physical segment may continue an established
-            # front, but it cannot create a new one. This is temporal
-            # hysteresis, not interpolation or invented persistence.
-            if candidates[cand_index].get("gateStatus", "strong") != "strong":
-                continue
+            # Every unmatched candidate reaching this point already passed the
+            # hard, non-compensating physical gates (continuationPass): it is a
+            # genuine synoptic-front segment, not mesoscale noise. It may
+            # therefore start a track even when it is only "continuation" grade.
+            # A real but rarely-"strong" synoptic front (a slow, quasi-
+            # stationary boundary is the textbook case) would otherwise never be
+            # born and would be lost entirely. Ephemeral or spurious segments
+            # are still removed downstream by the lifetime, detection and
+            # coverage thresholds.
             track = Track(next_id, hour, candidates[cand_index])
             next_id += 1
             tracks.append(track)
@@ -557,20 +566,18 @@ def track_fronts(
         span = track.hours[-1] - track.hours[0]
         if len(track.hours) < max(2, int(min_detections)) or span < min_lifetime_hours:
             continue
+        # A single "strong"-grade hour anchors the track's identity, but a
+        # coherent front that stays at "continuation" grade for many hours
+        # (a slow synoptic boundary passing every hard physical gate) must NOT
+        # be discarded for lacking repeated "strong" hours. Track quality and
+        # coverage below, plus the qualityScore, weigh a continuation-heavy
+        # track down without erasing it. The former "no long marginal run"
+        # rule erased exactly these real long-lived boundaries and is gone.
         strong_hours = [
             h for h in track.hours
             if track.lines[h].get("gateStatus", "strong") == "strong"
         ]
         if len(strong_hours) < max(1, int(min_strong_detections)):
-            continue
-        run = longest_marginal_run = 0
-        for h in track.hours:
-            if track.lines[h].get("gateStatus", "strong") == "strong":
-                run = 0
-            else:
-                run += 1
-                longest_marginal_run = max(longest_marginal_run, run)
-        if longest_marginal_run > max(2, window_hours):
             continue
         expected = [h for h in available if track.hours[0] <= h <= track.hours[-1]]
         if len(track.hours) / max(len(expected), 1) < min_coverage:
