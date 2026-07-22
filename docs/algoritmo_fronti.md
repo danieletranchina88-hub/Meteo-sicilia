@@ -246,6 +246,18 @@ mobile richiede almeno due famiglie concordi e nessun voto opposto. Una
 contraddizione forte del vento rende la traccia `uncertain`, anche quando la
 linea termica sembra muoversi correttamente.
 
+**Stabilità temporale del tipo (Viterbi/HMM).** La classificazione oraria
+locale coglie l'evoluzione reale di un fronte, ma il moto geometrico che
+oscilla attorno allo zero — un fronte che rallenta — può far leggere per
+un'ora il tipo opposto. Un fronte caldo **non** diventa freddo l'ora dopo:
+per impedirlo, sulla sequenza dei tipi di ogni traccia si applica un passo di
+**Viterbi** (documento sez. 13) con transizioni fisicamente plausibili — il
+salto freddo↔caldo tra ore adiacenti è quasi proibito, il rallentamento verso
+stazionario è ordinario. Il percorso più coerente elimina i cambi impossibili
+(es. `…S C F S…` diventa `…S S S S…`) preservando le fasi reali e prolungate;
+le ore corrette restano marcate (`typeSmoothed`, `rawFrontType`) e con
+certezza ridotta.
+
 ### Occlusione
 
 L'occlusione non è decisa dal gradiente di una singola ora, ma dal contesto

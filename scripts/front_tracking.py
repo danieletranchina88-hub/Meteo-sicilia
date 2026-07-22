@@ -395,6 +395,96 @@ def classify_track(track: Track, window_hours: int, wind_sampler=None) -> dict:
     }
 
 
+_TYPE_STATES = ("cold", "warm", "stationary", "uncertain")
+
+
+def _transition_prob(previous: str, current: str, gap_hours: int) -> float:
+    """Physical plausibility of a per-hour type change.
+
+    A cold front cannot become a warm front from one hour to the next: that
+    transition is near-forbidden. Slowing to stationary (or the reverse) is
+    ordinary. Over a longer gap every transition relaxes toward uniform.
+    """
+    if previous == current:
+        base = {"cold": 0.88, "warm": 0.88, "stationary": 0.82}.get(current, 0.55)
+    elif {previous, current} == {"cold", "warm"}:
+        base = 0.012  # a warm front does not become a cold front in 1 h
+    elif "uncertain" in (previous, current):
+        base = 0.12
+    else:  # moving <-> stationary: a front slowing down or accelerating
+        base = 0.14
+    if gap_hours > 1:
+        # relax toward uniform (0.25) as the identity gap widens
+        weight = min(1.0, (gap_hours - 1) / 3.0)
+        base = (1.0 - weight) * base + weight * 0.25
+    return base
+
+
+def _emission_prob(state: str, assigned: str, certainty: float) -> float:
+    """How well an hour's own evidence supports each type."""
+    if state == assigned:
+        return 0.35 + 0.65 * float(np.clip(certainty, 0.0, 1.0))
+    if state == "uncertain" or assigned == "uncertain":
+        return 0.30
+    if {state, assigned} == {"cold", "warm"}:
+        return 0.04  # the hour's evidence argues against the opposite type
+    return 0.18
+
+
+def _viterbi_smooth_types(local: dict[int, dict]) -> dict[int, dict]:
+    """Most physically-consistent type sequence over a track (Viterbi/HMM).
+
+    Removes short, unphysical flips (a slowing front briefly read as its
+    opposite) by finding the maximum-likelihood path through the type states
+    under transition penalties that forbid cold<->warm swaps between hours.
+    Hours whose smoothed type differs from their own reading keep a reduced
+    certainty and a ``typeSmoothed`` flag, so the change stays transparent.
+    """
+    hours = sorted(local)
+    if len(hours) < 3:
+        return local
+    log = lambda p: float(np.log(max(p, 1.0e-6)))
+    scores = {}
+    back = {}
+    first = hours[0]
+    a0 = local[first].get("frontType", "uncertain")
+    c0 = local[first].get("classificationCertainty", 0.0)
+    for s in _TYPE_STATES:
+        scores[s] = log(_emission_prob(s, a0, c0))
+        back[s] = [s]
+    for index in range(1, len(hours)):
+        hour = hours[index]
+        gap = hour - hours[index - 1]
+        assigned = local[hour].get("frontType", "uncertain")
+        certainty = local[hour].get("classificationCertainty", 0.0)
+        new_scores, new_back = {}, {}
+        for s in _TYPE_STATES:
+            emission = log(_emission_prob(s, assigned, certainty))
+            best_prev, best_val = None, -np.inf
+            for sp in _TYPE_STATES:
+                val = scores[sp] + log(_transition_prob(sp, s, gap))
+                if val > best_val:
+                    best_val, best_prev = val, sp
+            new_scores[s] = emission + best_val
+            new_back[s] = back[best_prev] + [s]
+        scores, back = new_scores, new_back
+    best_state = max(_TYPE_STATES, key=lambda s: scores[s])
+    path = back[best_state]
+
+    smoothed: dict[int, dict] = {}
+    for hour, state in zip(hours, path):
+        entry = dict(local[hour])
+        if entry.get("frontType") != state:
+            entry["typeSmoothed"] = True
+            entry["rawFrontType"] = entry.get("frontType")
+            entry["classificationCertainty"] = round(
+                float(entry.get("classificationCertainty", 0.0)) * 0.85, 2
+            )
+            entry["frontType"] = state
+        smoothed[hour] = entry
+    return smoothed
+
+
 def classify_track_locally(
     track: Track, window_hours: int, wind_sampler=None
 ) -> dict[int, dict]:
@@ -402,7 +492,9 @@ def classify_track_locally(
 
     A front may slow down or reverse without ceasing to be the same air-mass
     boundary. One label for a 20-hour track would therefore be physically
-    misleading. Endpoints use the nearest three detections when available.
+    misleading. Endpoints use the nearest three detections when available. A
+    final Viterbi pass enforces temporal consistency so the published type
+    cannot flip cold->warm->stationary from hour to hour.
     """
     radius = max(2, int(window_hours))
     local: dict[int, dict] = {}
@@ -423,7 +515,7 @@ def classify_track_locally(
             subset.hours.append(hour)
             subset.lines[hour] = track.lines[hour]
         local[center] = classify_track(subset, window_hours, wind_sampler)
-    return local
+    return _viterbi_smooth_types(local)
 
 
 # --------------------------------------------------------------------------
