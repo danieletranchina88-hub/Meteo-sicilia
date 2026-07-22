@@ -18,7 +18,6 @@ on:
       - 'scripts/front_tracking.py'
       - 'scripts/thermodynamics.py'
       - 'scripts/tests/**'
-      - 'scripts/process_ecmwf.py'
       - 'requirements.txt'
       - '.github/workflows/update_meteo.yml'
   workflow_dispatch:
@@ -72,28 +71,6 @@ jobs:
           python scripts/tests/test_front_physics.py
           python scripts/tests/test_front_tracking.py
 
-      - name: Run ECMWF IFS processor
-        continue-on-error: true
-        run: python scripts/process_ecmwf.py
-
-      # I dati non vivono piu' su main: se il processore ECMWF e' fallito,
-      # recupera l'ultima copia pubblicata cosi' il sito conserva il modello
-      # globale. ECMWF non partecipa in alcun modo all'analisi dei fronti.
-      - name: Recupera dati ECMWF precedenti se il processore è fallito
-        run: |
-          if [ -d data_weather_ecmwf ] && [ -n "$(ls -A data_weather_ecmwf)" ]; then
-            echo "Dati ECMWF freschi disponibili."
-            exit 0
-          fi
-          echo "Processore ECMWF fallito: recupero l'ultima copia da gh-pages."
-          if git fetch --depth 1 origin gh-pages; then
-            git checkout FETCH_HEAD -- data_weather_ecmwf 2>/dev/null \
-              && git reset -q -- data_weather_ecmwf \
-              || echo "Nessuna copia ECMWF su gh-pages: si prosegue senza modello globale."
-          else
-            echo "Fetch di gh-pages non riuscito: si prosegue senza modello ECMWF."
-          fi
-
       - name: Run ICON-2I processor
         run: python scripts/process_data.py
 
@@ -114,9 +91,6 @@ jobs:
           cp index.html "$STAGE"/
           touch "$STAGE"/.nojekyll
           cp -r data_weather "$STAGE"/data_weather
-          if [ -d data_weather_ecmwf ]; then
-            cp -r data_weather_ecmwf "$STAGE"/data_weather_ecmwf
-          fi
 
           cd "$STAGE"
           git init -q -b gh-pages
