@@ -205,5 +205,27 @@ else:
     print("J) FAIL: traccia evolutiva assente")
     ok = False
 
+# K) Viterbi type smoothing removes an unphysical cold->warm->stationary flip
+# from hour to hour, but preserves a genuine, sustained warm phase.
+def _seq(types):
+    return {h: {"frontType": t, "classificationCertainty": 0.6}
+            for h, t in enumerate(types)}
+
+raw = ["cold"] * 6 + ["stationary", "warm", "warm", "cold", "cold", "stationary"]
+smoothed = ft._viterbi_smooth_types(_seq(raw))
+out = [smoothed[h]["frontType"] for h in sorted(smoothed)]
+print("K) smoothing tipi:", "".join(t[0].upper() for t in raw),
+      "->", "".join(t[0].upper() for t in out))
+if any({out[i], out[i + 1]} == {"cold", "warm"} for i in range(len(out) - 1)):
+    print("  FAIL: e' sopravvissuto un salto caldo<->freddo tra ore adiacenti")
+    ok = False
+sustained = ["cold"] * 4 + ["warm"] * 5 + ["cold"] * 2
+out2 = [ft._viterbi_smooth_types(_seq(sustained))[h]["frontType"]
+        for h in range(len(sustained))]
+print("   fase calda prolungata:", "".join(t[0].upper() for t in out2))
+if "warm" not in out2:
+    print("  FAIL: una fase calda reale e prolungata non deve sparire")
+    ok = False
+
 print("\nESITO:", "SUPERATO" if ok else "DA RIVEDERE")
 raise SystemExit(0 if ok else 1)
