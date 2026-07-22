@@ -165,7 +165,27 @@ def refine_line(
     if path is None or len(path) < 2:
         return line
     refined = np.column_stack((lon[path[:, 1]], lat[path[:, 0]]))
+    # The 8-connected least-cost path is optimal but stair-stepped: it can only
+    # turn in 45/90-degree steps, so the raw polyline is jagged even when it
+    # tracks the crest. Chaikin corner-cutting removes the grid staircase
+    # (orientation-independent, endpoints preserved) before decluttering.
+    refined = _chaikin(refined, iterations=3)
     return fl_rdp(refined)
+
+
+def _chaikin(points: np.ndarray, iterations: int = 3) -> np.ndarray:
+    """Chaikin corner-cutting smoothing, keeping the two endpoints fixed."""
+    points = np.asarray(points, dtype=float)
+    for _ in range(max(0, iterations)):
+        if len(points) < 3:
+            break
+        p0, p1 = points[:-1], points[1:]
+        q = 0.75 * p0 + 0.25 * p1
+        r = 0.25 * p0 + 0.75 * p1
+        cut = np.empty((2 * len(q), 2), dtype=float)
+        cut[0::2], cut[1::2] = q, r
+        points = np.vstack((points[0], cut, points[-1]))
+    return points
 
 
 def fl_rdp(points: np.ndarray, tolerance_deg: float = 0.05) -> np.ndarray:
