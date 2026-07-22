@@ -388,8 +388,10 @@ ore incerte si ancorano al tipo dominante della traccia. Restano quindi le
 variazioni reali (es. freddo→stazionario) senza falsi tratti opposti.
 
 Il campo `segmentTypes` è **additivo**: il singolo `frontType` dominante resta
-per retro-compatibilità. Il rendering dei segmenti sul viewer è un passo
-isolato (mai detector e viewer insieme).
+per retro-compatibilità. Il viewer disegna ogni segmento con i propri simboli
+(il tratto di linea è ritagliato per frazione d'arco `[start, end]`), con
+ripiego al tipo unico quando `segmentTypes` è assente — così una stessa linea
+mostra il fronte freddo che sfuma in stazionario, senza spezzare la geometria.
 
 ## 7. Test automatici
 
