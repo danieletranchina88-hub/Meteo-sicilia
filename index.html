@@ -2134,6 +2134,7 @@
         cold: "freddo",
         warm: "caldo",
         stationary: "stazionario",
+        occluded: "occluso",
         uncertain: "incerto"
       };
 
@@ -3755,6 +3756,24 @@
         vectorContext.restore();
       }
 
+      // Occluded front: triangle and semicircle on the SAME side (the
+      // triangle bulges toward -y, so this semicircle bulges the same way).
+      function drawOccludedSemicircle(x, y, angle, color, alpha) {
+        vectorContext.save();
+        vectorContext.translate(x, y);
+        vectorContext.rotate(angle);
+        vectorContext.globalAlpha = alpha;
+        vectorContext.beginPath();
+        vectorContext.arc(0, 0, 7, Math.PI, 2 * Math.PI, false);
+        vectorContext.strokeStyle = "rgba(255,255,255,0.94)";
+        vectorContext.lineWidth = 5.6;
+        vectorContext.stroke();
+        vectorContext.strokeStyle = color;
+        vectorContext.lineWidth = 3.3;
+        vectorContext.stroke();
+        vectorContext.restore();
+      }
+
       function strokeFrontLine(points, frontType, alpha) {
         vectorContext.beginPath();
         points.forEach(function (point, index) {
@@ -3773,6 +3792,14 @@
           vectorContext.lineWidth = 2.7;
           vectorContext.stroke();
           vectorContext.restore();
+          vectorContext.globalAlpha = 1;
+          return;
+        }
+
+        if (frontType === "occluded") {
+          vectorContext.strokeStyle = "#8b3fd0";
+          vectorContext.lineWidth = 2.9;
+          vectorContext.stroke();
           vectorContext.globalAlpha = 1;
           return;
         }
@@ -3825,7 +3852,7 @@
           const coordinates = feature.geometry && feature.geometry.coordinates;
           if (!coordinates || coordinates.length < 2) return;
           const properties = feature.properties || {};
-          const frontType = ["cold", "warm", "stationary", "uncertain"].includes(properties.frontType)
+          const frontType = ["cold", "warm", "stationary", "occluded", "uncertain"].includes(properties.frontType)
             ? properties.frontType
             : "uncertain";
           const confidence = Number(properties.confidence);
@@ -3841,6 +3868,12 @@
               drawFrontTriangle(x, y, angle, "#0875df", alpha);
             } else if (frontType === "warm") {
               drawFrontSemicircle(x, y, angle, "#e32638", alpha);
+            } else if (frontType === "occluded") {
+              if (index % 2 === 0) {
+                drawFrontTriangle(x, y, angle, "#8b3fd0", alpha);
+              } else {
+                drawOccludedSemicircle(x, y, angle, "#8b3fd0", alpha);
+              }
             } else if (frontType === "stationary" && index % 2 === 0) {
               drawFrontTriangle(x, y, angle, "#0875df", alpha);
             } else if (frontType === "stationary") {
