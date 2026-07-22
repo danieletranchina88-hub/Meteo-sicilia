@@ -13,6 +13,9 @@ probability and not a substitute for a forecaster's surface analysis.
 
 from __future__ import annotations
 
+import json
+import os
+
 import numpy as np
 
 import front_detection as fd
@@ -27,6 +30,46 @@ from front_analysis import SynopticFrontAnalyzer, _blend_lines, _line_length_km,
 FRONT_METHOD = "icon2i-ofa-physics-guided-v14"
 ANALYSIS_PRESSURE_PA = 85_000.0
 LOWER_PRESSURE_PA = 92_500.0
+
+# Climatological calibration of the detection thresholds (documento sez. 17).
+# Built offline by calibrate_thresholds.py from many ICON-2I runs; picked by
+# month, whole-domain band. Absent/empty -> the detector uses its fixed
+# fuzzy defaults, so this is an enhancement that never blocks the analysis.
+CLIMATOLOGY_PATH = os.path.join(
+    os.path.dirname(__file__), "climatology_thresholds.json"
+)
+
+
+def load_threshold_climatology(month: str) -> dict | None:
+    """Whole-domain synoptic+refined thresholds for a month, or None."""
+    try:
+        with open(CLIMATOLOGY_PATH, encoding="utf-8") as handle:
+            clim = json.load(handle)
+    except (OSError, ValueError):
+        return None
+
+    def _band(node):
+        return (node or {}).get("all")
+
+    candidates = [clim.get(month)]
+    candidates += [v for k, v in clim.items() if k not in ("_meta", month)]
+    for node in candidates:
+        if not node:
+            continue
+        syn, ref = _band(node.get("synoptic")), _band(node.get("refined"))
+        if not syn or not ref:
+            continue
+        return {
+            "synoptic_tfp_weak": syn["tfp_weak"],
+            "synoptic_tfp_full": syn["tfp_full"],
+            "synoptic_abz_weak": syn["abz_weak"],
+            "synoptic_abz_full": syn["abz_full"],
+            "refined_tfp_weak": ref["tfp_weak"],
+            "refined_tfp_full": ref["tfp_full"],
+            "refined_abz_weak": ref["abz_weak"],
+            "refined_abz_full": ref["abz_full"],
+        }
+    return None
 
 SYNOPTIC_SIGMA_KM = 100.0
 REFINE_SIGMA_KM = 45.0
@@ -90,6 +133,19 @@ class IconSynopticFrontAnalyzer(SynopticFrontAnalyzer):
         self._tracks: list[dict] | None = None
         self._by_hour: dict[int, list[tuple[np.ndarray, dict]]] | None = None
         self.analysis_summary: dict | None = None
+        # Climatological detection thresholds for the run's month (falls back
+        # to the detector's fixed fuzzy defaults when the climatology is absent
+        # or does not cover this month).
+        run_month = "00"
+        try:
+            reference = np.atleast_1d(
+                np.asarray(self.datasets["t"].time.values)
+            ).ravel()[0]
+            run_month = str(np.datetime64(reference, "M")).split("-")[1]
+        except Exception:
+            pass
+        self.run_month = run_month
+        self._threshold_climatology = load_threshold_climatology(run_month)
 
         if lower_temperature_path and lower_humidity_path:
             added = []
@@ -330,6 +386,7 @@ class IconSynopticFrontAnalyzer(SynopticFrontAnalyzer):
             synoptic_min_length_km=350.0,
             refine_min_length_km=220.0,
             boundary_margin_km=70.0,
+            **(self._threshold_climatology or {}),
         )
         lower_candidates = self._lower_candidates(hour)
         lower_lines = [np.asarray(item["coordinates"], dtype=float) for item in lower_candidates]
@@ -352,6 +409,7 @@ class IconSynopticFrontAnalyzer(SynopticFrontAnalyzer):
             synoptic_min_length_km=350.0,
             refine_min_length_km=220.0,
             boundary_margin_km=70.0,
+            **(self._threshold_climatology or {}),
         )
 
         # A theta-w locator is sensitive to the physically useful moisture
@@ -792,6 +850,9 @@ class IconSynopticFrontAnalyzer(SynopticFrontAnalyzer):
             "lowerWind925": self.has_lower_wind,
             "omega700": "omega700" in self.datasets,
             "pressure": "p" in self.datasets,
+            "thresholdClimatology": (
+                self.run_month if self._threshold_climatology else None
+            ),
         }
         print(
             "   Front QC: "
