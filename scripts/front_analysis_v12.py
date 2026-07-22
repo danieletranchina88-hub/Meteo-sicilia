@@ -903,6 +903,12 @@ class IconSynopticFrontAnalyzer(SynopticFrontAnalyzer):
             ),
             "diagnostics": _json_mapping(track.get("diagnostics", {}), 4),
             "diagnosis": track.get("diagnosis", "synoptic-front"),
+            "explanation": fp.frontal_explanation(
+                track.get("diagnostics", {}),
+                classification,
+                track.get("diagnosis", "synoptic-front"),
+                track.get("lifetimeH", 0),
+            ),
             "lifetimeH": int(track.get("lifetimeH", 0)),
             "trackId": int(track.get("id", -1)),
             "method": self.method,

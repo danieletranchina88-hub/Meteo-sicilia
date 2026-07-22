@@ -240,6 +240,87 @@ def candidate_hypothesis(metrics: dict) -> tuple[str, list[str]]:
     return "synoptic-front", reasons
 
 
+_DIAGNOSIS_LABEL = {
+    "synoptic-front": "fronte sinottico",
+    "moisture-boundary": "confine di umidità / dryline",
+    "orographic-boundary": "segnale orografico",
+    "mesoscale-boundary": "confine mesoscalare (brezza/outflow)",
+    "ridge-boundary": "gradiente debole sotto promontorio barico",
+}
+
+
+def frontal_explanation(
+    diagnostics: dict,
+    classification: dict | None = None,
+    diagnosis: str = "synoptic-front",
+    lifetime_h: float | None = None,
+) -> list[str]:
+    """Plain-language reasons a front was accepted (the science, exposed).
+
+    Reads only diagnostics already computed for the track, so it invents no
+    new physics: it verbalises the evidence that the numeric scores encode.
+    Ordered strongest-first, thermodynamics before dynamics before context.
+    """
+    reasons: list[str] = []
+    classification = classification or {}
+
+    delta_tw = _finite(diagnostics.get("deltaThetaW"))
+    abz = _finite(diagnostics.get("medianAbzGradient"))
+    delta_t = _finite(diagnostics.get("deltaTemperature"))
+    delta_tv = _finite(diagnostics.get("deltaThetaV"))
+    if np.isfinite(delta_tw) and delta_tw >= 1.2:
+        reasons.append(
+            f"masse d'aria termicamente distinte (Δθw {delta_tw:.1f} K)"
+        )
+    if np.isfinite(abz) and abz >= 1.0:
+        reasons.append(f"zona baroclina adiacente marcata ({abz:.1f} K/100 km)")
+    if np.isfinite(delta_t) and np.isfinite(delta_tv) and delta_t >= 0.6 and delta_tv >= 0.25:
+        reasons.append("contrasto reale di temperatura secca e densità")
+
+    wind_angle = _finite(diagnostics.get("windShiftAngleDeg"))
+    convergence = _finite(diagnostics.get("convergenceMs"))
+    vorticity = _finite(diagnostics.get("vorticity1e5"))
+    frontogenesis = _finite(diagnostics.get("frontogenesis"))
+    if np.isfinite(wind_angle) and wind_angle >= 10.0:
+        reasons.append(f"rotazione del vento attraverso la linea ({wind_angle:.0f}°)")
+    if np.isfinite(convergence) and convergence >= 0.12:
+        reasons.append("convergenza del vento verso il fronte")
+    if np.isfinite(vorticity) and vorticity >= 0.8:
+        reasons.append("striscia di vorticità ciclonica")
+    if np.isfinite(frontogenesis) and frontogenesis >= 0.25:
+        reasons.append("frontogenesi attiva (gradiente in intensificazione)")
+
+    trough = _finite(diagnostics.get("pressureTroughHpa"))
+    if np.isfinite(trough) and trough >= 0.2:
+        reasons.append(f"linea in saccatura barica ({trough:.1f} hPa)")
+
+    lower = _finite(diagnostics.get("lowerLevelSupport"))
+    lower_contrast = _finite(diagnostics.get("deltaThetaW925"))
+    if np.isfinite(lower) and lower >= 0.35 and np.isfinite(lower_contrast) and lower_contrast >= 0.7:
+        reasons.append("contrasto coerente anche a 925 hPa (struttura profonda)")
+
+    omega = _finite(diagnostics.get("omega700PaS"))
+    if np.isfinite(omega) and omega <= -0.05:
+        reasons.append("moto verticale ascendente a 700 hPa")
+
+    if lifetime_h is not None and np.isfinite(_finite(lifetime_h)) and lifetime_h >= 6:
+        reasons.append(f"persistente e coerente per {int(lifetime_h)} ore")
+
+    votes = classification.get("motionVotes", {})
+    agree = [k for k, v in votes.items() if v == classification.get("frontType")]
+    if classification.get("frontType") in ("cold", "warm") and len(agree) >= 2:
+        reasons.append("moto geometrico e vento concordi sul tipo")
+
+    if diagnosis != "synoptic-front":
+        reasons.append(
+            f"attenzione: interpretazione più probabile = "
+            f"{_DIAGNOSIS_LABEL.get(diagnosis, diagnosis)}"
+        )
+    if not reasons:
+        reasons.append("supporto fisico minimo ma coerente")
+    return reasons
+
+
 def candidate_gate_report(metrics: dict, evidence: dict | None = None) -> dict:
     """Apply a small set of non-compensating physical gates.
 

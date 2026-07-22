@@ -261,6 +261,22 @@ campi del run, non che la posizione reale sia garantita. Per una probabilità
 meteorologica occorrerebbero ensemble e verifica retrospettiva con un archivio
 di analisi ufficiali.
 
+## 6b. Output spiegabile
+
+Il ragionamento non è nascosto dietro un solo numero. Ogni fronte pubblicato
+espone, oltre a `qualityScore`/`uncertaintyIndex` e ai `diagnostics` numerici:
+
+- `diagnosis`: l'ipotesi vincente della diagnosi differenziale (fronte
+  sinottico, confine di umidità, orografico, mesoscalare, promontorio);
+- `explanation`: le ragioni in linguaggio umano che verbalizzano le prove
+  numeriche già calcolate — contrasto di masse d'aria (Δθw), zona baroclina
+  adiacente, contrasto secco/densità, rotazione e convergenza del vento,
+  vorticità/frontogenesi, saccatura barica, coerenza a 925 hPa, moto verticale
+  a 700 hPa, persistenza e concordanza di classificazione.
+
+La spiegazione non introduce nuova fisica: rende leggibile ciò che i punteggi
+codificano, così l'utente vede *perché* una linea è un fronte.
+
 ## 7. Test automatici
 
 La workflow blocca la pubblicazione se falliscono i test sintetici:
