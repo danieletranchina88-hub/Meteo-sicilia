@@ -258,5 +258,19 @@ if edges[0][0] != 0.0 or edges[-1][1] != 1.0 or any(
     print("  FAIL: i segmenti non coprono la linea in modo contiguo")
     ok = False
 
+# M) A weak OPPOSITE-type reading on a cold-anchored line is demoted to
+# stationary, not shown as a spurious warm patch (noise suppression).
+weak_track = ft.Track(0, 0, _cand(lambda x: 42.0))
+weak_track.hours.append(1)
+# west drifts ~7 km/h NORTH (weak "warm" reading, below 11 km/h); east cold
+weak_track.lines[1] = _cand(lambda x: 41.7 if x >= 14.0 else 42.06)
+weak_segs = ft.segment_types_for_track(
+    weak_track, {0: {"frontType": "cold"}, 1: {"frontType": "cold"}})[0]
+weak_labels = [s["type"] for s in weak_segs]
+print(f"M) deviazione opposta debole: {[(s['type'], s['start'], s['end']) for s in weak_segs]}")
+if "warm" in weak_labels:
+    print("  FAIL: una lettura 'caldo' debole su fronte freddo non deve sopravvivere")
+    ok = False
+
 print("\nESITO:", "SUPERATO" if ok else "DA RIVEDERE")
 raise SystemExit(0 if ok else 1)

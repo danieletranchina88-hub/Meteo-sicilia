@@ -602,6 +602,7 @@ def _merge_short_runs(labels: list[str], min_run: int) -> list[list]:
 def segment_types_for_track(
     track: Track, local: dict[int, dict],
     *, count: int = 40, min_segment_fraction: float = 0.22,
+    strong_opposite_kmh: float = 11.0,
 ) -> dict[int, list[dict]]:
     """Classify each hour's line into contiguous cold/warm/stationary segments.
 
@@ -611,17 +612,33 @@ def segment_types_for_track(
     stays one continuous line while the character varies along it. Falls back
     to a single segment (the hour's temporal type) where per-point motion is
     unavailable.
+
+    The per-point motion of a single hour is noisier than the whole-line
+    consensus, so a segment is **anchored** to the hour's consensus type: a
+    point may become *stationary* (a slowing stretch, physical and common),
+    but it may not flip to the *opposite* moving type (warm on a cold front)
+    unless its local motion is strong and sustained. This removes spurious
+    "warm patch on a cold front" artefacts while keeping real cold->stationary
+    variation.
     """
     min_run = max(2, int(round(min_segment_fraction * count)))
     result: dict[int, list[dict]] = {}
     for hour in track.hours:
-        fallback_type = local.get(hour, {}).get("frontType", "uncertain")
+        anchor = local.get(hour, {}).get("frontType", "uncertain")
         speeds = _point_motion_kmh(track, hour, count)
         if speeds is None or not np.all(np.isfinite(speeds)):
             result[hour] = [{"start": 0.0, "end": 1.0,
-                             "type": fallback_type, "certainty": 0.3}]
+                             "type": anchor, "certainty": 0.3}]
             continue
         raw = [_type_from_speed(float(s)) for s in speeds]
+        if anchor in ("cold", "warm"):
+            opposite = "warm" if anchor == "cold" else "cold"
+            raw = [
+                "stationary" if (label == opposite
+                                 and abs(float(speed)) < strong_opposite_kmh)
+                else label
+                for label, speed in zip(raw, speeds)
+            ]
         smoothed = _mode_filter(raw, radius=2)
         segments = _merge_short_runs(smoothed, min_run)
         pieces = []
