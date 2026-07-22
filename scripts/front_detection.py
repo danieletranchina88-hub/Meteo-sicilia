@@ -123,6 +123,14 @@ def detect_fronts_two_scale(
     refine_min_length_km: float = 220.0,
     boundary_margin_km: float = 70.0,
     return_synoptic: bool = False,
+    synoptic_tfp_weak: float = -1.5e-5,
+    synoptic_tfp_full: float = -4.0e-5,
+    synoptic_abz_weak: float = 0.65,
+    synoptic_abz_full: float = 1.10,
+    refined_tfp_weak: float = -2.5e-5,
+    refined_tfp_full: float = -9.0e-5,
+    refined_abz_weak: float = 0.90,
+    refined_abz_full: float = 1.70,
 ):
     """Two-scale detection: refined candidates constrained by a synoptic prior.
 
@@ -134,10 +142,10 @@ def detect_fronts_two_scale(
         theta_w, longitudes, latitudes,
         synoptic_sigma_km=synoptic_sigma_km,
         derivative_sigma_km=max(derivative_sigma_km, synoptic_sigma_km * 0.3),
-        tfp_threshold=-1.5e-5,
-        tfp_full_strength=-4.0e-5,
-        abz_gradient_threshold=0.65,
-        abz_gradient_full_strength=1.10,
+        tfp_threshold=synoptic_tfp_weak,
+        tfp_full_strength=synoptic_tfp_full,
+        abz_gradient_threshold=synoptic_abz_weak,
+        abz_gradient_full_strength=synoptic_abz_full,
         min_length_km=synoptic_min_length_km,
         boundary_margin_km=boundary_margin_km,
     )
@@ -147,10 +155,10 @@ def detect_fronts_two_scale(
         derivative_sigma_km=derivative_sigma_km,
         # Beckert et al. (2023) show that less-smoothed kilometre-scale
         # fields need stricter TFP/gradient intervals than synoptic fields.
-        tfp_threshold=-2.5e-5,
-        tfp_full_strength=-9.0e-5,
-        abz_gradient_threshold=0.90,
-        abz_gradient_full_strength=1.70,
+        tfp_threshold=refined_tfp_weak,
+        tfp_full_strength=refined_tfp_full,
+        abz_gradient_threshold=refined_abz_weak,
+        abz_gradient_full_strength=refined_abz_full,
         min_length_km=refine_min_length_km,
         boundary_margin_km=boundary_margin_km,
     )

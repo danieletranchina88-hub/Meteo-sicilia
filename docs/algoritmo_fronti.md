@@ -112,16 +112,30 @@ ne conserva la geometria ICON-2I. Un gradiente locale molto intenso non può
 aggirare il requisito sinottico: è il meccanismo principale contro brezze,
 outflow convettivi, canali vallivi e cold pool.
 
-Soglie fuzzy OFA, espresse in unità fisiche:
+Soglie fuzzy OFA (valori di ripiego, in unità fisiche):
 
 | Scala | TFP debole → pieno | ABZ debole → pieno |
 |---|---:|---:|
-| Sinottica | −0,15 → −0,40 K/(100 km)² | 0,65 → 1,10 K/100 km |
-| Raffinata | −0,25 → −0,90 K/(100 km)² | 0,90 → 1,70 K/100 km |
+| Sinottica | −1,5e-5 → −4,0e-5 K/km² | 0,65 → 1,10 K/100 km |
+| Raffinata | −2,5e-5 → −9,0e-5 K/km² | 0,90 → 1,70 K/100 km |
 
-I quantili del dominio possono rendere le soglie più severe, mai più
-permissive. Vengono inoltre respinte anomalie quasi chiuse, hairpin molto
-sinuosi, duplicati paralleli e linee prevalentemente sopra terreno elevato.
+**Calibrazione climatologica (documento sez. 17).** Non si copiano valori
+esteri: `scripts/calibrate_thresholds.py` costruisce una **climatologia** dei
+due campi decisionali (`|∇θw|` e TFP), calcolati alle *stesse* scale di
+smoothing del rilevatore, su molti run ICON-2I, separata per mese e fascia
+latitudinale. Da lì ricava le soglie base — ABZ debole = Q₅₀, ABZ pieno =
+Q₈₅ di `|∇θw|`; TFP debole = Q₂₅, TFP pieno = Q₀₅ — salvate in
+`scripts/climatology_thresholds.json`. L'analyzer carica le soglie del mese
+del run (fascia intero dominio), con **ripiego** ai valori fissi se la
+climatologia manca o non copre quel mese. Una climatologia stabile su molti
+run evita che una singola mappa quieta o tempestosa sposti la soglia; per
+luglio (bassa baroclinicità) la soglia di gradiente scende, recuperando i
+fronti estivi deboli, mentre il TFP a piena forza è più severo.
+
+I quantili del **singolo** run possono poi rendere le soglie ancora più
+severe, mai più permissive. Vengono inoltre respinte anomalie quasi chiuse,
+hairpin molto sinuosi, duplicati paralleli e linee prevalentemente sopra
+terreno elevato.
 
 ## 4. Controlli fisici indipendenti
 
@@ -349,7 +363,12 @@ La workflow blocca la pubblicazione se falliscono i test sintetici:
   visibile di un fronte quasi stazionario passato ogni porta fisica;
 - riconoscimento dell'onda in occlusione e rifiuto di onda aperta / fronte
   freddo isolato come falsa occlusione;
-- presenza e buona forma dell'array `explanation` su ogni fronte pubblicato.
+- presenza e buona forma dell'array `explanation` su ogni fronte pubblicato;
+- caricamento della climatologia delle soglie (otto valori ordinati, ripiego
+  fra mesi) e loro applicazione nel rilevatore;
+- il motore differenziale valuta tutte le ipotesi e sceglie il verdetto;
+- stabilità temporale del tipo (Viterbi): rimozione del flip caldo↔freddo,
+  conservazione di una fase reale prolungata.
 
 ## Riferimenti primari
 
