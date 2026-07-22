@@ -150,13 +150,35 @@ Sulla linea si calcolano inoltre:
 I requisiti duri impongono un vero contrasto secco e di densità, persistenza
 del contrasto alle tre distanze, allineamento termico plausibile e geometria
 sinottica.
-### Diagnosi differenziale e porte logiche
+### Motore di ragionamento (diagnosi differenziale)
 
-La v14 non decide l'esistenza di un fronte con la sola media dei punteggi.
-Prima del ranking distingue in modo esplicito le ipotesi: fronte sinottico,
-confine di umidità/dryline, segnale orografico, confine mesoscalare (brezza o
-outflow) e gradiente debole sotto promontorio. Solo l'ipotesi sinottica può
-entrare nel tracciamento.
+L'algoritmo ragiona come un meteorologo, non come una catena di soglie:
+**individua un possibile fronte** (TFL/TFP/ABZ), **raccoglie tutte le prove
+disponibili** (contrasto di θw, temperatura secca, densità virtuale, gradiente
+secco, corridoio sinottico, lunghezza, geometria, vento, convergenza,
+vorticità, frontogenesi, saccatura, 925 hPa, omega 700 hPa), **osserva
+l'evoluzione nel tempo** (durata, copertura, coerenza del moto), **confronta le
+spiegazioni alternative** e **sceglie l'ipotesi che spiega meglio l'intero
+quadro**, rendendo trasparente il motivo.
+
+Il motore (`front_physics.differential_diagnosis`) assegna un punteggio di
+coerenza a **ogni** ipotesi in competizione — fronte sinottico, confine di
+umidità/dryline, confine mesoscalare (brezza), outflow convettivo, segnale
+orografico, rumore debole — a partire da *tutte* le caratteristiche osservate,
+comprese quelle temporali: un fronte sinottico **persiste e si muove in modo
+coerente** per molte ore, mentre una brezza o un outflow sono **transitori** e
+spesso diurni. Vince l'ipotesi meglio supportata.
+
+La decisione è **conservativa come quella di un analista**: un candidato già
+localizzato che possiede il contrasto di massa d'aria è considerato un fronte,
+a meno che una spiegazione concorrente non prevalga **chiaramente** — così un
+fronte reale ma modesto non viene scartato da un punteggio di "rumore"
+appena più alto. Se però manca del tutto il contrasto termico di massa d'aria
+(solo umidità), l'ipotesi di dryline vince e la linea non entra nel
+tracciamento. Ogni fronte pubblicato espone `reasoning` (verdetto, margine,
+ipotesi alternativa e motivi) e `explanation`.
+
+Solo l'ipotesi sinottica può entrare nel tracciamento.
 
 Le porte non compensabili sono volutamente poche:
 
@@ -283,6 +305,9 @@ espone, oltre a `qualityScore`/`uncertaintyIndex` e ai `diagnostics` numerici:
 
 - `diagnosis`: l'ipotesi vincente della diagnosi differenziale (fronte
   sinottico, confine di umidità, orografico, mesoscalare, promontorio);
+- `reasoning`: il ragionamento del motore — verdetto, margine sul secondo
+  classificato, ipotesi alternativa con il suo supporto e i motivi della
+  scelta (compreso l'argomento temporale: persistenza e moto coerente);
 - `explanation`: le ragioni in linguaggio umano che verbalizzano le prove
   numeriche già calcolate — contrasto di masse d'aria (Δθw), zona baroclina
   adiacente, contrasto secco/densità, rotazione e convergenza del vento,
