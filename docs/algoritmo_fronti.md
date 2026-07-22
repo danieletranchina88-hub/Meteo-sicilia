@@ -372,15 +372,24 @@ TFL–TFP–ABZ. Nessun candidato scartato sparisce in silenzio:
 motivi, e `analysis_summary.rejectedByReason` ne conta le cause.
 
 **Classificazione per-segmento (`segmentTypes`).** La stessa struttura può
-essere freddo su un tratto e quasi stazionaria su un altro **alla stessa
-ora**: la geometria resta *una* linea continua (l'esistenza è tracciata
+essere freddo attivo su un tratto e quasi stazionaria su un altro **alla
+stessa ora**: la geometria resta *una* linea continua (l'esistenza è tracciata
 indipendentemente dal tipo), ma il carattere può variare lungo di essa. Ogni
-punto della linea è classificato dal suo **moto geometrico locale** (verso il
-caldo/freddo), poi si uniscono tratti adiacenti coerenti in segmenti espressi
-come frazioni di arco `[start, end]` con tipo e certezza. Il campo
-`segmentTypes` è **additivo**: il singolo `frontType` dominante resta per
-retro-compatibilità. Il rendering dei segmenti sul viewer è un passo isolato
-(mai detector e viewer insieme).
+punto è classificato dal suo **moto geometrico locale**, poi si uniscono
+tratti adiacenti coerenti in segmenti espressi come frazioni di arco
+`[start, end]` con tipo e certezza.
+
+Vincolo fisico: **una singola identità frontale non diventa il tipo opposto**
+lungo la sua lunghezza — un fronte freddo che diventasse caldo sarebbe un
+altro fronte, o un'occlusione (gestita a parte). Il carattere può solo
+indebolirsi verso *stazionario*. Poiché il moto per-punto di una sola ora è
+rumoroso, ogni lettura del tipo opposto viene declassata a stazionario e le
+ore incerte si ancorano al tipo dominante della traccia. Restano quindi le
+variazioni reali (es. freddo→stazionario) senza falsi tratti opposti.
+
+Il campo `segmentTypes` è **additivo**: il singolo `frontType` dominante resta
+per retro-compatibilità. Il rendering dei segmenti sul viewer è un passo
+isolato (mai detector e viewer insieme).
 
 ## 7. Test automatici
 
