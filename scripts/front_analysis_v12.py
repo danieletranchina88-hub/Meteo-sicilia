@@ -41,36 +41,75 @@ CLIMATOLOGY_PATH = os.path.join(
 )
 
 
-def load_threshold_climatology(month: str) -> dict | None:
-    """Whole-domain synoptic+refined thresholds for a month, or None."""
+MIN_CLIMATOLOGY_RUNS = 30
+MIN_CLIMATOLOGY_DAYS = 15
+
+
+def threshold_climatology_status(month: str) -> tuple[dict | None, str]:
+    """Return validated monthly thresholds and an explicit QC status.
+
+    Distributional quantiles are not automatically a calibration.  A month
+    is eligible only when it contains enough independent runs/days and the
+    benchmark process has explicitly promoted the file for operational use.
+    Thresholds from another season are never used as a fallback.
+    """
     try:
         with open(CLIMATOLOGY_PATH, encoding="utf-8") as handle:
             clim = json.load(handle)
-    except (OSError, ValueError):
-        return None
+    except OSError:
+        return None, "file-missing"
+    except ValueError:
+        return None, "invalid-json"
 
-    def _band(node):
-        return (node or {}).get("all")
+    node = clim.get(month)
+    if not isinstance(node, dict):
+        return None, "month-not-covered"
 
-    candidates = [clim.get(month)]
-    candidates += [v for k, v in clim.items() if k not in ("_meta", month)]
-    for node in candidates:
-        if not node:
-            continue
-        syn, ref = _band(node.get("synoptic")), _band(node.get("refined"))
-        if not syn or not ref:
-            continue
-        return {
-            "synoptic_tfp_weak": syn["tfp_weak"],
-            "synoptic_tfp_full": syn["tfp_full"],
-            "synoptic_abz_weak": syn["abz_weak"],
-            "synoptic_abz_full": syn["abz_full"],
-            "refined_tfp_weak": ref["tfp_weak"],
-            "refined_tfp_full": ref["tfp_full"],
-            "refined_abz_weak": ref["abz_weak"],
-            "refined_abz_full": ref["abz_full"],
-        }
-    return None
+    meta = clim.get("_meta") or {}
+    run_tags = [
+        str(tag) for tag in meta.get("runs", [])
+        if len(str(tag)) >= 10 and str(tag)[4:6] == month
+    ]
+    distinct_days = {tag[:8] for tag in run_tags}
+    if len(set(run_tags)) < MIN_CLIMATOLOGY_RUNS:
+        return None, "insufficient-independent-runs"
+    if len(distinct_days) < MIN_CLIMATOLOGY_DAYS:
+        return None, "insufficient-distinct-days"
+    if meta.get("operationalValidated") is not True:
+        return None, "not-operationally-validated"
+
+    syn = (node.get("synoptic") or {}).get("all")
+    ref = (node.get("refined") or {}).get("all")
+    if not isinstance(syn, dict) or not isinstance(ref, dict):
+        return None, "missing-whole-domain-band"
+
+    try:
+        ordered = (
+            syn["tfp_full"] < syn["tfp_weak"] < 0.0
+            and ref["tfp_full"] < ref["tfp_weak"] < 0.0
+            and 0.0 < syn["abz_weak"] < syn["abz_full"]
+            and 0.0 < ref["abz_weak"] < ref["abz_full"]
+        )
+    except (KeyError, TypeError):
+        return None, "incomplete-threshold-set"
+    if not ordered:
+        return None, "invalid-threshold-order"
+
+    return {
+        "synoptic_tfp_weak": syn["tfp_weak"],
+        "synoptic_tfp_full": syn["tfp_full"],
+        "synoptic_abz_weak": syn["abz_weak"],
+        "synoptic_abz_full": syn["abz_full"],
+        "refined_tfp_weak": ref["tfp_weak"],
+        "refined_tfp_full": ref["tfp_full"],
+        "refined_abz_weak": ref["abz_weak"],
+        "refined_abz_full": ref["abz_full"],
+    }, "validated"
+
+
+def load_threshold_climatology(month: str) -> dict | None:
+    """Backward-compatible thresholds-only view of the QC-aware loader."""
+    return threshold_climatology_status(month)[0]
 
 SYNOPTIC_SIGMA_KM = 100.0
 REFINE_SIGMA_KM = 45.0
@@ -151,7 +190,10 @@ class IconSynopticFrontAnalyzer(SynopticFrontAnalyzer):
         except Exception:
             pass
         self.run_month = run_month
-        self._threshold_climatology = load_threshold_climatology(run_month)
+        (
+            self._threshold_climatology,
+            self._threshold_climatology_status,
+        ) = threshold_climatology_status(run_month)
 
         if lower_temperature_path and lower_humidity_path:
             added = []
@@ -840,10 +882,10 @@ class IconSynopticFrontAnalyzer(SynopticFrontAnalyzer):
                 "analisi frontale incompleta: "
                 f"{len(detection_errors)}/{len(self.available_hours)} ore in errore"
             )
-        if total_candidates == 0:
-            raise RuntimeError(
-                "nessun candidato OFA in tutte le scadenze: output non pubblicabile"
-            )
+        # Zero physically robust candidates is a valid meteorological result.
+        # It must publish a fresh empty analysis instead of leaving stale fronts
+        # from the previous run online.  Excessive processing errors above still
+        # fail closed and remain distinct from a genuine no-front situation.
 
         raw_tracks = ftk.track_fronts(
             hourly,
@@ -865,7 +907,14 @@ class IconSynopticFrontAnalyzer(SynopticFrontAnalyzer):
                 int(np.ceil(0.55 * len(track.get("hours", [])))),
             )
         ]
+        run_status = "fronts-detected" if tracks else "no-robust-fronts"
         self.analysis_summary = {
+            "analysisStatus": run_status,
+            "analysisMessage": (
+                "Fronti sinottici robusti rilevati nel run."
+                if tracks else
+                "Nessun fronte sinottico robusto nel run."
+            ),
             "hours": len(self.available_hours),
             "hoursWithCandidates": sum(bool(items) for items in hourly.values()),
             "candidateLines": total_candidates,
@@ -879,6 +928,7 @@ class IconSynopticFrontAnalyzer(SynopticFrontAnalyzer):
             "thresholdClimatology": (
                 self.run_month if self._threshold_climatology else None
             ),
+            "thresholdClimatologyStatus": self._threshold_climatology_status,
             "rejectedByReason": self._aggregate_rejections(),
         }
         print(
@@ -1110,9 +1160,16 @@ class IconSynopticFrontAnalyzer(SynopticFrontAnalyzer):
             "classificationWind": "925/850 hPa" if self.has_lower_wind else "850 hPa",
             "estimated": True,
             "uncertainty": "diagnostic-not-probabilistic",
+            "analysisStatus": "unavailable",
+            "analysisMessage": "Scadenza non disponibile per l'analisi frontale.",
         }
         if hour not in self.hour_to_index:
-            return {"type": "FeatureCollection", "features": [], "properties": base_properties}
+            return {
+                "type": "FeatureCollection",
+                "features": [],
+                "properties": base_properties,
+            }
+
         self._ensure_tracks()
         entries = list(self._by_hour.get(hour, []))
         entries.sort(key=lambda item: item[1]["qualityScore"], reverse=True)
@@ -1132,6 +1189,17 @@ class IconSynopticFrontAnalyzer(SynopticFrontAnalyzer):
                 },
                 "properties": dict(properties),
             })
+
+        if features:
+            base_properties["analysisStatus"] = "fronts-detected"
+            base_properties["analysisMessage"] = (
+                f"{len(features)} strutture frontali sinottiche robuste."
+            )
+        else:
+            base_properties["analysisStatus"] = "no-robust-fronts"
+            base_properties["analysisMessage"] = (
+                "Nessun fronte sinottico robusto in questa ora."
+            )
         return {
             "type": "FeatureCollection",
             "features": features,
