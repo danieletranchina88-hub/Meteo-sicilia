@@ -178,6 +178,7 @@ class IconSynopticFrontAnalyzer(SynopticFrontAnalyzer):
         self._support_cache: dict[int, dict] = {}
         self._pipeline_diag: dict[int, dict] = {}
         self._rejected: dict[int, list[dict]] = {}
+        self._detection_errors: dict[int, str] = {}
         # Climatological detection thresholds for the run's month (falls back
         # to the detector's fixed fuzzy defaults when the climatology is absent
         # or does not cover this month).
@@ -877,6 +878,7 @@ class IconSynopticFrontAnalyzer(SynopticFrontAnalyzer):
 
         total_candidates = sum(len(items) for items in hourly.values())
         allowed_errors = max(2, int(np.ceil(len(self.available_hours) * 0.05)))
+        self._detection_errors = detection_errors
         if len(detection_errors) > allowed_errors:
             raise RuntimeError(
                 "analisi frontale incompleta: "
@@ -907,13 +909,21 @@ class IconSynopticFrontAnalyzer(SynopticFrontAnalyzer):
                 int(np.ceil(0.55 * len(track.get("hours", [])))),
             )
         ]
-        run_status = "fronts-detected" if tracks else "no-robust-fronts"
+        run_status = (
+            "partially-unavailable"
+            if detection_errors
+            else "fronts-detected"
+            if tracks
+            else "no-robust-fronts"
+        )
         self.analysis_summary = {
             "analysisStatus": run_status,
             "analysisMessage": (
-                "Fronti sinottici robusti rilevati nel run."
-                if tracks else
-                "Nessun fronte sinottico robusto nel run."
+                f"{len(detection_errors)} ore frontali non disponibili nel run."
+                if detection_errors
+                else "Fronti sinottici robusti rilevati nel run."
+                if tracks
+                else "Nessun fronte sinottico robusto nel run."
             ),
             "hours": len(self.available_hours),
             "hoursWithCandidates": sum(bool(items) for items in hourly.values()),
@@ -1171,6 +1181,17 @@ class IconSynopticFrontAnalyzer(SynopticFrontAnalyzer):
             }
 
         self._ensure_tracks()
+        if hour in self._detection_errors:
+            base_properties["analysisStatus"] = "unavailable"
+            base_properties["analysisMessage"] = (
+                "Analisi frontale non disponibile per un errore diagnostico: "
+                + self._detection_errors[hour]
+            )
+            return {
+                "type": "FeatureCollection",
+                "features": [],
+                "properties": base_properties,
+            }
         entries = list(self._by_hour.get(hour, []))
         entries.sort(key=lambda item: item[1]["qualityScore"], reverse=True)
         features = []
