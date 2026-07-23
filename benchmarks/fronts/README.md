@@ -105,6 +105,19 @@ shadow (accordo di posizione, gradiente e tipo): non deve cancellare un fronte
 ICON né promuoverne uno. Il suo peso potrà essere deciso solo dai risultati
 separati per stagione del benchmark.
 
+Fonti dati precise:
+
+- [NOMADS GFS 0.25°](https://nomads.ncep.noaa.gov/gribfilter.php?ds=gfs_0p25)
+  per il sottoinsieme operativo recente;
+- [NOAA GFS su AWS](https://registry.opendata.aws/noaa-gfs-pds/) per la finestra
+  cloud recente a 0.25°;
+- [archivio GFS NCEI](https://www.ncei.noaa.gov/products/weather-climate-models/global-forecast)
+  per la disponibilità storica ufficiale e i relativi metodi di accesso;
+- [ERA5 su Copernicus CDS](https://cds.climate.copernicus.eu/datasets/reanalysis-era5-complete)
+  per la ricostruzione oraria storica su livelli di pressione;
+- [archivio carte Met Office](https://www.metoffice.gov.uk/research/library-and-archive/archive/charts)
+  per le analisi superficiali ASXX con posizione dei fronti.
+
 ERA5 è adatto alla ricostruzione storica dei campi atmosferici, ma non contiene
 una verità pronta dei fronti. Le etichette geometriche restano quelle umane,
 tracciate da fonti sinottiche indipendenti.
