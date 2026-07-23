@@ -245,6 +245,87 @@ def _global_assign(tracks: list[Track], candidates: list[dict], hour: int,
 # --------------------------------------------------------------------------
 # Classification (consensus)
 # --------------------------------------------------------------------------
+def _stitch_cost(a: "Track", b: "Track", max_gap: int) -> float:
+    """Cost of continuing track ``a`` with track ``b`` across a short gap.
+
+    A physical front that briefly drops below detection for a single hour is
+    split by the online (causal) tracker into two consecutive tracks, because
+    the 2-hour forward prediction that would re-link them is deliberately
+    strict. With both pieces now in hand we re-test the link with hindsight:
+    across exactly one missing hour the end of ``a`` and the start of ``b``
+    must be physically close (centroid travel under ~65 km/h, small line-to-
+    line distance), similarly oriented and facing the same warm side.
+    Returns +inf when any condition fails.
+    """
+    gap = b.hours[0] - a.hours[-1]
+    # Only a single missing hour (an isolated detection dropout). A larger
+    # gap, or two tracks in adjacent/overlapping hours (gap 1 = no missing
+    # hour), are distinct identities and must not be fused.
+    if gap != 2 or gap > max_gap:
+        return np.inf
+    a_line = a.lines[a.hours[-1]]["coordinates"]
+    b_line = b.lines[b.hours[0]]["coordinates"]
+    # Hard physical ceiling on how far the *centroid* may travel across the
+    # gap: a front does not exceed ~65 km/h. The symmetric distance alone is
+    # fooled by two long parallel lines that overlap end-to-end, so the
+    # centroid displacement is the decisive teleport guard.
+    mean_lat = math_mean_lat(a_line, b_line)
+    ca = _project_km(a_line, mean_lat).mean(axis=0)
+    cb = _project_km(b_line, mean_lat).mean(axis=0)
+    if float(np.hypot(*(cb - ca))) > 65.0 * gap:
+        return np.inf
+    # Direct line-to-line proximity (not the extrapolated prediction, whose
+    # 2-hour noise inflates the distance for a genuinely continuous front).
+    distance = _symmetric_distance_km(a_line, b_line)
+    if distance > 40.0 + 45.0 * gap:
+        return np.inf
+    if _orientation_diff(a_line, b_line) > 45.0:
+        return np.inf
+    length_a = _length_km(a_line)
+    length_b = _length_km(b_line)
+    if max(length_a, length_b) > 2.5 * max(min(length_a, length_b), 1.0):
+        return np.inf
+    normal_a = _resample_vectors(a.lines[a.hours[-1]]["warmNormal"], 32)
+    normal_b = _resample_vectors(b.lines[b.hours[0]]["warmNormal"], 32)
+    pa = _resample(a_line, 32)
+    pb = _resample(b_line, 32)
+    if float(np.mean(np.hypot(*(pa - pb[::-1]).T))) < float(np.mean(np.hypot(*(pa - pb).T))):
+        normal_b = normal_b[::-1]
+    facing = float(np.nanmedian(np.sum(normal_a * normal_b, axis=1)))
+    if not np.isfinite(facing) or facing < 0.0:
+        return np.inf
+    return distance + 2.0 * _orientation_diff(a_line, b_line)
+
+
+def _stitch_tracks(tracks: list["Track"], max_gap: int) -> list["Track"]:
+    """Greedily merge consecutive same-identity tracks split by a short gap.
+
+    Repeatedly joins the globally cheapest compatible (earlier -> later) pair
+    until none qualifies. The missing hours are left as a gap in the merged
+    track's ``hours``: the publisher bridges single-hour gaps between equal
+    types by blending, so the boundary is drawn as one continuous, non-
+    flickering front instead of two tracks with a hole between them.
+    """
+    tracks = list(tracks)
+    while True:
+        best = None
+        best_cost = np.inf
+        for i, a in enumerate(tracks):
+            for j, b in enumerate(tracks):
+                if i == j or b.hours[0] <= a.hours[-1]:
+                    continue
+                cost = _stitch_cost(a, b, max_gap)
+                if cost < best_cost:
+                    best_cost, best = cost, (i, j)
+        if best is None:
+            return tracks
+        i, j = best
+        a, b = tracks[i], tracks[j]
+        a.hours = sorted(set(a.hours) | set(b.hours))
+        a.lines.update(b.lines)
+        tracks.pop(j)
+
+
 def _type_from_speed(speed_kmh: float) -> str:
     if speed_kmh >= COLD_WARM_THRESHOLD_KMH:
         return "cold"
@@ -800,6 +881,13 @@ def track_fronts(
             next_id += 1
             tracks.append(track)
             active.append(track)
+
+    # Re-link tracks that the online (causal) assignment split across a brief
+    # detection dropout. Done here, with the whole sequence in hand, so a
+    # single physical boundary becomes one continuous track instead of two
+    # with a one-hour hole between them (the "front vanishes for an hour"
+    # artefact). Max gap mirrors the online tracking window.
+    tracks = _stitch_tracks(tracks, max_gap=max(2, window_hours))
 
     available = sorted(hourly_candidates)
     results = []

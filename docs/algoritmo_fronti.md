@@ -308,6 +308,21 @@ traccia pubblicata, un'ora la cui classificazione locale è ambigua viene
 mostrata con il tipo dominante della traccia, così la linea resta continua
 invece di sparire per una singola ora.
 
+**Ricucitura delle tracce spezzate.** Il tracciamento è causale: elabora
+un'ora alla volta e non può guardare avanti. Se un fronte reale scende sotto
+la soglia di rilevamento per una singola ora, la predizione a due ore che lo
+riaggancerebbe è troppo severa e il tracker lo spezza in due tracce
+consecutive, con un buco di un'ora in mezzo — il fronte "sparisce e riappare".
+Con l'intera sequenza in mano si rifà il controllo *a posteriori*: due tracce
+separate da **esattamente un'ora mancante** vengono riunite in una sola se il
+loro moto è fisicamente plausibile — spostamento del centroide sotto ~65 km/h
+(guardia anti-teletrasporto, perché due linee lunghe parallele possono avere
+distanza simmetrica piccola pur essendo fronti diversi), piccola distanza
+linea-linea, orientamento e lato caldo compatibili. Il buco di un'ora così
+ricucito è poi colmato dall'interpolazione descritta sopra, e la linea è
+disegnata come un unico fronte continuo. Una perdita di segnale più lunga
+resta invece una nuova identità.
+
 ## 6. Significato dell'incertezza
 
 L'indice aumenta con prove fisiche deboli, scarsa continuità, moto instabile,

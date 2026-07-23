@@ -272,5 +272,33 @@ if "warm" in weak_labels:
     print("  FAIL: una lettura 'caldo' debole su fronte freddo non deve sopravvivere")
     ok = False
 
+# N) A single missing hour is re-stitched into one continuous track --------
+# The online window is 1 h, so the causal tracker CANNOT bridge the 2-hour
+# jump and splits the front in two; the post-hoc stitch must rejoin them.
+one_gap = {h: c for h, c in cold.items() if h != 12}
+tr_stitch = ft.track_fronts(
+    one_gap, window_hours=1, min_lifetime_hours=6, min_coverage=0.5
+)
+print(f"N) buco di 1 ora ricucito: {len(tr_stitch)} traccia")
+if not (len(tr_stitch) == 1 and 11 in tr_stitch[0]["hours"]
+        and 13 in tr_stitch[0]["hours"] and 12 not in tr_stitch[0]["hours"]):
+    print("  FAIL: un dropout di 1 ora deve tornare una sola traccia continua")
+    ok = False
+
+# O) A far jump across the same 1-hour gap is NOT stitched (teleport guard) --
+near = {h: c for h, c in moving_front_candidates(lambda h: 45.0).items()
+        if 6 <= h <= 11}
+far = {h: c for h, c in moving_front_candidates(lambda h: 38.0).items()
+       if 13 <= h <= 18}
+teleport = {**near, **far}
+tr_tel = ft.track_fronts(
+    teleport, window_hours=1, min_lifetime_hours=3, min_coverage=0.5
+)
+fused = any(11 in t["hours"] and 13 in t["hours"] for t in tr_tel)
+print(f"O) salto ~780 km non ricucito: {len(tr_tel)} tracce, fuse={fused}")
+if fused:
+    print("  FAIL: due fronti a ~780 km non vanno fusi attraverso il buco")
+    ok = False
+
 print("\nESITO:", "SUPERATO" if ok else "DA RIVEDERE")
 raise SystemExit(0 if ok else 1)
