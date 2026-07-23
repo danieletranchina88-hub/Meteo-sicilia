@@ -157,7 +157,12 @@ def match_fronts(
                 prediction["coordinates"], label["coordinates"], radius_km
             )
 
-    prediction_indexes, label_indexes = linear_sum_assignment(-scores)
+    # Maximise the number of eligible matches first, then their overlap.
+    # Maximising raw overlap alone can choose one excellent pair plus an
+    # ineligible pair instead of two valid, moderately overlapping pairs.
+    cardinality_bonus = min(scores.shape) + 1.0
+    utility = scores + (scores >= minimum_overlap) * cardinality_bonus
+    prediction_indexes, label_indexes = linear_sum_assignment(-utility)
     matches = []
     matched_predictions: set[int] = set()
     matched_labels: set[int] = set()
