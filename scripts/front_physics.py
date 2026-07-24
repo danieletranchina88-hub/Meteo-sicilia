@@ -154,6 +154,11 @@ def candidate_evidence(metrics: dict) -> dict:
         )
     else:
         vertical = 0.45
+    # Cross-section 925/850 coherence (front_sections): prudent weight until
+    # calibrated on an independent archive; missing stays strictly neutral.
+    coherence = _finite(metrics.get("verticalCoherence"))
+    if np.isfinite(coherence):
+        vertical = 0.80 * vertical + 0.20 * float(np.clip(coherence, 0.0, 1.0))
 
     omega = _finite(metrics.get("omega700PaS"))
     activity = smoothstep(-omega, -0.03, 0.20) if np.isfinite(omega) else 0.50

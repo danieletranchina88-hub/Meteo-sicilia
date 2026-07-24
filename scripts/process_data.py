@@ -225,15 +225,15 @@ def prepare_icon_front_analyzer(run_dt):
         # frontale tecnicamente vuoto o parziale.
         analyzer.analyze(analyzer.available_hours[0])
         summary = analyzer.analysis_summary or {}
-        if summary.get("publishedTracks", 0) < 1:
-            analyzer.close()
-            raise ValueError(
-                "nessuna traccia frontale a bassa incertezza nel run completo"
-            )
+        published = int(summary.get("publishedTracks", 0))
         print(
             "   Analisi ICON-2I pronta: "
             f"{len(analyzer.available_hours)} ore, "
-            f"{summary.get('publishedTracks')} tracce pubblicabili.",
+            + (
+                f"{published} tracce pubblicabili."
+                if published else
+                "nessun fronte sinottico robusto: pubblico un'analisi vuota valida."
+            ),
             flush=True,
         )
         return analyzer
@@ -447,6 +447,9 @@ def process_data():
 
     catalog = []
     step_errors = []
+    front_qc_hours = []
+    front_analysis_summary = {}
+    front_pipeline_diagnostics = {}
     icon_front_analyzer = prepare_icon_front_analyzer(run_dt)
     if icon_front_analyzer is None:
         raise RuntimeError(
@@ -628,6 +631,18 @@ def process_data():
                             flush=True,
                         )
 
+                front_properties = (
+                    fronts.get("properties", {})
+                    if isinstance(fronts, dict) else {}
+                )
+                front_analysis_status = front_properties.get(
+                    "analysisStatus", "unavailable"
+                )
+                front_analysis_message = front_properties.get(
+                    "analysisMessage",
+                    "Analisi frontale non disponibile per questa ora.",
+                )
+
                 header = {
                     "nx": nx, "ny": ny, "lo1": lo1, "la1": la1, "lo2": lo2, "la2": la2,
                     "dx": dx, "dy": dy, "runTime": iso_z(run_dt), "validTime": iso_date, "refTime": iso_date, "leadHours": step_hours,
@@ -636,6 +651,8 @@ def process_data():
                     "frontSource": front_source,
                     "frontLevel": front_level,
                     "frontValidTime": front_valid_time,
+                    "frontAnalysisStatus": front_analysis_status,
+                    "frontAnalysisMessage": front_analysis_message,
                 }
 
                 step_data = {
@@ -672,6 +689,14 @@ def process_data():
 
                 if not any(x['hour'] == step_hours for x in catalog):
                     catalog.append({ "file": out_name, "label": f"{valid_dt.strftime('%d/%m %H:00')} UTC", "hour": step_hours, "runTime": iso_z(run_dt), "validTime": iso_date, "leadHours": step_hours })
+                    front_qc_hours.append({
+                        "leadHours": step_hours,
+                        "validTime": iso_date,
+                        "analysisStatus": front_analysis_status,
+                        "analysisMessage": front_analysis_message,
+                        "frontCount": len(fronts.get("features", [])),
+                        "fronts": fronts.get("features", []),
+                    })
 
             except Exception as e:
                 step_errors.append((step_hours, str(e)))
@@ -686,6 +711,13 @@ def process_data():
         print(" -> Done")
 
     if icon_front_analyzer is not None:
+        front_analysis_summary = dict(
+            icon_front_analyzer.analysis_summary or {}
+        )
+        front_pipeline_diagnostics = {
+            str(hour): dict(values)
+            for hour, values in icon_front_analyzer._pipeline_diag.items()
+        }
         icon_front_analyzer.close()
     if os.path.exists(FRONT_TEMP_DIR):
         shutil.rmtree(FRONT_TEMP_DIR)
@@ -705,6 +737,19 @@ def process_data():
                 f"output ICON incompleto: {len(step_errors)} errori, "
                 f"ore mancanti {missing_hours}; {preview}"
             )
+        front_qc_hours.sort(key=lambda item: item["leadHours"])
+        write_json_atomic(
+            f"{TEMP_DIR}/front_qc.json",
+            {
+                "schemaVersion": 1,
+                "runTime": iso_z(run_dt),
+                "model": "ICON-2I",
+                "method": ICON_FRONT_METHOD,
+                "analysisSummary": front_analysis_summary,
+                "pipelineByHour": front_pipeline_diagnostics,
+                "hours": front_qc_hours,
+            },
+        )
         write_json_atomic(f"{TEMP_DIR}/catalog.json", catalog)
 
         if os.path.exists(FINAL_DIR): shutil.rmtree(FINAL_DIR)

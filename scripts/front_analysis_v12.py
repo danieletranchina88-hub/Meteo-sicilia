@@ -22,13 +22,15 @@ import front_detection as fd
 import front_locator as fl
 import front_occlusion as focc
 import front_physics as fp
+import front_ridge as fridge
+import front_sections as fsec
 import front_support as fsup
 import front_tracking as ftk
 import thermodynamics as thermo
 from front_analysis import SynopticFrontAnalyzer, _blend_lines, _line_length_km, _rdp
 
 
-FRONT_METHOD = "icon2i-ofa-physics-guided-v14"
+FRONT_METHOD = "icon2i-ofa-physics-guided-v15"
 ANALYSIS_PRESSURE_PA = 85_000.0
 LOWER_PRESSURE_PA = 92_500.0
 
@@ -41,36 +43,75 @@ CLIMATOLOGY_PATH = os.path.join(
 )
 
 
-def load_threshold_climatology(month: str) -> dict | None:
-    """Whole-domain synoptic+refined thresholds for a month, or None."""
+MIN_CLIMATOLOGY_RUNS = 30
+MIN_CLIMATOLOGY_DAYS = 15
+
+
+def threshold_climatology_status(month: str) -> tuple[dict | None, str]:
+    """Return validated monthly thresholds and an explicit QC status.
+
+    Distributional quantiles are not automatically a calibration.  A month
+    is eligible only when it contains enough independent runs/days and the
+    benchmark process has explicitly promoted the file for operational use.
+    Thresholds from another season are never used as a fallback.
+    """
     try:
         with open(CLIMATOLOGY_PATH, encoding="utf-8") as handle:
             clim = json.load(handle)
-    except (OSError, ValueError):
-        return None
+    except OSError:
+        return None, "file-missing"
+    except ValueError:
+        return None, "invalid-json"
 
-    def _band(node):
-        return (node or {}).get("all")
+    node = clim.get(month)
+    if not isinstance(node, dict):
+        return None, "month-not-covered"
 
-    candidates = [clim.get(month)]
-    candidates += [v for k, v in clim.items() if k not in ("_meta", month)]
-    for node in candidates:
-        if not node:
-            continue
-        syn, ref = _band(node.get("synoptic")), _band(node.get("refined"))
-        if not syn or not ref:
-            continue
-        return {
-            "synoptic_tfp_weak": syn["tfp_weak"],
-            "synoptic_tfp_full": syn["tfp_full"],
-            "synoptic_abz_weak": syn["abz_weak"],
-            "synoptic_abz_full": syn["abz_full"],
-            "refined_tfp_weak": ref["tfp_weak"],
-            "refined_tfp_full": ref["tfp_full"],
-            "refined_abz_weak": ref["abz_weak"],
-            "refined_abz_full": ref["abz_full"],
-        }
-    return None
+    meta = clim.get("_meta") or {}
+    run_tags = [
+        str(tag) for tag in meta.get("runs", [])
+        if len(str(tag)) >= 10 and str(tag)[4:6] == month
+    ]
+    distinct_days = {tag[:8] for tag in run_tags}
+    if len(set(run_tags)) < MIN_CLIMATOLOGY_RUNS:
+        return None, "insufficient-independent-runs"
+    if len(distinct_days) < MIN_CLIMATOLOGY_DAYS:
+        return None, "insufficient-distinct-days"
+    if meta.get("operationalValidated") is not True:
+        return None, "not-operationally-validated"
+
+    syn = (node.get("synoptic") or {}).get("all")
+    ref = (node.get("refined") or {}).get("all")
+    if not isinstance(syn, dict) or not isinstance(ref, dict):
+        return None, "missing-whole-domain-band"
+
+    try:
+        ordered = (
+            syn["tfp_full"] < syn["tfp_weak"] < 0.0
+            and ref["tfp_full"] < ref["tfp_weak"] < 0.0
+            and 0.0 < syn["abz_weak"] < syn["abz_full"]
+            and 0.0 < ref["abz_weak"] < ref["abz_full"]
+        )
+    except (KeyError, TypeError):
+        return None, "incomplete-threshold-set"
+    if not ordered:
+        return None, "invalid-threshold-order"
+
+    return {
+        "synoptic_tfp_weak": syn["tfp_weak"],
+        "synoptic_tfp_full": syn["tfp_full"],
+        "synoptic_abz_weak": syn["abz_weak"],
+        "synoptic_abz_full": syn["abz_full"],
+        "refined_tfp_weak": ref["tfp_weak"],
+        "refined_tfp_full": ref["tfp_full"],
+        "refined_abz_weak": ref["abz_weak"],
+        "refined_abz_full": ref["abz_full"],
+    }, "validated"
+
+
+def load_threshold_climatology(month: str) -> dict | None:
+    """Backward-compatible thresholds-only view of the QC-aware loader."""
+    return threshold_climatology_status(month)[0]
 
 SYNOPTIC_SIGMA_KM = 100.0
 REFINE_SIGMA_KM = 45.0
@@ -87,6 +128,13 @@ TRACK_MIN_COVERAGE = 0.72
 MIN_PUBLISH_QUALITY = 0.61
 MAX_PUBLISH_UNCERTAINTY = 0.39
 MAX_FRONTS_PER_HOUR = 4
+
+# Fase C/E: la geometria pubblicata segue la cresta di any_front_support
+# (least-cost path in front_ridge), non piu' il solo contorno TFL. Attivato
+# dopo il benchmark Fase E (supporto medio 0.43->0.50, tortuosita' non
+# peggiore). Un solo interruttore, reversibile: False torna ai contorni.
+REFINE_PUBLISHED_GEOMETRY = True
+GEOMETRY_CORRIDOR_KM = 120.0
 
 
 def _finite_median(values, default=np.nan) -> float:
@@ -139,6 +187,11 @@ class IconSynopticFrontAnalyzer(SynopticFrontAnalyzer):
         self._support_cache: dict[int, dict] = {}
         self._pipeline_diag: dict[int, dict] = {}
         self._rejected: dict[int, list[dict]] = {}
+        self._detection_errors: dict[int, str] = {}
+        # Gate-rejected candidates whose differential diagnosis still says
+        # synoptic-front: the weak phase of a real boundary. Kept in full so
+        # tracking can reclaim these hours for an established track.
+        self._weak: dict[int, list[dict]] = {}
         # Climatological detection thresholds for the run's month (falls back
         # to the detector's fixed fuzzy defaults when the climatology is absent
         # or does not cover this month).
@@ -151,7 +204,10 @@ class IconSynopticFrontAnalyzer(SynopticFrontAnalyzer):
         except Exception:
             pass
         self.run_month = run_month
-        self._threshold_climatology = load_threshold_climatology(run_month)
+        (
+            self._threshold_climatology,
+            self._threshold_climatology_status,
+        ) = threshold_climatology_status(run_month)
 
         if lower_temperature_path and lower_humidity_path:
             added = []
@@ -789,6 +845,24 @@ class IconSynopticFrontAnalyzer(SynopticFrontAnalyzer):
             else:
                 metrics["lowerValidFraction"] = 0.0
 
+            # Cross-front sections (front_sections): the transition-zone
+            # profile at 850 hPa, and its 925 hPa vertical coherence when the
+            # lower level exists. Width/offset stay diagnostics (not gates);
+            # a missing 925 hPa profile is neutral, never counter-evidence.
+            section_850 = fsec.profile_diagnostics(fsec.cross_profiles(
+                theta_w, self.longitudes, self.latitudes, coordinates, normal,
+            ))
+            metrics.update(section_850)
+            if theta_w_925 is not None:
+                section_925 = fsec.profile_diagnostics(fsec.cross_profiles(
+                    theta_w_925, self.longitudes, self.latitudes,
+                    coordinates, normal,
+                ))
+                metrics["frontWidth925Km"] = section_925.get("frontWidthKm")
+                coherence = fsec.vertical_coherence(section_850, section_925)
+                if coherence is not None:
+                    metrics["verticalCoherence"] = coherence
+
             evidence = fp.candidate_evidence(metrics)
             metrics.update(evidence)
             gates = fp.candidate_gate_report(metrics, evidence)
@@ -802,6 +876,10 @@ class IconSynopticFrontAnalyzer(SynopticFrontAnalyzer):
                     "reasons": list(gates.get("rejectionReasons", [])),
                     "candidateEvidence": metrics.get("candidateEvidence"),
                 })
+                if gates.get("diagnosis") == "synoptic-front":
+                    # Weak phase of a possibly real boundary: keep the full
+                    # candidate so an established track can reclaim this hour.
+                    self._weak.setdefault(hour, []).append(metrics)
                 for reason in gates.get("rejectionReasons", []) or ["unspecified"]:
                     reject_counts[reason] = reject_counts.get(reason, 0) + 1
                 continue
@@ -835,15 +913,16 @@ class IconSynopticFrontAnalyzer(SynopticFrontAnalyzer):
 
         total_candidates = sum(len(items) for items in hourly.values())
         allowed_errors = max(2, int(np.ceil(len(self.available_hours) * 0.05)))
+        self._detection_errors = detection_errors
         if len(detection_errors) > allowed_errors:
             raise RuntimeError(
                 "analisi frontale incompleta: "
                 f"{len(detection_errors)}/{len(self.available_hours)} ore in errore"
             )
-        if total_candidates == 0:
-            raise RuntimeError(
-                "nessun candidato OFA in tutte le scadenze: output non pubblicabile"
-            )
+        # Zero physically robust candidates is a valid meteorological result.
+        # It must publish a fresh empty analysis instead of leaving stale fronts
+        # from the previous run online.  Excessive processing errors above still
+        # fail closed and remain distinct from a genuine no-front situation.
 
         raw_tracks = ftk.track_fronts(
             hourly,
@@ -852,20 +931,43 @@ class IconSynopticFrontAnalyzer(SynopticFrontAnalyzer):
             min_lifetime_hours=TRACK_MIN_LIFETIME_HOURS,
             min_detections=TRACK_MIN_DETECTIONS,
             min_coverage=TRACK_MIN_COVERAGE,
+            weak_candidates=getattr(self, "_weak", None),
         )
+        # Publication is judged on the CORE hours (strong detections): the
+        # weak-phase hours recovered by the tracker extend where the boundary
+        # is drawn but must not dilute -- nor artificially satisfy -- the
+        # confidence requirements.
         tracks = [
             track for track in raw_tracks
             if track.get("qualityScore", 0.0) >= MIN_PUBLISH_QUALITY
             and track.get("uncertaintyIndex", 1.0) <= MAX_PUBLISH_UNCERTAINTY
             and sum(
-                value.get("frontType") != "uncertain"
-                for value in track.get("localClassifications", {}).values()
+                track.get("localClassifications", {}).get(h, {}).get("frontType")
+                != "uncertain"
+                for h in track.get("coreHours", track.get("hours", []))
             ) >= max(
                 TRACK_MIN_DETECTIONS,
-                int(np.ceil(0.55 * len(track.get("hours", [])))),
+                int(np.ceil(0.55 * len(
+                    track.get("coreHours", track.get("hours", []))
+                ))),
             )
         ]
+        run_status = (
+            "partially-unavailable"
+            if detection_errors
+            else "fronts-detected"
+            if tracks
+            else "no-robust-fronts"
+        )
         self.analysis_summary = {
+            "analysisStatus": run_status,
+            "analysisMessage": (
+                f"{len(detection_errors)} ore frontali non disponibili nel run."
+                if detection_errors
+                else "Fronti sinottici robusti rilevati nel run."
+                if tracks
+                else "Nessun fronte sinottico robusto nel run."
+            ),
             "hours": len(self.available_hours),
             "hoursWithCandidates": sum(bool(items) for items in hourly.values()),
             "candidateLines": total_candidates,
@@ -879,6 +981,7 @@ class IconSynopticFrontAnalyzer(SynopticFrontAnalyzer):
             "thresholdClimatology": (
                 self.run_month if self._threshold_climatology else None
             ),
+            "thresholdClimatologyStatus": self._threshold_climatology_status,
             "rejectedByReason": self._aggregate_rejections(),
         }
         print(
@@ -952,7 +1055,7 @@ class IconSynopticFrontAnalyzer(SynopticFrontAnalyzer):
                     )
                     classification["typeInferredFromTrack"] = True
                 hour_properties = self._track_properties(
-                    track, classification
+                    track, classification, hour=hour
                 )
                 # Per-segment character along the line (existence stays one
                 # continuous track; the type may vary west->east). Additive:
@@ -965,9 +1068,10 @@ class IconSynopticFrontAnalyzer(SynopticFrontAnalyzer):
                     hour_properties["uncertaintyIndex"] = round(
                         min(1.0, hour_properties["uncertaintyIndex"] + 0.06), 2
                     )
-                by_hour.setdefault(hour, []).append((
-                    np.asarray(coordinates, dtype=float), hour_properties
-                ))
+                geometry = self._refine_geometry(
+                    hour, np.asarray(coordinates, dtype=float)
+                )
+                by_hour.setdefault(hour, []).append((geometry, hour_properties))
         self._occlusion_hours = self._apply_occlusions(by_hour)
         self._by_hour = by_hour
 
@@ -1061,15 +1165,35 @@ class IconSynopticFrontAnalyzer(SynopticFrontAnalyzer):
         }
 
     def _track_properties(
-        self, track: dict, classification: dict | None = None
+        self, track: dict, classification: dict | None = None,
+        hour: int | None = None,
     ) -> dict:
+        """Feature properties for one display hour.
+
+        Track-level values (persistence, publication) are always exposed as
+        ``trackQualityScore`` / ``trackUncertaintyIndex`` / ``trackDiagnostics``.
+        When ``hour`` is given and directly observed, ``qualityScore``,
+        ``uncertaintyIndex``, ``diagnostics`` and the explanation describe
+        THAT hour, so a front weakening at one lead time shows it instead of
+        repeating the track median. An interpolated hour never pretends to be
+        a detection: ``detectionQuality`` is null and the score carries an
+        explicit penalty.
+        """
         classification = classification or track
-        return {
+        properties = {
             "frontType": classification["frontType"],
             "confidence": round(float(track["qualityScore"]), 2),
             "qualityScore": round(float(track["qualityScore"]), 2),
             "uncertaintyIndex": round(float(track["uncertaintyIndex"]), 2),
             "uncertaintyClass": track.get("uncertaintyClass", "low"),
+            "trackQualityScore": round(
+                float(track.get("trackQualityScore", track["qualityScore"])), 2
+            ),
+            "trackUncertaintyIndex": round(
+                float(track.get("trackUncertaintyIndex",
+                                track["uncertaintyIndex"])), 2
+            ),
+            "trackDiagnostics": _json_mapping(track.get("diagnostics", {}), 4),
             "motionKmh": round(float(classification.get("geoMotionKmh", 0.0)), 1),
             "geoMotionKmh": _json_number(classification.get("geoMotionKmh"), 1),
             "ofaSpeedKmh": _json_number(classification.get("ofaSpeedKmh"), 1),
@@ -1100,6 +1224,86 @@ class IconSynopticFrontAnalyzer(SynopticFrontAnalyzer):
             "method": self.method,
             "source": self.source,
         }
+        if hour is None:
+            return properties
+        hourly_quality = (track.get("hourlyQuality") or {}).get(hour)
+        if hourly_quality is not None:
+            # Directly observed hour: instantaneous quality view.
+            properties["qualityScore"] = round(float(hourly_quality), 2)
+            properties["confidence"] = properties["qualityScore"]
+            properties["uncertaintyIndex"] = _json_number(
+                (track.get("hourlyUncertainty") or {}).get(hour), 2
+            ) or properties["uncertaintyIndex"]
+            properties["detectionQuality"] = _json_number(
+                (track.get("detectionQuality") or {}).get(hour), 3
+            )
+            properties["trackingConfidence"] = _json_number(
+                (track.get("trackingConfidence") or {}).get(hour), 3
+            )
+            properties["classificationConfidence"] = _json_number(
+                (track.get("classificationConfidence") or {}).get(hour), 2
+            )
+            observation = (track.get("observations") or {}).get(hour) or {}
+            properties["gateStatus"] = observation.get("gateStatus")
+            properties["recovered"] = hour in (
+                track.get("recoveredHours") or []
+            )
+            hour_diagnostics = observation.get("diagnostics") or {}
+            if hour_diagnostics:
+                properties["diagnostics"] = _json_mapping(hour_diagnostics, 4)
+                # The meteorological explanation describes THIS hour; the
+                # track's persistence enters separately via lifetimeH.
+                properties["explanation"] = fp.frontal_explanation(
+                    hour_diagnostics,
+                    classification,
+                    observation.get("diagnosis", "synoptic-front"),
+                    track.get("lifetimeH", 0),
+                )
+        else:
+            # Interpolated display hour: no direct detection to describe.
+            detected = sorted(track.get("hourlyQuality") or {})
+            before = [h for h in detected if h < hour]
+            after = [h for h in detected if h > hour]
+            neighbour_scores = [
+                float((track.get("hourlyQuality") or {})[h])
+                for h in ([before[-1]] if before else []) + ([after[0]] if after else [])
+            ]
+            if neighbour_scores:
+                # explicit penalty: the hour is a bridge, not an observation
+                bridged = float(np.mean(neighbour_scores)) * 0.85
+                properties["qualityScore"] = round(bridged, 2)
+                properties["confidence"] = properties["qualityScore"]
+                properties["uncertaintyIndex"] = round(
+                    float(np.clip(1.0 - bridged + 0.10, 0.0, 1.0)), 2
+                )
+                neighbour_diagnostics = [
+                    ((track.get("observations") or {}).get(h) or {})
+                    .get("diagnostics") or {}
+                    for h in ([before[-1]] if before else [])
+                    + ([after[0]] if after else [])
+                ]
+                merged = {}
+                for key in ftk.DIAGNOSTIC_KEYS:
+                    values = [
+                        diag.get(key) for diag in neighbour_diagnostics
+                        if diag.get(key) is not None
+                    ]
+                    finite = [
+                        float(v) for v in values
+                        if isinstance(v, (int, float)) and np.isfinite(float(v))
+                    ]
+                    if finite:
+                        merged[key] = float(np.mean(finite))
+                if merged:
+                    properties["diagnostics"] = _json_mapping(merged, 4)
+            properties["detectionQuality"] = None
+            properties["trackingConfidence"] = None
+            properties["classificationConfidence"] = _json_number(
+                classification.get("classificationCertainty"), 2
+            )
+            properties["gateStatus"] = None
+            properties["recovered"] = False
+        return properties
 
     def analyze(self, hour: int) -> dict:
         base_properties = {
@@ -1110,10 +1314,28 @@ class IconSynopticFrontAnalyzer(SynopticFrontAnalyzer):
             "classificationWind": "925/850 hPa" if self.has_lower_wind else "850 hPa",
             "estimated": True,
             "uncertainty": "diagnostic-not-probabilistic",
+            "analysisStatus": "unavailable",
+            "analysisMessage": "Scadenza non disponibile per l'analisi frontale.",
         }
         if hour not in self.hour_to_index:
-            return {"type": "FeatureCollection", "features": [], "properties": base_properties}
+            return {
+                "type": "FeatureCollection",
+                "features": [],
+                "properties": base_properties,
+            }
+
         self._ensure_tracks()
+        if hour in self._detection_errors:
+            base_properties["analysisStatus"] = "unavailable"
+            base_properties["analysisMessage"] = (
+                "Analisi frontale non disponibile per un errore diagnostico: "
+                + self._detection_errors[hour]
+            )
+            return {
+                "type": "FeatureCollection",
+                "features": [],
+                "properties": base_properties,
+            }
         entries = list(self._by_hour.get(hour, []))
         entries.sort(key=lambda item: item[1]["qualityScore"], reverse=True)
         features = []
@@ -1132,6 +1354,17 @@ class IconSynopticFrontAnalyzer(SynopticFrontAnalyzer):
                 },
                 "properties": dict(properties),
             })
+
+        if features:
+            base_properties["analysisStatus"] = "fronts-detected"
+            base_properties["analysisMessage"] = (
+                f"{len(features)} strutture frontali sinottiche robuste."
+            )
+        else:
+            base_properties["analysisStatus"] = "no-robust-fronts"
+            base_properties["analysisMessage"] = (
+                "Nessun fronte sinottico robusto in questa ora."
+            )
         return {
             "type": "FeatureCollection",
             "features": features,
@@ -1158,12 +1391,39 @@ class IconSynopticFrontAnalyzer(SynopticFrontAnalyzer):
             "tfp_full": clim["refined_tfp_full"],
         }
 
-    def support_field(self, hour: int) -> dict:
-        """Continuous any_front_support field for one hour (Fase B, diagnostic).
+    def _refine_geometry(self, hour: int, coordinates: np.ndarray) -> np.ndarray:
+        """Snap a published front line onto the crest of any_front_support.
 
-        Computed on demand and cached, so it does not add cost to the normal
-        publish path. It does NOT change the published fronts; in Fase C it
-        will drive least-cost line extraction.
+        Fase C/E: instead of drawing the raw TFL contour, follow the least-cost
+        path along the continuous support field inside a corridor around the
+        contour. Benchmarked (Fase E) as better-or-equal to the contour, so it
+        is on by default; ``REFINE_PUBLISHED_GEOMETRY = False`` reverts. The
+        step is conservative by construction (bounded corridor) and fully
+        guarded: any failure or a degenerate result falls back to the contour,
+        so publication can never regress to an empty or broken line.
+        """
+        if not REFINE_PUBLISHED_GEOMETRY or len(coordinates) < 2:
+            return coordinates
+        try:
+            support = self.support_field(hour)
+            refined = fridge.refine_line(
+                support, self.longitudes, self.latitudes, coordinates,
+                corridor_km=GEOMETRY_CORRIDOR_KM,
+            )
+        except Exception:
+            return coordinates
+        refined = np.asarray(refined, dtype=float)
+        if refined.ndim != 2 or len(refined) < 2 or not np.all(np.isfinite(refined)):
+            return coordinates
+        return refined
+
+    def support_field(self, hour: int) -> dict:
+        """Continuous any_front_support field for one hour (Fase B).
+
+        Computed on demand and cached once per hour. With
+        ``REFINE_PUBLISHED_GEOMETRY`` on (Fase C/E) it drives the least-cost
+        line extraction that shapes the published geometry; it does not add or
+        remove fronts, only refines where each existing line is drawn.
         """
         cached = self._support_cache.get(hour)
         if cached is not None:

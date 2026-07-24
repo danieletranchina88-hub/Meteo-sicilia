@@ -36,6 +36,28 @@ from scipy.optimize import linear_sum_assignment
 EARTH_KM_PER_DEG = 111.32
 COLD_WARM_THRESHOLD_KMH = 5.4  # 1.5 m/s, Hewson/Berry/Sansom-Catto
 
+# Physical diagnostics carried per hour and summarised per track. Shared by
+# the track medians and the per-hour observations so the two views can never
+# drift apart.
+DIAGNOSTIC_KEYS = (
+    "medianTfpStrength", "medianAbzGradient", "deltaThetaW",
+    "deltaThetaE", "deltaTemperature", "deltaThetaV", "dryThermalGradient",
+    "thermalAlignment", "windShiftMs", "convergenceMs",
+    "thermalContrastFraction", "thermalAlignmentFraction",
+    "crossDistanceThermalSupport",
+    "windShiftAngleDeg", "windBoundaryFraction",
+    "convergenceFraction", "airmassMotionKmh",
+    "vorticity1e5", "frontogenesis", "pressureTroughHpa",
+    "pressureTroughFraction", "linePressureTendencyHpa3h",
+    "coldPressureTendencyHpa3h", "warmPressureTendencyHpa3h",
+    "lowerLevelSupport", "deltaThetaW925", "omega700PaS",
+    "terrainFraction", "candidateEvidence",
+    "synopticSupport", "lengthKm", "sinuosity",
+    "profileValidFraction", "profileThermalSupport", "profilePeakGradient",
+    "frontWidthKm", "frontOffsetKm", "airMassHomogeneity",
+    "verticalCoherence", "frontWidth925Km",
+)
+
 
 def _finite_median(values, default=np.nan) -> float:
     array = np.asarray(values, dtype=float)
@@ -245,6 +267,209 @@ def _global_assign(tracks: list[Track], candidates: list[dict], hour: int,
 # --------------------------------------------------------------------------
 # Classification (consensus)
 # --------------------------------------------------------------------------
+def _stitch_cost(a: "Track", b: "Track", max_gap: int) -> float:
+    """Cost of continuing track ``a`` with track ``b`` across a short gap.
+
+    A physical front that briefly drops below detection for a single hour is
+    split by the online (causal) tracker into two consecutive tracks, because
+    the 2-hour forward prediction that would re-link them is deliberately
+    strict. With both pieces now in hand we re-test the link with hindsight:
+    across exactly one missing hour the end of ``a`` and the start of ``b``
+    must be physically close (centroid travel under ~65 km/h, small line-to-
+    line distance), similarly oriented and facing the same warm side.
+    Returns +inf when any condition fails.
+    """
+    gap = b.hours[0] - a.hours[-1]
+    # Only a single missing hour (an isolated detection dropout). A larger
+    # gap, or two tracks in adjacent/overlapping hours (gap 1 = no missing
+    # hour), are distinct identities and must not be fused.
+    if gap != 2 or gap > max_gap:
+        return np.inf
+    return _continuity_cost(
+        a.lines[a.hours[-1]]["coordinates"], a.lines[a.hours[-1]]["warmNormal"],
+        b.lines[b.hours[0]]["coordinates"], b.lines[b.hours[0]]["warmNormal"],
+        gap,
+    )
+
+
+def _continuity_cost(a_line, a_normal, b_line, b_normal, gap: int) -> float:
+    """Physical same-boundary cost between two lines ``gap`` hours apart.
+
+    Shared by track stitching and weak-candidate recovery. A front's centroid
+    does not exceed ~65 km/h (the decisive teleport guard: the symmetric
+    distance alone is fooled by two long parallel lines that overlap
+    end-to-end); the lines must also be directly close, similarly oriented,
+    of comparable length, and facing the same warm side. +inf when any
+    condition fails.
+    """
+    a_line = np.asarray(a_line, dtype=float)
+    b_line = np.asarray(b_line, dtype=float)
+    mean_lat = math_mean_lat(a_line, b_line)
+    ca = _project_km(a_line, mean_lat).mean(axis=0)
+    cb = _project_km(b_line, mean_lat).mean(axis=0)
+    if float(np.hypot(*(cb - ca))) > 65.0 * gap:
+        return np.inf
+    distance = _symmetric_distance_km(a_line, b_line)
+    if distance > 40.0 + 45.0 * gap:
+        return np.inf
+    if _orientation_diff(a_line, b_line) > 45.0:
+        return np.inf
+    length_a = _length_km(a_line)
+    length_b = _length_km(b_line)
+    if max(length_a, length_b) > 2.5 * max(min(length_a, length_b), 1.0):
+        return np.inf
+    normal_a = _resample_vectors(np.asarray(a_normal, dtype=float), 32)
+    normal_b = _resample_vectors(np.asarray(b_normal, dtype=float), 32)
+    pa = _resample(a_line, 32)
+    pb = _resample(b_line, 32)
+    if float(np.mean(np.hypot(*(pa - pb[::-1]).T))) < float(np.mean(np.hypot(*(pa - pb).T))):
+        normal_b = normal_b[::-1]
+    facing = float(np.nanmedian(np.sum(normal_a * normal_b, axis=1)))
+    if not np.isfinite(facing) or facing < 0.0:
+        return np.inf
+    return distance + 2.0 * _orientation_diff(a_line, b_line)
+
+
+def _recovery_cost(a_line, a_normal, b_line, b_normal, gap: int) -> float:
+    """Same-boundary cost for weak-phase recovery, elongation-tolerant.
+
+    Weak-phase detections of one boundary fragment and change extent hour to
+    hour, so the full-centroid guard of ``_continuity_cost`` wrongly punishes
+    a line that merely grew along itself. Physically a front moves normal to
+    itself: only the CROSS-line component of the centroid displacement is
+    speed-capped (~80 km/h, generous for a noisy weak phase), while along-
+    line growth is free. Proximity uses the median one-sided distance from
+    the shorter line to the longer, again robust to extent changes.
+    """
+    a_line = np.asarray(a_line, dtype=float)
+    b_line = np.asarray(b_line, dtype=float)
+    if _orientation_diff(a_line, b_line) > 45.0:
+        return np.inf
+    length_a = _length_km(a_line)
+    length_b = _length_km(b_line)
+    # Extent changes are the NORM in the weak phase (the detected window of
+    # one long boundary slides and fragments), so the ratio guard is loose:
+    # the overlap fraction below is what really decides same-boundary.
+    if max(length_a, length_b) > 4.0 * max(min(length_a, length_b), 1.0):
+        return np.inf
+    mean_lat = math_mean_lat(a_line, b_line)
+    a_km = _project_km(_resample(a_line), mean_lat)
+    b_km = _project_km(_resample(b_line), mean_lat)
+    short, long_ = (a_km, b_km) if length_a <= length_b else (b_km, a_km)
+    gaps = np.hypot(short[:, None, 0] - long_[None, :, 0],
+                    short[:, None, 1] - long_[None, :, 1])
+    near = np.min(gaps, axis=1)
+    # Decisive same-boundary gate: a substantial fraction of the shorter
+    # line must lie within physical front travel (~65 km/h) of the longer.
+    # Fragments of one long boundary whose detected window slides along it
+    # keep a large overlap; a nearby but distinct boundary (e.g. an alpine
+    # lee line north of a cold front) has almost none.
+    if float(np.mean(near <= 65.0 * gap)) < 0.40:
+        return np.inf
+    distance = float(np.median(near))
+    if distance > 60.0 + 50.0 * gap:
+        return np.inf
+    # cross-line displacement of the centroid, along the reference normal
+    normal_a = _resample_vectors(np.asarray(a_normal, dtype=float), 32)
+    scale_lon = EARTH_KM_PER_DEG * np.cos(mean_lat)
+    normal_km = np.column_stack((normal_a[:, 0] * scale_lon,
+                                 normal_a[:, 1] * EARTH_KM_PER_DEG))
+    mean_normal = np.nanmean(
+        normal_km / np.maximum(np.hypot(*normal_km.T)[:, None], 1.0e-9), axis=0
+    )
+    mean_normal /= max(float(np.hypot(*mean_normal)), 1.0e-9)
+    shift = b_km.mean(axis=0) - a_km.mean(axis=0)
+    if abs(float(np.dot(shift, mean_normal))) > 80.0 * gap:
+        return np.inf
+    normal_b = _resample_vectors(np.asarray(b_normal, dtype=float), 32)
+    if float(np.mean(np.hypot(*(a_km - b_km[::-1]).T))) < float(
+            np.mean(np.hypot(*(a_km - b_km).T))):
+        normal_b = normal_b[::-1]
+    facing = float(np.nanmedian(np.sum(
+        _resample_vectors(np.asarray(a_normal, dtype=float), 32) * normal_b,
+        axis=1,
+    )))
+    if not np.isfinite(facing) or facing < 0.0:
+        return np.inf
+    return distance + 2.0 * _orientation_diff(a_line, b_line)
+
+
+def _extend_track_weak(
+    track: "Track", weak_by_hour: dict, used: set, max_extend: int = 18,
+) -> list[int]:
+    """Reclaim a track's weak-phase hours from gate-rejected candidates.
+
+    A real boundary often exists for hours below the hard publication gates
+    (weak thermal core early in its life) before strengthening into a
+    published track. Those hours were detected, diagnosed ``synoptic-front``
+    and rejected — the evidence is on file. With the published track in hand,
+    its identity extends backward/forward through consecutive matching weak
+    candidates (same ``_continuity_cost`` physics as stitching, one skipped
+    hour allowed). Weak candidates can only EXTEND an established track:
+    they never create one, so noise cannot bootstrap itself into a front.
+    Mutates the track; returns the recovered hours.
+    """
+    recovered = []
+    for direction in (-1, 1):
+        for _ in range(max_extend):
+            edge = track.hours[0] if direction < 0 else track.hours[-1]
+            found = None
+            for gap in (1, 2):
+                hour = edge + direction * gap
+                best = np.inf
+                for index, candidate in enumerate(weak_by_hour.get(hour, [])):
+                    if (hour, index) in used:
+                        continue
+                    cost = _recovery_cost(
+                        track.lines[edge]["coordinates"],
+                        track.lines[edge]["warmNormal"],
+                        candidate["coordinates"], candidate["warmNormal"], gap,
+                    )
+                    if cost < best:
+                        best, found = cost, (hour, index, candidate)
+                if found is not None:
+                    break
+            if found is None:
+                break
+            hour, index, candidate = found
+            used.add((hour, index))
+            entry = dict(candidate)
+            entry["gateStatus"] = "weak-continuation"
+            track.lines[hour] = entry
+            track.hours = sorted(set(track.hours) | {hour})
+            recovered.append(hour)
+    return sorted(recovered)
+
+
+def _stitch_tracks(tracks: list["Track"], max_gap: int) -> list["Track"]:
+    """Greedily merge consecutive same-identity tracks split by a short gap.
+
+    Repeatedly joins the globally cheapest compatible (earlier -> later) pair
+    until none qualifies. The missing hours are left as a gap in the merged
+    track's ``hours``: the publisher bridges single-hour gaps between equal
+    types by blending, so the boundary is drawn as one continuous, non-
+    flickering front instead of two tracks with a hole between them.
+    """
+    tracks = list(tracks)
+    while True:
+        best = None
+        best_cost = np.inf
+        for i, a in enumerate(tracks):
+            for j, b in enumerate(tracks):
+                if i == j or b.hours[0] <= a.hours[-1]:
+                    continue
+                cost = _stitch_cost(a, b, max_gap)
+                if cost < best_cost:
+                    best_cost, best = cost, (i, j)
+        if best is None:
+            return tracks
+        i, j = best
+        a, b = tracks[i], tracks[j]
+        a.hours = sorted(set(a.hours) | set(b.hours))
+        a.lines.update(b.lines)
+        tracks.pop(j)
+
+
 def _type_from_speed(speed_kmh: float) -> str:
     if speed_kmh >= COLD_WARM_THRESHOLD_KMH:
         return "cold"
@@ -668,6 +893,119 @@ def segment_types_for_track(
 
 
 # --------------------------------------------------------------------------
+# Per-hour quality (NOT a probability)
+# --------------------------------------------------------------------------
+def _hourly_tracking_confidence(track: Track) -> dict[int, float]:
+    """Reliability of the temporal link at each hour, in [0, 1].
+
+    A detection tightly continued by its neighbours (small line-to-line
+    displacement per hour, no gap) is a reliable link; an isolated hour, a
+    bridged gap or a weak-phase recovery is progressively less so. This is
+    about the LINK, deliberately independent from how strong the physics of
+    the hour is (that is detectionQuality).
+    """
+    status_factor = {
+        "strong": 1.0, "continuation": 0.92, "weak-continuation": 0.72,
+    }
+    hours = sorted(track.hours)
+    confidence: dict[int, float] = {}
+    for index, hour in enumerate(hours):
+        neighbours = []
+        if index > 0:
+            neighbours.append(hours[index - 1])
+        if index < len(hours) - 1:
+            neighbours.append(hours[index + 1])
+        if not neighbours:
+            continuity = 0.30
+        else:
+            scores = []
+            for other in neighbours:
+                gap = abs(hour - other)
+                speed = _symmetric_distance_km(
+                    track.lines[hour]["coordinates"],
+                    track.lines[other]["coordinates"],
+                ) / max(gap, 1)
+                link = float(np.clip(1.0 - speed / 90.0, 0.05, 1.0))
+                scores.append(link * (1.0 if gap == 1 else 0.85))
+            continuity = float(np.max(scores))
+        factor = status_factor.get(
+            track.lines[hour].get("gateStatus", "strong"), 0.85
+        )
+        confidence[hour] = round(min(1.0, continuity * factor), 3)
+    return confidence
+
+
+def hourly_quality(track: Track, local_classifications: dict,
+                   quality: dict) -> dict:
+    """Per-hour quality view of a track: what THIS hour supports.
+
+    The published track keeps its track-level score for the publication
+    decision; each hour additionally gets an instantaneous score so a front
+    that weakens at one lead time shows that weakening instead of repeating
+    the track median. Diagnostic blend (not a probability):
+    58% physical evidence of the hour, 22% temporal-link reliability,
+    10% structural support, 10% classification confidence.
+    """
+    tracking_confidence = _hourly_tracking_confidence(track)
+    fallback_structural = float(
+        (quality.get("qualityComponents") or {}).get("structuralSupport", 0.5)
+    )
+    observations: dict[int, dict] = {}
+    hourly: dict[int, float] = {}
+    hourly_uncertainty: dict[int, float] = {}
+    detection: dict[int, float] = {}
+    classification_confidence: dict[int, float] = {}
+    for hour in track.hours:
+        line = track.lines[hour]
+        evidence = float(line.get("candidateEvidence") or 0.0)
+        components = line.get("evidenceComponents") or {}
+        structural = float(components.get("structural", np.nan))
+        if not np.isfinite(structural):
+            structural = fallback_structural
+        thermal = float(components.get("thermal", np.nan))
+        certainty = float(
+            (local_classifications.get(hour) or {})
+            .get("classificationCertainty", 0.0) or 0.0
+        )
+        score = float(np.clip(
+            0.58 * evidence
+            + 0.22 * tracking_confidence.get(hour, 0.30)
+            + 0.10 * structural
+            + 0.10 * certainty,
+            0.0, 1.0,
+        ))
+        # Same existence-core penalty used by the track uncertainty: a weak
+        # thermal core or an incoherent structure keeps THIS hour uncertain
+        # even when the temporal link is excellent.
+        core = min(thermal if np.isfinite(thermal) else structural, structural)
+        penalty = max(0.0, 0.50 - core) * 0.35
+        detection[hour] = round(evidence, 3)
+        classification_confidence[hour] = round(certainty, 2)
+        hourly[hour] = round(score, 2)
+        hourly_uncertainty[hour] = round(
+            float(np.clip(1.0 - score + penalty, 0.0, 1.0)), 2
+        )
+        observations[hour] = {
+            "gateStatus": line.get("gateStatus", "strong"),
+            "diagnosis": line.get("diagnosis", "synoptic-front"),
+            "candidateEvidence": round(evidence, 3),
+            "thermalSupport": round(thermal, 2) if np.isfinite(thermal) else None,
+            "structuralSupport": round(structural, 2),
+            "diagnostics": {
+                key: line.get(key) for key in DIAGNOSTIC_KEYS if key in line
+            },
+        }
+    return {
+        "observations": observations,
+        "hourlyQuality": hourly,
+        "hourlyUncertainty": hourly_uncertainty,
+        "detectionQuality": detection,
+        "trackingConfidence": tracking_confidence,
+        "classificationConfidence": classification_confidence,
+    }
+
+
+# --------------------------------------------------------------------------
 # Quality score (NOT a probability)
 # --------------------------------------------------------------------------
 def _quality_score(track: Track, classification: dict, window_hours: int) -> dict:
@@ -760,6 +1098,7 @@ def track_fronts(
     min_convergence_ms: float = 0.15,
     max_terrain_fraction: float = 0.25,
     min_strong_detections: int = 1,
+    weak_candidates: dict[int, list] | None = None,
 ):
     """Link hourly candidates into classified, quality-scored tracks.
 
@@ -801,8 +1140,16 @@ def track_fronts(
             tracks.append(track)
             active.append(track)
 
+    # Re-link tracks that the online (causal) assignment split across a brief
+    # detection dropout. Done here, with the whole sequence in hand, so a
+    # single physical boundary becomes one continuous track instead of two
+    # with a one-hour hole between them (the "front vanishes for an hour"
+    # artefact). Max gap mirrors the online tracking window.
+    tracks = _stitch_tracks(tracks, max_gap=max(2, window_hours))
+
     available = sorted(hourly_candidates)
     results = []
+    weak_used: set = set()
     for track in tracks:
         span = track.hours[-1] - track.hours[0]
         if len(track.hours) < max(2, int(min_detections)) or span < min_lifetime_hours:
@@ -827,21 +1174,7 @@ def track_fronts(
             key: _finite_median([
                 track.lines[h].get(key, np.nan) for h in track.hours
             ])
-            for key in (
-                "medianTfpStrength", "medianAbzGradient", "deltaThetaW",
-                "deltaThetaE", "deltaTemperature", "deltaThetaV", "dryThermalGradient",
-                "thermalAlignment", "windShiftMs", "convergenceMs",
-                "thermalContrastFraction", "thermalAlignmentFraction",
-                "crossDistanceThermalSupport",
-                "windShiftAngleDeg", "windBoundaryFraction",
-                "convergenceFraction", "airmassMotionKmh",
-                "vorticity1e5", "frontogenesis", "pressureTroughHpa",
-                "pressureTroughFraction", "linePressureTendencyHpa3h",
-                "coldPressureTendencyHpa3h", "warmPressureTendencyHpa3h",
-                "lowerLevelSupport", "deltaThetaW925", "omega700PaS",
-                "terrainFraction", "candidateEvidence",
-                "synopticSupport", "lengthKm", "sinuosity",
-            )
+            for key in DIAGNOSTIC_KEYS
         }
         if require_physical_support:
             dry_gradient = diagnostics["dryThermalGradient"]
@@ -875,23 +1208,44 @@ def track_fronts(
                 np.median(local_certainties)
             )
         quality = _quality_score(track, quality_classification, window_hours)
+        # Weak-phase recovery AFTER classification and quality: identity and
+        # confidence come from the strong core alone, so recovered hours can
+        # only extend where the boundary is drawn, never inflate its score.
+        core_hours = list(track.hours)
+        recovered_hours: list[int] = []
+        if weak_candidates:
+            recovered_hours = _extend_track_weak(track, weak_candidates, weak_used)
+            if recovered_hours:
+                local_classifications = classify_track_locally(
+                    track, window_hours, wind_sampler
+                )
         diagnoses = [
             str(track.lines[h].get("diagnosis", "synoptic-front"))
             for h in track.hours
         ]
         dominant_diagnosis = max(set(diagnoses), key=diagnoses.count)
         segment_types = segment_types_for_track(track, local_classifications)
+        per_hour = hourly_quality(track, local_classifications, quality)
         results.append({
             "id": track.id,
             "hours": list(track.hours),
+            "coreHours": core_hours,
+            "recoveredHours": recovered_hours,
             "lifetimeH": span,
             "lines": {h: track.lines[h]["coordinates"] for h in track.hours},
             "diagnostics": diagnostics,
             "diagnosis": dominant_diagnosis,
             "localClassifications": local_classifications,
             "segmentTypes": segment_types,
+            **per_hour,
             **classification,
             **quality,
+            # Explicit names for the two quality levels: the track-level
+            # score (publication persistence) stays in "qualityScore" for
+            # backward compatibility; the per-feature hourly score replaces
+            # it only in the exported GeoJSON.
+            "trackQualityScore": quality["qualityScore"],
+            "trackUncertaintyIndex": quality["uncertaintyIndex"],
         })
     results.sort(key=lambda r: r["qualityScore"], reverse=True)
     return results

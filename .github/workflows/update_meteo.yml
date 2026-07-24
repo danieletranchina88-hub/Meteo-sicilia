@@ -15,19 +15,93 @@ on:
       - 'scripts/front_detection.py'
       - 'scripts/front_locator.py'
       - 'scripts/front_physics.py'
+      - 'scripts/front_ridge.py'
+      - 'scripts/front_sections.py'
+      - 'scripts/front_support.py'
+      - 'scripts/front_occlusion.py'
       - 'scripts/front_tracking.py'
+      - 'scripts/front_benchmark.py'
+      - 'scripts/calibrate_thresholds.py'
+      - 'scripts/climatology_thresholds.json'
       - 'scripts/thermodynamics.py'
+      - 'benchmarks/fronts/**'
       - 'scripts/tests/**'
+      - 'index.html'
       - 'requirements.txt'
       - '.github/workflows/update_meteo.yml'
   workflow_dispatch:
+  pull_request:
+    branches:
+      - main
+    paths:
+      - 'scripts/process_data.py'
+      - 'scripts/front_analysis.py'
+      - 'scripts/front_analysis_v10.py'
+      - 'scripts/front_analysis_v12.py'
+      - 'scripts/front_detection.py'
+      - 'scripts/front_locator.py'
+      - 'scripts/front_physics.py'
+      - 'scripts/front_ridge.py'
+      - 'scripts/front_sections.py'
+      - 'scripts/front_support.py'
+      - 'scripts/front_occlusion.py'
+      - 'scripts/front_tracking.py'
+      - 'scripts/front_benchmark.py'
+      - 'scripts/calibrate_thresholds.py'
+      - 'scripts/climatology_thresholds.json'
+      - 'scripts/thermodynamics.py'
+      - 'benchmarks/fronts/**'
+      - 'scripts/tests/**'
+      - 'index.html'
+      - 'requirements.txt'
+      - '.github/workflows/update_meteo.yml'
 
 concurrency:
-  group: meteo-update
+  group: meteo-update-${{ github.event_name }}-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
+  tests:
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    permissions:
+      contents: read
+
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: 'pip'
+
+      - name: Install system deps
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends libeccodes-dev libnetcdf-dev
+
+      - name: Install Python dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -r requirements.txt
+
+      - name: Verifica nucleo scientifico dei fronti
+        run: |
+          python scripts/tests/test_front_locator.py
+          python scripts/tests/test_front_detection.py
+          python scripts/tests/test_front_physics.py
+          python scripts/tests/test_front_tracking.py
+          python scripts/tests/test_front_ridge.py
+          python scripts/tests/test_front_sections.py
+          python scripts/tests/test_climatology.py
+          python scripts/tests/test_front_analysis_status.py
+          python scripts/tests/test_front_benchmark.py
+
   build:
+    if: github.event_name != 'pull_request'
     runs-on: ubuntu-latest
     timeout-minutes: 90
     permissions:
@@ -70,9 +144,23 @@ jobs:
           python scripts/tests/test_front_detection.py
           python scripts/tests/test_front_physics.py
           python scripts/tests/test_front_tracking.py
+          python scripts/tests/test_front_ridge.py
+          python scripts/tests/test_front_sections.py
+          python scripts/tests/test_climatology.py
+          python scripts/tests/test_front_analysis_status.py
+          python scripts/tests/test_front_benchmark.py
 
       - name: Run ICON-2I processor
         run: python scripts/process_data.py
+
+      - name: Archivia diagnostica QC dei fronti
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: front-qc-${{ github.run_id }}
+          path: data_weather/front_qc.json
+          if-no-files-found: warn
+          retention-days: 90
 
       # Unica pubblicazione: commit orfano su gh-pages da un repository
       # temporaneo isolato. Nessuna storia accumulata (la dimensione resta

@@ -272,5 +272,107 @@ if "warm" in weak_labels:
     print("  FAIL: una lettura 'caldo' debole su fronte freddo non deve sopravvivere")
     ok = False
 
+# N) A single missing hour is re-stitched into one continuous track --------
+# The online window is 1 h, so the causal tracker CANNOT bridge the 2-hour
+# jump and splits the front in two; the post-hoc stitch must rejoin them.
+one_gap = {h: c for h, c in cold.items() if h != 12}
+tr_stitch = ft.track_fronts(
+    one_gap, window_hours=1, min_lifetime_hours=6, min_coverage=0.5
+)
+print(f"N) buco di 1 ora ricucito: {len(tr_stitch)} traccia")
+if not (len(tr_stitch) == 1 and 11 in tr_stitch[0]["hours"]
+        and 13 in tr_stitch[0]["hours"] and 12 not in tr_stitch[0]["hours"]):
+    print("  FAIL: un dropout di 1 ora deve tornare una sola traccia continua")
+    ok = False
+
+# O) A far jump across the same 1-hour gap is NOT stitched (teleport guard) --
+near = {h: c for h, c in moving_front_candidates(lambda h: 45.0).items()
+        if 6 <= h <= 11}
+far = {h: c for h, c in moving_front_candidates(lambda h: 38.0).items()
+       if 13 <= h <= 18}
+teleport = {**near, **far}
+tr_tel = ft.track_fronts(
+    teleport, window_hours=1, min_lifetime_hours=3, min_coverage=0.5
+)
+fused = any(11 in t["hours"] and 13 in t["hours"] for t in tr_tel)
+print(f"O) salto ~780 km non ricucito: {len(tr_tel)} tracce, fuse={fused}")
+if fused:
+    print("  FAIL: due fronti a ~780 km non vanno fusi attraverso il buco")
+    ok = False
+
+# P) Weak-phase recovery: hours rejected by the hard gates but diagnosed
+# synoptic-front are reclaimed by the established track they continue -------
+full = moving_front_candidates(lambda h: 45.0 - (h - 6) * 0.20)
+strong_part = {h: c for h, c in full.items() if h >= 12}
+weak_part = {h: c for h, c in full.items() if h < 12}
+tr_weak = ft.track_fronts(
+    strong_part, window_hours=1, min_lifetime_hours=4, min_coverage=0.5,
+    weak_candidates=weak_part,
+)
+if tr_weak:
+    t = tr_weak[0]
+    print(f"P) recupero fase debole: ore {t['hours'][0]}-{t['hours'][-1]}, "
+          f"core={t['coreHours'][0]}-{t['coreHours'][-1]}, "
+          f"recuperate={t['recoveredHours']}")
+    if not (t["hours"][0] == 6 and t["coreHours"][0] == 12
+            and t["recoveredHours"] == list(range(6, 12))
+            and t["frontType"] == "cold"):
+        print("  FAIL: la traccia deve riappropriarsi delle ore deboli 6-11")
+        ok = False
+else:
+    print("P) FAIL: nessuna traccia con recupero debole"); ok = False
+
+# Q) A distant weak candidate must NOT be attached (no zombie extension) ----
+far_weak = {h: c for h, c in
+            moving_front_candidates(lambda h: 38.0).items() if h < 12}
+tr_far = ft.track_fronts(
+    strong_part, window_hours=1, min_lifetime_hours=4, min_coverage=0.5,
+    weak_candidates=far_weak,
+)
+rec = tr_far[0]["recoveredHours"] if tr_far else None
+print(f"Q) debole lontano ~700 km: recuperate={rec}")
+if rec != []:
+    print("  FAIL: un candidato debole lontano non deve estendere la traccia")
+    ok = False
+
+# R) Hourly quality drops in a physically weak hour while the track keeps
+# enough quality to preserve continuity (v15 separation) ---------------------
+weak_hour = 12
+weakened = moving_front_candidates(lambda h: 45.0 - (h - 6) * 0.20)
+for candidate in weakened[weak_hour]:
+    candidate["candidateEvidence"] = 0.40          # weak physics THIS hour
+    candidate["evidenceComponents"] = dict(candidate["evidenceComponents"])
+    candidate["evidenceComponents"]["thermal"] = 0.35
+    candidate["gateStatus"] = "continuation"
+tr_weakhour = ft.track_fronts(weakened, window_hours=1, min_lifetime_hours=6)
+if tr_weakhour:
+    t = tr_weakhour[0]
+    hq = t["hourlyQuality"]
+    strong_hours = [h for h in hq if h != weak_hour]
+    mean_strong = float(np.mean([hq[h] for h in strong_hours]))
+    print(f"R) qualita' oraria: ora debole={hq.get(weak_hour)} "
+          f"media ore forti={mean_strong:.2f} trackQuality={t['trackQualityScore']}")
+    if not (hq.get(weak_hour) is not None
+            and hq[weak_hour] < mean_strong - 0.05):
+        print("  FAIL: l'ora debole deve avere qualita' oraria inferiore"); ok = False
+    if weak_hour not in t["hours"]:
+        print("  FAIL: l'ora debole non deve sparire dalla traccia"); ok = False
+    if not (t["trackQualityScore"] == t["qualityScore"]):
+        print("  FAIL: trackQualityScore deve restare il punteggio di traccia"); ok = False
+    # separation: at least one hour differs from the track score
+    if all(abs(hq[h] - t["trackQualityScore"]) < 1e-9 for h in hq):
+        print("  FAIL: la qualita' oraria non deve ripetere il punteggio di traccia")
+        ok = False
+    # per-hour structures all present and aligned
+    for key in ("observations", "detectionQuality", "trackingConfidence",
+                "classificationConfidence", "hourlyUncertainty"):
+        if set(t[key]) != set(t["hours"]):
+            print(f"  FAIL: {key} non copre tutte le ore della traccia"); ok = False
+    if t["detectionQuality"][weak_hour] >= 0.5:
+        print("  FAIL: detectionQuality dell'ora debole deve riflettere l'evidenza")
+        ok = False
+else:
+    print("R) FAIL: traccia con ora debole assente"); ok = False
+
 print("\nESITO:", "SUPERATO" if ok else "DA RIVEDERE")
 raise SystemExit(0 if ok else 1)
