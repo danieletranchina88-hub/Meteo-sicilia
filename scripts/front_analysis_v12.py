@@ -23,13 +23,14 @@ import front_locator as fl
 import front_occlusion as focc
 import front_physics as fp
 import front_ridge as fridge
+import front_sections as fsec
 import front_support as fsup
 import front_tracking as ftk
 import thermodynamics as thermo
 from front_analysis import SynopticFrontAnalyzer, _blend_lines, _line_length_km, _rdp
 
 
-FRONT_METHOD = "icon2i-ofa-physics-guided-v14"
+FRONT_METHOD = "icon2i-ofa-physics-guided-v15"
 ANALYSIS_PRESSURE_PA = 85_000.0
 LOWER_PRESSURE_PA = 92_500.0
 
@@ -844,6 +845,24 @@ class IconSynopticFrontAnalyzer(SynopticFrontAnalyzer):
             else:
                 metrics["lowerValidFraction"] = 0.0
 
+            # Cross-front sections (front_sections): the transition-zone
+            # profile at 850 hPa, and its 925 hPa vertical coherence when the
+            # lower level exists. Width/offset stay diagnostics (not gates);
+            # a missing 925 hPa profile is neutral, never counter-evidence.
+            section_850 = fsec.profile_diagnostics(fsec.cross_profiles(
+                theta_w, self.longitudes, self.latitudes, coordinates, normal,
+            ))
+            metrics.update(section_850)
+            if theta_w_925 is not None:
+                section_925 = fsec.profile_diagnostics(fsec.cross_profiles(
+                    theta_w_925, self.longitudes, self.latitudes,
+                    coordinates, normal,
+                ))
+                metrics["frontWidth925Km"] = section_925.get("frontWidthKm")
+                coherence = fsec.vertical_coherence(section_850, section_925)
+                if coherence is not None:
+                    metrics["verticalCoherence"] = coherence
+
             evidence = fp.candidate_evidence(metrics)
             metrics.update(evidence)
             gates = fp.candidate_gate_report(metrics, evidence)
@@ -912,7 +931,7 @@ class IconSynopticFrontAnalyzer(SynopticFrontAnalyzer):
             min_lifetime_hours=TRACK_MIN_LIFETIME_HOURS,
             min_detections=TRACK_MIN_DETECTIONS,
             min_coverage=TRACK_MIN_COVERAGE,
-            weak_candidates=self._weak,
+            weak_candidates=getattr(self, "_weak", None),
         )
         # Publication is judged on the CORE hours (strong detections): the
         # weak-phase hours recovered by the tracker extend where the boundary
@@ -1036,7 +1055,7 @@ class IconSynopticFrontAnalyzer(SynopticFrontAnalyzer):
                     )
                     classification["typeInferredFromTrack"] = True
                 hour_properties = self._track_properties(
-                    track, classification
+                    track, classification, hour=hour
                 )
                 # Per-segment character along the line (existence stays one
                 # continuous track; the type may vary west->east). Additive:
@@ -1146,15 +1165,35 @@ class IconSynopticFrontAnalyzer(SynopticFrontAnalyzer):
         }
 
     def _track_properties(
-        self, track: dict, classification: dict | None = None
+        self, track: dict, classification: dict | None = None,
+        hour: int | None = None,
     ) -> dict:
+        """Feature properties for one display hour.
+
+        Track-level values (persistence, publication) are always exposed as
+        ``trackQualityScore`` / ``trackUncertaintyIndex`` / ``trackDiagnostics``.
+        When ``hour`` is given and directly observed, ``qualityScore``,
+        ``uncertaintyIndex``, ``diagnostics`` and the explanation describe
+        THAT hour, so a front weakening at one lead time shows it instead of
+        repeating the track median. An interpolated hour never pretends to be
+        a detection: ``detectionQuality`` is null and the score carries an
+        explicit penalty.
+        """
         classification = classification or track
-        return {
+        properties = {
             "frontType": classification["frontType"],
             "confidence": round(float(track["qualityScore"]), 2),
             "qualityScore": round(float(track["qualityScore"]), 2),
             "uncertaintyIndex": round(float(track["uncertaintyIndex"]), 2),
             "uncertaintyClass": track.get("uncertaintyClass", "low"),
+            "trackQualityScore": round(
+                float(track.get("trackQualityScore", track["qualityScore"])), 2
+            ),
+            "trackUncertaintyIndex": round(
+                float(track.get("trackUncertaintyIndex",
+                                track["uncertaintyIndex"])), 2
+            ),
+            "trackDiagnostics": _json_mapping(track.get("diagnostics", {}), 4),
             "motionKmh": round(float(classification.get("geoMotionKmh", 0.0)), 1),
             "geoMotionKmh": _json_number(classification.get("geoMotionKmh"), 1),
             "ofaSpeedKmh": _json_number(classification.get("ofaSpeedKmh"), 1),
@@ -1185,6 +1224,86 @@ class IconSynopticFrontAnalyzer(SynopticFrontAnalyzer):
             "method": self.method,
             "source": self.source,
         }
+        if hour is None:
+            return properties
+        hourly_quality = (track.get("hourlyQuality") or {}).get(hour)
+        if hourly_quality is not None:
+            # Directly observed hour: instantaneous quality view.
+            properties["qualityScore"] = round(float(hourly_quality), 2)
+            properties["confidence"] = properties["qualityScore"]
+            properties["uncertaintyIndex"] = _json_number(
+                (track.get("hourlyUncertainty") or {}).get(hour), 2
+            ) or properties["uncertaintyIndex"]
+            properties["detectionQuality"] = _json_number(
+                (track.get("detectionQuality") or {}).get(hour), 3
+            )
+            properties["trackingConfidence"] = _json_number(
+                (track.get("trackingConfidence") or {}).get(hour), 3
+            )
+            properties["classificationConfidence"] = _json_number(
+                (track.get("classificationConfidence") or {}).get(hour), 2
+            )
+            observation = (track.get("observations") or {}).get(hour) or {}
+            properties["gateStatus"] = observation.get("gateStatus")
+            properties["recovered"] = hour in (
+                track.get("recoveredHours") or []
+            )
+            hour_diagnostics = observation.get("diagnostics") or {}
+            if hour_diagnostics:
+                properties["diagnostics"] = _json_mapping(hour_diagnostics, 4)
+                # The meteorological explanation describes THIS hour; the
+                # track's persistence enters separately via lifetimeH.
+                properties["explanation"] = fp.frontal_explanation(
+                    hour_diagnostics,
+                    classification,
+                    observation.get("diagnosis", "synoptic-front"),
+                    track.get("lifetimeH", 0),
+                )
+        else:
+            # Interpolated display hour: no direct detection to describe.
+            detected = sorted(track.get("hourlyQuality") or {})
+            before = [h for h in detected if h < hour]
+            after = [h for h in detected if h > hour]
+            neighbour_scores = [
+                float((track.get("hourlyQuality") or {})[h])
+                for h in ([before[-1]] if before else []) + ([after[0]] if after else [])
+            ]
+            if neighbour_scores:
+                # explicit penalty: the hour is a bridge, not an observation
+                bridged = float(np.mean(neighbour_scores)) * 0.85
+                properties["qualityScore"] = round(bridged, 2)
+                properties["confidence"] = properties["qualityScore"]
+                properties["uncertaintyIndex"] = round(
+                    float(np.clip(1.0 - bridged + 0.10, 0.0, 1.0)), 2
+                )
+                neighbour_diagnostics = [
+                    ((track.get("observations") or {}).get(h) or {})
+                    .get("diagnostics") or {}
+                    for h in ([before[-1]] if before else [])
+                    + ([after[0]] if after else [])
+                ]
+                merged = {}
+                for key in ftk.DIAGNOSTIC_KEYS:
+                    values = [
+                        diag.get(key) for diag in neighbour_diagnostics
+                        if diag.get(key) is not None
+                    ]
+                    finite = [
+                        float(v) for v in values
+                        if isinstance(v, (int, float)) and np.isfinite(float(v))
+                    ]
+                    if finite:
+                        merged[key] = float(np.mean(finite))
+                if merged:
+                    properties["diagnostics"] = _json_mapping(merged, 4)
+            properties["detectionQuality"] = None
+            properties["trackingConfidence"] = None
+            properties["classificationConfidence"] = _json_number(
+                classification.get("classificationCertainty"), 2
+            )
+            properties["gateStatus"] = None
+            properties["recovered"] = False
+        return properties
 
     def analyze(self, hour: int) -> dict:
         base_properties = {

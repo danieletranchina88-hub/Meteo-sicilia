@@ -85,12 +85,31 @@ scegliere il corridoio spaziale del benchmark.
 ```bash
 python scripts/front_benchmark.py benchmarks/fronts/manifest.json \
   --split test --radius-km 100 --min-overlap 0.60 \
+  --radius-grid-km 50,75,100,150 \
   --out benchmark-test.json
 ```
 
 Il matching è uno-a-uno e richiede sovrapposizione bidirezionale delle linee.
 Il report contiene precision, recall, F1, intervalli di confidenza, accuratezza
-del tipo e errore nel numero di fronti.
+del tipo e errore nel numero di fronti, più le metriche standard della
+verifica previsionale:
+
+- **POD** (probability of detection) — identica alla recall: quota di fronti
+  etichettati che l'algoritmo ha trovato;
+- **success ratio** — identico alla precision: quota di fronti previsti che
+  corrispondono a un fronte etichettato;
+- **CSI** (critical success index) — `TP / (TP + FP + FN)`: un solo numero
+  che paga sia i falsi allarmi sia i fronti mancati.
+
+### Sensibilità al raggio spaziale
+
+Con `--radius-grid-km 50,75,100,150` il report include la sezione
+`radiusSensitivity`: le stesse metriche ricalcolate a più tolleranze
+spaziali, dalla più severa alla più permissiva. Serve a smascherare i
+risultati "buoni" ottenuti solo con un raggio molto ampio: se POD e CSI
+crollano passando da 150 a 50 km, l'algoritmo trova i fronti ma li
+posiziona male, e il numero singolo a raggio largo lo nasconderebbe. Le
+metriche vanno sempre lette insieme al raggio a cui sono state calcolate.
 
 `qualityScore` resta un indice diagnostico. Può essere chiamato probabilità solo
 dopo aver congelato un calibratore sulla validation e averlo verificato su

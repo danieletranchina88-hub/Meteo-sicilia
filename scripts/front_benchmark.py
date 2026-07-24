@@ -322,6 +322,13 @@ def evaluate_manifest(
         if precision is not None and recall is not None and precision + recall > 0
         else None
     )
+    # Standard forecast-verification names (Wilks): POD == recall, success
+    # ratio == precision, CSI counts every kind of error in one number.
+    csi = _safe_div(
+        totals["truePositives"],
+        totals["truePositives"] + totals["falsePositives"]
+        + totals["falseNegatives"],
+    )
     type_accuracy = _safe_div(totals["correctTypes"], totals["typedMatches"])
     outcomes = [
         outcome
@@ -355,6 +362,9 @@ def evaluate_manifest(
                 totals["truePositives"] + totals["falseNegatives"],
             ),
             "f1": _round_metric(f1),
+            "pod": _round_metric(recall),
+            "successRatio": _round_metric(precision),
+            "csi": _round_metric(csi),
             "typeAccuracy": _round_metric(type_accuracy),
             "meanAbsoluteFrontCountError": _round_metric(
                 float(
@@ -382,18 +392,56 @@ def evaluate_manifest(
     }
 
 
+def radius_sensitivity(
+    manifest_path: str | os.PathLike[str],
+    radii_km: list[float],
+    split: str | None = "test",
+    minimum_overlap: float = DEFAULT_MIN_OVERLAP,
+) -> list[dict[str, Any]]:
+    """Re-run the benchmark at several spatial tolerances.
+
+    A result that looks good only with a very generous radius is hiding
+    position errors: metrics MUST be read together with the radius at which
+    they were computed. Returns one summary row per radius, strictest first.
+    """
+    rows = []
+    for radius in sorted(set(float(r) for r in radii_km)):
+        report = evaluate_manifest(
+            manifest_path, split, radius, minimum_overlap
+        )
+        rows.append({
+            "radiusKm": radius,
+            "counts": report["counts"],
+            "pod": report["metrics"]["pod"],
+            "successRatio": report["metrics"]["successRatio"],
+            "csi": report["metrics"]["csi"],
+            "f1": report["metrics"]["f1"],
+            "typeAccuracy": report["metrics"]["typeAccuracy"],
+        })
+    return rows
+
+
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("manifest", help="manifest JSON dei casi etichettati")
     parser.add_argument("--split", default="test", help="train, validation, test o all")
     parser.add_argument("--radius-km", type=float, default=DEFAULT_RADIUS_KM)
     parser.add_argument("--min-overlap", type=float, default=DEFAULT_MIN_OVERLAP)
+    parser.add_argument(
+        "--radius-grid-km",
+        help="lista di raggi (es. 50,75,100,150) per la sezione radiusSensitivity",
+    )
     parser.add_argument("--out", help="scrive il report JSON; altrimenti stdout")
     args = parser.parse_args()
     split = None if args.split == "all" else args.split
     report = evaluate_manifest(
         args.manifest, split, args.radius_km, args.min_overlap
     )
+    if args.radius_grid_km:
+        radii = [float(token) for token in args.radius_grid_km.split(",") if token.strip()]
+        report["radiusSensitivity"] = radius_sensitivity(
+            args.manifest, radii, split, args.min_overlap
+        )
     rendered = json.dumps(report, indent=2, ensure_ascii=False)
     if args.out:
         with open(args.out, "w", encoding="utf-8") as handle:

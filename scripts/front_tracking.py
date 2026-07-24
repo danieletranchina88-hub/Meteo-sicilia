@@ -36,6 +36,28 @@ from scipy.optimize import linear_sum_assignment
 EARTH_KM_PER_DEG = 111.32
 COLD_WARM_THRESHOLD_KMH = 5.4  # 1.5 m/s, Hewson/Berry/Sansom-Catto
 
+# Physical diagnostics carried per hour and summarised per track. Shared by
+# the track medians and the per-hour observations so the two views can never
+# drift apart.
+DIAGNOSTIC_KEYS = (
+    "medianTfpStrength", "medianAbzGradient", "deltaThetaW",
+    "deltaThetaE", "deltaTemperature", "deltaThetaV", "dryThermalGradient",
+    "thermalAlignment", "windShiftMs", "convergenceMs",
+    "thermalContrastFraction", "thermalAlignmentFraction",
+    "crossDistanceThermalSupport",
+    "windShiftAngleDeg", "windBoundaryFraction",
+    "convergenceFraction", "airmassMotionKmh",
+    "vorticity1e5", "frontogenesis", "pressureTroughHpa",
+    "pressureTroughFraction", "linePressureTendencyHpa3h",
+    "coldPressureTendencyHpa3h", "warmPressureTendencyHpa3h",
+    "lowerLevelSupport", "deltaThetaW925", "omega700PaS",
+    "terrainFraction", "candidateEvidence",
+    "synopticSupport", "lengthKm", "sinuosity",
+    "profileValidFraction", "profileThermalSupport", "profilePeakGradient",
+    "frontWidthKm", "frontOffsetKm", "airMassHomogeneity",
+    "verticalCoherence", "frontWidth925Km",
+)
+
 
 def _finite_median(values, default=np.nan) -> float:
     array = np.asarray(values, dtype=float)
@@ -871,6 +893,119 @@ def segment_types_for_track(
 
 
 # --------------------------------------------------------------------------
+# Per-hour quality (NOT a probability)
+# --------------------------------------------------------------------------
+def _hourly_tracking_confidence(track: Track) -> dict[int, float]:
+    """Reliability of the temporal link at each hour, in [0, 1].
+
+    A detection tightly continued by its neighbours (small line-to-line
+    displacement per hour, no gap) is a reliable link; an isolated hour, a
+    bridged gap or a weak-phase recovery is progressively less so. This is
+    about the LINK, deliberately independent from how strong the physics of
+    the hour is (that is detectionQuality).
+    """
+    status_factor = {
+        "strong": 1.0, "continuation": 0.92, "weak-continuation": 0.72,
+    }
+    hours = sorted(track.hours)
+    confidence: dict[int, float] = {}
+    for index, hour in enumerate(hours):
+        neighbours = []
+        if index > 0:
+            neighbours.append(hours[index - 1])
+        if index < len(hours) - 1:
+            neighbours.append(hours[index + 1])
+        if not neighbours:
+            continuity = 0.30
+        else:
+            scores = []
+            for other in neighbours:
+                gap = abs(hour - other)
+                speed = _symmetric_distance_km(
+                    track.lines[hour]["coordinates"],
+                    track.lines[other]["coordinates"],
+                ) / max(gap, 1)
+                link = float(np.clip(1.0 - speed / 90.0, 0.05, 1.0))
+                scores.append(link * (1.0 if gap == 1 else 0.85))
+            continuity = float(np.max(scores))
+        factor = status_factor.get(
+            track.lines[hour].get("gateStatus", "strong"), 0.85
+        )
+        confidence[hour] = round(min(1.0, continuity * factor), 3)
+    return confidence
+
+
+def hourly_quality(track: Track, local_classifications: dict,
+                   quality: dict) -> dict:
+    """Per-hour quality view of a track: what THIS hour supports.
+
+    The published track keeps its track-level score for the publication
+    decision; each hour additionally gets an instantaneous score so a front
+    that weakens at one lead time shows that weakening instead of repeating
+    the track median. Diagnostic blend (not a probability):
+    58% physical evidence of the hour, 22% temporal-link reliability,
+    10% structural support, 10% classification confidence.
+    """
+    tracking_confidence = _hourly_tracking_confidence(track)
+    fallback_structural = float(
+        (quality.get("qualityComponents") or {}).get("structuralSupport", 0.5)
+    )
+    observations: dict[int, dict] = {}
+    hourly: dict[int, float] = {}
+    hourly_uncertainty: dict[int, float] = {}
+    detection: dict[int, float] = {}
+    classification_confidence: dict[int, float] = {}
+    for hour in track.hours:
+        line = track.lines[hour]
+        evidence = float(line.get("candidateEvidence") or 0.0)
+        components = line.get("evidenceComponents") or {}
+        structural = float(components.get("structural", np.nan))
+        if not np.isfinite(structural):
+            structural = fallback_structural
+        thermal = float(components.get("thermal", np.nan))
+        certainty = float(
+            (local_classifications.get(hour) or {})
+            .get("classificationCertainty", 0.0) or 0.0
+        )
+        score = float(np.clip(
+            0.58 * evidence
+            + 0.22 * tracking_confidence.get(hour, 0.30)
+            + 0.10 * structural
+            + 0.10 * certainty,
+            0.0, 1.0,
+        ))
+        # Same existence-core penalty used by the track uncertainty: a weak
+        # thermal core or an incoherent structure keeps THIS hour uncertain
+        # even when the temporal link is excellent.
+        core = min(thermal if np.isfinite(thermal) else structural, structural)
+        penalty = max(0.0, 0.50 - core) * 0.35
+        detection[hour] = round(evidence, 3)
+        classification_confidence[hour] = round(certainty, 2)
+        hourly[hour] = round(score, 2)
+        hourly_uncertainty[hour] = round(
+            float(np.clip(1.0 - score + penalty, 0.0, 1.0)), 2
+        )
+        observations[hour] = {
+            "gateStatus": line.get("gateStatus", "strong"),
+            "diagnosis": line.get("diagnosis", "synoptic-front"),
+            "candidateEvidence": round(evidence, 3),
+            "thermalSupport": round(thermal, 2) if np.isfinite(thermal) else None,
+            "structuralSupport": round(structural, 2),
+            "diagnostics": {
+                key: line.get(key) for key in DIAGNOSTIC_KEYS if key in line
+            },
+        }
+    return {
+        "observations": observations,
+        "hourlyQuality": hourly,
+        "hourlyUncertainty": hourly_uncertainty,
+        "detectionQuality": detection,
+        "trackingConfidence": tracking_confidence,
+        "classificationConfidence": classification_confidence,
+    }
+
+
+# --------------------------------------------------------------------------
 # Quality score (NOT a probability)
 # --------------------------------------------------------------------------
 def _quality_score(track: Track, classification: dict, window_hours: int) -> dict:
@@ -1039,21 +1174,7 @@ def track_fronts(
             key: _finite_median([
                 track.lines[h].get(key, np.nan) for h in track.hours
             ])
-            for key in (
-                "medianTfpStrength", "medianAbzGradient", "deltaThetaW",
-                "deltaThetaE", "deltaTemperature", "deltaThetaV", "dryThermalGradient",
-                "thermalAlignment", "windShiftMs", "convergenceMs",
-                "thermalContrastFraction", "thermalAlignmentFraction",
-                "crossDistanceThermalSupport",
-                "windShiftAngleDeg", "windBoundaryFraction",
-                "convergenceFraction", "airmassMotionKmh",
-                "vorticity1e5", "frontogenesis", "pressureTroughHpa",
-                "pressureTroughFraction", "linePressureTendencyHpa3h",
-                "coldPressureTendencyHpa3h", "warmPressureTendencyHpa3h",
-                "lowerLevelSupport", "deltaThetaW925", "omega700PaS",
-                "terrainFraction", "candidateEvidence",
-                "synopticSupport", "lengthKm", "sinuosity",
-            )
+            for key in DIAGNOSTIC_KEYS
         }
         if require_physical_support:
             dry_gradient = diagnostics["dryThermalGradient"]
@@ -1104,6 +1225,7 @@ def track_fronts(
         ]
         dominant_diagnosis = max(set(diagnoses), key=diagnoses.count)
         segment_types = segment_types_for_track(track, local_classifications)
+        per_hour = hourly_quality(track, local_classifications, quality)
         results.append({
             "id": track.id,
             "hours": list(track.hours),
@@ -1115,8 +1237,15 @@ def track_fronts(
             "diagnosis": dominant_diagnosis,
             "localClassifications": local_classifications,
             "segmentTypes": segment_types,
+            **per_hour,
             **classification,
             **quality,
+            # Explicit names for the two quality levels: the track-level
+            # score (publication persistence) stays in "qualityScore" for
+            # backward compatibility; the per-feature hourly score replaces
+            # it only in the exported GeoJSON.
+            "trackQualityScore": quality["qualityScore"],
+            "trackUncertaintyIndex": quality["uncertaintyIndex"],
         })
     results.sort(key=lambda r: r["qualityScore"], reverse=True)
     return results

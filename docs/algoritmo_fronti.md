@@ -342,6 +342,56 @@ ricucito è poi colmato dall'interpolazione descritta sopra, e la linea è
 disegnata come un unico fronte continuo. Una perdita di segnale più lunga
 resta invece una nuova identità.
 
+## 5b. Qualità oraria e qualità di traccia (v15)
+
+Fino alla v14 `qualityScore`, diagnostica e spiegazione erano mediane
+dell'intera traccia, ripetute identiche in ogni ora: un fronte che si
+indeboliva a una scadenza non lo mostrava. Dalla v15 i due livelli sono
+separati e coesistono nel GeoJSON:
+
+- **`trackQualityScore` / `trackUncertaintyIndex` / `trackDiagnostics`** —
+  il giudizio sulla traccia (persistenza, coerenza del moto, copertura):
+  decide se la traccia è abbastanza affidabile da essere **pubblicata**;
+- **`qualityScore` / `uncertaintyIndex` / `diagnostics`** — la vista
+  dell'**ora corrente**: quanto i campi di QUELLA scadenza sostengono il
+  fronte. Miscela diagnostica (non probabilità): 58% evidenza fisica
+  dell'ora, 22% affidabilità del collegamento temporale, 10% supporto
+  strutturale, 10% confidenza della classificazione;
+- **`detectionQuality`** — l'evidenza del candidato dell'ora;
+  **`trackingConfidence`** — quanto è solido il collegamento temporale in
+  quell'ora (vicini stretti = alto; buco ricucito o recupero debole =
+  ridotto); **`classificationConfidence`** — certezza locale del tipo.
+
+Un'ora **interpolata** non simula mai un rilevamento: `detectionQuality` e
+`trackingConfidence` sono `null`, `interpolated: true`, la diagnostica è
+interpolata dalle due osservazioni vicine e il punteggio porta una
+penalizzazione esplicita. Il tracking continua a impedire che un fronte
+reale sparisca per una singola ora debole, ma la qualità di quell'ora resta
+onestamente bassa. La spiegazione meteorologica descrive l'ora corrente; la
+persistenza della traccia vi entra separatamente (`lifetimeH`).
+
+## 5c. Sezioni trasversali e coerenza verticale (v15)
+
+`front_sections.py` campiona θw lungo la normale fredda→calda a offset
+metrici fissi (−85…+85 km) e ne deriva diagnostiche fisiche per candidato:
+frazione valida del profilo (`profileValidFraction`), frazione della linea
+con contrasto termico coerente (`profileThermalSupport`), gradiente massimo
+del profilo (`profilePeakGradient`), posizione del massimo rispetto alla
+linea (`frontOffsetKm`), **larghezza frontale** (`frontWidthKm`, zona in cui
+il gradiente resta ≥50% del massimo) e omogeneità delle masse d'aria
+(`airMassHomogeneity`). La larghezza resta una diagnostica: non è usata come
+soglia finché non sarà calibrata su un archivio indipendente.
+
+Con i dati a 925 hPa lo stesso profilo è confrontato fra le due quote:
+`verticalCoherence` combina segno del contrasto, rapporto dei gradienti,
+distanza fra i massimi (un fronte reale è inclinato: uno scarto modesto è
+normale), somiglianza delle larghezze (`frontWidth925Km`) e frazione valida
+a entrambe le quote. Entra nella componente verticale dell'evidenza con
+peso prudente (20%); i dati 925 mancanti — incluse le zone dove la
+superficie interseca il terreno, già mascherate — sono **neutri**, mai prova
+contraria: una grave incoerenza riduce l'evidenza ma non cancella da sola un
+fronte ben sostenuto a 850 hPa.
+
 ## 6. Significato dell'incertezza
 
 L'indice aumenta con prove fisiche deboli, scarsa continuità, moto instabile,

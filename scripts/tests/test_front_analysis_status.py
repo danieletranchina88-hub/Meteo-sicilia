@@ -57,5 +57,55 @@ if broken.analysis_summary["analysisStatus"] != "partially-unavailable":
     print("FAIL: riepilogo run non segnala l'errore diagnostico")
     ok = False
 
+# --- v15: per-hour properties vs track properties --------------------------
+stub = analyzer_with(lambda hour: [])
+stub.method = v12.FRONT_METHOD
+fake_track = {
+    "frontType": "cold",
+    "qualityScore": 0.70, "uncertaintyIndex": 0.30,
+    "trackQualityScore": 0.70, "trackUncertaintyIndex": 0.30,
+    "uncertaintyClass": "low",
+    "geoMotionKmh": 12.0, "diagnostics": {"deltaThetaW": 3.0},
+    "diagnosis": "synoptic-front", "lifetimeH": 8, "id": 1,
+    "hours": [5, 6, 8], "recoveredHours": [],
+    "hourlyQuality": {5: 0.80, 6: 0.44, 8: 0.78},
+    "hourlyUncertainty": {5: 0.20, 6: 0.60, 8: 0.22},
+    "detectionQuality": {5: 0.82, 6: 0.40, 8: 0.80},
+    "trackingConfidence": {5: 0.9, 6: 0.85, 8: 0.9},
+    "classificationConfidence": {5: 0.8, 6: 0.5, 8: 0.8},
+    "observations": {
+        5: {"gateStatus": "strong", "diagnosis": "synoptic-front",
+            "diagnostics": {"deltaThetaW": 3.4}},
+        6: {"gateStatus": "continuation", "diagnosis": "synoptic-front",
+            "diagnostics": {"deltaThetaW": 1.1}},
+        8: {"gateStatus": "strong", "diagnosis": "synoptic-front",
+            "diagnostics": {"deltaThetaW": 3.2}},
+    },
+    "motionVotes": {}, "classificationCertainty": 0.7,
+    "qualityComponents": {},
+}
+observed = stub._track_properties(fake_track, hour=6)
+print("ora osservata debole:", observed["qualityScore"],
+      "track:", observed["trackQualityScore"])
+if not (observed["qualityScore"] == 0.44
+        and observed["trackQualityScore"] == 0.70
+        and observed["detectionQuality"] == 0.40
+        and observed["uncertaintyIndex"] == 0.60
+        and observed["diagnostics"].get("deltaThetaW") == 1.1
+        and observed["trackDiagnostics"].get("deltaThetaW") == 3.0):
+    print("FAIL: l'ora osservata deve esporre la vista oraria + quella di traccia")
+    ok = False
+
+interpolated = stub._track_properties(fake_track, hour=7)
+print("ora interpolata:", interpolated["qualityScore"],
+      "detectionQuality:", interpolated["detectionQuality"])
+neighbour_mean = 0.5 * (0.44 + 0.78)
+if not (interpolated["detectionQuality"] is None
+        and interpolated["trackingConfidence"] is None
+        and interpolated["qualityScore"] < neighbour_mean
+        and interpolated["qualityScore"] < interpolated["trackQualityScore"]):
+    print("FAIL: un'ora interpolata deve avere detectionQuality nulla e penalita'")
+    ok = False
+
 print("ESITO:", "SUPERATO" if ok else "DA RIVEDERE")
 raise SystemExit(0 if ok else 1)

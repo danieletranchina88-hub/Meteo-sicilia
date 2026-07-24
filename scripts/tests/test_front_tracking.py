@@ -335,5 +335,44 @@ if rec != []:
     print("  FAIL: un candidato debole lontano non deve estendere la traccia")
     ok = False
 
+# R) Hourly quality drops in a physically weak hour while the track keeps
+# enough quality to preserve continuity (v15 separation) ---------------------
+weak_hour = 12
+weakened = moving_front_candidates(lambda h: 45.0 - (h - 6) * 0.20)
+for candidate in weakened[weak_hour]:
+    candidate["candidateEvidence"] = 0.40          # weak physics THIS hour
+    candidate["evidenceComponents"] = dict(candidate["evidenceComponents"])
+    candidate["evidenceComponents"]["thermal"] = 0.35
+    candidate["gateStatus"] = "continuation"
+tr_weakhour = ft.track_fronts(weakened, window_hours=1, min_lifetime_hours=6)
+if tr_weakhour:
+    t = tr_weakhour[0]
+    hq = t["hourlyQuality"]
+    strong_hours = [h for h in hq if h != weak_hour]
+    mean_strong = float(np.mean([hq[h] for h in strong_hours]))
+    print(f"R) qualita' oraria: ora debole={hq.get(weak_hour)} "
+          f"media ore forti={mean_strong:.2f} trackQuality={t['trackQualityScore']}")
+    if not (hq.get(weak_hour) is not None
+            and hq[weak_hour] < mean_strong - 0.05):
+        print("  FAIL: l'ora debole deve avere qualita' oraria inferiore"); ok = False
+    if weak_hour not in t["hours"]:
+        print("  FAIL: l'ora debole non deve sparire dalla traccia"); ok = False
+    if not (t["trackQualityScore"] == t["qualityScore"]):
+        print("  FAIL: trackQualityScore deve restare il punteggio di traccia"); ok = False
+    # separation: at least one hour differs from the track score
+    if all(abs(hq[h] - t["trackQualityScore"]) < 1e-9 for h in hq):
+        print("  FAIL: la qualita' oraria non deve ripetere il punteggio di traccia")
+        ok = False
+    # per-hour structures all present and aligned
+    for key in ("observations", "detectionQuality", "trackingConfidence",
+                "classificationConfidence", "hourlyUncertainty"):
+        if set(t[key]) != set(t["hours"]):
+            print(f"  FAIL: {key} non copre tutte le ore della traccia"); ok = False
+    if t["detectionQuality"][weak_hour] >= 0.5:
+        print("  FAIL: detectionQuality dell'ora debole deve riflettere l'evidenza")
+        ok = False
+else:
+    print("R) FAIL: traccia con ora debole assente"); ok = False
+
 print("\nESITO:", "SUPERATO" if ok else "DA RIVEDERE")
 raise SystemExit(0 if ok else 1)

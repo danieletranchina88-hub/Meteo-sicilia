@@ -59,6 +59,12 @@ with tempfile.TemporaryDirectory() as directory:
     report = benchmark.evaluate_manifest(
         manifest_path, split="test", radius_km=80.0, minimum_overlap=0.60
     )
+    # Radius-sensitivity re-run while the temp files still exist. The
+    # predictions sit ~22 km from the labels, so a 15 km radius must fail
+    # them and every metric must worsen versus the 80 km run.
+    sensitivity = benchmark.radius_sensitivity(
+        manifest_path, [15.0, 80.0], split="test", minimum_overlap=0.60
+    )
 
 counts = report["counts"]
 metrics = report["metrics"]
@@ -84,6 +90,27 @@ if metrics["precision"] != 0.6667 or metrics["recall"] != 1.0:
 if metrics["f1"] != 0.8 or metrics["typeAccuracy"] != 0.5:
     print("FAIL: F1 o accuratezza del tipo errata")
     ok = False
+# v15: POD == recall, success ratio == precision, CSI = TP/(TP+FP+FN)
+if not (metrics["pod"] == metrics["recall"] == 1.0
+        and metrics["successRatio"] == metrics["precision"] == 0.6667
+        and metrics["csi"] == 0.6667):
+    print("FAIL: POD/success ratio/CSI errati")
+    ok = False
+
+# v15: a stricter spatial radius must WORSEN the benchmark (position errors
+# cannot hide behind a generous tolerance)
+strict, generous = sensitivity[0], sensitivity[1]
+print("sensibilita' al raggio:",
+      [(row["radiusKm"], row["pod"], row["csi"]) for row in sensitivity])
+if not (strict["radiusKm"] == 15.0 and generous["radiusKm"] == 80.0):
+    print("FAIL: righe radiusSensitivity non ordinate per raggio")
+    ok = False
+pod_strict = strict["pod"] if strict["pod"] is not None else 0.0
+csi_strict = strict["csi"] if strict["csi"] is not None else 0.0
+if not (pod_strict < generous["pod"] and csi_strict < generous["csi"]):
+    print("FAIL: un raggio piu' severo deve peggiorare POD e CSI")
+    ok = False
+
 if report["qualityScoreDiagnostic"]["eligibleForProbabilityInterpretation"]:
     print("FAIL: il piccolo test sintetico è stato interpretato come probabilistico")
     ok = False
