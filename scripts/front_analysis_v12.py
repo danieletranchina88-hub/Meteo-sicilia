@@ -147,6 +147,10 @@ class IconSynopticFrontAnalyzer(SynopticFrontAnalyzer):
         self._support_cache: dict[int, dict] = {}
         self._pipeline_diag: dict[int, dict] = {}
         self._rejected: dict[int, list[dict]] = {}
+        # Gate-rejected candidates whose differential diagnosis still says
+        # synoptic-front: the weak phase of a real boundary. Kept in full so
+        # tracking can reclaim these hours for an established track.
+        self._weak: dict[int, list[dict]] = {}
         # Climatological detection thresholds for the run's month (falls back
         # to the detector's fixed fuzzy defaults when the climatology is absent
         # or does not cover this month).
@@ -810,6 +814,10 @@ class IconSynopticFrontAnalyzer(SynopticFrontAnalyzer):
                     "reasons": list(gates.get("rejectionReasons", [])),
                     "candidateEvidence": metrics.get("candidateEvidence"),
                 })
+                if gates.get("diagnosis") == "synoptic-front":
+                    # Weak phase of a possibly real boundary: keep the full
+                    # candidate so an established track can reclaim this hour.
+                    self._weak.setdefault(hour, []).append(metrics)
                 for reason in gates.get("rejectionReasons", []) or ["unspecified"]:
                     reject_counts[reason] = reject_counts.get(reason, 0) + 1
                 continue
@@ -860,17 +868,25 @@ class IconSynopticFrontAnalyzer(SynopticFrontAnalyzer):
             min_lifetime_hours=TRACK_MIN_LIFETIME_HOURS,
             min_detections=TRACK_MIN_DETECTIONS,
             min_coverage=TRACK_MIN_COVERAGE,
+            weak_candidates=self._weak,
         )
+        # Publication is judged on the CORE hours (strong detections): the
+        # weak-phase hours recovered by the tracker extend where the boundary
+        # is drawn but must not dilute -- nor artificially satisfy -- the
+        # confidence requirements.
         tracks = [
             track for track in raw_tracks
             if track.get("qualityScore", 0.0) >= MIN_PUBLISH_QUALITY
             and track.get("uncertaintyIndex", 1.0) <= MAX_PUBLISH_UNCERTAINTY
             and sum(
-                value.get("frontType") != "uncertain"
-                for value in track.get("localClassifications", {}).values()
+                track.get("localClassifications", {}).get(h, {}).get("frontType")
+                != "uncertain"
+                for h in track.get("coreHours", track.get("hours", []))
             ) >= max(
                 TRACK_MIN_DETECTIONS,
-                int(np.ceil(0.55 * len(track.get("hours", [])))),
+                int(np.ceil(0.55 * len(
+                    track.get("coreHours", track.get("hours", []))
+                ))),
             )
         ]
         self.analysis_summary = {

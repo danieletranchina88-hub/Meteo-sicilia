@@ -263,19 +263,30 @@ def _stitch_cost(a: "Track", b: "Track", max_gap: int) -> float:
     # hour), are distinct identities and must not be fused.
     if gap != 2 or gap > max_gap:
         return np.inf
-    a_line = a.lines[a.hours[-1]]["coordinates"]
-    b_line = b.lines[b.hours[0]]["coordinates"]
-    # Hard physical ceiling on how far the *centroid* may travel across the
-    # gap: a front does not exceed ~65 km/h. The symmetric distance alone is
-    # fooled by two long parallel lines that overlap end-to-end, so the
-    # centroid displacement is the decisive teleport guard.
+    return _continuity_cost(
+        a.lines[a.hours[-1]]["coordinates"], a.lines[a.hours[-1]]["warmNormal"],
+        b.lines[b.hours[0]]["coordinates"], b.lines[b.hours[0]]["warmNormal"],
+        gap,
+    )
+
+
+def _continuity_cost(a_line, a_normal, b_line, b_normal, gap: int) -> float:
+    """Physical same-boundary cost between two lines ``gap`` hours apart.
+
+    Shared by track stitching and weak-candidate recovery. A front's centroid
+    does not exceed ~65 km/h (the decisive teleport guard: the symmetric
+    distance alone is fooled by two long parallel lines that overlap
+    end-to-end); the lines must also be directly close, similarly oriented,
+    of comparable length, and facing the same warm side. +inf when any
+    condition fails.
+    """
+    a_line = np.asarray(a_line, dtype=float)
+    b_line = np.asarray(b_line, dtype=float)
     mean_lat = math_mean_lat(a_line, b_line)
     ca = _project_km(a_line, mean_lat).mean(axis=0)
     cb = _project_km(b_line, mean_lat).mean(axis=0)
     if float(np.hypot(*(cb - ca))) > 65.0 * gap:
         return np.inf
-    # Direct line-to-line proximity (not the extrapolated prediction, whose
-    # 2-hour noise inflates the distance for a genuinely continuous front).
     distance = _symmetric_distance_km(a_line, b_line)
     if distance > 40.0 + 45.0 * gap:
         return np.inf
@@ -285,8 +296,8 @@ def _stitch_cost(a: "Track", b: "Track", max_gap: int) -> float:
     length_b = _length_km(b_line)
     if max(length_a, length_b) > 2.5 * max(min(length_a, length_b), 1.0):
         return np.inf
-    normal_a = _resample_vectors(a.lines[a.hours[-1]]["warmNormal"], 32)
-    normal_b = _resample_vectors(b.lines[b.hours[0]]["warmNormal"], 32)
+    normal_a = _resample_vectors(np.asarray(a_normal, dtype=float), 32)
+    normal_b = _resample_vectors(np.asarray(b_normal, dtype=float), 32)
     pa = _resample(a_line, 32)
     pb = _resample(b_line, 32)
     if float(np.mean(np.hypot(*(pa - pb[::-1]).T))) < float(np.mean(np.hypot(*(pa - pb).T))):
@@ -295,6 +306,117 @@ def _stitch_cost(a: "Track", b: "Track", max_gap: int) -> float:
     if not np.isfinite(facing) or facing < 0.0:
         return np.inf
     return distance + 2.0 * _orientation_diff(a_line, b_line)
+
+
+def _recovery_cost(a_line, a_normal, b_line, b_normal, gap: int) -> float:
+    """Same-boundary cost for weak-phase recovery, elongation-tolerant.
+
+    Weak-phase detections of one boundary fragment and change extent hour to
+    hour, so the full-centroid guard of ``_continuity_cost`` wrongly punishes
+    a line that merely grew along itself. Physically a front moves normal to
+    itself: only the CROSS-line component of the centroid displacement is
+    speed-capped (~80 km/h, generous for a noisy weak phase), while along-
+    line growth is free. Proximity uses the median one-sided distance from
+    the shorter line to the longer, again robust to extent changes.
+    """
+    a_line = np.asarray(a_line, dtype=float)
+    b_line = np.asarray(b_line, dtype=float)
+    if _orientation_diff(a_line, b_line) > 45.0:
+        return np.inf
+    length_a = _length_km(a_line)
+    length_b = _length_km(b_line)
+    # Extent changes are the NORM in the weak phase (the detected window of
+    # one long boundary slides and fragments), so the ratio guard is loose:
+    # the overlap fraction below is what really decides same-boundary.
+    if max(length_a, length_b) > 4.0 * max(min(length_a, length_b), 1.0):
+        return np.inf
+    mean_lat = math_mean_lat(a_line, b_line)
+    a_km = _project_km(_resample(a_line), mean_lat)
+    b_km = _project_km(_resample(b_line), mean_lat)
+    short, long_ = (a_km, b_km) if length_a <= length_b else (b_km, a_km)
+    gaps = np.hypot(short[:, None, 0] - long_[None, :, 0],
+                    short[:, None, 1] - long_[None, :, 1])
+    near = np.min(gaps, axis=1)
+    # Decisive same-boundary gate: a substantial fraction of the shorter
+    # line must lie within physical front travel (~65 km/h) of the longer.
+    # Fragments of one long boundary whose detected window slides along it
+    # keep a large overlap; a nearby but distinct boundary (e.g. an alpine
+    # lee line north of a cold front) has almost none.
+    if float(np.mean(near <= 65.0 * gap)) < 0.40:
+        return np.inf
+    distance = float(np.median(near))
+    if distance > 60.0 + 50.0 * gap:
+        return np.inf
+    # cross-line displacement of the centroid, along the reference normal
+    normal_a = _resample_vectors(np.asarray(a_normal, dtype=float), 32)
+    scale_lon = EARTH_KM_PER_DEG * np.cos(mean_lat)
+    normal_km = np.column_stack((normal_a[:, 0] * scale_lon,
+                                 normal_a[:, 1] * EARTH_KM_PER_DEG))
+    mean_normal = np.nanmean(
+        normal_km / np.maximum(np.hypot(*normal_km.T)[:, None], 1.0e-9), axis=0
+    )
+    mean_normal /= max(float(np.hypot(*mean_normal)), 1.0e-9)
+    shift = b_km.mean(axis=0) - a_km.mean(axis=0)
+    if abs(float(np.dot(shift, mean_normal))) > 80.0 * gap:
+        return np.inf
+    normal_b = _resample_vectors(np.asarray(b_normal, dtype=float), 32)
+    if float(np.mean(np.hypot(*(a_km - b_km[::-1]).T))) < float(
+            np.mean(np.hypot(*(a_km - b_km).T))):
+        normal_b = normal_b[::-1]
+    facing = float(np.nanmedian(np.sum(
+        _resample_vectors(np.asarray(a_normal, dtype=float), 32) * normal_b,
+        axis=1,
+    )))
+    if not np.isfinite(facing) or facing < 0.0:
+        return np.inf
+    return distance + 2.0 * _orientation_diff(a_line, b_line)
+
+
+def _extend_track_weak(
+    track: "Track", weak_by_hour: dict, used: set, max_extend: int = 18,
+) -> list[int]:
+    """Reclaim a track's weak-phase hours from gate-rejected candidates.
+
+    A real boundary often exists for hours below the hard publication gates
+    (weak thermal core early in its life) before strengthening into a
+    published track. Those hours were detected, diagnosed ``synoptic-front``
+    and rejected — the evidence is on file. With the published track in hand,
+    its identity extends backward/forward through consecutive matching weak
+    candidates (same ``_continuity_cost`` physics as stitching, one skipped
+    hour allowed). Weak candidates can only EXTEND an established track:
+    they never create one, so noise cannot bootstrap itself into a front.
+    Mutates the track; returns the recovered hours.
+    """
+    recovered = []
+    for direction in (-1, 1):
+        for _ in range(max_extend):
+            edge = track.hours[0] if direction < 0 else track.hours[-1]
+            found = None
+            for gap in (1, 2):
+                hour = edge + direction * gap
+                best = np.inf
+                for index, candidate in enumerate(weak_by_hour.get(hour, [])):
+                    if (hour, index) in used:
+                        continue
+                    cost = _recovery_cost(
+                        track.lines[edge]["coordinates"],
+                        track.lines[edge]["warmNormal"],
+                        candidate["coordinates"], candidate["warmNormal"], gap,
+                    )
+                    if cost < best:
+                        best, found = cost, (hour, index, candidate)
+                if found is not None:
+                    break
+            if found is None:
+                break
+            hour, index, candidate = found
+            used.add((hour, index))
+            entry = dict(candidate)
+            entry["gateStatus"] = "weak-continuation"
+            track.lines[hour] = entry
+            track.hours = sorted(set(track.hours) | {hour})
+            recovered.append(hour)
+    return sorted(recovered)
 
 
 def _stitch_tracks(tracks: list["Track"], max_gap: int) -> list["Track"]:
@@ -841,6 +963,7 @@ def track_fronts(
     min_convergence_ms: float = 0.15,
     max_terrain_fraction: float = 0.25,
     min_strong_detections: int = 1,
+    weak_candidates: dict[int, list] | None = None,
 ):
     """Link hourly candidates into classified, quality-scored tracks.
 
@@ -891,6 +1014,7 @@ def track_fronts(
 
     available = sorted(hourly_candidates)
     results = []
+    weak_used: set = set()
     for track in tracks:
         span = track.hours[-1] - track.hours[0]
         if len(track.hours) < max(2, int(min_detections)) or span < min_lifetime_hours:
@@ -963,6 +1087,17 @@ def track_fronts(
                 np.median(local_certainties)
             )
         quality = _quality_score(track, quality_classification, window_hours)
+        # Weak-phase recovery AFTER classification and quality: identity and
+        # confidence come from the strong core alone, so recovered hours can
+        # only extend where the boundary is drawn, never inflate its score.
+        core_hours = list(track.hours)
+        recovered_hours: list[int] = []
+        if weak_candidates:
+            recovered_hours = _extend_track_weak(track, weak_candidates, weak_used)
+            if recovered_hours:
+                local_classifications = classify_track_locally(
+                    track, window_hours, wind_sampler
+                )
         diagnoses = [
             str(track.lines[h].get("diagnosis", "synoptic-front"))
             for h in track.hours
@@ -972,6 +1107,8 @@ def track_fronts(
         results.append({
             "id": track.id,
             "hours": list(track.hours),
+            "coreHours": core_hours,
+            "recoveredHours": recovered_hours,
             "lifetimeH": span,
             "lines": {h: track.lines[h]["coordinates"] for h in track.hours},
             "diagnostics": diagnostics,

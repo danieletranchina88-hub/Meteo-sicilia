@@ -308,6 +308,25 @@ traccia pubblicata, un'ora la cui classificazione locale è ambigua viene
 mostrata con il tipo dominante della traccia, così la linea resta continua
 invece di sparire per una singola ora.
 
+**Recupero della fase debole (doppia soglia).** Un fronte reale spesso esiste
+per ore sotto le porte dure di pubblicazione (nucleo termico debole all'inizio
+della sua vita) prima di rafforzarsi in traccia pubblicata. Quelle ore non
+sono perse: ogni candidato respinto ma diagnosticato `synoptic-front` dal
+motore differenziale viene conservato per intero. Una traccia pubblicata
+estende poi la propria identità all'indietro e in avanti attraverso i
+candidati deboli consecutivi che la continuano fisicamente — è il
+ragionamento del previsore: *il fronte solido di stasera era già lì stamane,
+lo dimostra la continuità*. Il criterio di aggancio tollera i cambi di
+estensione (i frammenti deboli di un confine lungo scorrono e si spezzano):
+decide la **sovrapposizione** (≥40% della linea più corta entro ~65 km/h·gap
+dalla più lunga), con orientamento, lato caldo e spostamento trasversale del
+centroide limitati. Come nel doppio-soglia di Canny, i deboli possono solo
+**estendere** una traccia affermata, mai fondarne una: il rumore non può
+auto-promuoversi a fronte. Identità, tipo e qualità restano calcolati sul
+solo nucleo forte (`coreHours`), così le ore recuperate allungano la linea
+nel tempo senza gonfiarne la confidenza; le ore restano ispezionabili in
+`recoveredHours`.
+
 **Ricucitura delle tracce spezzate.** Il tracciamento è causale: elabora
 un'ora alla volta e non può guardare avanti. Se un fronte reale scende sotto
 la soglia di rilevamento per una singola ora, la predizione a due ore che lo

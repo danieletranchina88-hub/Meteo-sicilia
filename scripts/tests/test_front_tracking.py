@@ -300,5 +300,40 @@ if fused:
     print("  FAIL: due fronti a ~780 km non vanno fusi attraverso il buco")
     ok = False
 
+# P) Weak-phase recovery: hours rejected by the hard gates but diagnosed
+# synoptic-front are reclaimed by the established track they continue -------
+full = moving_front_candidates(lambda h: 45.0 - (h - 6) * 0.20)
+strong_part = {h: c for h, c in full.items() if h >= 12}
+weak_part = {h: c for h, c in full.items() if h < 12}
+tr_weak = ft.track_fronts(
+    strong_part, window_hours=1, min_lifetime_hours=4, min_coverage=0.5,
+    weak_candidates=weak_part,
+)
+if tr_weak:
+    t = tr_weak[0]
+    print(f"P) recupero fase debole: ore {t['hours'][0]}-{t['hours'][-1]}, "
+          f"core={t['coreHours'][0]}-{t['coreHours'][-1]}, "
+          f"recuperate={t['recoveredHours']}")
+    if not (t["hours"][0] == 6 and t["coreHours"][0] == 12
+            and t["recoveredHours"] == list(range(6, 12))
+            and t["frontType"] == "cold"):
+        print("  FAIL: la traccia deve riappropriarsi delle ore deboli 6-11")
+        ok = False
+else:
+    print("P) FAIL: nessuna traccia con recupero debole"); ok = False
+
+# Q) A distant weak candidate must NOT be attached (no zombie extension) ----
+far_weak = {h: c for h, c in
+            moving_front_candidates(lambda h: 38.0).items() if h < 12}
+tr_far = ft.track_fronts(
+    strong_part, window_hours=1, min_lifetime_hours=4, min_coverage=0.5,
+    weak_candidates=far_weak,
+)
+rec = tr_far[0]["recoveredHours"] if tr_far else None
+print(f"Q) debole lontano ~700 km: recuperate={rec}")
+if rec != []:
+    print("  FAIL: un candidato debole lontano non deve estendere la traccia")
+    ok = False
+
 print("\nESITO:", "SUPERATO" if ok else "DA RIVEDERE")
 raise SystemExit(0 if ok else 1)
