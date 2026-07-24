@@ -19,6 +19,7 @@ import os
 import numpy as np
 
 import front_detection as fd
+import front_geometry as fgeo
 import front_locator as fl
 import front_occlusion as focc
 import front_physics as fp
@@ -867,7 +868,19 @@ class IconSynopticFrontAnalyzer(SynopticFrontAnalyzer):
             metrics.update(evidence)
             gates = fp.candidate_gate_report(metrics, evidence)
             metrics.update(gates)
-            metrics["reasonCodes"] = fp.reason_codes(metrics)
+            # Continuous geometric penalties (sez. 8) + machine reason codes
+            # (sez. 11): computed only for candidates that will be published or
+            # kept for weak-phase recovery, so the O(n^2) shape scan never runs
+            # on discarded noise. Never veto a shape -- only describe it; a
+            # closed loop keeps confidence only with cyclonic support.
+            if gates["continuationPass"] or gates.get("diagnosis") == "synoptic-front":
+                geometry = fgeo.geometry_metrics(coordinates)
+                for key in ("meanTurningDegPerStep", "maxTurningDeg",
+                            "tangentReversals", "selfIntersections", "closedLoop",
+                            "enclosedAreaKm2", "isoperimetricPenalty",
+                            "curvaturePenalty"):
+                    metrics[key] = geometry[key]
+                metrics["reasonCodes"] = fp.reason_codes(metrics)
             if not gates["continuationPass"]:
                 # A rejected candidate is recorded, not silently dropped, so
                 # the reason is inspectable (diagnostic mode / QC).
@@ -1323,6 +1336,17 @@ class IconSynopticFrontAnalyzer(SynopticFrontAnalyzer):
             "high" if hourly_uncertainty <= 0.36
             else "moderate" if hourly_uncertainty <= 0.52 else "low"
         )
+        # Instantaneous vs temporally-filtered type (sez. 10): the hour's own
+        # local classification vs the track's dominant type. Both exposed so
+        # a genuine change is visible and the smoothing is auditable.
+        local = (track.get("localClassifications") or {}).get(hour) or {}
+        properties["instantType"] = local.get(
+            "frontType", classification.get("frontType")
+        )
+        properties["trackType"] = track.get("frontType")
+        properties["lifecycleEvents"] = (
+            track.get("lifecycle") or {}
+        ).get("events", [])
         return properties
 
     def analyze(self, hour: int) -> dict:

@@ -1248,5 +1248,65 @@ def track_fronts(
             "trackQualityScore": quality["qualityScore"],
             "trackUncertaintyIndex": quality["uncertaintyIndex"],
         })
+    annotate_lifecycle(results, gate_km=gate_km)
     results.sort(key=lambda r: r["qualityScore"], reverse=True)
     return results
+
+
+def annotate_lifecycle(results: list[dict], *, gate_km: float = 170.0) -> None:
+    """Label each track's life-cycle events (sez. 9), in place.
+
+    Every track has a ``genesis`` (birth) and a ``lysis`` (death). ``split``
+    marks a track whose end is spatially continued by two or more tracks
+    beginning the next hour; ``merge`` marks a track whose start is fed by two
+    or more tracks ending the previous hour; ``occlusion_transition`` marks a
+    track carrying occluded segments. Purely descriptive metadata: it does not
+    change which fronts are published.
+    """
+    starts = {}   # hour -> list of (index, first_line)
+    ends = {}     # hour -> list of (index, last_line)
+    for index, track in enumerate(results):
+        hours = sorted(track["hours"])
+        starts.setdefault(hours[0], []).append(
+            (index, np.asarray(track["lines"][hours[0]], dtype=float))
+        )
+        ends.setdefault(hours[-1], []).append(
+            (index, np.asarray(track["lines"][hours[-1]], dtype=float))
+        )
+
+    for index, track in enumerate(results):
+        hours = sorted(track["hours"])
+        genesis_hour, lysis_hour = hours[0], hours[-1]
+        first_line = np.asarray(track["lines"][genesis_hour], dtype=float)
+        last_line = np.asarray(track["lines"][lysis_hour], dtype=float)
+        events = ["genesis"]
+
+        feeders = [
+            j for (j, line) in ends.get(genesis_hour - 1, [])
+            if j != index and _symmetric_distance_km(first_line, line) <= gate_km
+        ]
+        if len(feeders) >= 2:
+            events.append("merge")
+        followers = [
+            j for (j, line) in starts.get(lysis_hour + 1, [])
+            if j != index and _symmetric_distance_km(last_line, line) <= gate_km
+        ]
+        if len(followers) >= 2:
+            events.append("split")
+
+        segment_types = track.get("segmentTypes") or {}
+        occluded = any(
+            any(seg.get("type") == "occluded" for seg in segs)
+            for segs in segment_types.values()
+        )
+        if occluded or track.get("frontType") == "occluded":
+            events.append("occlusion_transition")
+        events.append("lysis")
+
+        track["lifecycle"] = {
+            "genesisHour": genesis_hour,
+            "lysisHour": lysis_hour,
+            "events": events,
+            "feederTracks": feeders,
+            "followerTracks": followers,
+        }

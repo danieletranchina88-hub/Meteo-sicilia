@@ -252,5 +252,19 @@ if "MOISTURE_DOMINATED" not in fp.reason_codes(moist):
     print("  FAIL: confine di sola umidita' non etichettato MOISTURE_DOMINATED")
     ok = False
 
+# Closed loop without cyclonic support -> CLOSED_LOOP_UNSUPPORTED -----------
+loop_no_low = {"deltaThetaW": 2.5, "closedLoop": True,
+               "pressureTroughHpa": 0.1, "vorticity1e5": 0.2}
+loop_with_low = {"deltaThetaW": 2.5, "closedLoop": True,
+                 "pressureTroughHpa": 1.6, "vorticity1e5": 3.0}
+codes_no = fp.reason_codes(loop_no_low)
+codes_yes = fp.reason_codes(loop_with_low)
+print("anello senza minimo:", "CLOSED_LOOP_UNSUPPORTED" in codes_no,
+      " con minimo:", "CLOSED_LOOP_SUPPORTED" in codes_yes)
+if "CLOSED_LOOP_UNSUPPORTED" not in codes_no:
+    print("  FAIL: anello senza supporto ciclonico non segnalato"); ok = False
+if "CLOSED_LOOP_SUPPORTED" not in codes_yes:
+    print("  FAIL: anello con minimo/vorticita' deve risultare supportato"); ok = False
+
 print("\nESITO:", "SUPERATO" if ok else "DA RIVEDERE")
 raise SystemExit(0 if ok else 1)

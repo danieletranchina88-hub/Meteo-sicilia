@@ -709,6 +709,18 @@ def reason_codes(metrics: dict, thresholds: dict | None = None) -> list[str]:
 
     if val("terrainFraction") >= t["orographic_terrain_fraction"]:
         codes.append("OROGRAPHIC_PENALTY")
+
+    # A closed loop is only credible with a cyclonic signature (a low / a
+    # trough / cyclonic vorticity). Without it, flag as unsupported.
+    if metrics.get("closedLoop"):
+        trough_val = _finite(metrics.get("pressureTroughHpa"))
+        vort_val = _finite(metrics.get("vorticity1e5"))
+        cyclonic = (
+            (np.isfinite(trough_val) and trough_val >= t["cyclone_trough_min_hpa"])
+            or (np.isfinite(vort_val) and vort_val >= 1.0)
+        )
+        codes.append("CLOSED_LOOP_SUPPORTED" if cyclonic
+                     else "CLOSED_LOOP_UNSUPPORTED")
     lower_valid = _finite(metrics.get("lowerValidFraction"))
     if np.isfinite(lower_valid):
         if lower_valid < t["level_below_ground_max_valid"]:
