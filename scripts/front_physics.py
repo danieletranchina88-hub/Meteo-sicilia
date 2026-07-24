@@ -629,6 +629,7 @@ REASON_CODE_THRESHOLDS = {
     "moisture_dominated_theta_e_min_k": 2.0,
     "vertical_925_support_min": 0.5,
     "vertical_925_contrast_min_k": 1.0,
+    "vertical_700_coherence_min": 0.45,
     "vertical_coherence_low": 0.25,
     "ascent_700_max_pas": -0.10,
     "wind_shift_min_ms": 3.0,
@@ -679,6 +680,12 @@ def reason_codes(metrics: dict, thresholds: dict | None = None) -> list[str]:
     coherence = val("verticalCoherence")
     if np.isfinite(coherence) and coherence < t["vertical_coherence_low"]:
         codes.append("VERTICAL_INCOHERENCE")
+    coherence_700 = val("verticalCoherence700")
+    if np.isfinite(coherence_700):
+        if coherence_700 >= t["vertical_700_coherence_min"]:
+            codes.append("VERTICAL_SUPPORT_700")
+    else:
+        codes.append("MISSING_OPTIONAL_FIELD_700")
 
     omega = val("omega700PaS")
     if np.isfinite(omega) and omega <= t["ascent_700_max_pas"]:

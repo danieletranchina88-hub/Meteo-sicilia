@@ -173,6 +173,8 @@ class IconSynopticFrontAnalyzer(SynopticFrontAnalyzer):
         lower_u_wind_path: str | None = None,
         lower_v_wind_path: str | None = None,
         omega_700_path: str | None = None,
+        upper_temperature_path: str | None = None,
+        upper_humidity_path: str | None = None,
         **kwargs,
     ) -> None:
         requested_method = kwargs.get("method")
@@ -263,6 +265,38 @@ class IconSynopticFrontAnalyzer(SynopticFrontAnalyzer):
                     self.datasets.pop(key).close()
                     self.keys.pop(key, None)
 
+        # Optional 700 hPa thermodynamics (sez. 5): corroborates aloft and is
+        # the fallback reference where 850 hPa is close to the ground. Absent
+        # by default (MeteoHub currently exposes omega at 700 but not T/QV):
+        # missing is neutral, signalled downstream, never counter-evidence.
+        if upper_temperature_path and upper_humidity_path:
+            added = []
+            opened = None
+            try:
+                for key, path in (
+                    ("t700", upper_temperature_path),
+                    ("q700", upper_humidity_path),
+                ):
+                    opened = self._open_field(path, key)
+                    self._validate_optional_dataset(opened, key, 700.0)
+                    variable = next(iter(opened.data_vars))
+                    values = np.asarray(opened[variable].values, dtype=float)
+                    median = _finite_median(values)
+                    if key == "t700" and not 180.0 < median < 320.0:
+                        raise ValueError("T700 non espressa in kelvin")
+                    if key == "q700" and not 0.0 <= median < 0.1:
+                        raise ValueError("QV700 non espressa in kg/kg")
+                    self.datasets[key] = opened
+                    self.keys[key] = variable
+                    added.append(key)
+                    opened = None
+            except Exception:
+                if opened is not None:
+                    opened.close()
+                for key in added:
+                    self.datasets.pop(key).close()
+                    self.keys.pop(key, None)
+
         if omega_700_path:
             try:
                 dataset = self._open_field(omega_700_path, "omega700")
@@ -314,6 +348,10 @@ class IconSynopticFrontAnalyzer(SynopticFrontAnalyzer):
     @property
     def has_lower_wind(self) -> bool:
         return "u925" in self.datasets and "v925" in self.datasets
+
+    @property
+    def has_upper_level(self) -> bool:
+        return "t700" in self.datasets and "q700" in self.datasets
 
     @staticmethod
     def _offset_points(
@@ -570,6 +608,11 @@ class IconSynopticFrontAnalyzer(SynopticFrontAnalyzer):
         if self.has_lower_level:
             theta_w_925 = self._theta_w(hour, 925).copy()
             theta_w_925[self.terrain > 650.0] = np.nan
+        theta_w_700 = None
+        if self.has_upper_level:
+            # 700 hPa sits above most terrain, so no orographic mask is needed;
+            # it is the fallback reference where 850 is close to the ground.
+            theta_w_700 = self._theta_w(hour, 700).copy()
 
         accepted = []
         rejected: list[dict] = []
@@ -854,15 +897,29 @@ class IconSynopticFrontAnalyzer(SynopticFrontAnalyzer):
                 theta_w, self.longitudes, self.latitudes, coordinates, normal,
             ))
             metrics.update(section_850)
+            section_925 = section_700 = None
             if theta_w_925 is not None:
                 section_925 = fsec.profile_diagnostics(fsec.cross_profiles(
                     theta_w_925, self.longitudes, self.latitudes,
                     coordinates, normal,
                 ))
                 metrics["frontWidth925Km"] = section_925.get("frontWidthKm")
-                coherence = fsec.vertical_coherence(section_850, section_925)
-                if coherence is not None:
-                    metrics["verticalCoherence"] = coherence
+            if theta_w_700 is not None:
+                section_700 = fsec.profile_diagnostics(fsec.cross_profiles(
+                    theta_w_700, self.longitudes, self.latitudes,
+                    coordinates, normal,
+                ))
+                metrics["frontWidth700Km"] = section_700.get("frontWidthKm")
+            if section_925 is not None or section_700 is not None:
+                coherence = fsec.multilevel_coherence(
+                    section_850, section_925, section_700,
+                    terrain_fraction=metrics.get("terrainFraction", 0.0),
+                )
+                if coherence["verticalCoherence"] is not None:
+                    metrics["verticalCoherence"] = coherence["verticalCoherence"]
+                if coherence["coherence700"] is not None:
+                    metrics["verticalCoherence700"] = coherence["coherence700"]
+                metrics["verticalSupportLevels"] = coherence["supportedLevels"]
 
             evidence = fp.candidate_evidence(metrics)
             metrics.update(evidence)

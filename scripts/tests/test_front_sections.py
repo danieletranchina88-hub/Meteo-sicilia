@@ -88,5 +88,31 @@ empty = fs.profile_diagnostics(np.empty((0, 7)))
 if empty["profileValidFraction"] != 0.0:
     print("  FAIL: linea vuota non gestita"); ok = False
 
+# 5) multilevel coherence 925/850/700: 700 present and coherent raises it,
+#    absent 700 is neutral, high terrain leans the reference on 700 ----------
+theta_700 = front_field(41.85, width_deg=0.65, amplitude_k=6.0)
+diag_700 = fs.profile_diagnostics(
+    fs.cross_profiles(theta_700, LON, LAT, line, warm_normal))
+ml_full = fs.multilevel_coherence(diag_850, diag_925, diag_700)
+ml_no700 = fs.multilevel_coherence(diag_850, diag_925, None)
+ml_no925 = fs.multilevel_coherence(diag_850, None, diag_700)
+print(f"5) multilivello: 925+700={ml_full['verticalCoherence']} "
+      f"solo925={ml_no700['verticalCoherence']} solo700={ml_no925['verticalCoherence']} "
+      f"livelli={ml_full['supportedLevels']}")
+if ml_full["verticalCoherence"] is None or ml_full["coherence700"] is None:
+    print("  FAIL: 700 hPa coerente deve contribuire"); ok = False
+if set(ml_full["supportedLevels"]) != {"925", "700"}:
+    print("  FAIL: entrambi i livelli devono risultare di supporto"); ok = False
+# absent 700 must not turn coherence into counter-evidence (stays ~ the 925 value)
+if ml_no700["verticalCoherence"] is None or ml_no700["coherence700"] is not None:
+    print("  FAIL: 700 assente deve essere neutro, non contrario"); ok = False
+# with only 700 (850 near ground scenario) coherence still available
+if ml_no925["verticalCoherence"] is None:
+    print("  FAIL: con solo 700 la coerenza deve restare disponibile"); ok = False
+# fully missing upper levels -> None (neutral)
+ml_none = fs.multilevel_coherence(diag_850, None, None)
+if ml_none["verticalCoherence"] is not None:
+    print("  FAIL: nessun livello superiore -> coerenza neutra (None)"); ok = False
+
 print("\nESITO:", "SUPERATO" if ok else "DA RIVEDERE")
 raise SystemExit(0 if ok else 1)

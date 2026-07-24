@@ -392,6 +392,19 @@ superficie interseca il terreno, già mascherate — sono **neutri**, mai prova
 contraria: una grave incoerenza riduce l'evidenza ma non cancella da sola un
 fronte ben sostenuto a 850 hPa.
 
+**Coerenza multilivello 925/850/700.** Quando anche i campi termodinamici a
+**700 hPa** sono disponibili (`upper_temperature_path`/`upper_humidity_path`),
+`multilevel_coherence` estende il confronto a tre quote: 850 resta il
+riferimento, 925 verifica il collegamento con gli strati bassi sopra mare e
+pianure, **700 corrobora in quota e diventa il riferimento di ripiego dove
+850 è vicino al terreno** (peso maggiore all'aumentare della frazione
+orografica). Ogni livello mancante è neutro, mai contrario; i codici
+`VERTICAL_SUPPORT_700` / `MISSING_OPTIONAL_FIELD_700` rendono esplicito il
+contributo. **Stato dati:** MeteoHub oggi espone omega a 700 hPa ma non T/QV;
+il download di `t700`/`q700` è quindi opzionale e degrada in modo sicuro
+(analisi 925/850). Per attivarlo basta che il dataset ICON-2I serva T e QV a
+700 hPa: `process_data.py` li scarica già come campi opzionali.
+
 ## 6. Significato dell'incertezza
 
 L'indice aumenta con prove fisiche deboli, scarsa continuità, moto instabile,
