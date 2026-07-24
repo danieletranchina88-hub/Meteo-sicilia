@@ -308,6 +308,40 @@ traccia pubblicata, un'ora la cui classificazione locale è ambigua viene
 mostrata con il tipo dominante della traccia, così la linea resta continua
 invece di sparire per una singola ora.
 
+**Recupero della fase debole (doppia soglia).** Un fronte reale spesso esiste
+per ore sotto le porte dure di pubblicazione (nucleo termico debole all'inizio
+della sua vita) prima di rafforzarsi in traccia pubblicata. Quelle ore non
+sono perse: ogni candidato respinto ma diagnosticato `synoptic-front` dal
+motore differenziale viene conservato per intero. Una traccia pubblicata
+estende poi la propria identità all'indietro e in avanti attraverso i
+candidati deboli consecutivi che la continuano fisicamente — è il
+ragionamento del previsore: *il fronte solido di stasera era già lì stamane,
+lo dimostra la continuità*. Il criterio di aggancio tollera i cambi di
+estensione (i frammenti deboli di un confine lungo scorrono e si spezzano):
+decide la **sovrapposizione** (≥40% della linea più corta entro ~65 km/h·gap
+dalla più lunga), con orientamento, lato caldo e spostamento trasversale del
+centroide limitati. Come nel doppio-soglia di Canny, i deboli possono solo
+**estendere** una traccia affermata, mai fondarne una: il rumore non può
+auto-promuoversi a fronte. Identità, tipo e qualità restano calcolati sul
+solo nucleo forte (`coreHours`), così le ore recuperate allungano la linea
+nel tempo senza gonfiarne la confidenza; le ore restano ispezionabili in
+`recoveredHours`.
+
+**Ricucitura delle tracce spezzate.** Il tracciamento è causale: elabora
+un'ora alla volta e non può guardare avanti. Se un fronte reale scende sotto
+la soglia di rilevamento per una singola ora, la predizione a due ore che lo
+riaggancerebbe è troppo severa e il tracker lo spezza in due tracce
+consecutive, con un buco di un'ora in mezzo — il fronte "sparisce e riappare".
+Con l'intera sequenza in mano si rifà il controllo *a posteriori*: due tracce
+separate da **esattamente un'ora mancante** vengono riunite in una sola se il
+loro moto è fisicamente plausibile — spostamento del centroide sotto ~65 km/h
+(guardia anti-teletrasporto, perché due linee lunghe parallele possono avere
+distanza simmetrica piccola pur essendo fronti diversi), piccola distanza
+linea-linea, orientamento e lato caldo compatibili. Il buco di un'ora così
+ricucito è poi colmato dall'interpolazione descritta sopra, e la linea è
+disegnata come un unico fronte continuo. Una perdita di segnale più lunga
+resta invece una nuova identità.
+
 ## 6. Significato dell'incertezza
 
 L'indice aumenta con prove fisiche deboli, scarsa continuità, moto instabile,
@@ -364,12 +398,35 @@ supporto sinottico). La combinazione pesata è `any_front_support` ∈ [0, 1],
 un supporto fisico **non** una probabilità: dice *quanto* i campi sostengono
 la presenza di un fronte, indipendentemente da freddo/caldo/stazionario.
 
-In Fase B il campo è un **diagnostico** calcolato su richiesta
-(`support_field(hour)`): non cambia i fronti pubblicati. In Fase C guiderà
-l'estrazione della linea come percorso a costo minimo dentro il corridoio
-TFL–TFP–ABZ. Nessun candidato scartato sparisce in silenzio:
-`rejected_candidates(hour)` esporta le linee respinte con `rejectedAs` e i
-motivi, e `analysis_summary.rejectedByReason` ne conta le cause.
+Nessun candidato scartato sparisce in silenzio: `rejected_candidates(hour)`
+esporta le linee respinte con `rejectedAs` e i motivi, e
+`analysis_summary.rejectedByReason` ne conta le cause.
+
+### Geometria a cresta (Fase C/E, `front_ridge.py`)
+
+La linea pubblicata non è più il solo contorno TFL: segue la **cresta** di
+`any_front_support`. Dato un candidato TFL–TFP–ABZ, si apre un **corridoio** di
+±120 km attorno alla linea e si cerca il **percorso a costo minimo** (Dijkstra
+su griglia 8-connessa, `scipy`; nessuna nuova dipendenza, nessun ML) che resta
+sul supporto più alto. Il costo per cella è `log((1+ε)/(supporto+ε))` più
+penalità esplicite di terreno e bordo dominio; stare sulla cresta è economico,
+attraversare un buco di supporto o il terreno è caro. Il percorso ottimo su
+griglia è a gradini (svolte a 45/90°): uno smoothing di **Chaikin** rimuove la
+scala di griglia senza staccarsi dalla cresta, poi un piccolo RDP declutter.
+
+L'estrazione è **subordinata alla fisica**: non inventa una linea dove il
+supporto è alto, rifinisce *dove disegnare* un fronte già rilevato, dentro un
+corridoio limitato. È **completamente protetta** — qualsiasi errore o risultato
+degenere ripiega sul contorno originale, quindi la pubblicazione non può mai
+regredire a una linea vuota o rotta. Il numero di fronti, i tipi e i segmenti
+restano invariati: cambia solo la posizione della linea.
+
+L'attivazione (`REFINE_PUBLISHED_GEOMETRY = True`) è avvenuta dopo il
+**benchmark Fase E** su 3 run reali (24 linee, metrica equa a passo uniforme):
+supporto medio lungo la linea 0.43 → 0.50, frazione su supporto forte 0.50 →
+0.67, tortuosità 7.27 → 6.77 °/20 km. La cresta non regredisce su nessun
+criterio e migliora nettamente il supporto fisico; l'interruttore resta
+reversibile (`False` torna ai contorni).
 
 **Classificazione per-segmento (`segmentTypes`).** La stessa struttura può
 essere freddo attivo su un tratto e quasi stazionaria su un altro **alla
@@ -418,7 +475,10 @@ La workflow blocca la pubblicazione se falliscono i test sintetici:
   fra mesi) e loro applicazione nel rilevatore;
 - il motore differenziale valuta tutte le ipotesi e sceglie il verdetto;
 - stabilità temporale del tipo (Viterbi): rimozione del flip caldo↔freddo,
-  conservazione di una fase reale prolungata.
+  conservazione di una fase reale prolungata;
+- estrazione a cresta (`front_ridge`): la linea rifinita segue il crinale del
+  supporto staccandosi da una guess storta, una banda larga dà una sola linea,
+  il percorso evita una penalità di terreno a parità di supporto.
 
 ## Riferimenti primari
 
