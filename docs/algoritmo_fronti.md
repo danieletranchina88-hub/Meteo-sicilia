@@ -427,6 +427,28 @@ espone, oltre a `qualityScore`/`uncertaintyIndex` e ai `diagnostics` numerici:
 La spiegazione non introduce nuova fisica: rende leggibile ciò che i punteggi
 codificano, così l'utente vede *perché* una linea è un fronte.
 
+**Codici macchina (`reasonCodes`) e separazione degli score.** Oltre alla
+spiegazione in linguaggio umano, ogni ora osservata espone una lista di
+codici leggibili da macchina derivati *dalle diagnostiche già calcolate*
+(`front_physics.reason_codes`), con soglie **configurabili e documentate**
+(`REASON_CODE_THRESHOLDS`) che non filtrano il rilevamento ma etichettano
+soltanto: `STRONG_DRY_THERMAL_GRADIENT`, `STRONG_THETAW_CONTRAST`,
+`MOISTURE_DOMINATED`, `VERTICAL_SUPPORT_925`, `VERTICAL_INCOHERENCE`,
+`ASCENT_700_CONFIRMED`, `WIND_SHIFT_CONFIRMED`, `CONVERGENCE_CONFIRMED`,
+`COLD_/WARM_ADVECTION_CONFIRMED`, `CYCLONE_ASSOCIATED`, `OROGRAPHIC_PENALTY`,
+`LEVEL_BELOW_GROUND_925`, `MISSING_OPTIONAL_FIELD_*`. Un codice `MISSING_*`
+è informazione neutra (campo assente o campione non valido per quell'oggetto),
+mai una penalità. Le ore interpolate portano `INTERPOLATED_HOUR`.
+
+Gli score sono esposti separati e con nomi espliciti (additivi, il GeoJSON
+resta compatibile): `rawPhysicalScore` (evidenza fisica grezza dell'ora),
+`physicalQuality` (= `qualityScore` orario), `trackQuality`
+(= `trackQualityScore`, filtrato nel tempo), `confidenceLevel`
+(high/moderate/low dall'incertezza oraria) e `calibratedProbability`, che
+resta **`null`** finché un calibratore non sarà addestrato su casi
+indipendenti: un punteggio euristico non viene mai presentato come
+probabilità.
+
 ## 6c. Campo continuo di supporto (Fase B, ispirato a Biard & Kunkel 2019)
 
 Biard e Kunkel (2019) lasciano che una rete neurale produca un campo di

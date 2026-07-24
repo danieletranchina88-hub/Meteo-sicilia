@@ -613,3 +613,107 @@ def candidate_gate_report(metrics: dict, evidence: dict | None = None) -> dict:
 def candidate_is_plausible(metrics: dict, evidence: dict | None = None) -> bool:
     """Backward-compatible boolean view of the non-compensating gates."""
     return candidate_gate_report(metrics, evidence)["continuationPass"]
+
+
+# --------------------------------------------------------------------------
+# Reason codes (explainability, sez. 11 dello spec di affidabilita')
+# --------------------------------------------------------------------------
+# Every threshold is a CONFIGURABLE diagnostic prior, documented here and in
+# docs/algoritmo_fronti.md; none of them gates detection. They only decide
+# which machine-readable codes annotate a published hour so that the score
+# is explainable without reading the raw diagnostics.
+REASON_CODE_THRESHOLDS = {
+    "dry_gradient_strong_k100km": 2.5,
+    "theta_w_contrast_strong_k": 3.0,
+    "moisture_dominated_dry_max_k": 0.5,
+    "moisture_dominated_theta_e_min_k": 2.0,
+    "vertical_925_support_min": 0.5,
+    "vertical_925_contrast_min_k": 1.0,
+    "vertical_coherence_low": 0.25,
+    "ascent_700_max_pas": -0.10,
+    "wind_shift_min_ms": 3.0,
+    "wind_shift_min_deg": 25.0,
+    "convergence_min_ms": 0.5,
+    "advection_min_k3h": 0.30,
+    "cyclone_trough_min_hpa": 0.8,
+    "orographic_terrain_fraction": 0.25,
+    "level_below_ground_max_valid": 0.30,
+}
+
+
+def reason_codes(metrics: dict, thresholds: dict | None = None) -> list[str]:
+    """Machine-readable codes explaining what supports / penalises an hour.
+
+    Purely descriptive: derived FROM the already-computed diagnostics, never
+    feeding back into them. A MISSING_OPTIONAL_FIELD_* code means no finite
+    value was available for this object at this hour -- because the dataset
+    is absent OR the cross-front sample fell on NaN / off-domain -- and is
+    neutral information, never a penalty.
+    """
+    t = {**REASON_CODE_THRESHOLDS, **(thresholds or {})}
+    codes: list[str] = []
+
+    def val(key):
+        return _finite(metrics.get(key))
+
+    if val("dryThermalGradient") >= t["dry_gradient_strong_k100km"]:
+        codes.append("STRONG_DRY_THERMAL_GRADIENT")
+    if val("deltaThetaW") >= t["theta_w_contrast_strong_k"]:
+        codes.append("STRONG_THETAW_CONTRAST")
+    if (
+        metrics.get("diagnosis") == "moisture-boundary"
+        or (
+            val("deltaTemperature") < t["moisture_dominated_dry_max_k"]
+            and val("deltaThetaE") >= t["moisture_dominated_theta_e_min_k"]
+        )
+    ):
+        codes.append("MOISTURE_DOMINATED")
+
+    lower_support = val("lowerLevelSupport")
+    lower_contrast = val("deltaThetaW925")
+    if (
+        lower_support >= t["vertical_925_support_min"]
+        and lower_contrast >= t["vertical_925_contrast_min_k"]
+    ):
+        codes.append("VERTICAL_SUPPORT_925")
+    coherence = val("verticalCoherence")
+    if np.isfinite(coherence) and coherence < t["vertical_coherence_low"]:
+        codes.append("VERTICAL_INCOHERENCE")
+
+    omega = val("omega700PaS")
+    if np.isfinite(omega) and omega <= t["ascent_700_max_pas"]:
+        codes.append("ASCENT_700_CONFIRMED")
+    elif not np.isfinite(omega):
+        codes.append("MISSING_OPTIONAL_FIELD_OMEGA700")
+
+    if (
+        val("windShiftMs") >= t["wind_shift_min_ms"]
+        or val("windShiftAngleDeg") >= t["wind_shift_min_deg"]
+    ):
+        codes.append("WIND_SHIFT_CONFIRMED")
+    if val("convergenceMs") >= t["convergence_min_ms"]:
+        codes.append("CONVERGENCE_CONFIRMED")
+
+    advection = val("thermalAdvection3h")
+    if np.isfinite(advection):
+        if advection <= -t["advection_min_k3h"]:
+            codes.append("COLD_ADVECTION_CONFIRMED")
+        elif advection >= t["advection_min_k3h"]:
+            codes.append("WARM_ADVECTION_CONFIRMED")
+
+    trough = val("pressureTroughHpa")
+    if np.isfinite(trough) and trough >= t["cyclone_trough_min_hpa"]:
+        codes.append("CYCLONE_ASSOCIATED")
+    elif not np.isfinite(trough):
+        codes.append("MISSING_OPTIONAL_FIELD_PRESSURE")
+
+    if val("terrainFraction") >= t["orographic_terrain_fraction"]:
+        codes.append("OROGRAPHIC_PENALTY")
+    lower_valid = _finite(metrics.get("lowerValidFraction"))
+    if np.isfinite(lower_valid):
+        if lower_valid < t["level_below_ground_max_valid"]:
+            codes.append("LEVEL_BELOW_GROUND_925")
+    else:
+        codes.append("MISSING_OPTIONAL_FIELD_925")
+
+    return codes

@@ -213,5 +213,44 @@ if breeze_verdict == "synoptic-front":
     print("  FAIL: una linea corta e locale non deve vincere come fronte sinottico")
     ok = False
 
+# --- Reason codes (sez. 11): explainability derived from diagnostics -------
+strong_cold = {
+    "dryThermalGradient": 3.4, "deltaThetaW": 3.6, "deltaTemperature": 3.0,
+    "deltaThetaE": 3.5, "lowerLevelSupport": 0.7, "deltaThetaW925": 2.0,
+    "verticalCoherence": 0.8, "omega700PaS": -0.3, "windShiftMs": 6.0,
+    "convergenceMs": 1.2, "thermalAdvection3h": -0.8, "pressureTroughHpa": 1.5,
+    "terrainFraction": 0.05, "lowerValidFraction": 0.9,
+}
+codes_cold = fp.reason_codes(strong_cold)
+print("codici fronte freddo forte:", codes_cold)
+expected_present = {
+    "STRONG_DRY_THERMAL_GRADIENT", "STRONG_THETAW_CONTRAST",
+    "VERTICAL_SUPPORT_925", "ASCENT_700_CONFIRMED", "WIND_SHIFT_CONFIRMED",
+    "COLD_ADVECTION_CONFIRMED", "CYCLONE_ASSOCIATED",
+}
+if not expected_present.issubset(set(codes_cold)):
+    print(f"  FAIL: mancano codici attesi {expected_present - set(codes_cold)}")
+    ok = False
+if "WARM_ADVECTION_CONFIRMED" in codes_cold or "MOISTURE_DOMINATED" in codes_cold:
+    print("  FAIL: codici incoerenti su un fronte freddo termicamente forte")
+    ok = False
+
+# Missing optional fields must yield MISSING_* (neutral), not penalties
+bare = {"deltaThetaW": 3.6, "dryThermalGradient": 3.0, "deltaTemperature": 3.0}
+codes_bare = fp.reason_codes(bare)
+print("codici con campi opzionali mancanti:", codes_bare)
+for needed in ("MISSING_OPTIONAL_FIELD_OMEGA700",
+               "MISSING_OPTIONAL_FIELD_PRESSURE", "MISSING_OPTIONAL_FIELD_925"):
+    if needed not in codes_bare:
+        print(f"  FAIL: campo opzionale assente non segnalato ({needed})")
+        ok = False
+
+# A moisture-dominated boundary is flagged as such, not as a strong front
+moist = {"deltaTemperature": 0.2, "deltaThetaE": 3.0, "deltaThetaW": 2.5,
+         "diagnosis": "moisture-boundary"}
+if "MOISTURE_DOMINATED" not in fp.reason_codes(moist):
+    print("  FAIL: confine di sola umidita' non etichettato MOISTURE_DOMINATED")
+    ok = False
+
 print("\nESITO:", "SUPERATO" if ok else "DA RIVEDERE")
 raise SystemExit(0 if ok else 1)

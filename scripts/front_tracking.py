@@ -991,6 +991,7 @@ def hourly_quality(track: Track, local_classifications: dict,
             "candidateEvidence": round(evidence, 3),
             "thermalSupport": round(thermal, 2) if np.isfinite(thermal) else None,
             "structuralSupport": round(structural, 2),
+            "reasonCodes": list(line.get("reasonCodes", [])),
             "diagnostics": {
                 key: line.get(key) for key in DIAGNOSTIC_KEYS if key in line
             },

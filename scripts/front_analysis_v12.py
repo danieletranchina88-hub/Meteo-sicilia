@@ -867,6 +867,7 @@ class IconSynopticFrontAnalyzer(SynopticFrontAnalyzer):
             metrics.update(evidence)
             gates = fp.candidate_gate_report(metrics, evidence)
             metrics.update(gates)
+            metrics["reasonCodes"] = fp.reason_codes(metrics)
             if not gates["continuationPass"]:
                 # A rejected candidate is recorded, not silently dropped, so
                 # the reason is inspectable (diagnostic mode / QC).
@@ -1245,6 +1246,10 @@ class IconSynopticFrontAnalyzer(SynopticFrontAnalyzer):
             )
             observation = (track.get("observations") or {}).get(hour) or {}
             properties["gateStatus"] = observation.get("gateStatus")
+            properties["reasonCodes"] = list(observation.get("reasonCodes", []))
+            properties["rawPhysicalScore"] = _json_number(
+                observation.get("candidateEvidence"), 3
+            )
             properties["recovered"] = hour in (
                 track.get("recoveredHours") or []
             )
@@ -1303,6 +1308,21 @@ class IconSynopticFrontAnalyzer(SynopticFrontAnalyzer):
             )
             properties["gateStatus"] = None
             properties["recovered"] = False
+            properties["reasonCodes"] = ["INTERPOLATED_HOUR"]
+            properties["rawPhysicalScore"] = None
+
+        # Explicit score separation (sez. 11): instantaneous physical quality
+        # vs temporally-filtered track quality. calibratedProbability stays
+        # null until a calibrator is trained on independent cases -- the
+        # heuristic score is never presented as a probability.
+        hourly_uncertainty = float(properties["uncertaintyIndex"])
+        properties["physicalQuality"] = properties["qualityScore"]
+        properties["trackQuality"] = properties["trackQualityScore"]
+        properties["calibratedProbability"] = None
+        properties["confidenceLevel"] = (
+            "high" if hourly_uncertainty <= 0.36
+            else "moderate" if hourly_uncertainty <= 0.52 else "low"
+        )
         return properties
 
     def analyze(self, hour: int) -> dict:
