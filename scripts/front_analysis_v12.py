@@ -1,4 +1,4 @@
-"""ICON-2I objective synoptic-front analysis, physics-guided engine (v14).
+"""ICON-2I objective synoptic-front analysis, physics-guided engine (v16).
 
 The detector is intentionally conservative.  It identifies the warm-air
 edge of baroclinic zones in wet-bulb potential temperature at 850 hPa, then
@@ -30,7 +30,7 @@ import thermodynamics as thermo
 from front_analysis import SynopticFrontAnalyzer, _blend_lines, _line_length_km, _rdp
 
 
-FRONT_METHOD = "icon2i-ofa-physics-guided-v15"
+FRONT_METHOD = "icon2i-ofa-physics-guided-v16"
 ANALYSIS_PRESSURE_PA = 85_000.0
 LOWER_PRESSURE_PA = 92_500.0
 
@@ -127,6 +127,13 @@ TRACK_MIN_DETECTIONS = 4
 TRACK_MIN_COVERAGE = 0.72
 MIN_PUBLISH_QUALITY = 0.61
 MAX_PUBLISH_UNCERTAINTY = 0.39
+# A track just below the standard gate is not automatically noise: dropping
+# it silently makes a real but modest front indistinguishable from "nothing
+# there". Tracks in this lower band are still published, but explicitly
+# tagged confidenceTier="low" so the map/API can show them as provisional
+# instead of hiding a plausible front (documento sez. 5, "come un analista").
+MIN_PUBLISH_QUALITY_LOW = 0.50
+MAX_PUBLISH_UNCERTAINTY_LOW = 0.50
 MAX_FRONTS_PER_HOUR = 4
 
 # Fase C/E: la geometria pubblicata segue la cresta di any_front_support
@@ -937,26 +944,48 @@ class IconSynopticFrontAnalyzer(SynopticFrontAnalyzer):
         # weak-phase hours recovered by the tracker extend where the boundary
         # is drawn but must not dilute -- nor artificially satisfy -- the
         # confidence requirements.
-        tracks = [
-            track for track in raw_tracks
-            if track.get("qualityScore", 0.0) >= MIN_PUBLISH_QUALITY
-            and track.get("uncertaintyIndex", 1.0) <= MAX_PUBLISH_UNCERTAINTY
-            and sum(
+        def _consensus_count(track: dict) -> int:
+            return sum(
                 track.get("localClassifications", {}).get(h, {}).get("frontType")
                 != "uncertain"
                 for h in track.get("coreHours", track.get("hours", []))
-            ) >= max(
-                TRACK_MIN_DETECTIONS,
-                int(np.ceil(0.55 * len(
-                    track.get("coreHours", track.get("hours", []))
-                ))),
             )
-        ]
+
+        def _consensus_required(track: dict) -> int:
+            core = track.get("coreHours", track.get("hours", []))
+            return max(TRACK_MIN_DETECTIONS, int(np.ceil(0.55 * len(core))))
+
+        tracks = []
+        provisional_tracks = []
+        for track in raw_tracks:
+            quality = track.get("qualityScore", 0.0)
+            uncertainty = track.get("uncertaintyIndex", 1.0)
+            consensus_ok = _consensus_count(track) >= _consensus_required(track)
+            if not consensus_ok:
+                continue
+            if (
+                quality >= MIN_PUBLISH_QUALITY
+                and uncertainty <= MAX_PUBLISH_UNCERTAINTY
+            ):
+                track["confidenceTier"] = "standard"
+                tracks.append(track)
+            elif (
+                quality >= MIN_PUBLISH_QUALITY_LOW
+                and uncertainty <= MAX_PUBLISH_UNCERTAINTY_LOW
+            ):
+                # Just below the standard gate: a candidate this coherent is
+                # more likely a modest real front than noise (documento sez.
+                # 4, "un fronte reale ma modesto non viene scartato"). It is
+                # published as a distinct, clearly-flagged provisional tier
+                # instead of being silently dropped like plain noise.
+                track["confidenceTier"] = "low"
+                provisional_tracks.append(track)
+        published_tracks = tracks + provisional_tracks
         run_status = (
             "partially-unavailable"
             if detection_errors
             else "fronts-detected"
-            if tracks
+            if published_tracks
             else "no-robust-fronts"
         )
         self.analysis_summary = {
@@ -965,14 +994,16 @@ class IconSynopticFrontAnalyzer(SynopticFrontAnalyzer):
                 f"{len(detection_errors)} ore frontali non disponibili nel run."
                 if detection_errors
                 else "Fronti sinottici robusti rilevati nel run."
-                if tracks
+                if published_tracks
                 else "Nessun fronte sinottico robusto nel run."
             ),
             "hours": len(self.available_hours),
             "hoursWithCandidates": sum(bool(items) for items in hourly.values()),
             "candidateLines": total_candidates,
             "trackingTracks": len(raw_tracks),
-            "publishedTracks": len(tracks),
+            "publishedTracks": len(published_tracks),
+            "publishedTracksStandard": len(tracks),
+            "publishedTracksLowConfidence": len(provisional_tracks),
             "detectionErrors": len(detection_errors),
             "lowerLevel925": self.has_lower_level,
             "lowerWind925": self.has_lower_wind,
@@ -988,16 +1019,17 @@ class IconSynopticFrontAnalyzer(SynopticFrontAnalyzer):
             "   Front QC: "
             f"{self.analysis_summary['candidateLines']} candidati, "
             f"{self.analysis_summary['trackingTracks']} tracce, "
-            f"{self.analysis_summary['publishedTracks']} pubblicate, "
+            f"{self.analysis_summary['publishedTracks']} pubblicate "
+            f"({self.analysis_summary['publishedTracksLowConfidence']} a bassa fiducia), "
             f"{self.analysis_summary['detectionErrors']} errori.",
             flush=True,
         )
-        self._tracks = tracks
+        self._tracks = published_tracks
 
         by_hour: dict[int, list[tuple[np.ndarray, dict]]] = {
             hour: [] for hour in self.available_hours
         }
-        for track in tracks:
+        for track in published_tracks:
             expanded = dict(track["lines"])
             local = dict(track.get("localClassifications", {}))
             detected = sorted(track["lines"])
@@ -1186,6 +1218,11 @@ class IconSynopticFrontAnalyzer(SynopticFrontAnalyzer):
             "qualityScore": round(float(track["qualityScore"]), 2),
             "uncertaintyIndex": round(float(track["uncertaintyIndex"]), 2),
             "uncertaintyClass": track.get("uncertaintyClass", "low"),
+            # "standard" meets the full publish gate; "low" is a track that
+            # cleared the lower provisional band (MIN_PUBLISH_QUALITY_LOW /
+            # MAX_PUBLISH_UNCERTAINTY_LOW) and consensus classification but
+            # not the standard one. Shown, never hidden, always labelled.
+            "confidenceTier": track.get("confidenceTier", "standard"),
             "trackQualityScore": round(
                 float(track.get("trackQualityScore", track["qualityScore"])), 2
             ),
