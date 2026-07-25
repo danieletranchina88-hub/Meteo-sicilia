@@ -173,6 +173,62 @@ def refine_line(
     return fl_rdp(refined)
 
 
+def refinement_is_safe(
+    original: np.ndarray,
+    refined: np.ndarray,
+    *,
+    proximity_km: float = 70.0,
+    min_overlap: float = 0.80,
+) -> bool:
+    """Return whether a ridge path is a conservative geometric refinement."""
+    original = np.asarray(original, dtype=float)
+    refined = np.asarray(refined, dtype=float)
+    if (
+        original.ndim != 2
+        or refined.ndim != 2
+        or len(original) < 2
+        or len(refined) < 2
+        or not np.all(np.isfinite(original))
+        or not np.all(np.isfinite(refined))
+    ):
+        return False
+
+    import front_detection as fd
+
+    original_length = fd.fl._line_length_km(original)
+    refined_length = fd.fl._line_length_km(refined)
+    length_ratio = refined_length / max(original_length, 1.0)
+    if not 0.75 <= length_ratio <= 1.30:
+        return False
+
+    (
+        original_sinuosity,
+        original_net_turn,
+        original_closure,
+        original_turn,
+    ) = fd._shape_metrics(original)
+    (
+        refined_sinuosity,
+        refined_net_turn,
+        refined_closure,
+        refined_turn,
+    ) = fd._shape_metrics(refined)
+    if refined_sinuosity > min(2.35, original_sinuosity + 0.15):
+        return False
+    if refined_net_turn > min(165.0, original_net_turn + 25.0):
+        return False
+    if refined_closure < max(0.42, original_closure - 0.10):
+        return False
+    if refined_turn > min(420.0, original_turn + 80.0):
+        return False
+
+    overlap = min(
+        fd.line_support_fraction(refined, [original], proximity_km),
+        fd.line_support_fraction(original, [refined], proximity_km),
+    )
+    return overlap >= min_overlap
+
+
 def _chaikin(points: np.ndarray, iterations: int = 3) -> np.ndarray:
     """Chaikin corner-cutting smoothing, keeping the two endpoints fixed."""
     points = np.asarray(points, dtype=float)
