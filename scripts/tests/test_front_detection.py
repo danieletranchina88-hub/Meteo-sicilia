@@ -67,5 +67,16 @@ if final3:
     print("  FAIL: un anello/cold pool e' stato pubblicato come fronte")
     ok = False
 
+bad_shape = np.array([
+    [9.0, 40.0], [11.0, 40.0], [11.0, 42.0], [9.5, 42.0],
+    [9.5, 40.7], [12.0, 40.7], [12.0, 43.0], [14.0, 43.0],
+])
+bad_metrics = fd._shape_metrics(bad_shape)
+print(f"4) linea a tornanti: svolta cumulata={bad_metrics[3]:.1f}°, "
+      f"plausibile={fd._shape_is_plausible(bad_shape)}")
+if bad_metrics[3] <= 420.0 or fd._shape_is_plausible(bad_shape):
+    print("  FAIL: i tornanti compensati devono essere respinti")
+    ok = False
+
 print("\nESITO:", "SUPERATO" if ok else "DA RIVEDERE")
 raise SystemExit(0 if ok else 1)
