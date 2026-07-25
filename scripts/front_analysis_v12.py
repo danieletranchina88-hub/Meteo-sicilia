@@ -132,8 +132,15 @@ MAX_PUBLISH_UNCERTAINTY = 0.39
 # there". Tracks in this lower band are still published, but explicitly
 # tagged confidenceTier="low" so the map/API can show them as provisional
 # instead of hiding a plausible front (documento sez. 5, "come un analista").
-MIN_PUBLISH_QUALITY_LOW = 0.50
-MAX_PUBLISH_UNCERTAINTY_LOW = 0.50
+# 0.50 keeps symmetry with the standard uncertaintyIndex complement
+# (quality/uncertainty are anti-correlated by construction, see
+# qualityComponents) and sits roughly halfway between the standard gate and
+# the noise/no-signal region (qualityScore ~0 for a candidate with no
+# corroborated evidence): it separates "still evidence-backed but weaker"
+# from "essentially unsupported", without duplicating the standard gate.
+LOW_TIER_THRESHOLD = 0.50
+MIN_PUBLISH_QUALITY_LOW = LOW_TIER_THRESHOLD
+MAX_PUBLISH_UNCERTAINTY_LOW = LOW_TIER_THRESHOLD
 MAX_FRONTS_PER_HOUR = 4
 
 # Fase C/E: la geometria pubblicata segue la cresta di any_front_support
