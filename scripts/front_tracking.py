@@ -35,6 +35,7 @@ from scipy.optimize import linear_sum_assignment
 
 EARTH_KM_PER_DEG = 111.32
 COLD_WARM_THRESHOLD_KMH = 5.4  # 1.5 m/s, Hewson/Berry/Sansom-Catto
+MAX_HOURLY_LENGTH_RATIO = 2.2
 
 # Physical diagnostics carried per hour and summarised per track. Shared by
 # the track medians and the per-hour observations so the two views can never
@@ -140,6 +141,30 @@ def _orientation_diff(a: np.ndarray, b: np.ndarray) -> float:
     return min(diff, 180.0 - diff)
 
 
+def _short_line_overlap_fraction(
+    line_a: np.ndarray, line_b: np.ndarray, radius_km: float
+) -> float:
+    """Fraction of the shorter line close to the longer one."""
+    line_a = np.asarray(line_a, dtype=float)
+    line_b = np.asarray(line_b, dtype=float)
+    length_a = _length_km(line_a)
+    length_b = _length_km(line_b)
+    short, long_ = (
+        (line_a, line_b) if length_a <= length_b else (line_b, line_a)
+    )
+    mean_lat = math_mean_lat(short, long_)
+    short_km = _project_km(_resample(short, 48), mean_lat)
+    long_km = _project_km(_resample(long_, 64), mean_lat)
+    nearest = np.min(
+        np.hypot(
+            short_km[:, None, 0] - long_km[None, :, 0],
+            short_km[:, None, 1] - long_km[None, :, 1],
+        ),
+        axis=1,
+    )
+    return float(np.mean(nearest <= radius_km))
+
+
 def geometric_motion_kmh(
     line_prev: np.ndarray, line_next: np.ndarray,
     warm_normal_prev: np.ndarray, hours: float,
@@ -218,6 +243,11 @@ def _assignment_cost(track: Track, candidate: dict, hour: int,
     if orient > 70.0:
         return np.inf
     length_prev = track.lines[track.hours[-1]]["lengthKm"]
+    length_ratio = max(
+        float(candidate["lengthKm"]), float(length_prev)
+    ) / max(min(float(candidate["lengthKm"]), float(length_prev)), 1.0)
+    if length_ratio > MAX_HOURLY_LENGTH_RATIO:
+        return np.inf
     length_change = abs(candidate["lengthKm"] - length_prev) / max(length_prev, 1.0)
     previous_normal = _resample_vectors(
         track.lines[track.hours[-1]]["warmNormal"], 32
@@ -280,11 +310,44 @@ def _stitch_cost(a: "Track", b: "Track", max_gap: int) -> float:
     Returns +inf when any condition fails.
     """
     gap = b.hours[0] - a.hours[-1]
-    # Only a single missing hour (an isolated detection dropout). A larger
-    # gap, or two tracks in adjacent/overlapping hours (gap 1 = no missing
-    # hour), are distinct identities and must not be fused.
-    if gap != 2 or gap > max_gap:
+    if gap < 1 or gap > max_gap:
         return np.inf
+    if gap == 1:
+        a_line = np.asarray(
+            a.lines[a.hours[-1]]["coordinates"], dtype=float
+        )
+        b_line = np.asarray(
+            b.lines[b.hours[0]]["coordinates"], dtype=float
+        )
+        length_a, length_b = _length_km(a_line), _length_km(b_line)
+        ratio = max(length_a, length_b) / max(min(length_a, length_b), 1.0)
+        if ratio > MAX_HOURLY_LENGTH_RATIO:
+            return np.inf
+        overlap = _short_line_overlap_fraction(a_line, b_line, 55.0)
+        if overlap < 0.62:
+            return np.inf
+        if _orientation_diff(a_line, b_line) > 38.0:
+            return np.inf
+        normal_a = _resample_vectors(
+            np.asarray(a.lines[a.hours[-1]]["warmNormal"], dtype=float), 32
+        )
+        normal_b = _resample_vectors(
+            np.asarray(b.lines[b.hours[0]]["warmNormal"], dtype=float), 32
+        )
+        pa, pb = _resample(a_line, 32), _resample(b_line, 32)
+        if float(np.mean(np.hypot(*(pa - pb[::-1]).T))) < float(
+            np.mean(np.hypot(*(pa - pb).T))
+        ):
+            normal_b = normal_b[::-1]
+        facing = float(np.nanmedian(np.sum(normal_a * normal_b, axis=1)))
+        if not np.isfinite(facing) or facing < 0.20:
+            return np.inf
+        distance = _symmetric_distance_km(a_line, b_line)
+        return (
+            distance
+            + 2.0 * _orientation_diff(a_line, b_line)
+            + 80.0 * (1.0 - overlap)
+        )
     return _continuity_cost(
         a.lines[a.hours[-1]]["coordinates"], a.lines[a.hours[-1]]["warmNormal"],
         b.lines[b.hours[0]]["coordinates"], b.lines[b.hours[0]]["warmNormal"],
@@ -420,6 +483,18 @@ def _extend_track_weak(
                 for index, candidate in enumerate(weak_by_hour.get(hour, [])):
                     if (hour, index) in used:
                         continue
+                    if candidate.get("_orphanAccepted"):
+                        edge_length = _length_km(
+                            track.lines[edge]["coordinates"]
+                        )
+                        candidate_length = _length_km(
+                            candidate["coordinates"]
+                        )
+                        ratio = max(
+                            edge_length, candidate_length
+                        ) / max(min(edge_length, candidate_length), 1.0)
+                        if ratio > MAX_HOURLY_LENGTH_RATIO:
+                            continue
                     cost = _recovery_cost(
                         track.lines[edge]["coordinates"],
                         track.lines[edge]["warmNormal"],
@@ -434,7 +509,12 @@ def _extend_track_weak(
             hour, index, candidate = found
             used.add((hour, index))
             entry = dict(candidate)
-            entry["gateStatus"] = "weak-continuation"
+            entry.pop("_orphanAccepted", None)
+            entry["gateStatus"] = (
+                "orphan-continuation"
+                if candidate.get("_orphanAccepted")
+                else "weak-continuation"
+            )
             track.lines[hour] = entry
             track.hours = sorted(set(track.hours) | {hour})
             recovered.append(hour)
@@ -905,7 +985,10 @@ def _hourly_tracking_confidence(track: Track) -> dict[int, float]:
     the hour is (that is detectionQuality).
     """
     status_factor = {
-        "strong": 1.0, "continuation": 0.92, "weak-continuation": 0.72,
+        "strong": 1.0,
+        "continuation": 0.92,
+        "orphan-continuation": 0.82,
+        "weak-continuation": 0.72,
     }
     hours = sorted(track.hours)
     confidence: dict[int, float] = {}
@@ -1148,12 +1231,13 @@ def track_fronts(
     tracks = _stitch_tracks(tracks, max_gap=max(2, window_hours))
 
     available = sorted(hourly_candidates)
-    results = []
-    weak_used: set = set()
-    for track in tracks:
+    def structurally_eligible(track: Track) -> bool:
         span = track.hours[-1] - track.hours[0]
-        if len(track.hours) < max(2, int(min_detections)) or span < min_lifetime_hours:
-            continue
+        if (
+            len(track.hours) < max(2, int(min_detections))
+            or span < min_lifetime_hours
+        ):
+            return False
         # A single "strong"-grade hour anchors the track's identity, but a
         # coherent front that stays at "continuation" grade for many hours
         # (a slow synoptic boundary passing every hard physical gate) must NOT
@@ -1166,10 +1250,32 @@ def track_fronts(
             if track.lines[h].get("gateStatus", "strong") == "strong"
         ]
         if len(strong_hours) < max(1, int(min_strong_detections)):
+            return False
+        expected = [
+            h for h in available
+            if track.hours[0] <= h <= track.hours[-1]
+        ]
+        return len(track.hours) / max(len(expected), 1) >= min_coverage
+
+    eligible_tracks = [
+        track for track in tracks if structurally_eligible(track)
+    ]
+    recovery_pool: dict[int, list] = {
+        int(hour): [dict(candidate) for candidate in candidates]
+        for hour, candidates in (weak_candidates or {}).items()
+    }
+    for orphan in tracks:
+        if orphan in eligible_tracks:
             continue
-        expected = [h for h in available if track.hours[0] <= h <= track.hours[-1]]
-        if len(track.hours) / max(len(expected), 1) < min_coverage:
-            continue
+        for hour in orphan.hours:
+            candidate = dict(orphan.lines[hour])
+            candidate["_orphanAccepted"] = True
+            recovery_pool.setdefault(int(hour), []).append(candidate)
+
+    results = []
+    weak_used: set = set()
+    for track in eligible_tracks:
+        span = track.hours[-1] - track.hours[0]
         diagnostics = {
             key: _finite_median([
                 track.lines[h].get(key, np.nan) for h in track.hours
@@ -1213,8 +1319,10 @@ def track_fronts(
         # only extend where the boundary is drawn, never inflate its score.
         core_hours = list(track.hours)
         recovered_hours: list[int] = []
-        if weak_candidates:
-            recovered_hours = _extend_track_weak(track, weak_candidates, weak_used)
+        if recovery_pool:
+            recovered_hours = _extend_track_weak(
+                track, recovery_pool, weak_used
+            )
             if recovered_hours:
                 local_classifications = classify_track_locally(
                     track, window_hours, wind_sampler
