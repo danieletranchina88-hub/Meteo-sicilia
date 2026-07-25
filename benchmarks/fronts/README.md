@@ -84,7 +84,7 @@ scegliere il corridoio spaziale del benchmark.
 
 ```bash
 python scripts/front_benchmark.py benchmarks/fronts/manifest.json \
-  --split test --radius-km 100 --min-overlap 0.60 \
+  --split test --strict --radius-km 100 --min-overlap 0.60 \
   --radius-grid-km 50,75,100,150 \
   --out benchmark-test.json
 ```
@@ -100,6 +100,39 @@ verifica previsionale:
   corrispondono a un fronte etichettato;
 - **CSI** (critical success index) — `TP / (TP + FP + FN)`: un solo numero
   che paga sia i falsi allarmi sia i fronti mancati.
+
+### Metriche di lunghezza, distanza, continuità e tipo (schema v2)
+
+Oltre ai conteggi, il report espone:
+
+- **contabilità delle lunghezze** (`lengthAccountingKm`): `reference`,
+  `predicted`, `detectedReference` (quanta lunghezza etichettata è coperta da
+  una previsione entro il raggio), `missed`, `falsePredicted`;
+- **`lengthRecall`** = detectedReference / reference e **`falseLengthRatio`**
+  = falsePredicted / predicted: catturano gli errori di posizione che i soli
+  TP/FP/FN nascondono (un fronte agganciato solo su un tratto breve non è
+  rilevato per intero);
+- **distanze simmetriche** media / mediana / 95° percentile fra le linee
+  accoppiate (`meanSymmetricDistanceKm`, `medianSymmetricDistanceKm`,
+  `p95SymmetricDistanceKm`);
+- **continuità** (`continuity`): `splitEvents` (un fronte di riferimento
+  spezzato in più previsioni) e `mergeEvents` (più fronti fusi in uno);
+- **matrice di confusione dei tipi** (`typeConfusionMatrix`) sulle coppie
+  accoppiate; il matching della presenza è **indipendente dal tipo**, la
+  correttezza del tipo è valutata a parte (`matchTypePolicy`);
+- **stratificazione** (`stratification`): POD / success ratio / CSI raggruppati
+  per `season`, `localHour`, `surface`, `orography`, `lifecycle` e banda di
+  lead (`0-12h` / `12-36h` / `36-72h`), quando i casi del manifest portano
+  quei campi.
+
+### Detector vs forecast (sez. 14)
+
+`--mode detector` valuta solo i casi che nel manifest hanno `mode: detector`
+(algoritmo applicato a ICON-2I-ASSIM o al campo più vicino a un'analisi →
+misura soprattutto l'errore del **rilevatore**); `--mode forecast` valuta i
+casi di previsione deterministica (errore di previsione + rilevazione).
+Nessun altro modello numerico è usato come verità: le etichette restano
+carte frontali umane.
 
 ### Sensibilità al raggio spaziale
 
@@ -140,3 +173,90 @@ Fonti dati precise:
 ERA5 è adatto alla ricostruzione storica dei campi atmosferici, ma non contiene
 una verità pronta dei fronti. Le etichette geometriche restano quelle umane,
 tracciate da fonti sinottiche indipendenti.
+
+## Acquisizione ufficiale DWD
+
+Il DWD pubblica carte di analisi al suolo con fronti alle 00 e 12 UTC. Le
+carte correnti restano sull'Open Data circa 48 ore; il *European
+Meteorological Bulletin* degli ultimi sei mesi è disponibile in archivi ZIP.
+Le annate dal 2002 possono essere richieste alla Biblioteca DWD.
+
+Raccogliere le carte correnti senza scaricarle:
+
+```bash
+python scripts/official_chart_archive.py collect-current --dry-run
+```
+
+Archiviarle con URL, ora valida, impronta SHA-256 e data di accesso:
+
+```bash
+python scripts/official_chart_archive.py collect-current
+```
+
+Elencare i pacchetti mensili ufficiali EMB disponibili:
+
+```bash
+python scripts/official_chart_archive.py list-emb
+```
+
+Archiviare anche l'ultima analisi Met Office ASXX:
+
+```bash
+python scripts/official_chart_archive.py collect-metoffice
+```
+
+Il workflow `archive_front_references.yml` esegue la raccolta due volte al
+giorno e conserva un artifact immutabile per 90 giorni. Le immagini non
+entrano in Git; bisogna rispettare i termini di ciascun ente e mantenerne
+l'attribuzione.
+
+Fonti ufficiali:
+
+- analisi correnti: <https://opendata.dwd.de/weather/charts/analysis/>;
+- bollettini mensili: <https://download.dwd.de/pub/EMB/>;
+- descrizione e archivio: <https://www.dwd.de/DE/leistungen/pbfb_verlag_emb/emb.html>;
+- metodologia delle carte: <https://www.dwd.de/DE/fachnutzer/hobbymet/wetter_europa/allgemeines_analyse_prognosekarten_europa_neu.html>.
+
+## Protocollo di etichettatura
+
+Una PNG non è ancora un'etichetta geografica. Per ogni carta, l'analista deve
+digitalizzare i fronti in GeoJSON rispettando queste regole:
+
+1. non vedere la previsione dell'algoritmo prima di completare l'etichetta;
+2. distinguere `cold`, `warm`, `occluded` e `stationary`;
+3. registrare zone non valutabili e certezza bassa/media/alta;
+4. conservare URL e SHA-256 della carta sorgente;
+5. far riesaminare almeno il 20% dei casi da un secondo analista cieco;
+6. non correggere il test congelato dopo aver osservato il risultato.
+
+Il disaccordo tra due analisti è una misura scientifica utile: stabilisce il
+limite realistico della localizzazione e impedisce di premiare differenze più
+piccole dell'incertezza umana. L'estrazione automatica dei colori dalla carta
+può precompilare una linea, ma non può diventare verità senza controllo umano:
+simboli, occlusioni, scritte e sovrapposizioni rendono l'operazione ambigua.
+
+## Gerarchia delle fonti
+
+Non tutte le carte ufficiali hanno lo stesso ruolo scientifico:
+
+- **gold label primaria:** analisi DWD al suolo e analisi Met Office ASXX,
+  perché incorporano il giudizio sinottico di meteorologi e osservazioni;
+- **seconda opinione:** quando DWD e Met Office coprono la stessa ora, il loro
+  disaccordo viene registrato come incertezza dell'etichetta, non risolto
+  scegliendo la carta più simile all'algoritmo;
+- **shadow benchmark:** ECMWF Cyclone Database, front animation e front-density
+  ensemble. Sono prodotti ufficiali e molto utili, ma derivano da rilevamento
+  oggettivo su output ECMWF/Met Office: non sono verità umana indipendente e
+  non devono essere mescolati con il gold score;
+- **campi ausiliari:** OpenCharts ECMWF θw 850 hPa, satellite, radar e
+  precipitazione aiutano la revisione meteorologica, ma da soli non etichettano
+  una superficie frontale.
+
+Riferimenti ufficiali:
+
+- Met Office surface pressure charts e archivio ASXX:
+  <https://weather.metoffice.gov.uk/research/library-and-archive/archive/charts>;
+- ECMWF extratropical cyclone/front products:
+  <https://www.ecmwf.int/en/forecasts/charts/extra-tropical-cyclones>;
+- ECMWF OpenCharts:
+  <https://charts.ecmwf.int/>.

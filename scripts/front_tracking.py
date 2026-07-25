@@ -51,12 +51,22 @@ DIAGNOSTIC_KEYS = (
     "pressureTroughFraction", "linePressureTendencyHpa3h",
     "coldPressureTendencyHpa3h", "warmPressureTendencyHpa3h",
     "lowerLevelSupport", "deltaThetaW925", "omega700PaS",
-    "terrainFraction", "candidateEvidence",
+    "terrainFraction", "candidateEvidence", "dataCompleteness",
     "synopticSupport", "lengthKm", "sinuosity",
     "profileValidFraction", "profileThermalSupport", "profilePeakGradient",
     "frontWidthKm", "frontOffsetKm", "airMassHomogeneity",
     "verticalCoherence", "frontWidth925Km",
 )
+
+def uncertainty_class(value: float) -> str:
+    """Map the diagnostic uncertainty index to its published class."""
+    uncertainty = float(np.clip(value, 0.0, 1.0))
+    if uncertainty <= 0.36:
+        return "low"
+    if uncertainty <= 0.52:
+        return "moderate"
+    return "high"
+
 
 
 def _finite_median(values, default=np.nan) -> float:
@@ -963,6 +973,8 @@ def hourly_quality(track: Track, local_classifications: dict,
         if not np.isfinite(structural):
             structural = fallback_structural
         thermal = float(components.get("thermal", np.nan))
+        completeness = float(np.clip(
+            line.get("dataCompleteness", 1.0), 0.0, 1.0))
         certainty = float(
             (local_classifications.get(hour) or {})
             .get("classificationCertainty", 0.0) or 0.0
@@ -983,12 +995,15 @@ def hourly_quality(track: Track, local_classifications: dict,
         classification_confidence[hour] = round(certainty, 2)
         hourly[hour] = round(score, 2)
         hourly_uncertainty[hour] = round(
-            float(np.clip(1.0 - score + penalty, 0.0, 1.0)), 2
+            float(np.clip(1.0 - score + penalty
+                          + 0.12 * (1.0 - completeness), 0.0, 1.0)), 2
         )
         observations[hour] = {
             "gateStatus": line.get("gateStatus", "strong"),
             "diagnosis": line.get("diagnosis", "synoptic-front"),
             "candidateEvidence": round(evidence, 3),
+            "evidenceAvailability": line.get("evidenceAvailability", {}),
+            "dataCompleteness": round(completeness, 3),
             "thermalSupport": round(thermal, 2) if np.isfinite(thermal) else None,
             "structuralSupport": round(structural, 2),
             "diagnostics": {
@@ -1013,6 +1028,10 @@ def _quality_score(track: Track, classification: dict, window_hours: int) -> dic
     candidate_evidence = _finite_median([
         track.lines[h].get("candidateEvidence", np.nan) for h in hours
     ], 0.0)
+    data_completeness = _finite_median([
+        track.lines[h].get("dataCompleteness", np.nan) for h in hours
+    ], 1.0)
+    data_completeness = float(np.clip(data_completeness, 0.0, 1.0))
     component_names = ("thermal", "dynamic", "pressure", "vertical", "activity", "structural")
     physical_components = {
         name: _finite_median([
@@ -1047,6 +1066,7 @@ def _quality_score(track: Track, classification: dict, window_hours: int) -> dic
         "structuralSupport": round(structural, 2),
         "classificationCertainty": round(certainty, 2),
         "strongDetectionFraction": round(strong_fraction, 2),
+        "dataCompleteness": round(data_completeness, 2),
     }
     overall = float(np.clip(
         0.55 * candidate_evidence + 0.25 * temporal
@@ -1068,14 +1088,15 @@ def _quality_score(track: Track, classification: dict, window_hours: int) -> dic
             structural,
         ),
     ) * 0.35
-    uncertainty = float(np.clip(1.0 - overall + core_penalty, 0.0, 1.0))
-    uncertainty_class = "low" if uncertainty <= 0.36 else (
-        "moderate" if uncertainty <= 0.52 else "high"
-    )
+    # Missing optional fields do not lower conditional physical support, but
+    # they do widen diagnostic uncertainty explicitly.
+    completeness_penalty = 0.12 * (1.0 - data_completeness)
+    uncertainty = float(np.clip(1.0 - overall + core_penalty + completeness_penalty, 0.0, 1.0))
+    uncertainty_label = uncertainty_class(uncertainty)
     return {
         "qualityScore": round(overall, 2),
         "uncertaintyIndex": round(uncertainty, 2),
-        "uncertaintyClass": uncertainty_class,
+        "uncertaintyClass": uncertainty_label,
         "qualityComponents": components,
     }
 

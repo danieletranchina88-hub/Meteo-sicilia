@@ -1,4 +1,4 @@
-"""ICON-2I objective synoptic-front analysis, physics-guided engine (v14).
+"""ICON-2I objective synoptic-front analysis, physics-guided engine (v17).
 
 The detector is intentionally conservative.  It identifies the warm-air
 edge of baroclinic zones in wet-bulb potential temperature at 850 hPa, then
@@ -30,9 +30,14 @@ import thermodynamics as thermo
 from front_analysis import SynopticFrontAnalyzer, _blend_lines, _line_length_km, _rdp
 
 
-FRONT_METHOD = "icon2i-ofa-physics-guided-v15"
+FRONT_METHOD = "icon2i-ofa-physics-guided-v17"
 ANALYSIS_PRESSURE_PA = 85_000.0
 LOWER_PRESSURE_PA = 92_500.0
+# Conservative transition guard until theta-w at 1 km AGL is available from
+# ICON model levels. Standard-atmosphere pressure is about 877 hPa at 1200 m;
+# above this elevation 850 hPa is too close to or below the ground for robust
+# frontal geometry after spatial smoothing.
+MAX_850_TERRAIN_M = 1_200.0
 
 # Climatological calibration of the detection thresholds (documento sez. 17).
 # Built offline by calibrate_thresholds.py from many ICON-2I runs; picked by
@@ -129,12 +134,13 @@ MIN_PUBLISH_QUALITY = 0.61
 MAX_PUBLISH_UNCERTAINTY = 0.39
 MAX_FRONTS_PER_HOUR = 4
 
-# Fase C/E: la geometria pubblicata segue la cresta di any_front_support
-# (least-cost path in front_ridge), non piu' il solo contorno TFL. Attivato
-# dopo il benchmark Fase E (supporto medio 0.43->0.50, tortuosita' non
-# peggiore). Un solo interruttore, reversibile: False torna ai contorni.
-REFINE_PUBLISHED_GEOMETRY = True
-GEOMETRY_CORRIDOR_KM = 120.0
+# The ridge path was compared against the same support field that generated it,
+# not against independent human analyses. Publishing it would move a line after
+# its physical diagnostics were computed. Keep it in shadow mode until a frozen
+# DWD/Met Office benchmark proves a geometric improvement and diagnostics are
+# recomputed on the final line.
+REFINE_PUBLISHED_GEOMETRY = False
+GEOMETRY_CORRIDOR_KM = 70.0
 
 
 def _finite_median(values, default=np.nan) -> float:
@@ -370,7 +376,13 @@ class IconSynopticFrontAnalyzer(SynopticFrontAnalyzer):
             humidity,
             method="davies_jones",
         )
-        invalid = fields["out_of_domain"]
+        terrain_limit = 650.0 if level_hpa == 925 else MAX_850_TERRAIN_M
+        invalid = (
+            np.asarray(fields["out_of_domain"], dtype=bool)
+            | ~np.isfinite(temperature)
+            | ~np.isfinite(humidity)
+            | (self.terrain > terrain_limit)
+        )
         result = {
             name: np.where(invalid, np.nan, np.asarray(fields[name], dtype=float))
             for name in ("theta_w", "theta", "theta_e")
@@ -454,9 +466,11 @@ class IconSynopticFrontAnalyzer(SynopticFrontAnalyzer):
         lower_lines = [np.asarray(item["coordinates"], dtype=float) for item in lower_candidates]
 
         grid_metrics = fl.grid_metrics(self.longitudes, self.latitudes)
-        raw_temperature = self._field("t", hour)
+        valid_850 = np.isfinite(theta_w)
+        raw_temperature = np.where(valid_850, self._field("t", hour), np.nan)
+        raw_humidity = np.where(valid_850, self._field("q", hour), np.nan)
         temperature = fl.smooth_km(raw_temperature, REFINE_SIGMA_KM, grid_metrics)
-        humidity = fl.smooth_km(self._field("q", hour), REFINE_SIGMA_KM, grid_metrics)
+        humidity = fl.smooth_km(raw_humidity, REFINE_SIGMA_KM, grid_metrics)
         dry_theta = thermodynamics["theta"]
         theta_e = thermodynamics["theta_e"]
         dry_candidates = fd.detect_fronts_two_scale(
@@ -471,7 +485,6 @@ class IconSynopticFrontAnalyzer(SynopticFrontAnalyzer):
             synoptic_min_length_km=350.0,
             refine_min_length_km=220.0,
             boundary_margin_km=70.0,
-            **(self._threshold_climatology or {}),
         )
 
         # A theta-w locator is sensitive to the physically useful moisture
@@ -528,7 +541,8 @@ class IconSynopticFrontAnalyzer(SynopticFrontAnalyzer):
         temp_east, temp_north = fl.gradient(temperature, grid_metrics)
         dry_gradient = np.hypot(temp_east, temp_north) * 100.0
 
-        raw_u, raw_v = self._field("u", hour), self._field("v", hour)
+        raw_u = np.where(valid_850, self._field("u", hour), np.nan)
+        raw_v = np.where(valid_850, self._field("v", hour), np.nan)
         u_wind = fl.smooth_km(raw_u, REFINE_SIGMA_KM, grid_metrics)
         v_wind = fl.smooth_km(raw_v, REFINE_SIGMA_KM, grid_metrics)
         lower_u_wind = lower_v_wind = None
@@ -1231,9 +1245,11 @@ class IconSynopticFrontAnalyzer(SynopticFrontAnalyzer):
             # Directly observed hour: instantaneous quality view.
             properties["qualityScore"] = round(float(hourly_quality), 2)
             properties["confidence"] = properties["qualityScore"]
-            properties["uncertaintyIndex"] = _json_number(
+            hourly_uncertainty = _json_number(
                 (track.get("hourlyUncertainty") or {}).get(hour), 2
-            ) or properties["uncertaintyIndex"]
+            )
+            if hourly_uncertainty is not None:
+                properties["uncertaintyIndex"] = hourly_uncertainty
             properties["detectionQuality"] = _json_number(
                 (track.get("detectionQuality") or {}).get(hour), 3
             )
@@ -1303,6 +1319,10 @@ class IconSynopticFrontAnalyzer(SynopticFrontAnalyzer):
             )
             properties["gateStatus"] = None
             properties["recovered"] = False
+        # Hourly/interpolated uncertainty may differ from the track median; the
+        # textual class must always describe the number published beside it.
+        properties["uncertaintyClass"] = ftk.uncertainty_class(
+            properties["uncertaintyIndex"])
         return properties
 
     def analyze(self, hour: int) -> dict:

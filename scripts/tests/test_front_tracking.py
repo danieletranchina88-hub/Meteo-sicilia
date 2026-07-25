@@ -123,7 +123,7 @@ if tr_cold:
     need = {"physicalEvidence", "thermalSupport", "dynamicSupport",
             "pressureSupport", "verticalSupport", "temporalSupport",
             "structuralSupport", "classificationCertainty",
-            "strongDetectionFraction"}
+            "strongDetectionFraction", "dataCompleteness"}
     print(f"E) componenti qualityScore: {sorted(comp)}")
     if set(comp) != need:
         print("  FAIL: componenti qualityScore mancanti"); ok = False
@@ -373,6 +373,13 @@ if tr_weakhour:
         ok = False
 else:
     print("R) FAIL: traccia con ora debole assente"); ok = False
+
+print("S) classi d'incertezza coerenti con l'indice")
+for value, expected in ((0.0, "low"), (0.36, "low"), (0.37, "moderate"),
+                        (0.52, "moderate"), (0.53, "high"), (1.0, "high")):
+    actual = ft.uncertainty_class(value)
+    if actual != expected:
+        print(f"  FAIL: {value} -> {actual}, atteso {expected}"); ok = False
 
 print("\nESITO:", "SUPERATO" if ok else "DA RIVEDERE")
 raise SystemExit(0 if ok else 1)

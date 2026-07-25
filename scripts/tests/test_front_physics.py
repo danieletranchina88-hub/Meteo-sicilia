@@ -213,5 +213,24 @@ if breeze_verdict == "synoptic-front":
     print("  FAIL: una linea corta e locale non deve vincere come fronte sinottico")
     ok = False
 
+# 11) Missing optional fields must reduce completeness, not add neutral credit.
+optional_missing = dict(strong)
+for key in ("pressureTroughHpa", "isallobaricSupportHpa3h",
+            "lowerLevelSupport", "deltaThetaW925", "verticalCoherence",
+            "omega700PaS"):
+    optional_missing.pop(key, None)
+missing_score = fp.candidate_evidence(optional_missing)
+optional_zero = dict(optional_missing)
+optional_zero.update({
+    "pressureTroughHpa": -0.15, "lowerLevelSupport": 0.35,
+    "deltaThetaW925": 0.7, "omega700PaS": 0.03,
+})
+zero_score = fp.candidate_evidence(optional_zero)
+print(f"11) completezza mancante={missing_score['dataCompleteness']:.2f} "
+      f"completa={zero_score['dataCompleteness']:.2f}")
+if not missing_score["dataCompleteness"] < zero_score["dataCompleteness"]:
+    print("  FAIL: la completezza non distingue i campi opzionali mancanti")
+    ok = False
+
 print("\nESITO:", "SUPERATO" if ok else "DA RIVEDERE")
 raise SystemExit(0 if ok else 1)

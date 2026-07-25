@@ -118,5 +118,65 @@ if len(report["qualityScoreDiagnostic"]["bins"]) != 3:
     print("FAIL: bin diagnostici del quality score inattesi")
     ok = False
 
+# v15+: length metrics, distance percentiles, confusion matrix, splits ------
+la = report["lengthAccountingKm"]
+m = report["metrics"]
+print("length accounting:", la)
+print("distanze km:", m["meanSymmetricDistanceKm"], m["medianSymmetricDistanceKm"],
+      m["p95SymmetricDistanceKm"], " lengthRecall:", m["lengthRecall"])
+if not (la["reference"] > 0 and la["detectedReference"] > 0
+        and la["detectedReference"] <= la["reference"] + 1e-6):
+    print("FAIL: contabilita' delle lunghezze incoerente")
+    ok = False
+if not (0.0 <= m["lengthRecall"] <= 1.0 and 0.0 <= m["falseLengthRatio"] <= 1.0):
+    print("FAIL: lengthRecall/falseLengthRatio fuori [0,1]")
+    ok = False
+# the two predictions matched ~22 km from labels: median distance must be finite & small
+if not (m["medianSymmetricDistanceKm"] is not None
+        and m["medianSymmetricDistanceKm"] < 60.0):
+    print("FAIL: distanza mediana simmetrica non plausibile")
+    ok = False
+# type confusion: one label is warm, predicted cold -> confusion["warm"]["cold"] >= 1
+conf = report["typeConfusionMatrix"]
+print("matrice confusione tipi:", conf)
+if conf.get("warm", {}).get("cold", 0) < 1:
+    print("FAIL: la confusione warm->cold deve comparire in matrice")
+    ok = False
+if "stratification" not in report or "continuity" not in report:
+    print("FAIL: sezioni stratification/continuity assenti")
+    ok = False
+
+# stricter radius must also worsen lengthRecall (reuse the in-block run)
+lr_strict = sensitivity[0]["lengthRecall"] or 0.0
+lr_gen = sensitivity[1]["lengthRecall"] or 0.0
+if not lr_strict < lr_gen:
+    print("FAIL: un raggio piu' severo deve peggiorare anche lengthRecall")
+    ok = False
+
+# Gold provenance must be machine-auditable, not a free-text source note.
+gold_case = {
+    "split": "test",
+    "labelSource": {
+        "provider": "DWD",
+        "url": "https://opendata.dwd.de/example.png",
+        "accessedAt": "2026-07-25T08:00:00Z",
+        "sha256": "a" * 64,
+    },
+    "annotation": {
+        "analyst": "A1",
+        "blindToPrediction": True,
+        "digitisedAt": "2026-07-25T09:00:00Z",
+    },
+}
+if benchmark.label_provenance_warnings("gold", gold_case):
+    print("FAIL: un caso gold completo viene rifiutato")
+    ok = False
+not_blind = dict(gold_case)
+not_blind["annotation"] = {**gold_case["annotation"], "blindToPrediction": False}
+if not any("cieca" in warning for warning in
+           benchmark.label_provenance_warnings("bad", not_blind)):
+    print("FAIL: un'etichetta non cieca non viene segnalata")
+    ok = False
+
 print("ESITO:", "SUPERATO" if ok else "DA RIVEDERE")
 raise SystemExit(0 if ok else 1)
