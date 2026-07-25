@@ -102,6 +102,19 @@ def _shape_metrics(coordinates: np.ndarray) -> tuple[float, float, float, float]
     return sinuosity, net_turn, closure_ratio, total_turn
 
 
+def _shape_is_plausible(
+    coordinates: np.ndarray, *, max_total_turn_deg: float = 420.0
+) -> bool:
+    """Whether one polyline can plausibly represent one synoptic boundary."""
+    sinuosity, net_turn, closure_ratio, total_turn = _shape_metrics(coordinates)
+    return bool(
+        sinuosity <= 2.35
+        and closure_ratio >= 0.42
+        and net_turn <= 165.0
+        and total_turn <= max_total_turn_deg
+    )
+
+
 def _overlap_fraction(first: np.ndarray, second: np.ndarray, radius_km: float) -> float:
     """Symmetric fraction of two lines that represents the same boundary."""
     a = line_support_fraction(first, [second], radius_km)
@@ -131,6 +144,7 @@ def detect_fronts_two_scale(
     refined_tfp_full: float = -9.0e-5,
     refined_abz_weak: float = 0.90,
     refined_abz_full: float = 1.70,
+    max_total_turn_deg: float = 420.0,
 ):
     """Two-scale detection: refined candidates constrained by a synoptic prior.
 
@@ -171,9 +185,14 @@ def detect_fronts_two_scale(
         )
         # Closed/near-closed thermal anomalies and hairpins are local air
         # pools or convective outflows, not interfaces between two extended
-        # air masses.  Accumulated turning is retained as a soft diagnostic;
-        # closure and sinuosity provide the robust hard rejection.
-        if sinuosity > 2.35 or closure_ratio < 0.42 or net_turn > 165.0:
+        # air masses. Net turn alone misses an S/hairpin whose successive
+        # bends cancel one another. Accumulated turn is therefore a hard
+        # topology guard too; the generous ceiling still permits a wrapped
+        # cyclonic/occluding branch.
+        if not _shape_is_plausible(
+            candidate["coordinates"],
+            max_total_turn_deg=max_total_turn_deg,
+        ):
             continue
         candidate["sinuosity"] = round(sinuosity, 2)
         candidate["netTurnDeg"] = round(net_turn, 1)
