@@ -30,7 +30,7 @@ import thermodynamics as thermo
 from front_analysis import SynopticFrontAnalyzer, _blend_lines, _line_length_km, _rdp
 
 
-FRONT_METHOD = "icon2i-ofa-physics-guided-v15"
+FRONT_METHOD = "icon2i-ofa-object-tracked-v16"
 ANALYSIS_PRESSURE_PA = 85_000.0
 LOWER_PRESSURE_PA = 92_500.0
 
@@ -141,6 +141,19 @@ def _finite_median(values, default=np.nan) -> float:
     array = np.asarray(values, dtype=float)
     finite = array[np.isfinite(array)]
     return float(np.median(finite)) if finite.size else float(default)
+
+
+def _omega_bulk_is_plausible(values: np.ndarray) -> bool:
+    """Validate the bulk 700-hPa omega field without trusting rare spikes."""
+    absolute = np.abs(np.asarray(values, dtype=float))
+    return bool(np.nanpercentile(absolute, 99.5) <= 20.0)
+
+
+def _mask_omega_spikes(values: np.ndarray) -> np.ndarray:
+    """Mask isolated implausible omega values before spatial smoothing."""
+    clean = np.asarray(values, dtype=float).copy()
+    clean[np.abs(clean) > 20.0] = np.nan
+    return clean
 
 
 def _json_number(value, digits: int | None = None):
@@ -268,7 +281,7 @@ class IconSynopticFrontAnalyzer(SynopticFrontAnalyzer):
                 self._validate_optional_dataset(dataset, "omega700", 700.0)
                 variable = next(iter(dataset.data_vars))
                 values = np.asarray(dataset[variable].values, dtype=float)
-                if np.nanpercentile(np.abs(values), 99.9) > 20.0:
+                if not _omega_bulk_is_plausible(values):
                     raise ValueError("omega 700 hPa fuori scala Pa/s")
                 self.datasets["omega700"] = dataset
                 self.keys["omega700"] = variable
@@ -562,8 +575,11 @@ class IconSynopticFrontAnalyzer(SynopticFrontAnalyzer):
         )
         omega = None
         if "omega700" in self.datasets:
+            raw_omega = _mask_omega_spikes(
+                self._field("omega700", hour)
+            )
             omega = fl.smooth_km(
-                self._field("omega700", hour), 80.0, grid_metrics
+                raw_omega, 80.0, grid_metrics
             )
         theta_w_925 = None
         if self.has_lower_level:
@@ -1073,6 +1089,16 @@ class IconSynopticFrontAnalyzer(SynopticFrontAnalyzer):
                 )
                 by_hour.setdefault(hour, []).append((geometry, hour_properties))
         self._occlusion_hours = self._apply_occlusions(by_hour)
+        for entries in by_hour.values():
+            for geometry, properties in entries:
+                display_shape = fd._shape_metrics(geometry)
+                properties["geometryDiagnostics"] = {
+                    "lengthKm": round(float(fl._line_length_km(geometry)), 1),
+                    "sinuosity": round(float(display_shape[0]), 2),
+                    "netTurnDeg": round(float(display_shape[1]), 1),
+                    "closureRatio": round(float(display_shape[2]), 3),
+                    "totalTurnDeg": round(float(display_shape[3]), 1),
+                }
         self._by_hour = by_hour
 
     def _apply_occlusions(self, by_hour: dict) -> int:
@@ -1134,7 +1160,9 @@ class IconSynopticFrontAnalyzer(SynopticFrontAnalyzer):
         return occluded_hours
 
     @staticmethod
-    def _front_reasoning(track: dict) -> dict:
+    def _front_reasoning(
+        track: dict, diagnostics: dict | None = None
+    ) -> dict:
         """Compact, human-facing view of the multi-hypothesis reasoning.
 
         Feeds the reasoning engine both the spatial diagnostics AND the
@@ -1144,7 +1172,7 @@ class IconSynopticFrontAnalyzer(SynopticFrontAnalyzer):
         would. Exposes the verdict, by how much it beat the field, the best
         competing hypothesis and why.
         """
-        diagnostics = dict(track.get("diagnostics", {}))
+        diagnostics = dict(diagnostics or track.get("diagnostics", {}))
         hours = track.get("hours", [])
         span = (max(hours) - min(hours)) if hours else 0
         diagnostics["lifetimeH"] = track.get("lifetimeH", span)
@@ -1251,6 +1279,12 @@ class IconSynopticFrontAnalyzer(SynopticFrontAnalyzer):
             hour_diagnostics = observation.get("diagnostics") or {}
             if hour_diagnostics:
                 properties["diagnostics"] = _json_mapping(hour_diagnostics, 4)
+                properties["diagnosis"] = observation.get(
+                    "diagnosis", "synoptic-front"
+                )
+                properties["reasoning"] = self._front_reasoning(
+                    track, hour_diagnostics
+                )
                 # The meteorological explanation describes THIS hour; the
                 # track's persistence enters separately via lifetimeH.
                 properties["explanation"] = fp.frontal_explanation(
@@ -1396,11 +1430,9 @@ class IconSynopticFrontAnalyzer(SynopticFrontAnalyzer):
 
         Fase C/E: instead of drawing the raw TFL contour, follow the least-cost
         path along the continuous support field inside a corridor around the
-        contour. Benchmarked (Fase E) as better-or-equal to the contour, so it
-        is on by default; ``REFINE_PUBLISHED_GEOMETRY = False`` reverts. The
-        step is conservative by construction (bounded corridor) and fully
-        guarded: any failure or a degenerate result falls back to the contour,
-        so publication can never regress to an empty or broken line.
+        contour. ``REFINE_PUBLISHED_GEOMETRY = False`` reverts. A bounded
+        corridor alone does not guarantee the solver follows the same branch,
+        so length, overlap and topology are checked explicitly.
         """
         if not REFINE_PUBLISHED_GEOMETRY or len(coordinates) < 2:
             return coordinates
@@ -1413,7 +1445,7 @@ class IconSynopticFrontAnalyzer(SynopticFrontAnalyzer):
         except Exception:
             return coordinates
         refined = np.asarray(refined, dtype=float)
-        if refined.ndim != 2 or len(refined) < 2 or not np.all(np.isfinite(refined)):
+        if not fridge.refinement_is_safe(coordinates, refined):
             return coordinates
         return refined
 
