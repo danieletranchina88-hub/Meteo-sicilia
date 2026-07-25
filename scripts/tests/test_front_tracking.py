@@ -374,5 +374,58 @@ if tr_weakhour:
 else:
     print("R) FAIL: traccia con ora debole assente"); ok = False
 
+# S) Track identity cannot inherit an implausible one-hour extent jump -------
+base = _cand(lambda x: 42.0)
+base["lengthKm"] = ft._length_km(base["coordinates"])
+identity = ft.Track(99, 0, base)
+same_geometry_wrong_extent = dict(base)
+same_geometry_wrong_extent["lengthKm"] = base["lengthKm"] * 2.5
+extent_cost = ft._assignment_cost(
+    identity, same_geometry_wrong_extent, 1, gate_km=250.0
+)
+print(f"S) salto di estensione 2.5x: costo={extent_cost}")
+if np.isfinite(extent_cost):
+    print("  FAIL: un oggetto 2.5x più lungo non deve ereditare la traccia")
+    ok = False
+
+
+def _line_candidate(lon0, lon1, normal_sign=1.0):
+    coords = np.column_stack((
+        np.linspace(lon0, lon1, 25),
+        np.full(25, 42.0),
+    ))
+    return {
+        "coordinates": coords,
+        "warmNormal": np.tile([0.0, -normal_sign], (len(coords), 1)),
+        "lengthKm": ft._length_km(coords),
+    }
+
+
+short_track = ft.Track(100, 0, _line_candidate(10.0, 14.0))
+grown_track = ft.Track(101, 1, _line_candidate(9.0, 16.0))
+opposite_track = ft.Track(102, 1, _line_candidate(9.0, 16.0, -1.0))
+same_cost = ft._stitch_cost(short_track, grown_track, max_gap=2)
+opposite_cost = ft._stitch_cost(short_track, opposite_track, max_gap=2)
+print(f"T) ricucitura adiacente: stessa massa={same_cost:.1f}, "
+      f"lato caldo opposto={opposite_cost}")
+if not np.isfinite(same_cost) or np.isfinite(opposite_cost):
+    print("  FAIL: overlap e lato caldo devono decidere la ricucitura")
+    ok = False
+
+established = ft.Track(103, 2, _line_candidate(10.0, 14.0))
+orphan = _line_candidate(9.5, 14.5)
+orphan["_orphanAccepted"] = True
+recovered_orphan = ft._extend_track_weak(
+    established, {1: [orphan]}, used=set()
+)
+print(f"U) recupero oggetto orfano: ore={recovered_orphan}, "
+      f"stato={established.lines.get(1, {}).get('gateStatus')}")
+if (
+    recovered_orphan != [1]
+    or established.lines[1].get("gateStatus") != "orphan-continuation"
+):
+    print("  FAIL: il segmento orfano coerente deve estendere la traccia")
+    ok = False
+
 print("\nESITO:", "SUPERATO" if ok else "DA RIVEDERE")
 raise SystemExit(0 if ok else 1)
