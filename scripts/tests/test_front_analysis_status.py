@@ -3,6 +3,8 @@
 import os
 import sys
 
+import numpy as np
+
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 import front_analysis_v12 as v12
 
@@ -57,6 +59,16 @@ if broken.analysis_summary["analysisStatus"] != "partially-unavailable":
     print("FAIL: riepilogo run non segnala l'errore diagnostico")
     ok = False
 
+omega = np.zeros(1000, dtype=float)
+omega[0] = 80.0
+omega[1:6] = 10.0
+clean_omega = v12._mask_omega_spikes(omega)
+print("omega QC:", v12._omega_bulk_is_plausible(omega),
+      "spike masked:", np.isnan(clean_omega[0]))
+if not v12._omega_bulk_is_plausible(omega) or not np.isnan(clean_omega[0]):
+    print("FAIL: un outlier isolato non deve eliminare la diagnostica omega")
+    ok = False
+
 # --- v15: per-hour properties vs track properties --------------------------
 stub = analyzer_with(lambda hour: [])
 stub.method = v12.FRONT_METHOD
@@ -94,6 +106,9 @@ if not (observed["qualityScore"] == 0.44
         and observed["diagnostics"].get("deltaThetaW") == 1.1
         and observed["trackDiagnostics"].get("deltaThetaW") == 3.0):
     print("FAIL: l'ora osservata deve esporre la vista oraria + quella di traccia")
+    ok = False
+if observed["reasoning"] == stub._front_reasoning(fake_track):
+    print("FAIL: il ragionamento dell'ora debole non deve ripetere la mediana")
     ok = False
 
 interpolated = stub._track_properties(fake_track, hour=7)
