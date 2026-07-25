@@ -70,5 +70,21 @@ print(f"C) evitamento terreno: frazione sul muro={on_wall:.2f}")
 if on_wall > 0.6:
     print("  FAIL: il percorso non evita la penalità di terreno"); ok = False
 
+original = np.column_stack((np.linspace(8.0, 18.0, 15), np.full(15, 42.0)))
+mild = np.column_stack((
+    np.linspace(8.0, 18.0, 30),
+    42.0 + 0.08 * np.sin(np.linspace(0.0, np.pi, 30)),
+))
+detour = np.array([
+    [8.0, 42.0], [11.0, 42.0], [11.0, 43.5], [9.0, 43.5],
+    [9.0, 41.0], [14.0, 41.0], [14.0, 43.0], [18.0, 42.0],
+])
+safe_mild = fr.refinement_is_safe(original, mild)
+safe_detour = fr.refinement_is_safe(original, detour)
+print(f"D) guardia geometria: lieve={safe_mild}, tornanti={safe_detour}")
+if not safe_mild or safe_detour:
+    print("  FAIL: la rifinitura deve conservare identità e topologia")
+    ok = False
+
 print("\nESITO:", "SUPERATO" if ok else "DA RIVEDERE")
 raise SystemExit(0 if ok else 1)
