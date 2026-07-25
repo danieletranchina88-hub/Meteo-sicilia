@@ -1,4 +1,4 @@
-# Analisi oggettiva dei fronti ICON-2I (v14)
+# Analisi oggettiva dei fronti ICON-2I (v16)
 
 ## Scopo e limite fondamentale
 
@@ -12,7 +12,7 @@ Meteorologico. `qualityScore` e `uncertaintyIndex` descrivono la coerenza
 interna delle prove in un singolo run deterministico: non sono probabilità
 calibrate e non misurano l'errore previsionale assoluto.
 
-Il metodo operativo è `icon2i-ofa-physics-guided-v14`.
+Il metodo operativo è `icon2i-ofa-physics-guided-v16`.
 
 ## Dati usati
 
@@ -241,9 +241,23 @@ Per essere pubblicata una traccia deve avere:
 - almeno 4 rilevamenti;
 - durata di almeno 3 ore;
 - copertura temporale almeno 72%;
-- `qualityScore >= 0.61`;
-- `uncertaintyIndex <= 0.39`;
+- `qualityScore >= 0.61` (fascia standard) oppure `>= 0.50` con
+  `uncertaintyIndex <= 0.50` (fascia a bassa fiducia, v16);
+- `uncertaintyIndex <= 0.39` in fascia standard;
 - classificazione non conflittuale.
+
+**Fascia a bassa fiducia (v16).** Una traccia appena sotto la soglia standard
+non è automaticamente rumore: scartarla in blocco la rende indistinguibile da
+un fronte inesistente, mentre un candidato già localizzato e classificato in
+modo coerente è più spesso un fronte reale ma modesto (documento sez. 4, "un
+fronte reale ma modesto non viene scartato"). Le tracce comprese fra
+`MIN_PUBLISH_QUALITY_LOW = 0,50` / `MAX_PUBLISH_UNCERTAINTY_LOW = 0,50` e la
+soglia standard vengono quindi pubblicate comunque, con lo stesso requisito
+di consenso di classificazione, ma etichettate esplicitamente
+`confidenceTier = "low"` in ogni feature GeoJSON (contro `"standard"` per le
+tracce sopra soglia piena). Il riepilogo di run espone separatamente
+`publishedTracksStandard` e `publishedTracksLowConfidence`. Nessuna traccia
+sotto la fascia bassa viene pubblicata.
 
 La classificazione confronta tre famiglie indipendenti:
 
@@ -529,6 +543,10 @@ La workflow blocca la pubblicazione se falliscono i test sintetici:
 - estrazione a cresta (`front_ridge`): la linea rifinita segue il crinale del
   supporto staccandosi da una guess storta, una banda larga dà una sola linea,
   il percorso evita una penalità di terreno a parità di supporto.
+- fascia a bassa fiducia (v16): una traccia sopra soglia standard è
+  `confidenceTier = "standard"`, una traccia nella fascia provvisoria è
+  pubblicata come `"low"` invece di sparire, e nulla sotto la fascia bassa
+  viene pubblicato (`test_front_publish_tiers.py`).
 
 ## Riferimenti primari
 

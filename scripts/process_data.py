@@ -25,10 +25,14 @@ NWP_DIRECTORY_ID = "ICON-2I_SURFACE_PRESSURE_LEVELS"
 NWP_DIRECT_BASE = "https://meteohub.agenziaitaliameteo.it/nwp"
 
 # ============================================================
-# ITALIA (inclusi Sicilia + Sardegna)
+# DOMINIO ICON-2I (3-22 E / 33-49 N secondo MeteoHub), con lo stesso
+# margine di bordo usato dall'analisi frontale: i layer meteo devono
+# coprire l'intera area del modello, non solo l'Italia, altrimenti le
+# tracce frontali (che usano FRONT_BOUNDS) escono dal riquadro dei dati
+# meteo pubblicati.
 # ============================================================
-LAT_MIN, LAT_MAX = 35.0, 48.5
-LON_MIN, LON_MAX = 6.0, 19.5
+FRONT_BOUNDS = (3.0, 22.0, 33.7, 48.9)  # lon_min, lon_max, lat_min, lat_max
+LON_MIN, LON_MAX, LAT_MIN, LAT_MAX = FRONT_BOUNDS
 
 # ============================================================
 # CONTROLLO DIMENSIONE GRIGLIA
@@ -210,7 +214,7 @@ def prepare_icon_front_analyzer(run_dt):
             lower_v_wind_path=paths.get("v_wind_925"),
             omega_700_path=paths.get("omega_700"),
             downsample=4,
-            bounds=(3.0, 22.0, 33.7, 48.9),
+            bounds=FRONT_BOUNDS,
             method=ICON_FRONT_METHOD,
             source="ICON-2I",
             tendency_window_hours=3,
