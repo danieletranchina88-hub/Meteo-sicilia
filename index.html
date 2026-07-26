@@ -741,16 +741,113 @@
         transition: opacity 0.2s ease, transform 0.2s ease;
       }
 
+      #bulletin-scrim {
+        position: fixed;
+        z-index: 70;
+        inset: 0;
+        visibility: hidden;
+        background: rgba(2, 12, 20, 0.46);
+        opacity: 0;
+        transition: opacity 0.2s ease, visibility 0.2s ease;
+      }
+
       #bulletin-card {
         position: fixed;
-        z-index: 34;
-        top: calc(var(--safe-top) + 10px);
+        z-index: 72;
+        top: calc(var(--safe-top) + 68px);
         right: 10px;
-        width: min(306px, calc(100vw - 20px));
-        padding: 10px 11px 9px;
-        border-radius: 15px;
-        pointer-events: auto;
+        left: 10px;
+        max-height: calc(100dvh - var(--safe-top) - var(--safe-bottom) - 164px);
+        overflow: auto;
+        padding: 14px;
+        border-radius: 18px;
+        opacity: 0;
+        pointer-events: none;
+        transform: translateY(-10px) scale(0.98);
         transition: opacity 0.2s ease, transform 0.2s ease;
+      }
+
+      #bulletin-card.open {
+        opacity: 1;
+        pointer-events: auto;
+        transform: none;
+      }
+
+      body.bulletin-open #bulletin-scrim {
+        visibility: visible;
+        opacity: 1;
+      }
+
+      .bulletin-head {
+        display: flex;
+        align-items: flex-start;
+        justify-content: space-between;
+        gap: 12px;
+      }
+
+      .bulletin-head h2 {
+        margin: 1px 0 0;
+        color: #f8fdff;
+        font-size: 15px;
+        line-height: 1.2;
+      }
+
+      .bulletin-validity {
+        margin: 4px 0 0;
+        color: #9ec0d3;
+        font-size: 10px;
+        font-weight: 700;
+      }
+
+      .bulletin-close {
+        display: grid;
+        width: 34px;
+        height: 34px;
+        flex: 0 0 34px;
+        place-items: center;
+        border: 1px solid rgba(183, 222, 240, 0.22);
+        border-radius: 11px;
+        background: rgba(255, 255, 255, 0.06);
+        color: #eefaff;
+      }
+
+      .bulletin-status {
+        display: inline-flex;
+        margin-top: 12px;
+        padding: 5px 8px;
+        border: 1px solid rgba(103, 228, 239, 0.3);
+        border-radius: 999px;
+        background: rgba(55, 190, 211, 0.12);
+        color: #bff7fb;
+        font-size: 9px;
+        font-weight: 850;
+        letter-spacing: 0.03em;
+        text-transform: uppercase;
+      }
+
+      #nlg-bulletin-content {
+        margin-top: 11px;
+      }
+
+      #nlg-bulletin-content p {
+        margin: 0 0 9px;
+        color: #d7e8f2;
+        font-size: 12px;
+        line-height: 1.48;
+      }
+
+      #nlg-bulletin-content p:first-child {
+        color: #f5fbff;
+        font-weight: 760;
+      }
+
+      .bulletin-disclaimer {
+        margin: 11px 0 0;
+        padding-top: 9px;
+        border-top: 1px solid rgba(177, 216, 236, 0.16);
+        color: #8faabc;
+        font-size: 9px;
+        line-height: 1.4;
       }
 
       .legend-head {
@@ -1126,6 +1223,8 @@
       body.clean-mode #meta-card,
       body.clean-mode #legend-card,
       body.clean-mode #readout-card,
+      body.clean-mode #bulletin-card,
+      body.clean-mode #bulletin-scrim,
       body.clean-mode #drawer-button,
       body.clean-mode .maplibregl-ctrl-bottom-right {
         display: none !important;
@@ -1163,6 +1262,12 @@
           width: min(520px, calc(100vw - 38px));
           right: auto;
           left: 18px;
+        }
+
+        #bulletin-card {
+          right: 18px;
+          left: auto;
+          width: min(430px, calc(100vw - 36px));
         }
       }
 
@@ -1244,6 +1349,14 @@
           display: none;
         }
 
+        #bulletin-card {
+          top: 88px;
+          right: 344px;
+          width: min(430px, calc(100vw - 720px));
+          min-width: 360px;
+          max-height: calc(100dvh - 192px);
+        }
+
         #legend-card {
           bottom: 104px;
           left: 18px;
@@ -1313,6 +1426,15 @@
         </div>
       </div>
       <div id="header-actions">
+        <button id="bulletin-button" class="header-button" type="button" aria-expanded="false" aria-controls="bulletin-card" aria-label="Apri bollettino automatico">
+          <svg class="icon" viewBox="0 0 24 24">
+            <path d="M6 3h9l3 3v15H6z"></path>
+            <path d="M15 3v4h4"></path>
+            <path d="M9 11h6"></path>
+            <path d="M9 15h6"></path>
+          </svg>
+          <span>Bollettino</span>
+        </button>
         <button id="clean-button" class="header-button" type="button" aria-pressed="false" aria-label="Attiva solo mappa">
           <svg class="icon" viewBox="0 0 24 24">
             <path d="M4 7V4h3"></path>
@@ -1559,9 +1681,26 @@
       </div>
     </section>
 
-    <section id="bulletin-card" class="surface" aria-live="polite" aria-label="Bollettino testuale">
-      <h3 style="margin: 0 0 8px 0; font-size: 14px; font-weight: 600;">Bollettino Automatico (NLG)</h3>
-      <p id="nlg-bulletin-text" style="margin: 0; font-size: 13px; line-height: 1.4; color: var(--text-muted);">In attesa di dati...</p>
+    <div id="bulletin-scrim" aria-hidden="true"></div>
+    <section id="bulletin-card" class="surface" role="dialog" aria-modal="true" aria-hidden="true" aria-labelledby="bulletin-title">
+      <header class="bulletin-head">
+        <div>
+          <div class="micro-label">Sintesi ICON-2I</div>
+          <h2 id="bulletin-title">Bollettino automatico</h2>
+          <p id="bulletin-validity" class="bulletin-validity">In attesa dei dati</p>
+        </div>
+        <button id="bulletin-close" class="bulletin-close" type="button" aria-label="Chiudi bollettino">
+          <svg class="icon" viewBox="0 0 24 24">
+            <path d="M6 6l12 12"></path>
+            <path d="M18 6L6 18"></path>
+          </svg>
+        </button>
+      </header>
+      <div id="bulletin-status" class="bulletin-status">Diagnostica automatica</div>
+      <div id="nlg-bulletin-content" aria-live="polite">
+        <p id="nlg-bulletin-text">In attesa di dati...</p>
+      </div>
+      <p id="bulletin-disclaimer" class="bulletin-disclaimer">Sintesi automatica del modello: non è un'allerta né un bollettino ufficiale.</p>
     </section>
 
     <section id="timeline" class="surface" aria-label="Sequenza temporale">
@@ -1775,9 +1914,10 @@
 
       const CONVECTION_STOPS = [
         { v: 0, c: [255, 255, 255], a: 0 },
+        { v: 20, c: [255, 247, 188], a: 0.35 },
         { v: 40, c: [240, 230, 140], a: 0.7 },
-        { v: 80, c: [215, 48, 39], a: 0.85 },
-        { v: 100, c: [165, 0, 38], a: 1.0 }
+        { v: 70, c: [244, 109, 67], a: 0.86 },
+        { v: 95, c: [165, 0, 38], a: 1.0 }
       ];
 
       const VISIBILITY_STOPS = [
@@ -1907,8 +2047,8 @@
           stops: CONVECTION_STOPS,
           discrete: false,
           decimals: 0,
-          ticks: [0, 40, 80, 100],
-          note: "Probabilità di innesco convettivo basata su MUCAPE, CIN e convergenza.",
+          ticks: [0, 20, 40, 70, 95],
+          note: "Diagnostica d'innesco con ML-CAPE/CIN ICON-2I, convergenza reale a 10 m, moto verticale a 700 hPa e distanza dai fronti. Valori ≥70% richiedono tutti i segnali fisici.",
           opacity: 0.8,
           terrainOpacity: 0.3
         },
@@ -1980,6 +2120,15 @@
         drawerClose: document.getElementById("drawer-close"),
         drawerScrim: document.getElementById("drawer-scrim"),
         cleanButton: document.getElementById("clean-button"),
+        bulletinButton: document.getElementById("bulletin-button"),
+        bulletinCard: document.getElementById("bulletin-card"),
+        bulletinClose: document.getElementById("bulletin-close"),
+        bulletinScrim: document.getElementById("bulletin-scrim"),
+        bulletinTitle: document.getElementById("bulletin-title"),
+        bulletinValidity: document.getElementById("bulletin-validity"),
+        bulletinStatus: document.getElementById("bulletin-status"),
+        bulletinContent: document.getElementById("nlg-bulletin-content"),
+        bulletinDisclaimer: document.getElementById("bulletin-disclaimer"),
         brandSubtitle: document.getElementById("brand-subtitle"),
         drawerSubtitle: document.getElementById("drawer-subtitle"),
         scientificNote: document.getElementById("scientific-note"),
@@ -2754,13 +2903,39 @@
       }
 
       function updateBulletinUi() {
-        const textElement = document.getElementById("nlg-bulletin-text");
-        if (!textElement) return;
-        if (currentData && currentData.nlg_bulletin) {
-          textElement.textContent = currentData.nlg_bulletin;
-        } else {
-          textElement.textContent = "Dati non disponibili o bollettino non calcolato per questo passo.";
-        }
+        if (!ui.bulletinContent) return;
+        const details = currentData && currentData.nlg_bulletin_details;
+        const fallback = currentData && currentData.nlg_bulletin;
+        const item = catalog[currentIndex] || {};
+        const validDate = details && details.validTime
+          ? new Date(details.validTime)
+          : parseCatalogDate(item);
+
+        ui.bulletinTitle.textContent = details && details.title
+          ? details.title
+          : "Bollettino automatico";
+        ui.bulletinValidity.textContent = "Validità " + formatDateTime(
+          validDate && !Number.isNaN(validDate.getTime()) ? validDate : null
+        );
+        ui.bulletinStatus.textContent = details && details.confidence
+          ? "Affidabilità diagnostica " + details.confidence
+          : "Diagnostica automatica";
+        ui.bulletinDisclaimer.textContent = details && details.disclaimer
+          ? details.disclaimer
+          : "Sintesi automatica del modello: non è un'allerta né un bollettino ufficiale.";
+
+        const paragraphs = details && Array.isArray(details.paragraphs)
+          ? details.paragraphs.filter(Boolean)
+          : (fallback ? [fallback] : [
+            "Dati non disponibili o bollettino non calcolato per questo passo."
+          ]);
+        ui.bulletinContent.replaceChildren();
+        paragraphs.forEach(function (text, index) {
+          const paragraph = document.createElement("p");
+          if (index === 0) paragraph.id = "nlg-bulletin-text";
+          paragraph.textContent = text;
+          ui.bulletinContent.appendChild(paragraph);
+        });
       }
 
       function makeLegendGradient(info) {
@@ -4296,11 +4471,26 @@
         if (window.innerWidth < 960) setDrawer(false);
       }
 
+      function setBulletin(open) {
+        const next = Boolean(open);
+        ui.bulletinCard.classList.toggle("open", next);
+        ui.bulletinCard.setAttribute("aria-hidden", next ? "false" : "true");
+        ui.bulletinButton.setAttribute("aria-expanded", next ? "true" : "false");
+        document.body.classList.toggle("bulletin-open", next);
+        if (next) {
+          closeDrawerOnMobile();
+          ui.bulletinClose.focus({ preventScroll: true });
+        } else if (document.activeElement === ui.bulletinClose) {
+          ui.bulletinButton.focus({ preventScroll: true });
+        }
+      }
+
       function toggleCleanMode() {
         const active = document.body.classList.toggle("clean-mode");
         ui.cleanButton.setAttribute("aria-pressed", active ? "true" : "false");
         ui.cleanButton.setAttribute("aria-label", active ? "Mostra interfaccia" : "Attiva solo mappa");
         ui.cleanButton.querySelector("span").textContent = active ? "Mostra UI" : "Solo mappa";
+        if (active) setBulletin(false);
         closeDrawerOnMobile();
       }
 
@@ -4687,6 +4877,16 @@
         setDrawer(false);
       });
 
+      ui.bulletinButton.addEventListener("click", function () {
+        setBulletin(!ui.bulletinCard.classList.contains("open"));
+      });
+      ui.bulletinClose.addEventListener("click", function () {
+        setBulletin(false);
+      });
+      ui.bulletinScrim.addEventListener("click", function () {
+        setBulletin(false);
+      });
+
       ui.cleanButton.addEventListener("click", toggleCleanMode);
       ui.gpsButton.addEventListener("click", locateUser);
       ui.readoutClose.addEventListener("click", closeReadout);
@@ -4731,6 +4931,12 @@
           particleFrame = null;
         } else {
           startParticles();
+        }
+      });
+
+      document.addEventListener("keydown", function (event) {
+        if (event.key === "Escape" && ui.bulletinCard.classList.contains("open")) {
+          setBulletin(false);
         }
       });
 
