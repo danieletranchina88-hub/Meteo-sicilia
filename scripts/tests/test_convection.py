@@ -13,6 +13,7 @@ from meteo_analysis.hazards.convection import (  # noqa: E402
     front_distance_km,
     horizontal_convergence,
     normalize_cin,
+    summarize_convection,
 )
 
 
@@ -67,6 +68,23 @@ probability = np.asarray(
 check(np.nanmax(probability[:, near_column]) >= 70.0, "regola esperta alta non applicata")
 check(np.nanmax(probability[:, 0]) < 70.0, "probabilità alta lontano dai fronti")
 check(np.all(normalize_cin(cin_positive_magnitude) == -35.0), "segno CIN non normalizzato")
+sentinel_cin = normalize_cin(np.array([-999.9, 40.0, -25.0, np.nan]))
+check(np.isnan(sentinel_cin[0]), "sentinel CIN MeteoHub non escluso")
+check(sentinel_cin[1] == -40.0, "CIN positivo non convertito in magnitudine firmata")
+check(sentinel_cin[2] == -25.0, "CIN già firmato alterato")
+check(np.isnan(sentinel_cin[3]), "NaN CIN trasformato in valore valido")
+sentinel_probability = np.asarray(
+    calculate_convection_probability(
+        np.array([1_500.0]),
+        np.array([-999.9]),
+        np.array([1.5e-4]),
+        np.array([10.0]),
+    )
+)
+check(
+    np.isnan(sentinel_probability[0]),
+    "cella con sentinel CIN pubblicata come probabilità valida",
+)
 
 stable = np.asarray(
     calculate_convection_probability(
@@ -90,5 +108,8 @@ anti_saturation = np.asarray(
 high_fraction = float(np.mean(anti_saturation >= 70.0))
 check(high_fraction < 0.05, f"campo alto troppo esteso: {high_fraction:.3f}")
 check(not np.allclose(anti_saturation, 80.0), "ricomparso il valore fisso 80%")
+summary = summarize_convection(anti_saturation)
+check(summary["areaAbove70Pct"] < 5.0, "QC area alta non coerente")
+check(summary["areaExactly80Pct"] < 5.0, "QC valore fisso 80% non coerente")
 
 print("Convection tests passed")
