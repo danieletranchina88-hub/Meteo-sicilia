@@ -51,9 +51,15 @@ def normalize_cin(cin) -> np.ndarray:
     Some GRIB encoders publish CIN as a positive inhibition magnitude while
     others publish the signed negative energy.  ``-abs(CIN)`` makes the
     threshold ``CIN > -50 J/kg`` unambiguous for both encodings.
+
+    MeteoHub's ICON-2I field uses about ``-999.9`` for unavailable cells.
+    Those cells must remain missing: treating the sentinel as strong, finite
+    inhibition would bias summaries and make an unavailable diagnostic look
+    like a valid low-probability forecast.
     """
     values = _as_float(cin)
-    return np.where(np.isfinite(values), -np.abs(values), np.nan)
+    valid = np.isfinite(values) & (values > -900.0)
+    return np.where(valid, -np.abs(values), np.nan)
 
 
 def horizontal_convergence(
@@ -171,7 +177,7 @@ def front_distance_km(
 
 
 def calculate_convection_probability(
-    mucape,
+    cape_ml,
     cin,
     convergence_10m,
     front_distance_km,
@@ -188,7 +194,7 @@ def calculate_convection_probability(
     CIN > -50 J/kg, convergence > 1e-4 s-1 and a front within 50 km.  Without
     all four ingredients the result is capped below 70%.
     """
-    cape = _as_float(mucape)
+    cape = _as_float(cape_ml)
     inhibition = normalize_cin(cin)
     convergence = _as_float(convergence_10m)
     distance = _as_float(front_distance_km)
@@ -269,7 +275,7 @@ def calculate_convection_probability(
     )
     probability = np.where(valid, np.clip(probability, 0.0, 95.0), np.nan)
     return _return_like(
-        mucape,
+        cape_ml,
         probability / 100.0,
         "Probabilità esperta di innesco convettivo",
         "probability",
@@ -280,21 +286,33 @@ def summarize_convection(probability_percent, mask=None) -> dict:
     """Return robust statistics used by QC and natural-language products."""
     values = _as_float(probability_percent)
     valid = np.isfinite(values)
+    eligible = np.ones(values.shape, dtype=bool)
     if mask is not None:
-        valid &= np.asarray(mask, dtype=bool)
+        eligible = np.broadcast_to(np.asarray(mask, dtype=bool), values.shape)
+        valid &= eligible
     sample = values[valid]
     if not sample.size:
         return {
             "status": "unavailable",
             "maximum": None,
             "p95": None,
+            "validCellPct": 0.0,
             "areaAbove40Pct": None,
             "areaAbove70Pct": None,
+            "areaExactly80Pct": None,
         }
     return {
         "status": "available",
         "maximum": round(float(np.max(sample)), 1),
         "p95": round(float(np.percentile(sample, 95)), 1),
+        "validCellPct": round(
+            float(np.mean(valid[eligible]) * 100.0) if eligible.any() else 0.0,
+            2,
+        ),
         "areaAbove40Pct": round(float(np.mean(sample >= 40.0) * 100.0), 2),
         "areaAbove70Pct": round(float(np.mean(sample >= 70.0) * 100.0), 2),
+        "areaExactly80Pct": round(
+            float(np.mean(np.isclose(sample, 80.0, atol=0.05)) * 100.0),
+            2,
+        ),
     }
