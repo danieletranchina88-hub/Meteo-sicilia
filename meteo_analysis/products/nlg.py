@@ -202,7 +202,7 @@ def _front_sentence(inputs: BulletinInputs) -> str | None:
     else:
         subject = "più strutture frontali (" + ", ".join(names) + ")"
     return (
-        f"L'analisi oggettiva individua {subject} nel dominio italiano. "
+        f"L'analisi oggettiva individua {subject} su {inputs.area}. "
         "La posizione resta una stima del modello e può differire localmente."
     )
 
