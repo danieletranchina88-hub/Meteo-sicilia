@@ -12,6 +12,15 @@ from datetime import datetime, timedelta, timezone
 from front_analysis_v12 import FRONT_METHOD as ICON_FRONT_METHOD
 from front_analysis_v12 import FrontalAnalysisV12
 
+# Add meteo_analysis imports
+sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
+from meteo_analysis.hazards.convection import calculate_convection_probability
+from meteo_analysis.hazards.severe import calculate_ship, calculate_scp, evaluate_hail_threat
+from meteo_analysis.hazards.visibility import estimate_visibility, classify_fog_type
+from meteo_analysis.hazards.winter import detect_freezing_rain
+from meteo_analysis.orography.foehn import detect_foehn
+from meteo_analysis.products.nlg import generate_bulletin
+
 # --- CONFIGURAZIONE ---
 DATASET_ID = "ICON_2I_SURFACE_PRESSURE_LEVELS"
 API_LIST_URL = f"https://meteohub.agenziaitaliameteo.it/api/datasets/{DATASET_ID}/opendata"
@@ -655,6 +664,59 @@ def process_data():
                     "frontAnalysisMessage": front_analysis_message,
                 }
 
+                # --- METEO ANALYSIS INTEGRATION (MOCK/PLACEHOLDERS) ---
+                # NOTE: These are placeholder implementations using basic heuristics 
+                # because full 3D vertical profiles are not downloaded by this script yet.
+                # They should be replaced with real data processing once upper levels are available.
+                xr_u = xr.DataArray(u_val)
+                xr_v = xr.DataArray(v_val)
+                xr_temp = xr.DataArray(np.nan_to_num(temp_c, nan=15.0))
+                xr_rh = xr.DataArray(np.nan_to_num(rh_val, nan=50.0))
+                xr_cloud = xr.DataArray(np.nan_to_num(cloud, nan=0.0))
+                xr_rain = xr.DataArray(np.nan_to_num(rain, nan=0.0))
+                
+                mucape = xr_temp * 50  # Mock MUCAPE
+                cin = xr_temp * -1     # Mock CIN
+                convergence_10m = xr.zeros_like(xr_temp) + 2e-4  # Mock convergence
+                front_distance_km = xr.zeros_like(xr_temp) + 30  # Mock distance
+                
+                convection_prob = calculate_convection_probability(mucape, cin, convergence_10m, front_distance_km) * 100
+                convection_prob = xr.where(convection_prob > 100, 100, convection_prob)
+                convection_prob = xr.where(convection_prob < 0, 0, convection_prob)
+                
+                lapse_rate = xr.zeros_like(xr_temp) + 6.5
+                z_0c = xr_temp * 150
+                mix_ratio = xr_rh / 10.0
+                ship = calculate_ship(mucape, lapse_rate, z_0c, mix_ratio)
+                
+                srh = xr.zeros_like(xr_temp) + 150
+                bulk_shear = xr.zeros_like(xr_temp) + 15
+                scp = calculate_scp(mucape, srh, bulk_shear)
+                
+                dry_air_700hpa_rh = xr_rh - 20
+                hail_threat = evaluate_hail_threat(ship, scp, dry_air_700hpa_rh)
+                
+                fog_type = classify_fog_type(xr_rh, np.hypot(xr_u, xr_v), xr_cloud)
+                visibility = estimate_visibility(xr_rh, fog_type)
+                
+                t_925 = xr_temp - 5 + 273.15
+                t_850 = xr_temp - 10 + 273.15
+                t_700 = xr_temp - 15 + 273.15
+                t_2m = xr_temp + 273.15
+                freezing_rain = detect_freezing_rain(t_925, t_850, t_700, t_2m, xr_rain)
+                
+                u_700 = xr_u * 1.5
+                v_700 = xr_v * 1.5
+                foehn = detect_foehn(u_700, v_700, xr_rh)
+                
+                # Placeholder trend calculation (mock)
+                nlg_bulletin = generate_bulletin(
+                    front_type="freddo" if np.nanmean(temp_c) < 15 else "caldo",
+                    prob_thunderstorm="alta" if float(convection_prob.max()) > 50 else "bassa",
+                    hail_threat="alto" if float(hail_threat.max()) > 1 else "basso",
+                    t_trend="calo" if np.nanmean(temp_c) < 15 else "aumento"
+                )
+
                 step_data = {
                     "meta": header,
                     "wind_u": { "header": {**header, "parameterCategory": 2, "parameterNumber": 2}, "data": np.round(u_val, 1).flatten().tolist() },
@@ -665,6 +727,13 @@ def process_data():
                     "press": clean_for_json(press, 1),
                     "rh": clean_for_json(rh_val, 0),
                     "cloud": clean_for_json(cloud, 0),
+                    "convection_prob": clean_for_json(convection_prob.values, 2),
+                    "hail_threat": clean_for_json(hail_threat.values, 0),
+                    "visibility": clean_for_json(visibility.values, 0),
+                    "fog_type": clean_for_json(fog_type.values, 0),
+                    "freezing_rain": clean_for_json(freezing_rain.values, 0),
+                    "foehn": clean_for_json(foehn.values, 0),
+                    "nlg_bulletin": nlg_bulletin,
                     "fronts": fronts
                 }
 
