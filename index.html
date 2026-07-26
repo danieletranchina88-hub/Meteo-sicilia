@@ -489,8 +489,9 @@
       }
 
       .layer-card.disabled {
-        opacity: 0.4;
-        pointer-events: none;
+        opacity: 0.58;
+        cursor: help;
+        pointer-events: auto;
       }
 
       .layer-swatch {
@@ -590,6 +591,27 @@
       .gps-button .icon {
         width: 17px;
         height: 17px;
+      }
+
+      .bulletin-entry-button {
+        display: flex;
+        width: 100%;
+        min-height: 48px;
+        align-items: center;
+        justify-content: center;
+        gap: 9px;
+        border: 1px solid rgba(151, 231, 250, 0.62);
+        border-radius: 13px;
+        background: linear-gradient(135deg, #087fd5, #21c2e9);
+        color: #fff;
+        box-shadow: 0 8px 20px rgba(4, 135, 211, 0.2);
+        font-size: 11px;
+        font-weight: 920;
+      }
+
+      .bulletin-entry-button .icon {
+        width: 18px;
+        height: 18px;
       }
 
       .toggle-list {
@@ -1275,7 +1297,8 @@
         #app-header {
           top: 16px;
           left: 18px;
-          right: 18px;
+          /* Keep the header controls outside the always-open desktop drawer. */
+          right: 344px;
         }
 
         .brand-panel {
@@ -1420,13 +1443,13 @@
           </svg>
         </div>
         <div>
-          <div class="eyebrow">Italia · meteo modellistico</div>
+          <div class="eyebrow">Italia · dominio ICON-2I completo</div>
           <h1>METEOHUB</h1>
           <p id="brand-subtitle" class="brand-subtitle">ICON-2I · alta risoluzione</p>
         </div>
       </div>
       <div id="header-actions">
-        <button id="bulletin-button" class="header-button" type="button" aria-expanded="false" aria-controls="bulletin-card" aria-label="Apri bollettino automatico">
+        <button id="bulletin-button" class="header-button primary" type="button" aria-expanded="false" aria-controls="bulletin-card" aria-label="Apri bollettino automatico">
           <svg class="icon" viewBox="0 0 24 24">
             <path d="M6 3h9l3 3v15H6z"></path>
             <path d="M15 3v4h4"></path>
@@ -1489,13 +1512,25 @@
 
         <div class="drawer-content">
           <section class="drawer-section">
+            <button id="drawer-bulletin-button" class="bulletin-entry-button" type="button" aria-expanded="false" aria-controls="bulletin-card">
+              <svg class="icon" viewBox="0 0 24 24">
+                <path d="M6 3h9l3 3v15H6z"></path>
+                <path d="M15 3v4h4"></path>
+                <path d="M9 11h6"></path>
+                <path d="M9 15h6"></path>
+              </svg>
+              Bollettino automatico
+            </button>
+          </section>
+
+          <section class="drawer-section">
             <div class="section-title">
               <h3>Modello di previsione</h3>
               <span>ad area limitata</span>
             </div>
             <div class="model-grid">
               <button class="model-card active" type="button" data-model="icon2i" aria-pressed="true">
-                <b>ICON-2I</b><small>Italia · circa 2,2 km</small>
+                <b>ICON-2I</b><small>Dominio completo · circa 2,2 km</small>
               </button>
             </div>
           </section>
@@ -1930,7 +1965,8 @@
 
       const FREEZING_STOPS = [
         { v: 0, c: [255, 255, 255], a: 0 },
-        { v: 1, c: [49, 54, 149], a: 1.0 }
+        { v: 1, c: [69, 117, 180], a: 0.9 },
+        { v: 2, c: [49, 54, 149], a: 1.0 }
       ];
 
       const FOEHN_STOPS = [
@@ -2068,9 +2104,10 @@
           unit: "",
           stops: FREEZING_STOPS,
           discrete: true,
+          categorical: true,
           decimals: 0,
-          ticks: [0, 1],
-          note: "Rischio di pioggia congelantesi (gelicidio).",
+          ticks: ["Nessuno", "Possibile", "Elevato"],
+          note: "Warm nose a 925/850/700 hPa, temperatura al suolo sottozero e precipitazione del passo.",
           opacity: 0.9,
           terrainOpacity: 0.3
         },
@@ -2079,9 +2116,10 @@
           unit: "",
           stops: FOEHN_STOPS,
           discrete: true,
+          categorical: true,
           decimals: 0,
-          ticks: [0, 1, 2],
-          note: "Rischio di venti di ricaduta (Foehn). 0=Nessuno, 1=Foehn da Nord (versante sud), 2=Foehn da Sud (versante nord).",
+          ticks: ["Nessuno", "Da nord", "Da sud"],
+          note: "Vento trasversale a 700 hPa, differenza barica fra i versanti e aria secca sottovento, limitati all'arco alpino.",
           opacity: 0.9,
           terrainOpacity: 0.3
         }
@@ -2090,10 +2128,10 @@
       const MODEL_INFO = {
         icon2i: {
           label: "ICON-2I",
-          subtitle: "ICON-2I · alta risoluzione",
+          subtitle: "ICON-2I · dominio completo 3–22°E",
           drawer: "Campi ICON-2I e strumenti sinottici",
           directory: "data_weather",
-          gridLabel: "griglia ICON-2I · circa 2,2 km",
+          gridLabel: "griglia completa ICON-2I · 761×761 · circa 2,2 km",
           attribution: "Dati numerici ICON-2I da Agenzia ItaliaMeteo / MeteoHub."
         }
       };
@@ -2121,6 +2159,7 @@
         drawerScrim: document.getElementById("drawer-scrim"),
         cleanButton: document.getElementById("clean-button"),
         bulletinButton: document.getElementById("bulletin-button"),
+        drawerBulletinButton: document.getElementById("drawer-bulletin-button"),
         bulletinCard: document.getElementById("bulletin-card"),
         bulletinClose: document.getElementById("bulletin-close"),
         bulletinScrim: document.getElementById("bulletin-scrim"),
@@ -2212,7 +2251,7 @@
       let toastTimer = null;
 
       const stepCache = new Map();
-      const CACHE_LIMIT = 6;
+      const CACHE_LIMIT = window.innerWidth < 900 ? 2 : 3;
       const prefersReducedMotion = window.matchMedia && window.matchMedia("(prefers-reduced-motion: reduce)").matches;
 
       function clamp(value, minimum, maximum) {
@@ -2221,6 +2260,63 @@
 
       function getGrid(field) {
         return field && field.data ? field.data : field;
+      }
+
+      async function fetchJsonResource(url) {
+        const response = await fetch(url);
+        if (!response.ok) throw new Error("Risorsa dati non disponibile");
+        if (!url.endsWith(".gz")) return response.json();
+        // Alcuni CDN marcano il file come Content-Encoding: gzip e fetch lo
+        // restituisce già decompresso. GitHub Pages normalmente lo serve come
+        // application/gzip e richiede invece la decompressione esplicita.
+        const encoding = (response.headers.get("content-encoding") || "").toLowerCase();
+        if (encoding.includes("gzip")) return response.json();
+        if (!response.body || typeof DecompressionStream === "undefined") {
+          throw new Error("Il browser non supporta i dati ICON-2I compressi");
+        }
+        const stream = response.body.pipeThrough(new DecompressionStream("gzip"));
+        return new Response(stream).json();
+      }
+
+      function compactNumericFields(data) {
+        if (!data || !data.meta) return;
+        const keys = [
+          "temp", "feels_like", "rain", "press", "rh", "cloud",
+          "convection_prob", "hail_threat", "visibility",
+          "freezing_rain", "foehn"
+        ];
+        keys.forEach(function (key) {
+          if (Array.isArray(data[key])) {
+            data[key] = Float32Array.from(
+              data[key],
+              function (value) { return value === null ? NaN : Number(value); }
+            );
+          }
+        });
+        ["wind_u", "wind_v"].forEach(function (key) {
+          if (data[key] && Array.isArray(data[key].data)) {
+            data[key].data = Float32Array.from(
+              data[key].data,
+              function (value) { return value === null ? NaN : Number(value); }
+            );
+          }
+        });
+      }
+
+      function compactUpperData(data) {
+        if (!data || !data.levels) return;
+        Object.keys(data.levels).forEach(function (level) {
+          const fields = data.levels[level];
+          if (!fields) return;
+          ["t", "rh", "u", "v", "thetaW", "thetaE"].forEach(function (key) {
+            if (Array.isArray(fields[key])) {
+              fields[key] = Float32Array.from(
+                fields[key],
+                function (value) { return value === null ? NaN : Number(value); }
+              );
+            }
+          });
+        });
       }
 
       function rgba(color, alpha) {
@@ -2458,6 +2554,20 @@
         return Number.isFinite(value) ? value.toFixed(decimals) + " " + unit : "--";
       }
 
+      function formatFreezingRisk(value) {
+        if (!Number.isFinite(value)) return "--";
+        if (value >= 2) return "Elevato";
+        if (value >= 1) return "Possibile";
+        return "Nessun segnale";
+      }
+
+      function formatFoehn(value) {
+        if (!Number.isFinite(value)) return "--";
+        if (value >= 2) return "Da sud";
+        if (value >= 1) return "Da nord";
+        return "Nessun segnale";
+      }
+
       function heatIndexCelsius(temperatureC, relativeHumidity) {
         const temperatureF = temperatureC * 9 / 5 + 32;
         const humidity = clamp(relativeHumidity, 0, 100);
@@ -2602,6 +2712,23 @@
         return Boolean(getGrid(currentData[key]));
       }
 
+      function unavailableLayerMessage(key) {
+        const meta = currentData && currentData.meta ? currentData.meta : {};
+        if (key === "freezing_rain") {
+          return meta.freezingRainMessage ||
+            "Rischio gelicidio non disponibile per questa scadenza";
+        }
+        if (key === "foehn") {
+          return meta.foehnMessage ||
+            "Indice foehn non disponibile per questa scadenza";
+        }
+        if (key === "convection_prob") {
+          return meta.convectionMessage ||
+            "Probabilità temporali non disponibile per questa scadenza";
+        }
+        return "Campo non disponibile per questo passo";
+      }
+
       function selectedPressureLevel(key) {
         if (key === "theta850" || key === "t850") return "850";
         return ["temp", "wind", "rh"].includes(key) ? selectedLevel : "surface";
@@ -2659,17 +2786,16 @@
         const item = catalog[targetIndex];
         if (!item) return;
         const hour = item.hour !== undefined ? item.hour : item.leadHours;
-        upperPromise = fetch(MODEL_INFO[activeModel].directory + "/upper_" + hour + ".json")
-          .then(function (response) {
-            if (!response.ok) throw new Error("Campi 850 hPa non disponibili");
-            return response.json();
-          })
+        upperPromise = fetchJsonResource(
+          MODEL_INFO[activeModel].directory + "/upper_" + hour + ".json.gz"
+        )
           .then(function (data) {
             const requestedLevel = selectedPressureLevel(activeLayer);
             if (requestedLevel !== "surface" && requestedLevel !== "850" &&
               (!data.levels || !data.levels[requestedLevel])) {
               throw new Error("Livello " + requestedLevel + " hPa assente");
             }
+            compactUpperData(data);
             upperData = data;
             upperIndex = targetIndex;
           })
@@ -2691,6 +2817,7 @@
 
       function prepareData(data) {
         if (!data || !data.meta) return;
+        compactNumericFields(data);
 
         const meta = data.meta;
         const temperature = getGrid(data.temp);
@@ -2728,9 +2855,9 @@
           return cached;
         }
 
-        const response = await fetch(MODEL_INFO[activeModel].directory + "/" + catalog[index].file);
-        if (!response.ok) throw new Error("Dati non disponibili per questo passo");
-        const data = await response.json();
+        const data = await fetchJsonResource(
+          MODEL_INFO[activeModel].directory + "/" + catalog[index].file
+        );
         prepareData(data);
         cacheStep(index, data);
         return data;
@@ -2739,9 +2866,9 @@
       async function prefetchStep(index) {
         if (!catalog[index] || stepCache.has(index)) return;
         try {
-          const response = await fetch(MODEL_INFO[activeModel].directory + "/" + catalog[index].file);
-          if (!response.ok) return;
-          const next = await response.json();
+          const next = await fetchJsonResource(
+            MODEL_INFO[activeModel].directory + "/" + catalog[index].file
+          );
           prepareData(next);
           cacheStep(index, next);
         } catch (error) {
@@ -2985,8 +3112,10 @@
       function updateLayerUi() {
         document.querySelectorAll("[data-layer]").forEach(function (button) {
           const key = button.dataset.layer;
+          const available = hasLayerData(key);
           button.classList.toggle("active", key === activeLayer);
-          button.classList.toggle("disabled", !hasLayerData(key));
+          button.classList.toggle("disabled", !available);
+          button.setAttribute("aria-disabled", available ? "false" : "true");
           button.setAttribute("aria-pressed", key === activeLayer ? "true" : "false");
         });
 
@@ -3031,7 +3160,7 @@
       function setLayer(nextLayer) {
         if (!LAYER_INFO[nextLayer]) return;
         if (currentData && !hasLayerData(nextLayer)) {
-          toast("Campo non disponibile per questo passo");
+          toast(unavailableLayerMessage(nextLayer));
           return;
         }
 
@@ -3185,7 +3314,9 @@
 
         const image = rasterContext.createImageData(width, height);
         const pixels = image.data;
-        const rasterSampler = useNearestCell ? sampleNearest : sampleBilinear;
+        const rasterSampler = useNearestCell || info.categorical
+          ? sampleNearest
+          : sampleBilinear;
         const isWindField = activeLayer === "wind";
         const fieldKey = activeLayer === "feels" ? "feels_like" : activeLayer;
         const fieldGrid = isWindField
@@ -3260,18 +3391,18 @@
 
       function generateGraticule() {
         const features = [];
-        for (let longitude = 6; longitude <= 20; longitude += 1) {
+        for (let longitude = 3; longitude <= 22; longitude += 1) {
           features.push({
             type: "Feature",
             properties: { axis: "longitude", value: longitude },
-            geometry: { type: "LineString", coordinates: [[longitude, 35], [longitude, 48]] }
+            geometry: { type: "LineString", coordinates: [[longitude, 33.7], [longitude, 48.9]] }
           });
         }
-        for (let latitude = 35; latitude <= 48; latitude += 1) {
+        for (let latitude = 34; latitude <= 48; latitude += 1) {
           features.push({
             type: "Feature",
             properties: { axis: "latitude", value: latitude },
-            geometry: { type: "LineString", coordinates: [[6, latitude], [20, latitude]] }
+            geometry: { type: "LineString", coordinates: [[3, latitude], [22, latitude]] }
           });
         }
         return { type: "FeatureCollection", features: features };
@@ -4409,8 +4540,12 @@
         ui.detailFront.textContent = nearestFrontText(point.gx, point.gy);
         ui.detailConvection.textContent = formatValue(fieldValue("convection_prob", point.gx, point.gy), 0, "%");
         ui.detailVisibility.textContent = formatValue(fieldValue("visibility", point.gx, point.gy), 0, "m");
-        ui.detailFreezing.textContent = formatValue(fieldValue("freezing_rain", point.gx, point.gy), 0, "");
-        ui.detailFoehn.textContent = formatValue(fieldValue("foehn", point.gx, point.gy), 0, "");
+        ui.detailFreezing.textContent = formatFreezingRisk(
+          fieldValue("freezing_rain", point.gx, point.gy)
+        );
+        ui.detailFoehn.textContent = formatFoehn(
+          fieldValue("foehn", point.gx, point.gy)
+        );
 
         ui.readout.classList.add("visible");
         document.body.classList.add("readout-open");
@@ -4476,6 +4611,7 @@
         ui.bulletinCard.classList.toggle("open", next);
         ui.bulletinCard.setAttribute("aria-hidden", next ? "false" : "true");
         ui.bulletinButton.setAttribute("aria-expanded", next ? "true" : "false");
+        ui.drawerBulletinButton.setAttribute("aria-expanded", next ? "true" : "false");
         document.body.classList.toggle("bulletin-open", next);
         if (next) {
           closeDrawerOnMobile();
@@ -4521,7 +4657,7 @@
       function setupMap() {
         map = new maplibregl.Map({
           container: "map",
-          bounds: [[6, 35], [19.5, 47.5]],
+          bounds: [[3, 33.7], [22, 48.9]],
           maxZoom: 12.5,
           minZoom: 3.2,
           dragPan: true,
@@ -4879,6 +5015,9 @@
 
       ui.bulletinButton.addEventListener("click", function () {
         setBulletin(!ui.bulletinCard.classList.contains("open"));
+      });
+      ui.drawerBulletinButton.addEventListener("click", function () {
+        setBulletin(true);
       });
       ui.bulletinClose.addEventListener("click", function () {
         setBulletin(false);
