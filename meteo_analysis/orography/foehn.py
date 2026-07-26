@@ -20,12 +20,82 @@ def _like(template, values):
     return values
 
 
+def cross_alpine_pressure_difference(
+    pressure_hpa,
+    latitudes,
+    offset_degrees=1.35,
+):
+    """Return pressure north minus pressure south across the Alpine barrier.
+
+    The input grid is regular in latitude.  Each grid row is compared with
+    points roughly 150 km north and south, which is wide enough to span the
+    main Alpine ridge without replacing the diagnostic with a local pressure
+    gradient.
+    """
+    pressure = _array(pressure_hpa)
+    latitude = _array(latitudes).squeeze()
+    if pressure.ndim != 2 or latitude.ndim != 1 or pressure.shape[0] != latitude.size:
+        raise ValueError("griglia pressione/latitudine non coerente")
+
+    if latitude[0] > latitude[-1]:
+        latitude_ascending = latitude[::-1]
+        pressure_ascending = pressure[::-1]
+    else:
+        latitude_ascending = latitude
+        pressure_ascending = pressure
+
+    north = np.full_like(pressure, np.nan, dtype=float)
+    south = np.full_like(pressure, np.nan, dtype=float)
+    north_targets = latitude + float(offset_degrees)
+    south_targets = latitude - float(offset_degrees)
+    for column in range(pressure.shape[1]):
+        values = pressure_ascending[:, column]
+        finite = np.isfinite(latitude_ascending) & np.isfinite(values)
+        if np.count_nonzero(finite) < 2:
+            continue
+        north[:, column] = np.interp(
+            north_targets,
+            latitude_ascending[finite],
+            values[finite],
+            left=np.nan,
+            right=np.nan,
+        )
+        south[:, column] = np.interp(
+            south_targets,
+            latitude_ascending[finite],
+            values[finite],
+            left=np.nan,
+            right=np.nan,
+        )
+    return north - south
+
+
+def alpine_domain_mask(latitudes, longitudes):
+    """Return a conservative mask covering the Alpine ridge and lee valleys."""
+    latitude = _array(latitudes).squeeze()
+    longitude = _array(longitudes).squeeze()
+    if latitude.ndim != 1 or longitude.ndim != 1:
+        raise ValueError("coordinate alpine non monodimensionali")
+    lon_grid, lat_grid = np.meshgrid(longitude, latitude)
+    broad_arc = (
+        (lat_grid >= 44.4)
+        & (lat_grid <= 48.25)
+        & (lon_grid >= 5.8)
+        & (lon_grid <= 15.8)
+    )
+    # Exclude the broad Po Valley and the distant north-eastern lowlands.
+    south_edge = 44.65 + 0.055 * np.maximum(lon_grid - 6.0, 0.0)
+    north_edge = 48.2 - 0.025 * np.maximum(lon_grid - 6.0, 0.0)
+    return broad_arc & (lat_grid >= south_edge) & (lat_grid <= north_edge)
+
+
 def detect_foehn(
     u_700,
     v_700,
     rh_sfc,
     north_minus_south_pressure_hpa=None,
     ridge_axis_degrees_from_east=10.0,
+    domain_mask=None,
 ):
     """Detect cross-Alpine foehn with flow, pressure and lee-side dryness.
 
@@ -73,4 +143,7 @@ def detect_foehn(
     )
     result[north_foehn] = 1.0
     result[south_foehn] = 2.0
+    if domain_mask is not None:
+        mask = np.broadcast_to(np.asarray(domain_mask, dtype=bool), result.shape)
+        result[valid & ~mask] = 0.0
     return _like(rh_sfc, result)
