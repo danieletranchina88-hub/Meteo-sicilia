@@ -741,6 +741,18 @@
         transition: opacity 0.2s ease, transform 0.2s ease;
       }
 
+      #bulletin-card {
+        position: fixed;
+        z-index: 34;
+        top: calc(var(--safe-top) + 10px);
+        right: 10px;
+        width: min(306px, calc(100vw - 20px));
+        padding: 10px 11px 9px;
+        border-radius: 15px;
+        pointer-events: auto;
+        transition: opacity 0.2s ease, transform 0.2s ease;
+      }
+
       .legend-head {
         display: flex;
         align-items: flex-start;
@@ -1399,6 +1411,18 @@
               <button class="layer-card" type="button" data-layer="t850" style="--swatch: linear-gradient(#3e96dc,#e2603c)">
                 <span class="layer-swatch"></span><span><b>T 850 hPa</b><small>temperatura in quota</small></span>
               </button>
+              <button class="layer-card" type="button" data-layer="convection_prob" style="--swatch: linear-gradient(#f0e68c,#d73027)">
+                <span class="layer-swatch"></span><span><b>Rischio Temporali</b><small>Probabilità innesco</small></span>
+              </button>
+              <button class="layer-card" type="button" data-layer="visibility" style="--swatch: linear-gradient(#f7f7f7,#606f80)">
+                <span class="layer-swatch"></span><span><b>Visibilità</b><small>Nebbia e nubi basse</small></span>
+              </button>
+              <button class="layer-card" type="button" data-layer="freezing_rain" style="--swatch: linear-gradient(#e0f3f8,#313695)">
+                <span class="layer-swatch"></span><span><b>Rischio Ghiaccio</b><small>Gelicidio</small></span>
+              </button>
+              <button class="layer-card" type="button" data-layer="foehn" style="--swatch: linear-gradient(#fee090,#d73027)">
+                <span class="layer-swatch"></span><span><b>Foehn</b><small>Caduta alpina</small></span>
+              </button>
             </div>
             <div id="level-picker" class="level-picker">
               <label for="level-select">Quota di temperatura, vento e umidità
@@ -1528,7 +1552,16 @@
         <div class="point-detail"><b>Nuvolosità</b><span id="detail-cloud">--</span></div>
         <div class="point-detail"><b>Pressione</b><span id="detail-pressure">--</span></div>
         <div class="point-detail"><b>Fronte vicino</b><span id="detail-front">--</span></div>
+        <div class="point-detail"><b>Prob. Temporali</b><span id="detail-convection">--</span></div>
+        <div class="point-detail"><b>Visibilità</b><span id="detail-visibility">--</span></div>
+        <div class="point-detail"><b>Gelicidio</b><span id="detail-freezing">--</span></div>
+        <div class="point-detail"><b>Foehn</b><span id="detail-foehn">--</span></div>
       </div>
+    </section>
+
+    <section id="bulletin-card" class="surface" aria-live="polite" aria-label="Bollettino testuale">
+      <h3 style="margin: 0 0 8px 0; font-size: 14px; font-weight: 600;">Bollettino Automatico (NLG)</h3>
+      <p id="nlg-bulletin-text" style="margin: 0; font-size: 13px; line-height: 1.4; color: var(--text-muted);">In attesa di dati...</p>
     </section>
 
     <section id="timeline" class="surface" aria-label="Sequenza temporale">
@@ -1740,6 +1773,32 @@
       ];
       const THETA_STOPS = buildDiscreteBands(THETA_ANCHORS, 276, 312, 1, 1);
 
+      const CONVECTION_STOPS = [
+        { v: 0, c: [255, 255, 255], a: 0 },
+        { v: 40, c: [240, 230, 140], a: 0.7 },
+        { v: 80, c: [215, 48, 39], a: 0.85 },
+        { v: 100, c: [165, 0, 38], a: 1.0 }
+      ];
+
+      const VISIBILITY_STOPS = [
+        { v: 0, c: [150, 150, 150], a: 1.0 },
+        { v: 200, c: [200, 200, 200], a: 0.8 },
+        { v: 1000, c: [230, 230, 230], a: 0.6 },
+        { v: 5000, c: [250, 250, 250], a: 0.2 },
+        { v: 10000, c: [255, 255, 255], a: 0 }
+      ];
+
+      const FREEZING_STOPS = [
+        { v: 0, c: [255, 255, 255], a: 0 },
+        { v: 1, c: [49, 54, 149], a: 1.0 }
+      ];
+
+      const FOEHN_STOPS = [
+        { v: 0, c: [255, 255, 255], a: 0 },
+        { v: 1, c: [254, 224, 144], a: 0.8 },
+        { v: 2, c: [215, 48, 39], a: 0.8 }
+      ];
+
       const LAYER_INFO = {
         temp: {
           label: "Temperatura a 2 m",
@@ -1841,6 +1900,50 @@
           opacity: 0.93,
           terrainOpacity: 0.3,
           upper: true
+        },
+        convection_prob: {
+          label: "Probabilità Temporali",
+          unit: "%",
+          stops: CONVECTION_STOPS,
+          discrete: false,
+          decimals: 0,
+          ticks: [0, 40, 80, 100],
+          note: "Probabilità di innesco convettivo basata su MUCAPE, CIN e convergenza.",
+          opacity: 0.8,
+          terrainOpacity: 0.3
+        },
+        visibility: {
+          label: "Visibilità",
+          unit: "m",
+          stops: VISIBILITY_STOPS,
+          discrete: true,
+          decimals: 0,
+          ticks: [0, 200, 1000, 5000, 10000],
+          note: "Stima visibilità basata su umidità e tipo di nebbia.",
+          opacity: 0.9,
+          terrainOpacity: 0.3
+        },
+        freezing_rain: {
+          label: "Rischio Gelicidio",
+          unit: "",
+          stops: FREEZING_STOPS,
+          discrete: true,
+          decimals: 0,
+          ticks: [0, 1],
+          note: "Rischio di pioggia congelantesi (gelicidio).",
+          opacity: 0.9,
+          terrainOpacity: 0.3
+        },
+        foehn: {
+          label: "Foehn",
+          unit: "",
+          stops: FOEHN_STOPS,
+          discrete: true,
+          decimals: 0,
+          ticks: [0, 1, 2],
+          note: "Rischio di venti di ricaduta (Foehn). 1=Nord, 2=Sud.",
+          opacity: 0.9,
+          terrainOpacity: 0.3
         }
       };
 
@@ -1914,6 +2017,10 @@
         detailCloud: document.getElementById("detail-cloud"),
         detailPressure: document.getElementById("detail-pressure"),
         detailFront: document.getElementById("detail-front"),
+        detailConvection: document.getElementById("detail-convection"),
+        detailVisibility: document.getElementById("detail-visibility"),
+        detailFreezing: document.getElementById("detail-freezing"),
+        detailFoehn: document.getElementById("detail-foehn"),
         levelPicker: document.getElementById("level-picker"),
         levelSelect: document.getElementById("level-select")
       };
@@ -2585,6 +2692,7 @@
           updateModelUi();
           updateTimeUi();
           updateLayerUi();
+          updateBulletinUi();
           updateLegend();
           renderWeather();
           updateIsobars();
@@ -2611,6 +2719,7 @@
 
           updateTimeUi();
           updateLayerUi();
+          updateBulletinUi();
           updateLegend();
           renderWeather();
           updateIsobars();
@@ -2642,6 +2751,16 @@
         ui.timeLabel.textContent = formatDateTime(date);
         ui.leadLabel.textContent = lead === null ? "--" : "+" + lead + " h";
         ui.slider.setAttribute("aria-valuetext", formatDateTime(date));
+      }
+
+      function updateBulletinUi() {
+        const textElement = document.getElementById("nlg-bulletin-text");
+        if (!textElement) return;
+        if (currentData && currentData.nlg_bulletin) {
+          textElement.textContent = currentData.nlg_bulletin;
+        } else {
+          textElement.textContent = "Nessun bollettino disponibile.";
+        }
       }
 
       function makeLegendGradient(info) {
@@ -4113,6 +4232,10 @@
         ui.detailCloud.textContent = formatValue(fieldValue("cloud", point.gx, point.gy), 0, "%");
         ui.detailPressure.textContent = formatValue(fieldValue("press", point.gx, point.gy), 0, "hPa");
         ui.detailFront.textContent = nearestFrontText(point.gx, point.gy);
+        ui.detailConvection.textContent = formatValue(fieldValue("convection_prob", point.gx, point.gy), 0, "%");
+        ui.detailVisibility.textContent = formatValue(fieldValue("visibility", point.gx, point.gy), 0, "m");
+        ui.detailFreezing.textContent = formatValue(fieldValue("freezing_rain", point.gx, point.gy), 0, "");
+        ui.detailFoehn.textContent = formatValue(fieldValue("foehn", point.gx, point.gy), 0, "");
 
         ui.readout.classList.add("visible");
         document.body.classList.add("readout-open");
