@@ -664,8 +664,10 @@ def process_data():
                     "frontAnalysisMessage": front_analysis_message,
                 }
 
-                # --- METEO ANALYSIS INTEGRATION ---
-                # Mock arrays based on heuristics since raw 3D data isn't easily extracted here
+                # --- METEO ANALYSIS INTEGRATION (MOCK/PLACEHOLDERS) ---
+                # NOTE: These are placeholder implementations using basic heuristics 
+                # because full 3D vertical profiles are not downloaded by this script yet.
+                # They should be replaced with real data processing once upper levels are available.
                 xr_u = xr.DataArray(u_val)
                 xr_v = xr.DataArray(v_val)
                 xr_temp = xr.DataArray(np.nan_to_num(temp_c, nan=15.0))
@@ -679,6 +681,8 @@ def process_data():
                 front_distance_km = xr.zeros_like(xr_temp) + 30  # Mock distance
                 
                 convection_prob = calculate_convection_probability(mucape, cin, convergence_10m, front_distance_km) * 100
+                convection_prob = xr.where(convection_prob > 100, 100, convection_prob)
+                convection_prob = xr.where(convection_prob < 0, 0, convection_prob)
                 
                 lapse_rate = xr.zeros_like(xr_temp) + 6.5
                 z_0c = xr_temp * 150
@@ -705,9 +709,10 @@ def process_data():
                 v_700 = xr_v * 1.5
                 foehn = detect_foehn(u_700, v_700, xr_rh)
                 
+                # Placeholder trend calculation (mock)
                 nlg_bulletin = generate_bulletin(
                     front_type="freddo" if np.nanmean(temp_c) < 15 else "caldo",
-                    prob_thunderstorm="alta" if float(convection_prob.max()) > 0.5 else "bassa",
+                    prob_thunderstorm="alta" if float(convection_prob.max()) > 50 else "bassa",
                     hail_threat="alto" if float(hail_threat.max()) > 1 else "basso",
                     t_trend="calo" if np.nanmean(temp_c) < 15 else "aumento"
                 )
