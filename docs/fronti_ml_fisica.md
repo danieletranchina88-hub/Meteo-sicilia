@@ -49,6 +49,10 @@ python scripts/prepare_front_training_data.py \
 python scripts/train_front_model.py \
   training_data/front_features.parquet \
   --model models/front_model.json
+
+Per l'inferenza automatica il repository conserva lo stesso modello in
+`models/front_model.json.gz.b64`: è una copia compressa e codificata Base64,
+caricata direttamente da `FrontModel` senza alterare i valori predetti.
 ```
 
 Il preparatore scarica l'archivio DWD verificandone l'MD5 e legge, senza
