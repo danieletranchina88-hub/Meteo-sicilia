@@ -20,6 +20,9 @@ FIELD_SPECS = {
     # CIN is normalised later because providers use both signed and magnitude
     # conventions.
     "cin_ml": FieldSpec(-8_000.0, 8_000.0, "J kg-1"),
+    "t700": FieldSpec(180.0, 330.0, "K"),
+    "u700": FieldSpec(-150.0, 150.0, "m s-1"),
+    "v700": FieldSpec(-150.0, 150.0, "m s-1"),
 }
 
 
@@ -63,6 +66,13 @@ class IconRunFields:
 
     def _validate(self, name: str, data: xr.DataArray) -> None:
         spec = FIELD_SPECS.get(name)
+        units = str(data.attrs.get("units") or "").lower().replace(" ", "")
+        if name in {"cape_ml", "cin_ml"} and not (
+            "j" in units and "kg" in units
+        ):
+            raise ValueError(
+                f"{name}: unità {data.attrs.get('units')!r}, attese J kg-1"
+            )
         sample = data
         if "step" in sample.dims and sample.sizes["step"] > 3:
             last = sample.sizes["step"] - 1
@@ -110,6 +120,12 @@ class IconRunFields:
                 index = _step_hours(dataset).index(int(hour))
                 data = data.isel(step=index)
         data = data.squeeze(drop=True)
+        if name == "cin_ml":
+            # MeteoHub/ICON-2I uses about -999.9 for cells where CIN is not
+            # defined. Remove it before interpolation, otherwise a sentinel
+            # can be blended with neighbouring valid cells and become a
+            # plausible-looking but physically false inhibition value.
+            data = data.where(data > -900.0)
         if "latitude" not in data.coords or "longitude" not in data.coords:
             raise ValueError(f"{name}: coordinate latitude/longitude assenti")
 

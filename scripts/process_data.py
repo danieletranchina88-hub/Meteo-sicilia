@@ -2,6 +2,7 @@ import requests
 import xarray as xr
 import numpy as np
 import json
+import gzip
 import os
 import sys
 import shutil
@@ -19,12 +20,19 @@ from meteo_analysis.hazards.convection import (
     calculate_convection_probability,
     front_distance_km,
     horizontal_convergence,
+    normalize_cin,
     summarize_convection,
 )
 from meteo_analysis.hazards.visibility import (
     calculate_fog_probability,
     classify_fog_type,
     estimate_visibility,
+)
+from meteo_analysis.hazards.winter import detect_freezing_rain
+from meteo_analysis.orography.foehn import (
+    alpine_domain_mask,
+    cross_alpine_pressure_difference,
+    detect_foehn,
 )
 from meteo_analysis.products.nlg import (
     NLG_METHOD,
@@ -48,18 +56,21 @@ NWP_DIRECTORY_ID = "ICON-2I_SURFACE_PRESSURE_LEVELS"
 NWP_DIRECT_BASE = "https://meteohub.agenziaitaliameteo.it/nwp"
 
 # ============================================================
-# ITALIA (inclusi Sicilia + Sardegna)
+# DOMINIO MASSIMO PUBBLICATO DA ICON-2I / METEOHUB.
+# Verificato direttamente sui GRIB: 761 x 761 punti.
 # ============================================================
-LAT_MIN, LAT_MAX = 35.0, 48.5
-LON_MIN, LON_MAX = 6.0, 19.5
+LAT_MIN, LAT_MAX = 33.7, 48.9
+LON_MIN, LON_MAX = 3.0, 22.0
 
 # ============================================================
 # CONTROLLO DIMENSIONE GRIGLIA
 # FIX 1: Portato a 600_000 per mantenere la risoluzione nativa a 2.2km
 # ============================================================
-MAX_PIXELS = 600_000  
+MAX_PIXELS = 600_000
 FEELS_LIKE_METHOD = "heat-index-wind-chill-v1"
-CONVECTION_METHOD = "icon2i-mlcape-cin-convergence-front-v2"
+CONVECTION_METHOD = "icon2i-mlcape-cin-convergence-front-v3"
+MAX_CONVECTIVE_HIGH_AREA_PCT = 15.0
+MAX_FIXED_80_AREA_PCT = 5.0
 
 
 def download_grib_file(url, destination):
@@ -147,6 +158,35 @@ def write_json_atomic(path, payload):
     try:
         with open(partial, "w", encoding="utf-8") as output:
             json.dump(payload, output, separators=(",", ":"), allow_nan=False)
+        os.replace(partial, path)
+    finally:
+        if os.path.exists(partial):
+            os.remove(partial)
+
+
+def write_json_gzip_atomic(path, payload, compresslevel=6):
+    """Write deterministic compressed JSON, atomically.
+
+    Full-domain ICON-2I fields are large.  Manual gzip decompression in the
+    browser keeps the gh-pages snapshot and mobile transfer size manageable
+    without reducing the 761 x 761 source domain.
+    """
+    partial = path + ".part"
+    encoded = json.dumps(
+        payload,
+        separators=(",", ":"),
+        allow_nan=False,
+    ).encode("utf-8")
+    try:
+        with open(partial, "wb") as raw:
+            with gzip.GzipFile(
+                filename="",
+                mode="wb",
+                fileobj=raw,
+                compresslevel=int(compresslevel),
+                mtime=0,
+            ) as output:
+                output.write(encoded)
         os.replace(partial, path)
     finally:
         if os.path.exists(partial):
@@ -267,7 +307,7 @@ def prepare_icon_front_analyzer(run_dt):
 
 
 def prepare_icon_hazard_fields(run_dt):
-    """Download real ML-CAPE/CIN diagnostics for the whole ICON-2I run.
+    """Download real convective and 700-hPa hazard fields for the ICON run.
 
     These files replace the former temperature-derived CAPE and constant
     convergence placeholders.  Failure is non-fatal: the hazard layer is then
@@ -276,6 +316,7 @@ def prepare_icon_hazard_fields(run_dt):
     run_tag = run_dt.strftime("%Y%m%d%H")
     common = f"ICON_2I_SURFACE_PRESSURE_LEVELS_{run_tag}"
     run_base = f"{NWP_DIRECT_BASE}/{NWP_DIRECTORY_ID}/{run_tag}"
+    pressure_file_700 = f"{common}_isobaricInhPa-700.grib"
     requests_to_make = {
         "cape_ml": (
             f"{run_base}/CAPE_ML/{common}_atmML-0.grib",
@@ -285,12 +326,28 @@ def prepare_icon_hazard_fields(run_dt):
             f"{run_base}/CIN_ML/{common}_atmML-0.grib",
             "cin_ml.grib",
         ),
+        "t700": (
+            f"{run_base}/T/{pressure_file_700}",
+            "t700.grib",
+        ),
+        "u700": (
+            f"{run_base}/U/{pressure_file_700}",
+            "u700.grib",
+        ),
+        "v700": (
+            f"{run_base}/V/{pressure_file_700}",
+            "v700.grib",
+        ),
     }
+    optional_fields = {"t700", "u700", "v700"}
     if os.path.exists(HAZARD_TEMP_DIR):
         shutil.rmtree(HAZARD_TEMP_DIR)
     os.makedirs(HAZARD_TEMP_DIR)
     paths = {}
-    print("2b. Scarico ML-CAPE e ML-CIN reali ICON-2I…", flush=True)
+    print(
+        "2b. Scarico ML-CAPE/CIN e T/U/V a 700 hPa reali ICON-2I…",
+        flush=True,
+    )
     try:
         with ThreadPoolExecutor(max_workers=2) as executor:
             futures = {}
@@ -302,20 +359,30 @@ def prepare_icon_hazard_fields(run_dt):
                 )
             for future in as_completed(futures):
                 name, destination = futures[future]
-                future.result()
+                try:
+                    future.result()
+                except Exception as error:
+                    if name in optional_fields:
+                        print(f"   {name} non disponibile: {error}", flush=True)
+                        continue
+                    raise
                 paths[name] = destination
                 print(
                     f"   {name}: {os.path.getsize(destination) / 1048576:.1f} MB",
                     flush=True,
                 )
         fields = IconRunFields(paths)
-        if len(fields.available_hours) < 70:
+        cape_cin_hours = sorted(
+            fields.hours.get("cape_ml", set())
+            & fields.hours.get("cin_ml", set())
+        )
+        if len(cape_cin_hours) < 70:
             fields.close()
             raise ValueError(
-                f"solo {len(fields.available_hours)} scadenze CAPE/CIN disponibili"
+                f"solo {len(cape_cin_hours)} scadenze CAPE/CIN disponibili"
             )
         print(
-            f"   Diagnostica convettiva pronta: {len(fields.available_hours)} ore.",
+            f"   Diagnostica convettiva pronta: {len(cape_cin_hours)} ore.",
             flush=True,
         )
         return fields
@@ -637,8 +704,10 @@ def process_data():
                 # MASCHERA
                 dw_step = dw_step.sortby('latitude', ascending=False).sortby('longitude', ascending=True)
                 mask = (
-                    (dw_step.latitude >= LAT_MIN) & (dw_step.latitude <= LAT_MAX) &
-                    (dw_step.longitude >= LON_MIN) & (dw_step.longitude <= LON_MAX)
+                    (dw_step.latitude >= LAT_MIN - 1.0e-6)
+                    & (dw_step.latitude <= LAT_MAX + 1.0e-6)
+                    & (dw_step.longitude >= LON_MIN - 1.0e-6)
+                    & (dw_step.longitude <= LON_MAX + 1.0e-6)
                 )
 
                 cut_w = dw_step.where(mask, drop=True)
@@ -720,6 +789,41 @@ def process_data():
                         if f > 1: r_raw = downsample_2d(r_raw, f)
                         if r_raw.shape == u_val.shape:
                             rain = np.asarray(r_raw, dtype=float)
+                            # ICON total precipitation is normally encoded as
+                            # an accumulation from the start of the run.
+                            # Convert it to the amount arriving in this step:
+                            # hazard algorithms must not keep using rain that
+                            # fell many hours earlier.
+                            rain_steps = np.atleast_1d(ds_rain.step.values)
+                            rain_index = next(
+                                (
+                                    position
+                                    for position, value in enumerate(rain_steps)
+                                    if value == raw_step
+                                ),
+                                i if i < len(rain_steps) else -1,
+                            )
+                            if rain_index > 0:
+                                previous_step_value = rain_steps[rain_index - 1]
+                                previous_step = select_step(
+                                    ds_rain,
+                                    previous_step_value,
+                                    rain_index - 1,
+                                )
+                                previous_step = previous_step.sortby(
+                                    'latitude', ascending=False
+                                ).sortby('longitude', ascending=True)
+                                previous_raw = extract_raw_grid(
+                                    previous_step, mask, ['tp', 'tot_prec']
+                                )
+                                if previous_raw is not None and previous_raw.ndim == 2:
+                                    if f > 1:
+                                        previous_raw = downsample_2d(previous_raw, f)
+                                    if previous_raw.shape == u_val.shape:
+                                        rain = np.maximum(
+                                            rain - np.asarray(previous_raw, dtype=float),
+                                            0.0,
+                                        )
 
                 # 4) NUVOLOSITÀ
                 cloud = np.full_like(u_val, np.nan, dtype=float)
@@ -778,6 +882,7 @@ def process_data():
                     "frontValidTime": front_valid_time,
                     "frontAnalysisStatus": front_analysis_status,
                     "frontAnalysisMessage": front_analysis_message,
+                    "rainAccumulation": "forecast-step",
                 }
 
                 # --- DIAGNOSTICA CONVETTIVA REALE ---
@@ -789,8 +894,10 @@ def process_data():
                     "status": "unavailable",
                     "maximum": None,
                     "p95": None,
+                    "validCellPct": 0.0,
                     "areaAbove40Pct": None,
                     "areaAbove70Pct": None,
+                    "areaExactly80Pct": None,
                 }
                 convection_message = (
                     "ML-CAPE o ML-CIN ICON-2I non disponibile per questa scadenza."
@@ -814,8 +921,11 @@ def process_data():
                             u_val, v_val, lat, lon, smoothing_km=10.0
                         )
                         nearest_front_km = front_distance_km(lat, lon, fronts)
-                        omega_payload = icon_front_analyzer.diagnostic_field(
-                            step_hours, "omega700"
+                        omega_payload = (
+                            icon_front_analyzer.diagnostic_field(
+                                step_hours, "omega700"
+                            )
+                            if icon_front_analyzer is not None else None
                         )
                         omega_700 = interpolate_native_field(
                             omega_payload, lat, lon
@@ -853,9 +963,7 @@ def process_data():
                         )
 
                 # Nebbia/visibilità usa esclusivamente i campi di superficie
-                # reali disponibili.  Gli altri rischi tridimensionali non
-                # vengono più simulati da T2m: restano null finché il profilo
-                # verticale necessario non è presente.
+                # reali disponibili.
                 xr_rh = xr.DataArray(rh_val)
                 xr_cloud = xr.DataArray(cloud)
                 fog_type = classify_fog_type(
@@ -871,8 +979,96 @@ def process_data():
                     xr_rh, fog_type, fog_probability=fog_probability
                 )
                 hail_threat = None
+
+                # Gelicidio: warm nose osservato sui livelli reali
+                # 925/850/700 hPa, superficie sottozero e precipitazione
+                # effettivamente in arrivo nel passo.
                 freezing_rain = None
+                freezing_message = (
+                    "Profilo termico 925/850/700 hPa non disponibile."
+                )
+                try:
+                    t925 = interpolate_native_field(
+                        icon_front_analyzer.diagnostic_field(step_hours, "t925"),
+                        lat,
+                        lon,
+                    )
+                    t850 = interpolate_native_field(
+                        icon_front_analyzer.diagnostic_field(step_hours, "t850"),
+                        lat,
+                        lon,
+                    )
+                    t700 = (
+                        icon_hazard_fields.field("t700", step_hours, lat, lon)
+                        if icon_hazard_fields is not None else None
+                    )
+                    if t925 is None or t850 is None or t700 is None:
+                        raise ValueError("uno o più livelli termici assenti")
+                    freezing_rain = np.asarray(
+                        detect_freezing_rain(
+                            t925,
+                            t850,
+                            t700,
+                            temp_c,
+                            rain,
+                        ),
+                        dtype=float,
+                    )
+                    if not np.isfinite(freezing_rain).any():
+                        raise ValueError("nessuna cella con profilo completo")
+                    freezing_message = (
+                        "Warm nose ICON-2I 925/850/700 hPa, T2m sottozero "
+                        "e precipitazione del passo."
+                    )
+                except Exception as freezing_error:
+                    freezing_rain = None
+                    freezing_message = (
+                        "Rischio gelicidio non disponibile: "
+                        f"{type(freezing_error).__name__}:{freezing_error}"
+                    )
+
+                # Foehn: vento realmente perpendicolare alla catena a 700 hPa,
+                # differenza barica nord-sud misurata su PMSL e aria secca
+                # sottovento. Il campo è confinato all'arco alpino.
                 foehn = None
+                foehn_message = "Vento 700 hPa o gradiente alpino non disponibile."
+                try:
+                    u700 = (
+                        icon_hazard_fields.field("u700", step_hours, lat, lon)
+                        if icon_hazard_fields is not None else None
+                    )
+                    v700 = (
+                        icon_hazard_fields.field("v700", step_hours, lat, lon)
+                        if icon_hazard_fields is not None else None
+                    )
+                    if u700 is None or v700 is None:
+                        raise ValueError("vento 700 hPa assente")
+                    pressure_difference = cross_alpine_pressure_difference(
+                        press,
+                        lat,
+                    )
+                    foehn = np.asarray(
+                        detect_foehn(
+                            u700,
+                            v700,
+                            rh_val,
+                            north_minus_south_pressure_hpa=pressure_difference,
+                            domain_mask=alpine_domain_mask(lat, lon),
+                        ),
+                        dtype=float,
+                    )
+                    if not np.isfinite(foehn).any():
+                        raise ValueError("nessuna cella con diagnostica completa")
+                    foehn_message = (
+                        "Vento trasversale ICON-2I a 700 hPa, differenza PMSL "
+                        "nord-sud e UR sottovento, limitati all'arco alpino."
+                    )
+                except Exception as foehn_error:
+                    foehn = None
+                    foehn_message = (
+                        "Indice foehn non disponibile: "
+                        f"{type(foehn_error).__name__}:{foehn_error}"
+                    )
 
                 previous = bulletin_history.get(step_hours - 3, {})
                 bulletin_inputs = build_bulletin_inputs(
@@ -894,7 +1090,7 @@ def process_data():
                     previous_temperature_mean=previous.get("temperatureMean"),
                     previous_pressure_mean=previous.get("pressureMean"),
                     trend_hours=3 if previous else None,
-                    area="Italia",
+                    area="dominio completo ICON-2I",
                 )
                 nlg_details = generate_bulletin_details(bulletin_inputs)
                 nlg_bulletin = nlg_details["text"]
@@ -918,9 +1114,19 @@ def process_data():
                             "convection": convection_prob is not None,
                             "fogVisibility": True,
                             "hail": False,
-                            "freezingRain": False,
-                            "foehn": False,
+                            "freezingRain": freezing_rain is not None,
+                            "foehn": foehn is not None,
                         },
+                        "freezingRainMethod": (
+                            "icon2i-warm-nose-925-850-700-v1"
+                            if freezing_rain is not None else None
+                        ),
+                        "freezingRainMessage": freezing_message,
+                        "foehnMethod": (
+                            "icon2i-cross-alpine-700-pmsl-rh-v1"
+                            if foehn is not None else None
+                        ),
+                        "foehnMessage": foehn_message,
                     }
                 )
 
@@ -929,7 +1135,9 @@ def process_data():
                     "wind_u": { "header": {**header, "parameterCategory": 2, "parameterNumber": 2}, "data": np.round(u_val, 1).flatten().tolist() },
                     "wind_v": { "header": {**header, "parameterCategory": 2, "parameterNumber": 3}, "data": np.round(v_val, 1).flatten().tolist() },
                     "temp": clean_for_json(temp_c, 1),
-                    "feels_like": clean_for_json(feels_like, 1),
+                    # Il browser ricava la temperatura percepita dalla stessa
+                    # formula, evitando una grande matrice duplicata.
+                    "feels_like": None,
                     "rain": clean_for_json(rain, 2),
                     "press": clean_for_json(press, 1),
                     "rh": clean_for_json(rh_val, 0),
@@ -940,20 +1148,21 @@ def process_data():
                     ),
                     "hail_threat": None,
                     "visibility": clean_for_json(visibility.values, 0),
-                    "fog_type": clean_for_json(fog_type.values, 0),
-                    "fog_probability": clean_for_json(
-                        fog_probability.values * 100.0, 0
+                    "freezing_rain": (
+                        clean_for_json(freezing_rain, 0)
+                        if freezing_rain is not None else None
                     ),
-                    "freezing_rain": None,
-                    "foehn": None,
+                    "foehn": (
+                        clean_for_json(foehn, 0)
+                        if foehn is not None else None
+                    ),
                     "nlg_bulletin": nlg_bulletin,
                     "nlg_bulletin_details": nlg_details,
                     "fronts": fronts
                 }
 
-                out_name = f"step_{step_hours}.json"
-                # FIX 3: Minificazione del file
-                write_json_atomic(f"{TEMP_DIR}/{out_name}", step_data)
+                out_name = f"step_{step_hours}.json.gz"
+                write_json_gzip_atomic(f"{TEMP_DIR}/{out_name}", step_data)
 
                 # Campi a 850 hPa (theta-e, T, vento) per il layer di
                 # ispezione dei fronti: file separato, scaricato dal sito
@@ -964,8 +1173,8 @@ def process_data():
                         if upper is not None:
                             upper["runTime"] = iso_z(run_dt)
                             upper["validTime"] = iso_date
-                            write_json_atomic(
-                                f"{TEMP_DIR}/upper_{step_hours}.json", upper
+                            write_json_gzip_atomic(
+                                f"{TEMP_DIR}/upper_{step_hours}.json.gz", upper
                             )
                     except Exception as upper_error:
                         print(f" upper-{step_hours}h:{upper_error}", end="", flush=True)
@@ -996,9 +1205,20 @@ def process_data():
                             else None
                         ),
                         "cinMinimum": (
-                            round(float(np.nanmin(-np.abs(cin_ml))), 1)
-                            if cin_ml is not None and np.isfinite(cin_ml).any()
+                            round(float(np.nanmin(normalize_cin(cin_ml))), 1)
+                            if cin_ml is not None
+                            and np.isfinite(normalize_cin(cin_ml)).any()
                             else None
+                        ),
+                        "cinMissingPct": (
+                            round(
+                                float(
+                                    np.mean(~np.isfinite(normalize_cin(cin_ml)))
+                                    * 100.0
+                                ),
+                                2,
+                            )
+                            if cin_ml is not None else None
                         ),
                         "convergenceP99": (
                             float(np.round(
@@ -1007,6 +1227,16 @@ def process_data():
                             if convergence_10m is not None
                             and np.isfinite(convergence_10m).any()
                             else None
+                        ),
+                        "freezingRainMessage": freezing_message,
+                        "freezingRainCells": (
+                            int(np.count_nonzero(freezing_rain >= 1.0))
+                            if freezing_rain is not None else None
+                        ),
+                        "foehnMessage": foehn_message,
+                        "foehnCells": (
+                            int(np.count_nonzero(foehn >= 1.0))
+                            if foehn is not None else None
                         ),
                     })
 
@@ -1067,6 +1297,24 @@ def process_data():
             },
         )
         hazard_qc_hours.sort(key=lambda item: item["leadHours"])
+        convection_qc_failures = []
+        for hour_qc in hazard_qc_hours:
+            summary = hour_qc.get("convectionSummary") or {}
+            high_area = summary.get("areaAbove70Pct")
+            fixed_80_area = summary.get("areaExactly80Pct")
+            if high_area is not None and high_area > MAX_CONVECTIVE_HIGH_AREA_PCT:
+                convection_qc_failures.append(
+                    f"+{hour_qc['leadHours']}h area>=70%: {high_area}%"
+                )
+            if fixed_80_area is not None and fixed_80_area > MAX_FIXED_80_AREA_PCT:
+                convection_qc_failures.append(
+                    f"+{hour_qc['leadHours']}h area=80%: {fixed_80_area}%"
+                )
+        if convection_qc_failures:
+            raise RuntimeError(
+                "QC convettivo anti-saturazione fallito; mantengo il run "
+                "pubblicato precedente: " + "; ".join(convection_qc_failures[:8])
+            )
         write_json_atomic(
             f"{TEMP_DIR}/hazard_qc.json",
             {
@@ -1074,6 +1322,10 @@ def process_data():
                 "runTime": iso_z(run_dt),
                 "model": "ICON-2I",
                 "convectionMethod": CONVECTION_METHOD,
+                "antiSaturationThresholds": {
+                    "maximumAreaAbove70Pct": MAX_CONVECTIVE_HIGH_AREA_PCT,
+                    "maximumAreaExactly80Pct": MAX_FIXED_80_AREA_PCT,
+                },
                 "nlgMethod": NLG_METHOD,
                 "hours": hazard_qc_hours,
             },

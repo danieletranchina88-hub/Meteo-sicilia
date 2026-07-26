@@ -15,7 +15,10 @@ from meteo_analysis.hazards.visibility import (  # noqa: E402
     estimate_visibility,
 )
 from meteo_analysis.hazards.winter import detect_freezing_rain  # noqa: E402
-from meteo_analysis.orography.foehn import detect_foehn  # noqa: E402
+from meteo_analysis.orography.foehn import (  # noqa: E402
+    cross_alpine_pressure_difference,
+    detect_foehn,
+)
 
 
 shape = (3, 4)
@@ -58,5 +61,23 @@ foehn_without_pressure = detect_foehn(
     np.zeros(shape), np.full(shape, -10.0), np.full(shape, 30.0)
 )
 assert np.isnan(foehn_without_pressure).all(), "foehn senza gradiente barico"
+
+latitudes = np.array([49.0, 48.0, 47.0, 46.0, 45.0, 44.0])
+pressure_gradient = np.repeat(
+    np.array([1018.0, 1017.0, 1015.0, 1011.0, 1009.0, 1008.0])[:, None],
+    4,
+    axis=1,
+)
+cross_barrier = cross_alpine_pressure_difference(
+    pressure_gradient, latitudes, offset_degrees=1.0
+)
+assert np.nanmedian(cross_barrier[2:4]) > 3.0
+north_foehn = detect_foehn(
+    np.zeros((2, 4)),
+    np.full((2, 4), -9.0),
+    np.full((2, 4), 30.0),
+    north_minus_south_pressure_hpa=np.full((2, 4), 4.0),
+)
+assert np.all(north_foehn == 1.0), "foehn settentrionale non riconosciuto"
 
 print("Hazard tests passed")

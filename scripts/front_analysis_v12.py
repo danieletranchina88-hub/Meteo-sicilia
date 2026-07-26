@@ -1510,11 +1510,16 @@ class IconSynopticFrontAnalyzer(SynopticFrontAnalyzer):
         and other products from reaching into the detector's private dataset
         implementation.
         """
-        if name not in {"omega700"} or name not in self.datasets:
+        dataset_name = {
+            "omega700": "omega700",
+            "t850": "t",
+            "t925": "t925",
+        }.get(name)
+        if dataset_name is None or dataset_name not in self.datasets:
             return None
         if hour not in self.hour_to_index:
             return None
-        values = np.asarray(self._field(name, hour), dtype=float)
+        values = np.asarray(self._field(dataset_name, hour), dtype=float)
         if values.shape != (len(self.latitudes), len(self.longitudes)):
             return None
         return {

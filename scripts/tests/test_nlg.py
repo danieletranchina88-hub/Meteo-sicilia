@@ -53,6 +53,7 @@ high_field[:, :2] = 78.0
 high = make_inputs(cold_front, high_field)
 high_details = generate_bulletin_details(high)
 assert "fronte freddo" in high_details["text"].lower()
+assert "su Italia" in high_details["text"]
 assert "picchi del 78%" in high_details["text"]
 assert high_details["method"].endswith("-v2")
 assert len(high_details["paragraphs"]) >= 4
