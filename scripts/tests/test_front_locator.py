@@ -50,6 +50,22 @@ def run(name, field, lon=LON, lat=LAT, **kw):
 
 ok = True
 
+# --- explicit second derivatives ------------------------------------------
+print("Laplaciano: stencil centrale diretto:")
+test_metrics = {"dx_km_col": np.full((7, 1), 2.0), "dy_km": 3.0}
+x_km = np.arange(7, dtype=float) * 2.0
+y_km = np.arange(7, dtype=float) * 3.0
+xx_km, yy_km = np.meshgrid(x_km, y_km)
+quadratic = xx_km ** 2 + yy_km ** 2
+quadratic_laplacian = fl.laplacian(quadratic, test_metrics)
+if not np.allclose(quadratic_laplacian[1:-1, 1:-1], 4.0, atol=1.0e-12):
+    print("  FAIL: il Laplaciano di x^2+y^2 deve valere 4"); ok = False
+checkerboard = np.tile((np.arange(7) % 2).astype(float), (7, 1))
+checker_laplacian = fl.laplacian(checkerboard, test_metrics)
+if np.allclose(checker_laplacian[1:-1, 1:-1], 0.0):
+    print("  FAIL: rilevato stencil a due passi / disaccoppiamento pari-dispari")
+    ok = False
+
 # --- TFP SIGN (the critical correctness test) ------------------------------
 print("SEGNO TFP standard (fronte caldo-sud / freddo-nord: bordo caldo < 0):")
 cands = run("  fronte dritto", theta_w_straight())

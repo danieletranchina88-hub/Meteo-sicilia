@@ -132,10 +132,36 @@ def gradient(field: np.ndarray, metrics: dict) -> tuple[np.ndarray, np.ndarray]:
 
 
 def laplacian(field: np.ndarray, metrics: dict) -> np.ndarray:
-    east, north = gradient(field, metrics)
-    east_x, _ = gradient(east, metrics)
-    _, north_y = gradient(north, metrics)
-    return east_x + north_y
+    """Metric-aware Laplacian using explicit centred second derivatives.
+
+    Applying the centred first-derivative operator twice is *not* equivalent
+    to the usual three-point second derivative: it produces a two-grid-step
+    stencil that can decouple odd and even grid points and displace the zero
+    contour used by the TFL locator. Sansom & Catto (2024) explicitly avoid
+    that construction for objective front detection.
+
+    The outermost grid cells are left undefined. They are already excluded by
+    the locator's physical boundary margin, and inventing one-sided curvature
+    there would create more edge artefacts than information.
+    """
+    values = np.asarray(field, dtype=float)
+    result = np.full_like(values, np.nan, dtype=float)
+    if values.ndim != 2 or min(values.shape) < 3:
+        return result
+
+    dx = np.asarray(metrics["dx_km_col"], dtype=float)
+    if dx.ndim == 1:
+        dx = dx[:, None]
+    dy = float(metrics["dy_km"])
+
+    d2x = (
+        values[1:-1, 2:] - 2.0 * values[1:-1, 1:-1] + values[1:-1, :-2]
+    ) / (dx[1:-1] ** 2)
+    d2y = (
+        values[2:, 1:-1] - 2.0 * values[1:-1, 1:-1] + values[:-2, 1:-1]
+    ) / (dy ** 2)
+    result[1:-1, 1:-1] = d2x + d2y
+    return result
 
 
 # --------------------------------------------------------------------------

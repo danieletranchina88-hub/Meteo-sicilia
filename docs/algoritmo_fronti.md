@@ -1,4 +1,4 @@
-# Analisi oggettiva dei fronti ICON-2I (v14)
+# Analisi oggettiva dei fronti ICON-2I (v17)
 
 ## Scopo e limite fondamentale
 
@@ -12,8 +12,54 @@ Meteorologico. `qualityScore` e `uncertaintyIndex` descrivono la coerenza
 interna delle prove in un singolo run deterministico: non sono probabilità
 calibrate e non misurano l'errore previsionale assoluto.
 
-Il metodo operativo è `icon2i-ofa-physics-guided-v14`.
+Il metodo operativo è `icon2i-ofa-physics-guided-v17`.
 
+
+## Revisione scientific-validation v17
+
+La v17 corregge quattro fonti di falsa sicurezza emerse dall'audit del codice:
+
+1. il Laplaciano usato per la TFL è calcolato con derivate seconde centrali
+   esplicite. Applicare due volte la derivata prima produceva uno stencil a due
+   passi capace di disaccoppiare punti pari e dispari della griglia;
+2. il ridge snapping resta disponibile come esperimento, ma non modifica più
+   la geometria pubblicata finché un test indipendente non dimostrerà un
+   miglioramento. Le diagnostiche descrivono quindi la stessa linea mostrata;
+3. i campi 850 hPa sono mascherati sopra 1200 m prima dello smoothing; è una
+   protezione transitoria contro livelli sotto-terreno. L'obiettivo definitivo
+   è θw su livelli di modello interpolati a circa 1 km AGL;
+4. pressione, coerenza verticale e omega mancanti sono esclusi dal punteggio.
+   `dataCompleteness` ed `evidenceAvailability` restano separati dalla qualità;
+   l'assenza di un campo non è più evidenza positiva.
+
+Le soglie climatologiche θw non vengono applicate al locator θ secco: le due
+distribuzioni dovranno essere calibrate separatamente per variabile, scala,
+stagione e fascia geografica.
+
+### Regola di promozione
+
+Una modifica di soglie, pesi o geometria può diventare operativa soltanto se:
+
+- migliora la validation temporale su POD/CSI e distanza geometrica;
+- non peggiora materialmente il test congelato;
+- il risultato è stabile alle tolleranze 25/50/75/100 km;
+- viene controllato separatamente per stagione, orografia, mare/terra, fase del
+  ciclo frontale e lead time;
+- mantiene visibili i casi incerti invece di trasformarli in assenza di fronte.
+
+Le etichette gold provengono da carte frontali ufficiali digitalizzate senza
+vedere la previsione. Il comando `front_benchmark.py --strict` rifiuta casi
+senza URL, SHA-256, analista e dichiarazione di cecità. Il raccoglitore
+`official_chart_archive.py` archivia le carte DWD correnti con provenienza
+immutabile; il relativo workflow gira due volte al giorno.
+
+Riferimenti metodologici principali:
+
+- Sansom & Catto (2024), GMD, DOI `10.5194/gmd-17-6137-2024`;
+- Hewson (2009), ECMWF Technical Memorandum, DOI `10.21957/un8liw3vjs`;
+- Beckert et al. (2023), GMD, DOI `10.5194/gmd-16-4427-2023`;
+- Bitsa et al. (2019), Climate, DOI `10.3390/cli7110130`;
+- DWD, European Meteorological Bulletin e carte di analisi al suolo.
 ## Dati usati
 
 Per ogni run 00/12 UTC e per tutte le 73 scadenze orarie:

@@ -1,0 +1,53 @@
+name: Archive official front references
+
+on:
+  workflow_dispatch:
+  schedule:
+    # DWD 00/12 UTC charts are normally available 2-3 hours later.
+    - cron: '35 4,16 * * *'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: official-front-references
+  cancel-in-progress: false
+
+jobs:
+  official-analyses:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Test collector offline
+        run: python scripts/tests/test_official_chart_archive.py
+
+      - name: Collect current DWD analysed charts
+        run: |
+          python scripts/official_chart_archive.py collect-current \
+            --limit 8 \
+            --output benchmarks/fronts/source_charts/dwd \
+            --catalog benchmarks/fronts/source_charts/dwd/catalog.json
+
+      - name: Collect current Met Office analysed chart
+        run: |
+          python scripts/official_chart_archive.py collect-metoffice \
+            --limit 2 \
+            --output benchmarks/fronts/source_charts/metoffice \
+            --catalog benchmarks/fronts/source_charts/metoffice/catalog.json
+
+      - name: Preserve immutable source package
+        uses: actions/upload-artifact@v4
+        with:
+          name: official-front-analyses-${{ github.run_id }}
+          path: benchmarks/fronts/source_charts/
+          if-no-files-found: error
+          retention-days: 90
+          compression-level: 6

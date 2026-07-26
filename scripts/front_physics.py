@@ -106,19 +106,16 @@ def candidate_evidence(metrics: dict) -> dict:
     dry_gradient = smoothstep(metrics.get("dryThermalGradient"), 0.75, 3.0)
     alignment = smoothstep(metrics.get("thermalAlignment"), 0.05, 0.75)
     # A genuine air-mass boundary should survive sampling on both sides at
-    # several physical distances.  Missing legacy data is deliberately
-    # neutral rather than negative: this module is also used by unit tests
-    # and by older archived analysis files.
+    # several physical distances. Missing optional data are excluded from the
+    # weighted mean, not replaced with free positive evidence.
     cross_distance_value = _finite(metrics.get("crossDistanceThermalSupport"))
-    cross_distance = (
-        smoothstep(cross_distance_value, 0.36, 0.84)
-        if np.isfinite(cross_distance_value) else 0.50
-    )
-    thermal = float(np.average(
-        [locator, theta_w_contrast, dry_contrast, virtual_contrast,
-         dry_gradient, alignment, cross_distance],
-        weights=[1.1, 1.2, 1.3, 1.2, 1.0, 0.8, 1.0],
-    ))
+    thermal_values = [locator, theta_w_contrast, dry_contrast,
+                      virtual_contrast, dry_gradient, alignment]
+    thermal_weights = [1.1, 1.2, 1.3, 1.2, 1.0, 0.8]
+    if np.isfinite(cross_distance_value):
+        thermal_values.append(smoothstep(cross_distance_value, 0.36, 0.84))
+        thermal_weights.append(1.0)
+    thermal = float(np.average(thermal_values, weights=thermal_weights))
 
     wind_shift = max(
         smoothstep(metrics.get("windShiftMs"), 1.5, 7.0),
@@ -138,30 +135,36 @@ def candidate_evidence(metrics: dict) -> dict:
     dynamic = float(0.62 * wind_pillar + 0.38 * deformation_pillar)
 
     pressure_value = _finite(metrics.get("pressureTroughHpa"))
-    pressure = (
-        smoothstep(pressure_value, -0.15, 1.8)
-        if np.isfinite(pressure_value) else 0.45
-    )
     isallobaric = _finite(metrics.get("isallobaricSupportHpa3h"))
+    pressure_parts, pressure_weights = [], []
+    if np.isfinite(pressure_value):
+        pressure_parts.append(smoothstep(pressure_value, -0.15, 1.8))
+        pressure_weights.append(0.72)
     if np.isfinite(isallobaric):
-        pressure = 0.72 * pressure + 0.28 * smoothstep(isallobaric, -0.3, 1.2)
+        pressure_parts.append(smoothstep(isallobaric, -0.3, 1.2))
+        pressure_weights.append(0.28)
+    pressure_available = bool(pressure_parts)
+    pressure = float(np.average(pressure_parts, weights=pressure_weights)) if pressure_available else 0.0
 
     lower_support = _finite(metrics.get("lowerLevelSupport"))
     lower_contrast = _finite(metrics.get("deltaThetaW925"))
+    vertical_parts, vertical_weights = [], []
     if np.isfinite(lower_support) and np.isfinite(lower_contrast):
-        vertical = 0.58 * smoothstep(lower_support, 0.35, 0.80) + 0.42 * smoothstep(
-            lower_contrast, 0.7, 3.2
-        )
-    else:
-        vertical = 0.45
-    # Cross-section 925/850 coherence (front_sections): prudent weight until
-    # calibrated on an independent archive; missing stays strictly neutral.
+        vertical_parts.extend((
+            smoothstep(lower_support, 0.35, 0.80),
+            smoothstep(lower_contrast, 0.7, 3.2),
+        ))
+        vertical_weights.extend((0.58, 0.42))
     coherence = _finite(metrics.get("verticalCoherence"))
     if np.isfinite(coherence):
-        vertical = 0.80 * vertical + 0.20 * float(np.clip(coherence, 0.0, 1.0))
+        vertical_parts.append(float(np.clip(coherence, 0.0, 1.0)))
+        vertical_weights.append(0.20)
+    vertical_available = bool(vertical_parts)
+    vertical = float(np.average(vertical_parts, weights=vertical_weights)) if vertical_available else 0.0
 
     omega = _finite(metrics.get("omega700PaS"))
-    activity = smoothstep(-omega, -0.03, 0.20) if np.isfinite(omega) else 0.50
+    activity_available = bool(np.isfinite(omega))
+    activity = smoothstep(-omega, -0.03, 0.20) if activity_available else 0.0
 
     synoptic = smoothstep(metrics.get("synopticSupport"), 0.55, 0.95)
     length = smoothstep(metrics.get("lengthKm"), 220.0, 750.0)
@@ -172,16 +175,26 @@ def candidate_evidence(metrics: dict) -> dict:
         [synoptic, length, shape, terrain], weights=[1.4, 0.8, 0.8, 0.6]
     ))
 
+    evidence_values = [thermal, dynamic, structural]
+    evidence_weights = [0.38, 0.24, 0.14]
+    if pressure_available:
+        evidence_values.append(pressure)
+        evidence_weights.append(0.10)
+    if vertical_available:
+        evidence_values.append(vertical)
+        evidence_weights.append(0.10)
+    if activity_available:
+        evidence_values.append(activity)
+        evidence_weights.append(0.04)
     evidence = float(np.clip(
-        0.38 * thermal
-        + 0.24 * dynamic
-        + 0.10 * pressure
-        + 0.10 * vertical
-        + 0.04 * activity
-        + 0.14 * structural,
-        0.0,
-        1.0,
+        np.average(evidence_values, weights=evidence_weights), 0.0, 1.0
     ))
+    availability = {
+        "crossDistance": bool(np.isfinite(cross_distance_value)),
+        "pressure": pressure_available,
+        "vertical": vertical_available,
+        "omega700": activity_available,
+    }
     components = {
         "thermal": round(thermal, 3),
         "dynamic": round(dynamic, 3),
@@ -193,6 +206,8 @@ def candidate_evidence(metrics: dict) -> dict:
     return {
         "candidateEvidence": round(evidence, 3),
         "evidenceComponents": components,
+        "evidenceAvailability": availability,
+        "dataCompleteness": round(float(sum(evidence_weights)), 3),
     }
 
 
