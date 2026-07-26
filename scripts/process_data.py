@@ -39,6 +39,7 @@ from meteo_analysis.products.nlg import (
     build_bulletin_inputs,
     generate_bulletin_details,
 )
+from meteo_analysis.products.meteograms import MeteogramArchive
 from meteo_analysis.ml.icon2i import Icon2IStore
 from meteo_analysis.ml.model import FrontModel
 from ml_fronts import predict_store as predict_ml_fronts
@@ -679,6 +680,19 @@ def iso_z(dt):
     if dt.tzinfo is None:
         dt = dt.replace(tzinfo=timezone.utc)
     return dt.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def temperature_celsius(values):
+    """Normalize an ICON temperature field to Celsius without guessing gaps."""
+    if values is None:
+        return None
+    result = np.asarray(values, dtype=float)
+    finite = result[np.isfinite(result)]
+    if finite.size and float(np.nanmedian(finite)) > 150.0:
+        result = result - 273.15
+    return result
+
+
 def process_data():
     run_dt, file_list = get_latest_run_files()
     if not file_list:
@@ -698,6 +712,7 @@ def process_data():
     front_analysis_summary = {}
     front_pipeline_diagnostics = {}
     bulletin_history = {}
+    meteogram_archive = None
     icon_front_analyzer = prepare_icon_front_analyzer(run_dt)
     if icon_front_analyzer is None:
         raise RuntimeError(
@@ -796,6 +811,12 @@ def process_data():
                 dy = float(abs(lat[0] - lat[1])) if ny > 1 else 0.0
                 lo2 = lo1 + (nx - 1) * dx
                 la2 = la1 - (ny - 1) * dy
+                if meteogram_archive is None:
+                    meteogram_archive = MeteogramArchive(
+                        lat,
+                        lon,
+                        run_time=iso_z(run_dt),
+                    )
 
                 # 1) TEMP e RH
                 temp_c = np.full_like(u_val, np.nan, dtype=float)
@@ -1042,6 +1063,9 @@ def process_data():
                 # 925/850/700 hPa, superficie sottozero e precipitazione
                 # effettivamente in arrivo nel passo.
                 freezing_rain = None
+                t925 = None
+                t850 = None
+                t700 = None
                 freezing_message = (
                     "Profilo termico 925/850/700 hPa non disponibile."
                 )
@@ -1225,6 +1249,7 @@ def process_data():
                 # Campi a 850 hPa (theta-e, T, vento) per il layer di
                 # ispezione dei fronti: file separato, scaricato dal sito
                 # solo quando l'utente attiva la vista 850 hPa.
+                upper = None
                 if icon_front_analyzer is not None:
                     try:
                         upper = icon_front_analyzer.upper_air(step_hours)
@@ -1238,6 +1263,33 @@ def process_data():
                         print(f" upper-{step_hours}h:{upper_error}", end="", flush=True)
 
                 if not any(x['hour'] == step_hours for x in catalog):
+                    meteogram_archive.add(
+                        step_hours,
+                        iso_date,
+                        {
+                            "temperature2m": temp_c,
+                            "feelsLike": feels_like,
+                            "rainStep": rain,
+                            "pressureMsl": press,
+                            "relativeHumidity2m": rh_val,
+                            "cloudCover": cloud,
+                            "windU10": u_val,
+                            "windV10": v_val,
+                            "convectionProbability": convection_prob,
+                            "capeMl": cape_ml,
+                            "cinMl": normalize_cin(cin_ml) if cin_ml is not None else None,
+                            "omega700": omega_700,
+                            "frontDistanceKm": nearest_front_km,
+                            "visibility": visibility.values,
+                            "fogProbability": np.asarray(fog_probability) * 100.0,
+                            "freezingRainRisk": freezing_rain,
+                            "foehnIndex": foehn,
+                            "temperature925": temperature_celsius(t925),
+                            "temperature850": temperature_celsius(t850),
+                            "temperature700": temperature_celsius(t700),
+                        },
+                        upper_air=upper,
+                    )
                     catalog.append({ "file": out_name, "label": f"{valid_dt.strftime('%d/%m %H:00')} UTC", "hour": step_hours, "runTime": iso_z(run_dt), "validTime": iso_date, "leadHours": step_hours })
                     front_qc_hours.append({
                         "leadHours": step_hours,
@@ -1389,6 +1441,16 @@ def process_data():
             },
         )
         write_json_atomic(f"{TEMP_DIR}/catalog.json", catalog)
+        if meteogram_archive is None:
+            raise RuntimeError("archivio meteogrammi non inizializzato")
+        meteogram_manifest = meteogram_archive.write(
+            os.path.join(TEMP_DIR, "meteograms")
+        )
+        if len(meteogram_manifest["hours"]) != len(catalog):
+            raise RuntimeError(
+                "archivio meteogrammi incompleto: "
+                f"{len(meteogram_manifest['hours'])}/{len(catalog)} scadenze"
+            )
 
         if os.path.exists(FINAL_DIR): shutil.rmtree(FINAL_DIR)
         shutil.move(TEMP_DIR, FINAL_DIR)
