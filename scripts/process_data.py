@@ -39,6 +39,9 @@ from meteo_analysis.products.nlg import (
     build_bulletin_inputs,
     generate_bulletin_details,
 )
+from meteo_analysis.ml.icon2i import Icon2IStore
+from meteo_analysis.ml.model import FrontModel
+from ml_fronts import predict_store as predict_ml_fronts
 
 # --- CONFIGURAZIONE ---
 DATASET_ID = "ICON_2I_SURFACE_PRESSURE_LEVELS"
@@ -207,6 +210,8 @@ def prepare_icon_front_analyzer(run_dt):
     pressure_file_850 = f"{common}_isobaricInhPa-850.grib"
     pressure_file_925 = f"{common}_isobaricInhPa-925.grib"
     pressure_file_700 = f"{common}_isobaricInhPa-700.grib"
+    pressure_file_500 = f"{common}_isobaricInhPa-500.grib"
+    height_file_10 = f"{common}_heightAboveGround-10.grib"
     surface_file = f"{common}_surface-0.grib"
     mean_sea_file = f"{common}_meanSea-0.grib"
     requests_to_make = {
@@ -219,6 +224,13 @@ def prepare_icon_front_analyzer(run_dt):
         "u_wind_925": (f"{run_base}/U/{pressure_file_925}", "u925.grib"),
         "v_wind_925": (f"{run_base}/V/{pressure_file_925}", "v925.grib"),
         "omega_700": (f"{run_base}/OMEGA/{pressure_file_700}", "omega700.grib"),
+        "temperature_700": (f"{run_base}/T/{pressure_file_700}", "t700_ml.grib"),
+        "humidity_700": (f"{run_base}/QV/{pressure_file_700}", "q700_ml.grib"),
+        "u_wind_500": (f"{run_base}/U/{pressure_file_500}", "u500_ml.grib"),
+        "v_wind_500": (f"{run_base}/V/{pressure_file_500}", "v500_ml.grib"),
+        "geopotential_500": (f"{run_base}/FI/{pressure_file_500}", "fi500_ml.grib"),
+        "u_wind_10": (f"{run_base}/U_10M/{height_file_10}", "u10_ml.grib"),
+        "v_wind_10": (f"{run_base}/V_10M/{height_file_10}", "v10_ml.grib"),
         "orography": (f"{run_base}/HSURF/{surface_file}", "hsurf.grib"),
         "pressure": (f"{run_base}/PMSL/{mean_sea_file}", "pmsl.grib"),
     }
@@ -226,7 +238,9 @@ def prepare_icon_front_analyzer(run_dt):
     # Sono opzionali per non inventare dati e non bloccare l'analisi primaria.
     optional_fields = {
         "pressure", "temperature_925", "humidity_925",
-        "u_wind_925", "v_wind_925", "omega_700"
+        "u_wind_925", "v_wind_925", "omega_700",
+        "temperature_700", "humidity_700", "u_wind_500", "v_wind_500",
+        "geopotential_500", "u_wind_10", "v_wind_10",
     }
 
     if os.path.exists(FRONT_TEMP_DIR):
@@ -261,6 +275,48 @@ def prepare_icon_front_analyzer(run_dt):
                     flush=True,
                 )
 
+        ml_guidance = None
+        model_path = os.path.join("models", "front_model.json.gz.b64")
+        ml_path_map = {
+            "t850": paths.get("temperature"),
+            "q850": paths.get("humidity"),
+            "u850": paths.get("u_wind"),
+            "v850": paths.get("v_wind"),
+            "t700": paths.get("temperature_700"),
+            "q700": paths.get("humidity_700"),
+            "u500": paths.get("u_wind_500"),
+            "v500": paths.get("v_wind_500"),
+            "fi500": paths.get("geopotential_500"),
+            "u10": paths.get("u_wind_10"),
+            "v10": paths.get("v_wind_10"),
+            "pmsl": paths.get("pressure"),
+        }
+        if os.path.exists(model_path) and all(ml_path_map.values()):
+            ml_store = None
+            try:
+                ml_store = Icon2IStore(ml_path_map, run_tag)
+                ml_model = FrontModel.load(model_path)
+                common_hours = set.intersection(*[
+                    ml_store.available_hours(name) for name in ml_path_map
+                ])
+                ml_guidance = predict_ml_fronts(
+                    ml_store,
+                    ml_model,
+                    hours=range(min(common_hours), max(common_hours) + 1, 3),
+                    output_dir=os.path.join(TEMP_DIR, "fronts_ml"),
+                )
+                print(
+                    "   Fusione ML pronta: griglia 0.20°, passo 3 h "
+                    "interpolato solo come conferma.",
+                    flush=True,
+                )
+            except Exception as error:
+                print(f"   ML frontale disabilitato: {error}", flush=True)
+                ml_guidance = None
+            finally:
+                if ml_store is not None:
+                    ml_store.close()
+
         analyzer = FrontalAnalysisV12(
             paths["temperature"],
             paths["humidity"],
@@ -278,6 +334,7 @@ def prepare_icon_front_analyzer(run_dt):
             method=ICON_FRONT_METHOD,
             source="ICON-2I",
             tendency_window_hours=3,
+            ml_guidance=ml_guidance,
         )
         if len(analyzer.available_hours) < 70:
             analyzer.close()
@@ -882,6 +939,7 @@ def process_data():
                     "frontValidTime": front_valid_time,
                     "frontAnalysisStatus": front_analysis_status,
                     "frontAnalysisMessage": front_analysis_message,
+                    "frontFusion": bool(front_properties.get("mlFusion")),
                     "rainAccumulation": "forecast-step",
                 }
 
