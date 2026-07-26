@@ -488,6 +488,7 @@ def classify_track(track: Track, window_hours: int, wind_sampler=None) -> dict:
     """
     hours = track.hours
     geo_speeds = []
+    motion_bearings = []
     for h_prev, h_next in zip(hours[:-1], hours[1:]):
         line_prev = track.lines[h_prev]["coordinates"]
         line_next = track.lines[h_next]["coordinates"]
@@ -495,8 +496,34 @@ def classify_track(track: Track, window_hours: int, wind_sampler=None) -> dict:
         geo_speeds.append(
             geometric_motion_kmh(line_prev, line_next, warm_prev, h_next - h_prev)
         )
+        previous_center = np.nanmean(np.asarray(line_prev, dtype=float), axis=0)
+        next_center = np.nanmean(np.asarray(line_next, dtype=float), axis=0)
+        mean_latitude = np.deg2rad(
+            0.5 * (previous_center[1] + next_center[1])
+        )
+        east_km = (
+            (next_center[0] - previous_center[0])
+            * 111.195
+            * np.cos(mean_latitude)
+        )
+        north_km = (next_center[1] - previous_center[1]) * 111.195
+        if np.hypot(east_km, north_km) >= 2.0:
+            motion_bearings.append(
+                np.deg2rad(
+                    (np.degrees(np.arctan2(east_km, north_km)) + 360.0)
+                    % 360.0
+                )
+            )
     geo_motion = float(np.median(geo_speeds)) if geo_speeds else 0.0
     geo_type = _type_from_speed(geo_motion)
+    if motion_bearings:
+        bearing_sine = float(np.mean(np.sin(motion_bearings)))
+        bearing_cosine = float(np.mean(np.cos(motion_bearings)))
+        motion_bearing = (
+            np.degrees(np.arctan2(bearing_sine, bearing_cosine)) + 360.0
+        ) % 360.0
+    else:
+        motion_bearing = np.nan
 
     ofa_values = [
         track.lines[h].get("ofaSpeedMps", np.nan) for h in hours
@@ -610,6 +637,10 @@ def classify_track(track: Track, window_hours: int, wind_sampler=None) -> dict:
     return {
         "frontType": front_type,
         "geoMotionKmh": round(geo_motion, 1),
+        "motionBearingDeg": (
+            None if not np.isfinite(motion_bearing)
+            else round(float(motion_bearing), 1)
+        ),
         "ofaSpeedKmh": None if not np.isfinite(ofa_motion) else round(ofa_motion, 1),
         "tendencyMotionKmh": None if not np.isfinite(tendency_motion) else round(tendency_motion, 1),
         "airmassMotionKmh": None if not np.isfinite(airmass_motion) else round(airmass_motion, 1),

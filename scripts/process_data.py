@@ -14,12 +14,23 @@ from front_analysis_v12 import FrontalAnalysisV12
 
 # Add meteo_analysis imports
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
-from meteo_analysis.hazards.convection import calculate_convection_probability
-from meteo_analysis.hazards.severe import calculate_ship, calculate_scp, evaluate_hail_threat
-from meteo_analysis.hazards.visibility import estimate_visibility, classify_fog_type
-from meteo_analysis.hazards.winter import detect_freezing_rain
-from meteo_analysis.orography.foehn import detect_foehn
-from meteo_analysis.products.nlg import generate_bulletin
+from meteo_analysis.core.icon_fields import IconRunFields
+from meteo_analysis.hazards.convection import (
+    calculate_convection_probability,
+    front_distance_km,
+    horizontal_convergence,
+    summarize_convection,
+)
+from meteo_analysis.hazards.visibility import (
+    calculate_fog_probability,
+    classify_fog_type,
+    estimate_visibility,
+)
+from meteo_analysis.products.nlg import (
+    NLG_METHOD,
+    build_bulletin_inputs,
+    generate_bulletin_details,
+)
 
 # --- CONFIGURAZIONE ---
 DATASET_ID = "ICON_2I_SURFACE_PRESSURE_LEVELS"
@@ -30,6 +41,9 @@ FINAL_DIR = "data_weather"
 TEMP_DIR = "temp_processing"
 TEMP_FILE = "temp.grib2"
 FRONT_TEMP_DIR = "temp_front_processing"
+HAZARD_TEMP_DIR = "temp_hazard_processing"
+# The API dataset identifier uses an underscore, while the public NWP
+# directory really uses a hyphen.  Keep the two identifiers separate.
 NWP_DIRECTORY_ID = "ICON-2I_SURFACE_PRESSURE_LEVELS"
 NWP_DIRECT_BASE = "https://meteohub.agenziaitaliameteo.it/nwp"
 
@@ -45,6 +59,7 @@ LON_MIN, LON_MAX = 6.0, 19.5
 # ============================================================
 MAX_PIXELS = 600_000  
 FEELS_LIKE_METHOD = "heat-index-wind-chill-v1"
+CONVECTION_METHOD = "icon2i-mlcape-cin-convergence-front-v2"
 
 
 def download_grib_file(url, destination):
@@ -251,6 +266,68 @@ def prepare_icon_front_analyzer(run_dt):
         return None
 
 
+def prepare_icon_hazard_fields(run_dt):
+    """Download real ML-CAPE/CIN diagnostics for the whole ICON-2I run.
+
+    These files replace the former temperature-derived CAPE and constant
+    convergence placeholders.  Failure is non-fatal: the hazard layer is then
+    explicitly unavailable instead of being filled with synthetic values.
+    """
+    run_tag = run_dt.strftime("%Y%m%d%H")
+    common = f"ICON_2I_SURFACE_PRESSURE_LEVELS_{run_tag}"
+    run_base = f"{NWP_DIRECT_BASE}/{NWP_DIRECTORY_ID}/{run_tag}"
+    requests_to_make = {
+        "cape_ml": (
+            f"{run_base}/CAPE_ML/{common}_atmML-0.grib",
+            "cape_ml.grib",
+        ),
+        "cin_ml": (
+            f"{run_base}/CIN_ML/{common}_atmML-0.grib",
+            "cin_ml.grib",
+        ),
+    }
+    if os.path.exists(HAZARD_TEMP_DIR):
+        shutil.rmtree(HAZARD_TEMP_DIR)
+    os.makedirs(HAZARD_TEMP_DIR)
+    paths = {}
+    print("2b. Scarico ML-CAPE e ML-CIN reali ICON-2I…", flush=True)
+    try:
+        with ThreadPoolExecutor(max_workers=2) as executor:
+            futures = {}
+            for name, (url, filename) in requests_to_make.items():
+                destination = os.path.join(HAZARD_TEMP_DIR, filename)
+                futures[executor.submit(download_grib_file, url, destination)] = (
+                    name,
+                    destination,
+                )
+            for future in as_completed(futures):
+                name, destination = futures[future]
+                future.result()
+                paths[name] = destination
+                print(
+                    f"   {name}: {os.path.getsize(destination) / 1048576:.1f} MB",
+                    flush=True,
+                )
+        fields = IconRunFields(paths)
+        if len(fields.available_hours) < 70:
+            fields.close()
+            raise ValueError(
+                f"solo {len(fields.available_hours)} scadenze CAPE/CIN disponibili"
+            )
+        print(
+            f"   Diagnostica convettiva pronta: {len(fields.available_hours)} ore.",
+            flush=True,
+        )
+        return fields
+    except Exception as error:
+        print(
+            "   Diagnostica convettiva non disponibile; "
+            f"pubblico il layer come assente: {error}",
+            flush=True,
+        )
+        return None
+
+
 def get_latest_run_files():
     print("1. Cerco dati su MeteoHub...", flush=True)
     try:
@@ -438,6 +515,42 @@ def clean_for_json(arr, decimals):
     return [None if not np.isfinite(float(v)) else float(v) for v in rounded]
 
 
+def interpolate_native_field(payload, target_latitudes, target_longitudes):
+    """Interpolate a regular native-grid diagnostic onto the surface grid."""
+    if not payload:
+        return None
+    values = np.asarray(payload.get("values"), dtype=float)
+    latitudes = np.asarray(payload.get("latitudes"), dtype=float)
+    longitudes = np.asarray(payload.get("longitudes"), dtype=float)
+    if (
+        values.ndim != 2
+        or latitudes.ndim != 1
+        or longitudes.ndim != 1
+        or values.shape != (latitudes.size, longitudes.size)
+    ):
+        return None
+    field = xr.DataArray(
+        values,
+        coords={"latitude": latitudes, "longitude": longitudes},
+        dims=("latitude", "longitude"),
+    )
+    if latitudes[0] > latitudes[-1]:
+        field = field.sortby("latitude")
+    if longitudes[0] > longitudes[-1]:
+        field = field.sortby("longitude")
+    interpolated = field.interp(
+        latitude=xr.DataArray(
+            np.asarray(target_latitudes, dtype=float), dims=("latitude",)
+        ),
+        longitude=xr.DataArray(
+            np.asarray(target_longitudes, dtype=float), dims=("longitude",)
+        ),
+    )
+    result = np.asarray(interpolated.values, dtype=float)
+    expected = (len(target_latitudes), len(target_longitudes))
+    return result if result.shape == expected else None
+
+
 def iso_z(dt):
     if dt.tzinfo is None:
         dt = dt.replace(tzinfo=timezone.utc)
@@ -457,14 +570,17 @@ def process_data():
     catalog = []
     step_errors = []
     front_qc_hours = []
+    hazard_qc_hours = []
     front_analysis_summary = {}
     front_pipeline_diagnostics = {}
+    bulletin_history = {}
     icon_front_analyzer = prepare_icon_front_analyzer(run_dt)
     if icon_front_analyzer is None:
         raise RuntimeError(
             "analisi frontale ICON-2I obbligatoria non disponibile; "
             "mantengo l'ultima pubblicazione valida"
         )
+    icon_hazard_fields = prepare_icon_hazard_fields(run_dt)
     for idx, filename in enumerate(file_list):
         print(f"   [{idx+1:02d}] DL {filename}...", end=" ", flush=True)
 
@@ -664,57 +780,148 @@ def process_data():
                     "frontAnalysisMessage": front_analysis_message,
                 }
 
-                # --- METEO ANALYSIS INTEGRATION (MOCK/PLACEHOLDERS) ---
-                # NOTE: These are placeholder implementations using basic heuristics 
-                # because full 3D vertical profiles are not downloaded by this script yet.
-                # They should be replaced with real data processing once upper levels are available.
-                xr_u = xr.DataArray(u_val)
-                xr_v = xr.DataArray(v_val)
-                xr_temp = xr.DataArray(np.nan_to_num(temp_c, nan=15.0))
-                xr_rh = xr.DataArray(np.nan_to_num(rh_val, nan=50.0))
-                xr_cloud = xr.DataArray(np.nan_to_num(cloud, nan=0.0))
-                xr_rain = xr.DataArray(np.nan_to_num(rain, nan=0.0))
-                
-                mucape = xr_temp * 50  # Mock MUCAPE
-                cin = xr_temp * -1     # Mock CIN
-                convergence_10m = xr.zeros_like(xr_temp) + 2e-4  # Mock convergence
-                front_distance_km = xr.zeros_like(xr_temp) + 30  # Mock distance
-                
-                convection_prob = calculate_convection_probability(mucape, cin, convergence_10m, front_distance_km) * 100
-                convection_prob = xr.where(convection_prob > 100, 100, convection_prob)
-                convection_prob = xr.where(convection_prob < 0, 0, convection_prob)
-                
-                lapse_rate = xr.zeros_like(xr_temp) + 6.5
-                z_0c = xr_temp * 150
-                mix_ratio = xr_rh / 10.0
-                ship = calculate_ship(mucape, lapse_rate, z_0c, mix_ratio)
-                
-                srh = xr.zeros_like(xr_temp) + 150
-                bulk_shear = xr.zeros_like(xr_temp) + 15
-                scp = calculate_scp(mucape, srh, bulk_shear)
-                
-                dry_air_700hpa_rh = xr_rh - 20
-                hail_threat = evaluate_hail_threat(ship, scp, dry_air_700hpa_rh)
-                
-                fog_type = classify_fog_type(xr_rh, np.hypot(xr_u, xr_v), xr_cloud)
-                visibility = estimate_visibility(xr_rh, fog_type)
-                
-                t_925 = xr_temp - 5 + 273.15
-                t_850 = xr_temp - 10 + 273.15
-                t_700 = xr_temp - 15 + 273.15
-                t_2m = xr_temp + 273.15
-                freezing_rain = detect_freezing_rain(t_925, t_850, t_700, t_2m, xr_rain)
-                
-                u_700 = xr_u * 1.5
-                v_700 = xr_v * 1.5
-                foehn = detect_foehn(u_700, v_700, xr_rh)
-                
-                # Placeholder trend calculation (mock)
-                nlg_bulletin = generate_bulletin(
-                    front_type="freddo" if np.nanmean(temp_c) < 15 else "caldo",
-                    prob_thunderstorm="alta" if float(convection_prob.max()) > 50 else "bassa",
-                    hail_threat="alto" if float(hail_threat.max()) > 1 else "basso",
-                    t_trend="calo" if np.nanmean(temp_c) < 15 else "aumento"
+                # --- DIAGNOSTICA CONVETTIVA REALE ---
+                # CAPE e CIN provengono dai campi nativi ICON-2I.  La
+                # convergenza deriva da u/v a 10 m e la distanza è misurata
+                # dalle linee frontali effettivamente pubblicate.
+                convection_prob = None
+                convection_summary = {
+                    "status": "unavailable",
+                    "maximum": None,
+                    "p95": None,
+                    "areaAbove40Pct": None,
+                    "areaAbove70Pct": None,
+                }
+                convection_message = (
+                    "ML-CAPE o ML-CIN ICON-2I non disponibile per questa scadenza."
+                )
+                cape_ml = None
+                cin_ml = None
+                convergence_10m = None
+                nearest_front_km = None
+                omega_700 = None
+                if icon_hazard_fields is not None:
+                    try:
+                        cape_ml = icon_hazard_fields.field(
+                            "cape_ml", step_hours, lat, lon
+                        )
+                        cin_ml = icon_hazard_fields.field(
+                            "cin_ml", step_hours, lat, lon
+                        )
+                        if cape_ml is None or cin_ml is None:
+                            raise ValueError("scadenza CAPE/CIN assente")
+                        convergence_10m = horizontal_convergence(
+                            u_val, v_val, lat, lon, smoothing_km=10.0
+                        )
+                        nearest_front_km = front_distance_km(lat, lon, fronts)
+                        omega_payload = icon_front_analyzer.diagnostic_field(
+                            step_hours, "omega700"
+                        )
+                        omega_700 = interpolate_native_field(
+                            omega_payload, lat, lon
+                        )
+                        convection_prob = np.asarray(
+                            calculate_convection_probability(
+                                cape_ml,
+                                cin_ml,
+                                convergence_10m,
+                                nearest_front_km,
+                                omega_700=omega_700,
+                                surface_rh=rh_val,
+                            ),
+                            dtype=float,
+                        ) * 100.0
+                        convection_summary = summarize_convection(
+                            convection_prob, mask=np.isfinite(temp_c)
+                        )
+                        convection_message = (
+                            "ML-CAPE/CIN ICON-2I, convergenza 10 m smussata "
+                            "a 10 km, omega 700 hPa opzionale e distanza dai "
+                            "fronti OFA."
+                        )
+                    except Exception as convection_error:
+                        convection_prob = None
+                        convection_message = (
+                            "Diagnostica convettiva non disponibile: "
+                            f"{type(convection_error).__name__}:"
+                            f"{convection_error}"
+                        )
+                        print(
+                            f" convection-{step_hours}h:{convection_error}",
+                            end="",
+                            flush=True,
+                        )
+
+                # Nebbia/visibilità usa esclusivamente i campi di superficie
+                # reali disponibili.  Gli altri rischi tridimensionali non
+                # vengono più simulati da T2m: restano null finché il profilo
+                # verticale necessario non è presente.
+                xr_rh = xr.DataArray(rh_val)
+                xr_cloud = xr.DataArray(cloud)
+                fog_type = classify_fog_type(
+                    xr_rh, xr.DataArray(np.hypot(u_val, v_val)), xr_cloud
+                )
+                fog_probability = calculate_fog_probability(
+                    xr_rh,
+                    xr.DataArray(np.hypot(u_val, v_val)),
+                    xr_cloud,
+                    fog_type=fog_type,
+                )
+                visibility = estimate_visibility(
+                    xr_rh, fog_type, fog_probability=fog_probability
+                )
+                hail_threat = None
+                freezing_rain = None
+                foehn = None
+
+                previous = bulletin_history.get(step_hours - 3, {})
+                bulletin_inputs = build_bulletin_inputs(
+                    valid_time=iso_date,
+                    fronts=fronts,
+                    convection_probability=(
+                        convection_prob
+                        if convection_prob is not None
+                        else np.full_like(temp_c, np.nan)
+                    ),
+                    temperature=temp_c,
+                    precipitation=rain,
+                    cloud=cloud,
+                    pressure=press,
+                    u_wind=u_val,
+                    v_wind=v_val,
+                    hail_threat=hail_threat,
+                    mask=np.isfinite(temp_c),
+                    previous_temperature_mean=previous.get("temperatureMean"),
+                    previous_pressure_mean=previous.get("pressureMean"),
+                    trend_hours=3 if previous else None,
+                    area="Italia",
+                )
+                nlg_details = generate_bulletin_details(bulletin_inputs)
+                nlg_bulletin = nlg_details["text"]
+                bulletin_history[step_hours] = {
+                    "temperatureMean": bulletin_inputs.temperature.get("mean"),
+                    "pressureMean": bulletin_inputs.pressure.get("mean"),
+                }
+
+                header.update(
+                    {
+                        "convectionMethod": (
+                            CONVECTION_METHOD
+                            if convection_prob is not None else None
+                        ),
+                        "convectionStatus": convection_summary["status"],
+                        "convectionMessage": convection_message,
+                        "convectionSummary": convection_summary,
+                        "convectionCAPE": "ML-CAPE",
+                        "nlgMethod": NLG_METHOD,
+                        "hazardAvailability": {
+                            "convection": convection_prob is not None,
+                            "fogVisibility": True,
+                            "hail": False,
+                            "freezingRain": False,
+                            "foehn": False,
+                        },
+                    }
                 )
 
                 step_data = {
@@ -727,13 +934,20 @@ def process_data():
                     "press": clean_for_json(press, 1),
                     "rh": clean_for_json(rh_val, 0),
                     "cloud": clean_for_json(cloud, 0),
-                    "convection_prob": clean_for_json(convection_prob.values, 2),
-                    "hail_threat": clean_for_json(hail_threat.values, 0),
+                    "convection_prob": (
+                        clean_for_json(convection_prob, 1)
+                        if convection_prob is not None else None
+                    ),
+                    "hail_threat": None,
                     "visibility": clean_for_json(visibility.values, 0),
                     "fog_type": clean_for_json(fog_type.values, 0),
-                    "freezing_rain": clean_for_json(freezing_rain.values, 0),
-                    "foehn": clean_for_json(foehn.values, 0),
+                    "fog_probability": clean_for_json(
+                        fog_probability.values * 100.0, 0
+                    ),
+                    "freezing_rain": None,
+                    "foehn": None,
                     "nlg_bulletin": nlg_bulletin,
+                    "nlg_bulletin_details": nlg_details,
                     "fronts": fronts
                 }
 
@@ -766,6 +980,35 @@ def process_data():
                         "frontCount": len(fronts.get("features", [])),
                         "fronts": fronts.get("features", []),
                     })
+                    hazard_qc_hours.append({
+                        "leadHours": step_hours,
+                        "validTime": iso_date,
+                        "convectionMethod": (
+                            CONVECTION_METHOD
+                            if convection_prob is not None else None
+                        ),
+                        "convectionMessage": convection_message,
+                        "convectionSummary": convection_summary,
+                        "frontCount": len(fronts.get("features", [])),
+                        "capeMaximum": (
+                            round(float(np.nanmax(cape_ml)), 1)
+                            if cape_ml is not None and np.isfinite(cape_ml).any()
+                            else None
+                        ),
+                        "cinMinimum": (
+                            round(float(np.nanmin(-np.abs(cin_ml))), 1)
+                            if cin_ml is not None and np.isfinite(cin_ml).any()
+                            else None
+                        ),
+                        "convergenceP99": (
+                            float(np.round(
+                                np.nanpercentile(convergence_10m, 99), 7
+                            ))
+                            if convergence_10m is not None
+                            and np.isfinite(convergence_10m).any()
+                            else None
+                        ),
+                    })
 
             except Exception as e:
                 step_errors.append((step_hours, str(e)))
@@ -788,8 +1031,12 @@ def process_data():
             for hour, values in icon_front_analyzer._pipeline_diag.items()
         }
         icon_front_analyzer.close()
+    if icon_hazard_fields is not None:
+        icon_hazard_fields.close()
     if os.path.exists(FRONT_TEMP_DIR):
         shutil.rmtree(FRONT_TEMP_DIR)
+    if os.path.exists(HAZARD_TEMP_DIR):
+        shutil.rmtree(HAZARD_TEMP_DIR)
     if os.path.exists(TEMP_FILE): os.remove(TEMP_FILE)
     if os.path.exists(f"{TEMP_FILE}.idx"): os.remove(f"{TEMP_FILE}.idx")
 
@@ -817,6 +1064,18 @@ def process_data():
                 "analysisSummary": front_analysis_summary,
                 "pipelineByHour": front_pipeline_diagnostics,
                 "hours": front_qc_hours,
+            },
+        )
+        hazard_qc_hours.sort(key=lambda item: item["leadHours"])
+        write_json_atomic(
+            f"{TEMP_DIR}/hazard_qc.json",
+            {
+                "schemaVersion": 1,
+                "runTime": iso_z(run_dt),
+                "model": "ICON-2I",
+                "convectionMethod": CONVECTION_METHOD,
+                "nlgMethod": NLG_METHOD,
+                "hours": hazard_qc_hours,
             },
         )
         write_json_atomic(f"{TEMP_DIR}/catalog.json", catalog)

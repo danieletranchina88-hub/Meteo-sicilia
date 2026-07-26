@@ -1196,6 +1196,9 @@ class IconSynopticFrontAnalyzer(SynopticFrontAnalyzer):
             "trackDiagnostics": _json_mapping(track.get("diagnostics", {}), 4),
             "motionKmh": round(float(classification.get("geoMotionKmh", 0.0)), 1),
             "geoMotionKmh": _json_number(classification.get("geoMotionKmh"), 1),
+            "motionBearingDeg": _json_number(
+                classification.get("motionBearingDeg"), 1
+            ),
             "ofaSpeedKmh": _json_number(classification.get("ofaSpeedKmh"), 1),
             "tendencyMotionKmh": _json_number(
                 classification.get("tendencyMotionKmh"), 1
@@ -1499,6 +1502,27 @@ class IconSynopticFrontAnalyzer(SynopticFrontAnalyzer):
                 },
             })
         return {"type": "FeatureCollection", "features": features}
+
+    def diagnostic_field(self, hour: int, name: str) -> dict | None:
+        """Expose a validated native-grid field to downstream diagnostics.
+
+        Only explicitly allowed fields are returned.  This keeps convection
+        and other products from reaching into the detector's private dataset
+        implementation.
+        """
+        if name not in {"omega700"} or name not in self.datasets:
+            return None
+        if hour not in self.hour_to_index:
+            return None
+        values = np.asarray(self._field(name, hour), dtype=float)
+        if values.shape != (len(self.latitudes), len(self.longitudes)):
+            return None
+        return {
+            "name": name,
+            "values": values.copy(),
+            "latitudes": np.asarray(self.latitudes, dtype=float).copy(),
+            "longitudes": np.asarray(self.longitudes, dtype=float).copy(),
+        }
 
     def upper_air(self, hour: int, stride: int = 2) -> dict | None:
         """Export map-ready 850/925-hPa fields used by the level selector.
