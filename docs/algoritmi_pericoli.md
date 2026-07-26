@@ -10,7 +10,7 @@ ricavate artificialmente dalla temperatura a 2 metri.
 
 ## Innesco convettivo
 
-Metodo corrente: `icon2i-mlcape-cin-convergence-front-v2`.
+Metodo corrente: `icon2i-mlcape-cin-convergence-front-v3`.
 
 Input:
 
@@ -21,6 +21,13 @@ Input:
 - omega a 700 hPa, quando disponibile;
 - umidità relativa superficiale come modulatore secondario.
 
+La disponibilità e il formato sono verificati sul GRIB prima del calcolo:
+`CAPE_ML` e `CIN_ML` devono avere unità energetiche `J kg-1`, 73 scadenze
+orarie e valori fisicamente plausibili. Nel prodotto MeteoHub ICON-2I il CIN
+è prevalentemente una magnitudine positiva; viene convertito nella convenzione
+firmata negativa. Il sentinel `-999,9` viene trasformato in dato mancante e non
+entra né nella probabilità né nelle statistiche QC.
+
 La classe alta è possibile soltanto con:
 
 `CAPE > 800 J/kg`, `CIN > -50 J/kg`, convergenza `> 1e-4 s-1` e fronte entro
@@ -29,9 +36,12 @@ debole, CIN forte o divergenza impongono ulteriori limiti. L'output massimo è
 95%, per ricordare che il prodotto è una regola esperta e non una probabilità
 ensemble calibrata.
 
-Il file `hazard_qc.json` salva per ogni ora massimo, 95° percentile e frazione
-di area sopra 40% e 70%. Il test `test_convection.py` contiene una regressione
-specifica contro il precedente campo nazionale fisso all'80%.
+Il file `hazard_qc.json` salva per ogni ora massimo, 95° percentile, celle
+valide e frazione di area sopra 40%, sopra 70% ed esattamente all'80%. Il
+deploy viene interrotto e mantiene il run precedente se l'area sopra 70%
+supera il 15% del dominio oppure se un valore fisso all'80% ricopre oltre il
+5%. Il test `test_convection.py` contiene una regressione specifica contro il
+precedente campo nazionale fisso all'80%.
 
 ## Bollettino automatico
 
@@ -51,20 +61,42 @@ non viene descritto come fenomeno diffuso: il generatore considera anche il
 sia il testo compatibile (`nlg_bulletin`) sia la struttura verificabile
 `nlg_bulletin_details`.
 
-## Prodotti tridimensionali
+## Gelicidio
 
-SHIP/SCP, gelicidio e foehn richiedono profili e diagnostiche indipendenti. Le
-funzioni fisiche sono presenti nel pacchetto, ma il processore operativo
-pubblica questi layer come non disponibili finché il run non fornisce tutti
-gli input richiesti:
+Metodo corrente: `icon2i-warm-nose-925-850-700-v1`.
 
-- SHIP: CAPE, rapporto di mescolanza, lapse rate 700–500 hPa, temperatura a
-  500 hPa e quota dello zero termico;
-- SCP: CAPE, SRH e bulk shear 0–6 km reali;
-- gelicidio: profilo termico 925/850/700 hPa, temperatura a 2 m e
-  precipitazione;
-- foehn: vento perpendicolare alle Alpi a 700 hPa, differenza di pressione
-  nord-sud e umidità sottovento.
+Il rischio richiede contemporaneamente:
+
+- temperatura a 2 m sotto 0 °C;
+- uno strato caldo sopra 0 °C fra 925, 850 e 700 hPa;
+- precipitazione realmente in arrivo nel passo di previsione.
+
+La classe elevata richiede un warm nose di almeno 1 °C e T925 sopra zero,
+segnale coerente con uno strato freddo superficiale relativamente sottile.
+
+## Foehn alpino
+
+Metodo corrente: `icon2i-cross-alpine-700-pmsl-rh-v1`.
+
+Il campo combina vento perpendicolare all'asse alpino superiore a 15 kt a
+700 hPa, differenza PMSL nord-sud di almeno 2 hPa e umidità sottovento sotto
+40%. Una maschera geografica conservativa impedisce di classificare come
+foehn normali correnti secche lontane dall'arco alpino.
+
+## Prodotti ancora non disponibili
+
+SHIP/SCP restano non disponibili finché il run operativo non fornisce tutti
+gli input verticali indipendenti: lapse rate 700–500 hPa, temperatura a
+500 hPa, quota dello zero termico, SRH reale e bulk shear 0–6 km.
 
 Questa scelta evita che una mappa visivamente completa comunichi un rischio
 fisicamente inesistente.
+
+## Dominio e distribuzione
+
+I GRIB MeteoHub ICON-2I usati dal sistema hanno una griglia regolare
+761 × 761, da 3°E a 22°E e da 33,7°N a 48,9°N. Il processore non applica più
+il precedente ritaglio sull'Italia: conserva l'intero dominio disponibile.
+I file orari vengono pubblicati come JSON compresso gzip e trasformati in
+array numerici compatti nel browser, così l'estensione geografica non richiede
+un degrado della risoluzione.
