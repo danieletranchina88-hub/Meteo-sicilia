@@ -172,6 +172,7 @@ class IconSynopticFrontAnalyzer(SynopticFrontAnalyzer):
         lower_u_wind_path: str | None = None,
         lower_v_wind_path: str | None = None,
         omega_700_path: str | None = None,
+        ml_guidance=None,
         **kwargs,
     ) -> None:
         requested_method = kwargs.get("method")
@@ -182,6 +183,7 @@ class IconSynopticFrontAnalyzer(SynopticFrontAnalyzer):
         self._tracks: list[dict] | None = None
         self._by_hour: dict[int, list[tuple[np.ndarray, dict]]] | None = None
         self.analysis_summary: dict | None = None
+        self.ml_guidance = ml_guidance
         # Fase B diagnostics: computed on demand / recorded as a side effect,
         # never changing the published fronts.
         self._support_cache: dict[int, dict] = {}
@@ -867,6 +869,10 @@ class IconSynopticFrontAnalyzer(SynopticFrontAnalyzer):
             metrics.update(evidence)
             gates = fp.candidate_gate_report(metrics, evidence)
             metrics.update(gates)
+            if self.ml_guidance is not None:
+                metrics, gates = self.ml_guidance.evaluate(
+                    hour, metrics["coordinates"], metrics, gates
+                )
             if not gates["continuationPass"]:
                 # A rejected candidate is recorded, not silently dropped, so
                 # the reason is inspectable (diagnostic mode / QC).
@@ -978,6 +984,7 @@ class IconSynopticFrontAnalyzer(SynopticFrontAnalyzer):
             "lowerWind925": self.has_lower_wind,
             "omega700": "omega700" in self.datasets,
             "pressure": "p" in self.datasets,
+            "mlFusion": getattr(self, "ml_guidance", None) is not None,
             "thresholdClimatology": (
                 self.run_month if self._threshold_climatology else None
             ),
@@ -1226,6 +1233,22 @@ class IconSynopticFrontAnalyzer(SynopticFrontAnalyzer):
             "trackId": int(track.get("id", -1)),
             "method": self.method,
             "source": self.source,
+            "fusion": {
+                "decision": "track-aggregate",
+                "mlFrontProbability": _json_number(
+                    track.get("diagnostics", {}).get("mlFrontProbability"), 4
+                ),
+                "mlSupportFraction": _json_number(
+                    track.get("diagnostics", {}).get("mlSupportFraction"), 3
+                ),
+                "evidenceBonus": _json_number(
+                    track.get("diagnostics", {}).get("fusionEvidenceBonus"), 4
+                ),
+                "mlAssisted": any(
+                    bool((value or {}).get("mlAssisted"))
+                    for value in (track.get("observations") or {}).values()
+                ),
+            },
         }
         if hour is None:
             return properties
@@ -1247,11 +1270,24 @@ class IconSynopticFrontAnalyzer(SynopticFrontAnalyzer):
                 (track.get("classificationConfidence") or {}).get(hour), 2
             )
             observation = (track.get("observations") or {}).get(hour) or {}
+            hour_diagnostics = observation.get("diagnostics") or {}
             properties["gateStatus"] = observation.get("gateStatus")
+            properties["fusion"] = {
+                "decision": observation.get("fusionDecision", "physics-only"),
+                "mlFrontProbability": _json_number(
+                    hour_diagnostics.get("mlFrontProbability"), 4
+                ) if hour_diagnostics else None,
+                "mlSupportFraction": _json_number(
+                    hour_diagnostics.get("mlSupportFraction"), 3
+                ) if hour_diagnostics else None,
+                "evidenceBonus": _json_number(
+                    hour_diagnostics.get("fusionEvidenceBonus"), 4
+                ) if hour_diagnostics else None,
+                "mlAssisted": bool(observation.get("mlAssisted", False)),
+            }
             properties["recovered"] = hour in (
                 track.get("recoveredHours") or []
             )
-            hour_diagnostics = observation.get("diagnostics") or {}
             if hour_diagnostics:
                 properties["diagnostics"] = _json_mapping(hour_diagnostics, 4)
                 # The meteorological explanation describes THIS hour; the
@@ -1317,6 +1353,7 @@ class IconSynopticFrontAnalyzer(SynopticFrontAnalyzer):
             "classificationWind": "925/850 hPa" if self.has_lower_wind else "850 hPa",
             "estimated": True,
             "uncertainty": "diagnostic-not-probabilistic",
+            "mlFusion": getattr(self, "ml_guidance", None) is not None,
             "analysisStatus": "unavailable",
             "analysisMessage": "Scadenza non disponibile per l'analisi frontale.",
         }
