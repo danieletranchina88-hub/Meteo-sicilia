@@ -1284,11 +1284,7 @@ def process_data():
                             "fogProbability": np.asarray(fog_probability) * 100.0,
                             "freezingRainRisk": freezing_rain,
                             "foehnIndex": foehn,
-                            "temperature925": temperature_celsius(t925),
-                            "temperature850": temperature_celsius(t850),
-                            "temperature700": temperature_celsius(t700),
                         },
-                        upper_air=upper,
                     )
                     catalog.append({ "file": out_name, "label": f"{valid_dt.strftime('%d/%m %H:00')} UTC", "hour": step_hours, "runTime": iso_z(run_dt), "validTime": iso_date, "leadHours": step_hours })
                     front_qc_hours.append({
