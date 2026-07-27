@@ -214,6 +214,93 @@
     return "Previsione in prevalenza asciutta, con nuvolosità variabile e senza segnali di maltempo organizzato.";
   }
 
+  function classifyCAPERegime(capeMax, cinNear) {
+    if (!capeMax || !finite(capeMax.value)) return null;
+    var cape = capeMax.value;
+    var cin = cinNear && finite(cinNear.value) ? cinNear.value : 0;
+    if (cape >= 2500) return { level: "estrema", desc: "energia convettiva disponibile molto elevata (ML-CAPE > 2500 J/kg), compatibile con supercelle e grandine di grandi dimensioni" };
+    if (cape >= 1500) return { level: "forte", desc: "energia convettiva significativa (ML-CAPE " + number(cape, 0) + " J/kg), sufficiente a sostenere celle temporalesche organizzate" };
+    if (cape >= 800) return { level: "moderata", desc: "instabilità latente moderata (ML-CAPE " + number(cape, 0) + " J/kg), che in presenza di forzanti dinamiche può produrre temporali localmente intensi" };
+    if (cape >= 300) return { level: "debole", desc: "modesta energia convettiva (ML-CAPE " + number(cape, 0) + " J/kg), con innesco probabile solo in presenza di convergenza marcata al suolo" };
+    return { level: "trascurabile", desc: "energia convettiva trascurabile (ML-CAPE < 300 J/kg), situazione non favorevole a temporali" };
+  }
+
+  function buildThermodynamicAnalysis(data) {
+    var lines = [];
+    var capeRegime = classifyCAPERegime(data.capeMax, data.cinNearConvection);
+    if (!capeRegime) return null;
+
+    lines.push("Analisi termodinamica: " + capeRegime.desc + ".");
+
+    if (data.cinNearConvection && finite(data.cinNearConvection.value)) {
+      var cin = data.cinNearConvection.value;
+      if (cin < -200) {
+        lines.push("L'inibizione convettiva è molto forte (CIN " + number(cin, 0) + " J/kg): il coperchio è solido e l'innesco richiederebbe forzanti eccezionali, nonostante l'energia disponibile.");
+      } else if (cin < -100) {
+        lines.push("L'inibizione convettiva è significativa (CIN " + number(cin, 0) + " J/kg): l'innesco è sfavorito senza un sollevamento meccanico robusto, ad esempio forzato da fronti o convergenza orografica.");
+      } else if (cin < -50) {
+        lines.push("L'inibizione è moderata (CIN " + number(cin, 0) + " J/kg): sufficiente a ritardare l'innesco ma non a impedirlo in presenza di riscaldamento diurno e convergenze locali.");
+      } else {
+        lines.push("L'inibizione è debole o assente (CIN " + number(cin, 0) + " J/kg): l'atmosfera è prossima alla soglia di innesco libero.");
+      }
+    }
+
+    if (data.convectionMax && finite(data.convectionMax.value) && data.convectionMax.value >= 40) {
+      var prob = data.convectionMax.value;
+      if (prob >= 70) {
+        lines.push("La combinazione di CAPE, CIN ridotto, convergenza al suolo e prossimità frontale configura uno scenario ad alto rischio temporalesco: probabilità composita al " + number(prob, 0) + "%.");
+      } else {
+        lines.push("L'algoritmo composito stima una probabilità temporalesca del " + number(prob, 0) + "%, indicativa di un rischio reale ma non generalizzato.");
+      }
+    }
+
+    return lines.join(" ");
+  }
+
+  function buildPressureAnalysis(data, pressure) {
+    if (!data.pressureMin || !finite(data.pressureMin.value)) return null;
+    var lines = [];
+    var pressMin = data.pressureMin.value;
+
+    // Pressure tendency over first 12h
+    var trend12h = null;
+    if (pressure.length >= 13 && finite(pressure[0]) && finite(pressure[12])) {
+      trend12h = pressure[12] - pressure[0];
+    }
+
+    if (trend12h !== null && Math.abs(trend12h) >= 2) {
+      if (trend12h < -4) {
+        lines.push("Campo barico: il barometro è in rapida caduta (" + number(Math.abs(trend12h), 1) + " hPa in 12 ore), si configura un approfondimento ciclonico con possibile peggioramento del tempo e rinforzo della ventilazione.");
+      } else if (trend12h < -2) {
+        lines.push("Campo barico: si osserva un calo barometrico progressivo (" + number(Math.abs(trend12h), 1) + " hPa in 12 ore), coerente con l'avvicinamento di un sistema perturbato.");
+      } else if (trend12h > 4) {
+        lines.push("Campo barico: il barometro è in netta risalita (" + number(trend12h, 1) + " hPa in 12 ore), fase di stabilizzazione post-frontale con schiarite progressive.");
+      } else {
+        lines.push("Campo barico: si nota un graduale aumento della pressione (" + number(trend12h, 1) + " hPa in 12 ore), con tendenza a condizioni più stabili.");
+      }
+    } else if (pressMin < 1000) {
+      lines.push("Campo barico: minimo puntuale di " + number(pressMin, 0) + " hPa, valore relativamente basso indicativo di una struttura ciclonica o di un sistema frontale attivo.");
+    }
+
+    return lines.length ? lines.join(" ") : null;
+  }
+
+  function buildFrontAnalysis(data, series) {
+    if (!data.frontMin || !finite(data.frontMin.value) || data.frontMin.value > 150) return null;
+    var dist = data.frontMin.value;
+    var lines = [];
+
+    if (dist <= 30) {
+      lines.push("La struttura frontale transita in prossimità diretta del punto (distanza minima ~" + number(dist, 0) + " km). Attendersi un cambio di massa d'aria con rotazione del vento, variazione termica e possibili precipitazioni organizzate nella finestra di transito.");
+    } else if (dist <= 80) {
+      lines.push("Una struttura frontale si porta a circa " + number(dist, 0) + " km dal punto: il suo influsso è probabile, con nubi in aumento e possibili fenomeni associati al passaggio.");
+    } else {
+      lines.push("Si individua una struttura frontale a " + number(dist, 0) + " km: il coinvolgimento del punto è incerto ma non escluso, soprattutto nelle code prefrontali e nelle bande di convezione avanzata.");
+    }
+
+    return lines.join(" ");
+  }
+
   function buildPointBulletin(series, locationName) {
     const location = locationName || "zona selezionata";
     const temperature = values(series, "temperature2m");
@@ -312,6 +399,15 @@
       }
     }
 
+    const thermoAnalysis = buildThermodynamicAnalysis(data);
+    if (thermoAnalysis) paragraphs.push(thermoAnalysis);
+
+    const pressureAnalysis = buildPressureAnalysis(data, pressure);
+    if (pressureAnalysis) paragraphs.push(pressureAnalysis);
+
+    const frontAnalysis = buildFrontAnalysis(data, series);
+    if (frontAnalysis) paragraphs.push(frontAnalysis);
+
     if (data.temperatureMin && data.temperatureMax) {
       let temperatureText =
         `Le temperature oscilleranno tra ${number(data.temperatureMin.value, 1)} °C, attesi ${timeAt(series, data.temperatureMin.index)}, ` +
@@ -357,13 +453,6 @@
         text += `. La probabilità diagnostica di nebbia raggiunge il ${number(data.fogMax.value, 0)}%`;
       }
       paragraphs.push(text + ".");
-    }
-
-    if (data.frontMin && data.frontMin.value <= 100) {
-      paragraphs.push(
-        `La struttura frontale stimata dal sistema si porta fino a circa ${number(data.frontMin.value, 0)} km dal punto verso ${timeAt(series, data.frontMin.index)}. ` +
-        "Questa prossimità viene usata come supporto dinamico, non come orario certo di transito."
-      );
     }
 
     const hazards = [];
