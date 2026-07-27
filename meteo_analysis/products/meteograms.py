@@ -33,34 +33,6 @@ FIELD_METADATA = {
     "fogProbability": ("Probabilità di nebbia", "%", 0),
     "freezingRainRisk": ("Rischio gelicidio", "classe", 0),
     "foehnIndex": ("Indice di foehn", "classe", 0),
-    "temperature925": ("Temperatura 925 hPa", "°C", 1),
-    "temperature850": ("Temperatura 850 hPa", "°C", 1),
-    "temperature700": ("Temperatura 700 hPa", "°C", 1),
-    "relativeHumidity925": ("Umidità relativa 925 hPa", "%", 0),
-    "relativeHumidity850": ("Umidità relativa 850 hPa", "%", 0),
-    "windU925": ("Componente zonale vento 925 hPa", "m/s", 1),
-    "windV925": ("Componente meridionale vento 925 hPa", "m/s", 1),
-    "windU850": ("Componente zonale vento 850 hPa", "m/s", 1),
-    "windV850": ("Componente meridionale vento 850 hPa", "m/s", 1),
-    "thetaW850": ("Theta-w 850 hPa", "K", 1),
-    "thetaE850": ("Theta-e 850 hPa", "K", 1),
-}
-
-UPPER_FIELD_MAP = {
-    "925": {
-        "t": "temperature925",
-        "rh": "relativeHumidity925",
-        "u": "windU925",
-        "v": "windV925",
-    },
-    "850": {
-        "t": "temperature850",
-        "rh": "relativeHumidity850",
-        "u": "windU850",
-        "v": "windV850",
-        "thetaW": "thetaW850",
-        "thetaE": "thetaE850",
-    },
 }
 
 
@@ -153,30 +125,7 @@ class MeteogramArchive:
             array[np.ix_(self.y_indices, self.x_indices)], dtype=np.float32
         )
 
-    def _sample_upper(self, payload, key):
-        if not payload or key not in payload:
-            return np.full(
-                (self.latitudes.size, self.longitudes.size), np.nan, dtype=np.float32
-            )
-        nx = int(payload.get("nx", 0))
-        ny = int(payload.get("ny", 0))
-        raw = np.asarray(
-            [np.nan if value is None else value for value in payload[key]], dtype=float
-        )
-        if nx < 2 or ny < 2 or raw.size != nx * ny:
-            return np.full(
-                (self.latitudes.size, self.longitudes.size), np.nan, dtype=np.float32
-            )
-        grid = raw.reshape(ny, nx)
-        dx = abs(float(payload["dx"]))
-        dy = abs(float(payload["dy"]))
-        x = np.rint((self.longitudes - float(payload["lo1"])) / dx).astype(int)
-        y = np.rint((float(payload["la1"]) - self.latitudes) / dy).astype(int)
-        x = np.clip(x, 0, nx - 1)
-        y = np.clip(y, 0, ny - 1)
-        return np.asarray(grid[np.ix_(y, x)], dtype=np.float32)
-
-    def add(self, lead_hours, valid_time, fields, *, upper_air=None):
+    def add(self, lead_hours, valid_time, fields):
         lead_hours = int(lead_hours)
         if lead_hours in self.entries:
             return
@@ -185,12 +134,6 @@ class MeteogramArchive:
             for name, values in fields.items()
             if name in FIELD_METADATA
         }
-        levels = (upper_air or {}).get("levels", {})
-        for level, mapping in UPPER_FIELD_MAP.items():
-            payload = levels.get(level)
-            for source, destination in mapping.items():
-                if destination not in sampled:
-                    sampled[destination] = self._sample_upper(payload, source)
         self.entries[lead_hours] = {
             "validTime": str(valid_time),
             "fields": sampled,
