@@ -230,7 +230,7 @@
     var capeRegime = classifyCAPERegime(data.capeMax, data.cinNearConvection);
     if (!capeRegime) return null;
 
-    lines.push("ANALISI TERMODINAMICA — " + capeRegime.desc + ".");
+    lines.push("Analisi termodinamica: " + capeRegime.desc + ".");
 
     if (data.cinNearConvection && finite(data.cinNearConvection.value)) {
       var cin = data.cinNearConvection.value;
@@ -270,16 +270,16 @@
 
     if (trend12h !== null && Math.abs(trend12h) >= 2) {
       if (trend12h < -4) {
-        lines.push("CAMPO BARICO — Il barometro è in rapida caduta (" + number(Math.abs(trend12h), 1) + " hPa in 12 ore): si configura un approfondimento ciclonico con possibile peggioramento del tempo e rinforzo della ventilazione.");
+        lines.push("Campo barico: il barometro è in rapida caduta (" + number(Math.abs(trend12h), 1) + " hPa in 12 ore), si configura un approfondimento ciclonico con possibile peggioramento del tempo e rinforzo della ventilazione.");
       } else if (trend12h < -2) {
-        lines.push("CAMPO BARICO — Si osserva un calo barometrico progressivo (" + number(Math.abs(trend12h), 1) + " hPa in 12 ore), coerente con l'avvicinamento di un sistema perturbato.");
+        lines.push("Campo barico: si osserva un calo barometrico progressivo (" + number(Math.abs(trend12h), 1) + " hPa in 12 ore), coerente con l'avvicinamento di un sistema perturbato.");
       } else if (trend12h > 4) {
-        lines.push("CAMPO BARICO — Il barometro è in netta risalita (" + number(trend12h, 1) + " hPa in 12 ore): fase di stabilizzazione post-frontale con schiarite progressive.");
+        lines.push("Campo barico: il barometro è in netta risalita (" + number(trend12h, 1) + " hPa in 12 ore), fase di stabilizzazione post-frontale con schiarite progressive.");
       } else {
-        lines.push("CAMPO BARICO — Si nota un graduale aumento della pressione (" + number(trend12h, 1) + " hPa in 12 ore), con tendenza a condizioni più stabili.");
+        lines.push("Campo barico: si nota un graduale aumento della pressione (" + number(trend12h, 1) + " hPa in 12 ore), con tendenza a condizioni più stabili.");
       }
     } else if (pressMin < 1000) {
-      lines.push("CAMPO BARICO — Minimo puntuale di " + number(pressMin, 0) + " hPa, valore relativamente basso indicativo di una struttura ciclonica o di un sistema frontale attivo.");
+      lines.push("Campo barico: minimo puntuale di " + number(pressMin, 0) + " hPa, valore relativamente basso indicativo di una struttura ciclonica o di un sistema frontale attivo.");
     }
 
     return lines.length ? lines.join(" ") : null;
@@ -291,11 +291,11 @@
     var lines = [];
 
     if (dist <= 30) {
-      lines.push("STRUTTURA FRONTALE — Il sistema frontale transita in prossimità diretta del punto (distanza minima ~" + number(dist, 0) + " km). Attendersi un cambio di massa d'aria con rotazione del vento, variazione termica e possibili precipitazioni organizzate nella finestra di transito.");
+      lines.push("La struttura frontale transita in prossimità diretta del punto (distanza minima ~" + number(dist, 0) + " km). Attendersi un cambio di massa d'aria con rotazione del vento, variazione termica e possibili precipitazioni organizzate nella finestra di transito.");
     } else if (dist <= 80) {
-      lines.push("STRUTTURA FRONTALE — Una linea frontale si porta a circa " + number(dist, 0) + " km dal punto: il suo influsso è probabile, con nubi in aumento e possibili fenomeni associati al passaggio.");
+      lines.push("Una struttura frontale si porta a circa " + number(dist, 0) + " km dal punto: il suo influsso è probabile, con nubi in aumento e possibili fenomeni associati al passaggio.");
     } else {
-      lines.push("STRUTTURA FRONTALE — Si individua un sistema frontale a " + number(dist, 0) + " km: il coinvolgimento del punto è incerto ma non escluso, soprattutto nelle code prefrontali e nelle bande di convezione avanzata.");
+      lines.push("Si individua una struttura frontale a " + number(dist, 0) + " km: il coinvolgimento del punto è incerto ma non escluso, soprattutto nelle code prefrontali e nelle bande di convezione avanzata.");
     }
 
     return lines.join(" ");

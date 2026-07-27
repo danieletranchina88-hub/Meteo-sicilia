@@ -309,10 +309,64 @@ def _hail_sentence(inputs: BulletinInputs) -> str | None:
     return None
 
 
+def _synoptic_overview_sentence(inputs: BulletinInputs) -> str | None:
+    """Synthesize a synoptic overview from all available evidence."""
+    signals = []
+    # Pressure trend indicates frontal dynamics
+    pressure_trend = inputs.pressure_trend_hpa
+    hours = inputs.trend_hours
+    if pressure_trend is not None and hours:
+        if pressure_trend < -2.0:
+            signals.append("approfondimento ciclonico")
+        elif pressure_trend > 2.0:
+            signals.append("rimonta anticiclonica")
+
+    # Front presence indicates baroclinic activity
+    if inputs.front_types:
+        signals.append("attività frontale in corso")
+
+    # Convection indicates thermodynamic instability
+    convection = inputs.convection
+    p95 = convection.get("p95") or 0.0
+    if p95 >= 70.0:
+        signals.append("instabilità termodinamica elevata")
+    elif p95 >= 40.0:
+        signals.append("instabilità latente moderata")
+
+    # Wind indicates dynamic forcing
+    wind_p95 = inputs.wind.get("p95")
+    if wind_p95 is not None and wind_p95 >= 60.0:
+        signals.append("forzante dinamica significativa")
+
+    if not signals:
+        return None
+
+    overview = "Quadro sinottico: " + ", ".join(signals) + "."
+    # Add a brief meteorological interpretation
+    if "approfondimento ciclonico" in signals and "attività frontale in corso" in signals:
+        overview += (
+            " La configurazione suggerisce un sistema perturbato organizzato "
+            "con transito frontale attivo e precipitazioni associate."
+        )
+    elif "rimonta anticiclonica" in signals:
+        overview += (
+            " Il campo di pressione è in fase di ricompattamento: "
+            "attesa una progressiva stabilizzazione delle condizioni."
+        )
+    elif "instabilità termodinamica elevata" in signals:
+        overview += (
+            " L'energia potenziale disponibile è sufficiente a sostenere "
+            "fenomeni convettivi organizzati, con possibili grandinate "
+            "nelle celle più intense."
+        )
+    return overview
+
+
 def generate_bulletin_details(inputs: BulletinInputs) -> dict:
     paragraphs = [
         sentence
         for sentence in (
+            _synoptic_overview_sentence(inputs),
             _front_sentence(inputs),
             _convection_sentence(inputs),
             _precipitation_sentence(inputs),
