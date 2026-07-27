@@ -54,5 +54,7 @@ with tempfile.TemporaryDirectory() as temporary:
         assert all(len(values) == point_count for values in field["values"])
     assert tile["fields"]["rainStep"]["values"][2][0] == 0.5
     assert tile["fields"]["windU10"]["unit"] == "m/s"
+    assert "temperature850" not in manifest["fields"]
+    assert "temperature925" not in manifest["fields"]
 
 print("Meteogram archive tests passed")
