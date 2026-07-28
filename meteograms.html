@@ -272,13 +272,18 @@
       }
       .chart-tooltip b { display: block; margin-bottom: 3px; color: #7be8f2; font-size: 9.5px; }
       .chart-axis { fill: #5a7a8e; font-size: 17px; font-weight: 700; letter-spacing: -.01em; }
+      .chart-hour { fill: #7d97a8; font-size: 14px; font-weight: 700; font-variant-numeric: tabular-nums; }
+      .chart-tick { stroke: #b0c8d6; stroke-width: 1; }
+      .chart-unit { fill: #90a6b4; font-size: 13px; font-weight: 800; letter-spacing: .04em; }
       .chart-grid { stroke: #e2ecf1; stroke-width: 0.8; stroke-dasharray: 3 6; }
-      .chart-zero { stroke: #8eaab8; stroke-width: 1.5; stroke-dasharray: 6 4; }
+      .chart-zero { stroke: #d1495b; stroke-width: 1.4; stroke-dasharray: 5 4; opacity: .75; }
       .chart-cursor { stroke: rgba(22,139,210,.7); stroke-width: 1.8; stroke-dasharray: 4 3; opacity: 0; transition: opacity .15s; }
       .day-shade { fill: rgba(224,240,248,.55); }
+      .night-shade { fill: rgba(64,96,120,.10); }
       .day-divider { stroke: #b0c8d6; stroke-width: 1; }
-      .day-label { fill: #1e4d66; font-size: 17px; font-weight: 900; letter-spacing: .05em; text-transform: uppercase; }
-      .chart-extreme { stroke: #fff; stroke-width: 3.5; filter: drop-shadow(0 2px 4px rgba(0,0,0,.15)); }
+      .day-label { fill: #1e4d66; font-size: 16px; font-weight: 900; letter-spacing: .05em; text-transform: uppercase; }
+      .chart-extreme { stroke: #fff; stroke-width: 2.5; }
+      .chart-extreme-label { font-size: 15px; font-weight: 850; fill: #223; stroke: #fff; stroke-width: 3.2; paint-order: stroke; font-variant-numeric: tabular-nums; }
       .chart-empty { display: grid; min-height: 200px; place-items: center; color: var(--muted); font-size: 11px; font-weight: 700; }
 
       .direction-strip {
@@ -706,7 +711,7 @@
         const gradientPrefix = id.replace(/[^a-z0-9]/gi, "");
         let definitions = "";
         seriesList.forEach((series, index) => {
-          definitions += `<linearGradient id="${gradientPrefix}-line-${index}" x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stop-color="${series.color}" stop-opacity=".30"></stop><stop offset="100%" stop-color="${series.color}" stop-opacity=".015"></stop></linearGradient>`;
+          definitions += `<linearGradient id="${gradientPrefix}-line-${index}" x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stop-color="${series.color}" stop-opacity=".18"></stop><stop offset="100%" stop-color="${series.color}" stop-opacity=".01"></stop></linearGradient>`;
           definitions += `<linearGradient id="${gradientPrefix}-bar-${index}" x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stop-color="${series.color}" stop-opacity="1"></stop><stop offset="100%" stop-color="${series.color}" stop-opacity=".58"></stop></linearGradient>`;
         });
         let svg = `<svg viewBox="0 0 ${width} ${height}" role="img" aria-label="${escapeHtml(options.aria || "Grafico meteorologico")}"><defs>${definitions}</defs>`;
@@ -720,12 +725,23 @@
             rangeStart = index;
           }
         }
+        // Fasce notturne (indicative, 20:00-06:00) come nei meteogrammi
+        // ufficiali: la notte e' ombreggiata, non i giorni alterni.
+        let nightStart = null;
+        for (let index = 0; index <= count; index += 1) {
+          const hour = index < count ? new Date(state.series.times[index].validTime).getHours() : null;
+          const isNight = hour !== null && (hour >= 20 || hour < 6);
+          if (isNight && nightStart === null) nightStart = index;
+          if ((!isNight || index === count) && nightStart !== null) {
+            const sx = nightStart === 0 ? left : (xScale(nightStart - 1) + xScale(nightStart)) / 2;
+            const ex = index >= count ? width - right : (xScale(index - 1) + xScale(index)) / 2;
+            svg += `<rect class="night-shade" x="${sx}" y="${top}" width="${Math.max(0, ex - sx)}" height="${plotHeight}"></rect>`;
+            nightStart = null;
+          }
+        }
         dayRanges.forEach((range, dayIndex) => {
           const startX = range[0] === 0 ? left : (xScale(range[0] - 1) + xScale(range[0])) / 2;
           const endX = range[1] === count - 1 ? width - right : (xScale(range[1]) + xScale(range[1] + 1)) / 2;
-          if (dayIndex % 2) {
-            svg += `<rect class="day-shade" x="${startX}" y="${top}" width="${Math.max(0,endX-startX)}" height="${plotHeight}"></rect>`;
-          }
           if (dayIndex) svg += `<line class="day-divider" x1="${startX}" x2="${startX}" y1="${top}" y2="${height-bottom}"></line>`;
           const labelDate = new Date(state.series.times[range[0]].validTime);
           const dayLabel = new Intl.DateTimeFormat("it-IT", { weekday:"short", day:"2-digit" }).format(labelDate);
@@ -737,32 +753,45 @@
           svg += `<line class="chart-grid" x1="${left}" x2="${width-right}" y1="${y}" y2="${y}"></line>`;
           svg += `<text class="chart-axis" x="${left-10}" y="${y+6}" text-anchor="end">${Number(value).toFixed(options.axisDecimals ?? 0)}</text>`;
         }
-        if (extent[0] < 0 && extent[1] > 0) {
+        const axisUnit = options.unit || (seriesList[0] && seriesList[0].unit) || "";
+        if (axisUnit) {
+          svg += `<text class="chart-unit" x="${left-10}" y="${top-6}" text-anchor="end">${escapeHtml(axisUnit)}</text>`;
+        }
+        // Linea dello zero solo quando i dati attraversano davvero lo 0
+        // (0 °C in inverno, ascesa/discesa per omega): non per la pioggia,
+        // dove lo zero e' solo effetto del padding dell'asse.
+        const crossesZero = seriesList.some(
+          series => series.values.some(value => finite(value) && Number(value) < 0)
+        );
+        if (crossesZero && extent[1] > 0) {
           const zero = yScale(0);
           svg += `<line class="chart-zero" x1="${left}" x2="${width-right}" y1="${zero}" y2="${zero}"></line>`;
         }
-        const labelEvery = count > 50 ? 6 : 3;
+        // Tacche orarie ogni 6 h (00/06/12/18), come nei meteogrammi ufficiali.
         state.series.times.forEach((time, index) => {
-          if (index % labelEvery || index === count - 1) return;
-          svg += `<text class="chart-axis" x="${xScale(index)}" y="${height-11}" text-anchor="middle">${escapeHtml(dateLabel(time.validTime, false))}</text>`;
+          const hour = new Date(time.validTime).getHours();
+          if (hour % 6 !== 0) return;
+          const x = xScale(index);
+          svg += `<line class="chart-tick" x1="${x}" x2="${x}" y1="${height-bottom}" y2="${height-bottom+5}"></line>`;
+          svg += `<text class="chart-hour" x="${x}" y="${height-11}" text-anchor="middle">${String(hour).padStart(2,"0")}</text>`;
         });
         seriesList.forEach((series, seriesIndex) => {
           if (series.bars) {
-            const barWidth = Math.max(3, plotWidth / count * .68);
+            const barWidth = Math.max(2, plotWidth / count * .6);
             const base = yScale(Math.max(0, extent[0]));
             series.values.forEach((value, index) => {
               if (!finite(value) || Number(value) <= 0) return;
               const y = yScale(Number(value));
-              svg += `<rect x="${xScale(index)-barWidth/2}" y="${Math.min(y,base)}" width="${barWidth}" height="${Math.max(1,Math.abs(base-y))}" rx="3.5" fill="url(#${gradientPrefix}-bar-${seriesIndex})" style="filter:drop-shadow(0 1px 3px rgba(22,139,210,.12))"></rect>`;
+              svg += `<rect x="${xScale(index)-barWidth/2}" y="${Math.min(y,base)}" width="${barWidth}" height="${Math.max(1,Math.abs(base-y))}" rx="1" fill="${series.color}" fill-opacity="0.82"></rect>`;
             });
           } else {
             pathSegments(series.values, xScale, yScale).forEach(segment => {
-              if (seriesIndex === 0 && segment.points.length > 1) {
+              if (seriesIndex === 0 && series.fill !== false && segment.points.length > 1) {
                 const first = segment.points[0], last = segment.points[segment.points.length - 1];
                 const area = `${segment.path} L${last[0].toFixed(1)},${(height-bottom).toFixed(1)} L${first[0].toFixed(1)},${(height-bottom).toFixed(1)} Z`;
                 svg += `<path d="${area}" fill="url(#${gradientPrefix}-line-${seriesIndex})"></path>`;
               }
-              svg += `<path d="${segment.path}" fill="none" stroke="${series.color}" stroke-width="${series.width || 2.8}" stroke-linecap="round" stroke-linejoin="round" style="filter:drop-shadow(0 1px 2px rgba(0,0,0,.08))"></path>`;
+              svg += `<path d="${segment.path}" fill="none" stroke="${series.color}" stroke-width="${series.width || 2.4}" stroke-linecap="round" stroke-linejoin="round"></path>`;
             });
           }
         });
@@ -771,8 +800,18 @@
         if (primaryFinite.length && !seriesList[0].bars) {
           const minimum = primaryFinite.reduce((a,b) => a.value < b.value ? a : b);
           const maximum = primaryFinite.reduce((a,b) => a.value > b.value ? a : b);
-          [minimum, maximum].forEach(pointValue => {
-            svg += `<circle class="chart-extreme" cx="${xScale(pointValue.index)}" cy="${yScale(pointValue.value)}" r="5.5" fill="${seriesList[0].color}"></circle>`;
+          const extremeDecimals = seriesList[0].decimals ?? (options.axisDecimals ?? 0);
+          const extremeUnit = seriesList[0].unit || "";
+          [[maximum, true], [minimum, false]].forEach(entry => {
+            const pointValue = entry[0], isMax = entry[1];
+            const cx = xScale(pointValue.index), cy = yScale(pointValue.value);
+            // Etichetta sopra il punto, ma sotto se troppo vicina al bordo
+            // superiore (dove ci sono i nomi dei giorni) o inferiore.
+            const dy = isMax
+              ? (cy - top < 30 ? 16 : -9)
+              : (height - bottom - cy < 24 ? -9 : 16);
+            svg += `<circle class="chart-extreme" cx="${cx}" cy="${cy}" r="3.6" fill="${seriesList[0].color}"></circle>`;
+            svg += `<text class="chart-extreme-label" x="${cx}" y="${cy + dy}" text-anchor="middle">${escapeHtml(format(pointValue.value, extremeDecimals, extremeUnit))}</text>`;
           });
         }
         svg += `<line class="chart-cursor" x1="${left}" x2="${left}" y1="${top}" y2="${height-bottom}"></line>`;
