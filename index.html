@@ -1639,6 +1639,9 @@
               <button class="toggle-row" type="button" data-toggle="isobars" aria-pressed="false">
                 <span><b>Isobare e A/B</b><small>passo 2 hPa</small></span><span class="switch"></span>
               </button>
+              <button class="toggle-row" type="button" data-toggle="isohypses" aria-pressed="false">
+                <span><b>Isoipse 500 hPa</b><small>geopotenziale · passo 4 dam</small></span><span class="switch"></span>
+              </button>
               <button class="toggle-row" type="button" data-toggle="fronts" aria-pressed="false">
                 <span><b>Fronti sinottici stimati</b><small id="front-source-label">ICON-2I · fisica 850/925 hPa</small></span><span class="switch"></span>
               </button>
@@ -2260,6 +2263,7 @@
       let showParticles = false;
       let showVectors = false;
       let showIsobars = false;
+      let showIsohypses = false;
       let showFronts = false;
       let showTerrain = true;
       let showGraticule = false;
@@ -3248,6 +3252,7 @@
           flow: showParticles,
           vectors: showVectors,
           isobars: showIsobars,
+          isohypses: showIsohypses,
           fronts: showFronts,
           terrain: showTerrain,
           graticule: showGraticule,
@@ -3334,6 +3339,16 @@
         } else if (name === "isobars") {
           showIsobars = !showIsobars;
           updateIsobars();
+        } else if (name === "isohypses") {
+          if (!showIsohypses && (!currentData || !getGrid(currentData.geopot500))) {
+            toast("Geopotenziale a 500 hPa non disponibile per questa scadenza");
+            return;
+          }
+          showIsohypses = !showIsohypses;
+          requestVectorRender();
+          if (showIsohypses) {
+            toast("Isoipse di geopotenziale a 500 hPa · passo 4 dam");
+          }
         } else if (name === "fronts") {
           if (
             !currentData || !currentData.meta.frontMethod
@@ -3779,7 +3794,49 @@
         return lines;
       }
 
+      // Chaikin corner-cutting: turns the marching-squares staircase into a
+      // soft, continuous curve while staying inside the original polyline, so
+      // isobars read as smooth meteorological lines instead of broken segments.
+      function smoothIsobarLine(line, iterations) {
+        if (line.length < 3) return line;
+        const isClosed =
+          Math.abs(line[0][0] - line[line.length - 1][0]) < 1e-6 &&
+          Math.abs(line[0][1] - line[line.length - 1][1]) < 1e-6;
+        let points = isClosed ? line.slice(0, line.length - 1) : line.slice();
+
+        for (let step = 0; step < iterations; step += 1) {
+          if (points.length < 3) break;
+          const output = [];
+          if (!isClosed) output.push(points[0]);
+          const count = points.length;
+          const limit = isClosed ? count : count - 1;
+          for (let index = 0; index < limit; index += 1) {
+            const current = points[index];
+            const next = points[(index + 1) % count];
+            output.push([
+              current[0] * 0.75 + next[0] * 0.25,
+              current[1] * 0.75 + next[1] * 0.25
+            ]);
+            output.push([
+              current[0] * 0.25 + next[0] * 0.75,
+              current[1] * 0.25 + next[1] * 0.75
+            ]);
+          }
+          if (!isClosed) output.push(points[points.length - 1]);
+          points = output;
+        }
+
+        if (isClosed && points.length > 0) points.push(points[0]);
+        return points;
+      }
+
       function createIsobarFeatures(pressure, meta) {
+        return createContourFeatures(pressure, meta, 2, 4);
+      }
+
+      // Generic marching-squares contouring on a scalar grid at a fixed
+      // interval, reused for both isobars (2 hPa) and 500 hPa isohypses.
+      function createContourFeatures(pressure, meta, interval, majorEvery) {
         let minimum = Infinity;
         let maximum = -Infinity;
 
@@ -3792,13 +3849,13 @@
 
         if (!Number.isFinite(minimum) || !Number.isFinite(maximum)) return [];
 
-        const firstThreshold = Math.ceil(minimum / 2) * 2;
-        const lastThreshold = Math.floor(maximum / 2) * 2;
+        const firstThreshold = Math.ceil(minimum / interval) * interval;
+        const lastThreshold = Math.floor(maximum / interval) * interval;
         const features = [];
         const nx = meta.nx;
         const ny = meta.ny;
 
-        for (let threshold = firstThreshold; threshold <= lastThreshold; threshold += 2) {
+        for (let threshold = firstThreshold; threshold <= lastThreshold; threshold += interval) {
           const segments = [];
 
           for (let y = 0; y < ny - 1; y += 1) {
@@ -3853,15 +3910,16 @@
           }
 
           stitchIsobarSegments(segments).forEach(function (line) {
+            const smoothLine = smoothIsobarLine(line, 2);
             features.push({
               type: "Feature",
               properties: {
                 value: threshold,
-                major: Math.round(threshold) % 4 === 0
+                major: Math.abs(threshold % majorEvery) < 1e-6
               },
               geometry: {
                 type: "LineString",
-                coordinates: line.map(function (point) {
+                coordinates: smoothLine.map(function (point) {
                   return [meta.lo1 + point[0] * meta.dx, meta.la1 - point[1] * meta.dy];
                 })
               }
@@ -3911,6 +3969,22 @@
               }
             };
           })
+        };
+      }
+
+      function buildGeopotentialProducts(data) {
+        if (data.isohypses) return;
+        const meta = data.meta;
+        const heights = getGrid(data.geopot500);
+        if (!heights) {
+          data.isohypses = { type: "FeatureCollection", features: [] };
+          return;
+        }
+        // 500 hPa geopotential height contours every 4 dam (40 m), major
+        // lines (bold, labelled in decametres) every 8 dam (80 m).
+        data.isohypses = {
+          type: "FeatureCollection",
+          features: createContourFeatures(heights, meta, 40, 80)
         };
       }
 
@@ -4210,42 +4284,79 @@
       }
 
       function drawSynopticCanvas() {
-        if (!showIsobars || !currentData || !map) return;
-        if (!currentData.isobars || !currentData.pressureCenters) buildPressureProducts(currentData);
-
-        const features = currentData.isobars ? currentData.isobars.features : [];
+        if ((!showIsobars && !showIsohypses) || !currentData || !map) return;
         vectorContext.save();
         vectorContext.lineCap = "round";
         vectorContext.lineJoin = "round";
 
-        features.forEach(function (feature, featureIndex) {
-          const coordinates = feature.geometry && feature.geometry.coordinates;
-          if (!coordinates || coordinates.length < 2) return;
-          const points = coordinates.map(function (coordinate) {
-            return map.project(coordinate);
+        // 500 hPa isohypses first, so isobars and fronts read on top.
+        if (showIsohypses) {
+          if (!currentData.isohypses) buildGeopotentialProducts(currentData);
+          const isoFeatures = currentData.isohypses ? currentData.isohypses.features : [];
+          isoFeatures.forEach(function (feature, featureIndex) {
+            const coordinates = feature.geometry && feature.geometry.coordinates;
+            if (!coordinates || coordinates.length < 2) return;
+            const points = coordinates.map(function (coordinate) {
+              return map.project(coordinate);
+            });
+            const major = Boolean(feature.properties && feature.properties.major);
+
+            vectorContext.beginPath();
+            points.forEach(function (point, pointIndex) {
+              if (pointIndex === 0) vectorContext.moveTo(point.x, point.y);
+              else vectorContext.lineTo(point.x, point.y);
+            });
+            vectorContext.strokeStyle = "rgba(255,255,255," + (major ? "0.66" : "0.42") + ")";
+            vectorContext.lineWidth = major ? 3.4 : 2.4;
+            vectorContext.stroke();
+
+            // Indigo distinguishes geopotential height from black isobars.
+            vectorContext.strokeStyle = major ? "rgba(60,24,132,0.95)" : "rgba(74,42,140,0.72)";
+            vectorContext.lineWidth = major ? 1.5 : 0.85;
+            vectorContext.stroke();
+
+            if (major) {
+              // Labelled in decametres (e.g. 552 = 5520 m), meteo convention.
+              drawLabelsAlongIsobar(
+                points, Math.round(feature.properties.value / 10), featureIndex
+              );
+            }
           });
-          const major = Boolean(feature.properties && feature.properties.major);
+        }
 
-          vectorContext.beginPath();
-          points.forEach(function (point, pointIndex) {
-            if (pointIndex === 0) vectorContext.moveTo(point.x, point.y);
-            else vectorContext.lineTo(point.x, point.y);
+        if (showIsobars) {
+          if (!currentData.isobars || !currentData.pressureCenters) buildPressureProducts(currentData);
+          const features = currentData.isobars ? currentData.isobars.features : [];
+          features.forEach(function (feature, featureIndex) {
+            const coordinates = feature.geometry && feature.geometry.coordinates;
+            if (!coordinates || coordinates.length < 2) return;
+            const points = coordinates.map(function (coordinate) {
+              return map.project(coordinate);
+            });
+            const major = Boolean(feature.properties && feature.properties.major);
+
+            vectorContext.beginPath();
+            points.forEach(function (point, pointIndex) {
+              if (pointIndex === 0) vectorContext.moveTo(point.x, point.y);
+              else vectorContext.lineTo(point.x, point.y);
+            });
+            vectorContext.strokeStyle = "rgba(255,255,255," + (major ? "0.72" : "0.48") + ")";
+            vectorContext.lineWidth = major ? 3.5 : 2.5;
+            vectorContext.stroke();
+
+            vectorContext.strokeStyle = major ? "rgba(5,12,18,0.96)" : "rgba(7,16,23,0.78)";
+            vectorContext.lineWidth = major ? 1.45 : 0.82;
+            vectorContext.stroke();
+
+            if (major) {
+              drawLabelsAlongIsobar(points, feature.properties.value, featureIndex);
+            }
           });
-          vectorContext.strokeStyle = "rgba(255,255,255," + (major ? "0.72" : "0.48") + ")";
-          vectorContext.lineWidth = major ? 3.5 : 2.5;
-          vectorContext.stroke();
 
-          vectorContext.strokeStyle = major ? "rgba(5,12,18,0.96)" : "rgba(7,16,23,0.78)";
-          vectorContext.lineWidth = major ? 1.45 : 0.82;
-          vectorContext.stroke();
+          const centers = currentData.pressureCenters ? currentData.pressureCenters.features : [];
+          centers.forEach(drawPressureCenter);
+        }
 
-          if (major) {
-            drawLabelsAlongIsobar(points, feature.properties.value, featureIndex);
-          }
-        });
-
-        const centers = currentData.pressureCenters ? currentData.pressureCenters.features : [];
-        centers.forEach(drawPressureCenter);
         vectorContext.restore();
       }
 
@@ -4778,10 +4889,32 @@
         if (isPlaying) setTimeout(playLoop, playbackDelay);
       }
 
+      function initialItalyView() {
+        // Frame Italy so it always fills the viewport vertically (Sicily → Alps),
+        // regardless of screen aspect. Fitting a wide Mediterranean box used to
+        // zoom out on portrait phones, leaving Italy tiny above a strip of sea.
+        const el = document.getElementById("map");
+        const height = (el && el.clientHeight) || window.innerHeight || 720;
+        const latSouth = 36.2;
+        const latNorth = 46.9;
+        const mercatorY = function (lat) {
+          const phi = (lat * Math.PI) / 180;
+          return Math.log(Math.tan(Math.PI / 4 + phi / 2));
+        };
+        const latFraction =
+          (mercatorY(latNorth) - mercatorY(latSouth)) / (2 * Math.PI);
+        const worldSize = height / latFraction;
+        let zoom = Math.log2(worldSize / 512);
+        zoom = clamp(zoom, 3.6, 6.0);
+        return { center: [12.7, 41.9], zoom: zoom };
+      }
+
       function setupMap() {
+        const startView = initialItalyView();
         map = new maplibregl.Map({
           container: "map",
-          bounds: [[3, 33.7], [22, 48.9]],
+          center: startView.center,
+          zoom: startView.zoom,
           maxZoom: 12.5,
           minZoom: 3.2,
           dragPan: true,
