@@ -23,6 +23,12 @@ FIELD_SPECS = {
     "t700": FieldSpec(180.0, 330.0, "K"),
     "u700": FieldSpec(-150.0, 150.0, "m s-1"),
     "v700": FieldSpec(-150.0, 150.0, "m s-1"),
+    "u500": FieldSpec(-200.0, 200.0, "m s-1"),
+    "v500": FieldSpec(-200.0, 200.0, "m s-1"),
+    # Specific humidity (kg/kg) and geopotential (m2/s2) carry no range
+    # validation: providers publish varied units, and these optional fields
+    # must never abort the whole convective/isohypse layer over a units
+    # mismatch - the RH conversion and the height divide validate downstream.
 }
 
 

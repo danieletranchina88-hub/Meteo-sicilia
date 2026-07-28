@@ -21,6 +21,7 @@ from meteo_analysis.hazards.convection import (
     front_distance_km,
     horizontal_convergence,
     normalize_cin,
+    relative_humidity_from_specific_humidity,
     summarize_convection,
 )
 from meteo_analysis.hazards.visibility import (
@@ -375,6 +376,7 @@ def prepare_icon_hazard_fields(run_dt):
     common = f"ICON_2I_SURFACE_PRESSURE_LEVELS_{run_tag}"
     run_base = f"{NWP_DIRECT_BASE}/{NWP_DIRECTORY_ID}/{run_tag}"
     pressure_file_700 = f"{common}_isobaricInhPa-700.grib"
+    pressure_file_500 = f"{common}_isobaricInhPa-500.grib"
     requests_to_make = {
         "cape_ml": (
             f"{run_base}/CAPE_ML/{common}_atmML-0.grib",
@@ -396,14 +398,38 @@ def prepare_icon_hazard_fields(run_dt):
             f"{run_base}/V/{pressure_file_700}",
             "v700.grib",
         ),
+        # Mid-tropospheric moisture (700 hPa) and deep-layer shear (500 hPa
+        # wind relative to the 10 m wind) for the ingredients-based convective
+        # probability; 500-hPa geopotential (FI) for the isohypse overlay.
+        # All optional: their absence only removes those ingredients/layer, it
+        # never disables the convective layer.
+        "q700": (
+            f"{run_base}/QV/{pressure_file_700}",
+            "q700.grib",
+        ),
+        "u500": (
+            f"{run_base}/U/{pressure_file_500}",
+            "u500.grib",
+        ),
+        "v500": (
+            f"{run_base}/V/{pressure_file_500}",
+            "v500.grib",
+        ),
+        "fi500": (
+            f"{run_base}/FI/{pressure_file_500}",
+            "fi500.grib",
+        ),
     }
-    optional_fields = {"t700", "u700", "v700"}
+    optional_fields = {
+        "t700", "u700", "v700", "q700", "u500", "v500", "fi500",
+    }
     if os.path.exists(HAZARD_TEMP_DIR):
         shutil.rmtree(HAZARD_TEMP_DIR)
     os.makedirs(HAZARD_TEMP_DIR)
     paths = {}
     print(
-        "2b. Scarico ML-CAPE/CIN e T/U/V a 700 hPa reali ICON-2I…",
+        "2b. Scarico ML-CAPE/CIN, T/U/V/QV a 700 hPa e U/V/FI a 500 hPa reali "
+        "ICON-2I…",
         flush=True,
     )
     try:
@@ -1009,6 +1035,35 @@ def process_data():
                         omega_700 = interpolate_native_field(
                             omega_payload, lat, lon
                         )
+                        # Deep-layer (0-6 km) bulk shear: 500-hPa wind relative
+                        # to the 10 m wind.  Optional - absent 500-hPa fields
+                        # simply drop the shear ingredient.
+                        deep_layer_shear = None
+                        u500 = icon_hazard_fields.field(
+                            "u500", step_hours, lat, lon
+                        )
+                        v500 = icon_hazard_fields.field(
+                            "v500", step_hours, lat, lon
+                        )
+                        if u500 is not None and v500 is not None:
+                            deep_layer_shear = np.hypot(
+                                u500 - u_val, v500 - v_val
+                            )
+                        # Mid-tropospheric moisture: 700-hPa relative humidity
+                        # from ICON T and specific humidity.  Optional.
+                        mid_level_rh = None
+                        t700_field = icon_hazard_fields.field(
+                            "t700", step_hours, lat, lon
+                        )
+                        q700_field = icon_hazard_fields.field(
+                            "q700", step_hours, lat, lon
+                        )
+                        if t700_field is not None and q700_field is not None:
+                            mid_level_rh = (
+                                relative_humidity_from_specific_humidity(
+                                    t700_field, q700_field, 700.0
+                                )
+                            )
                         convection_prob = np.asarray(
                             calculate_convection_probability(
                                 cape_ml,
@@ -1017,6 +1072,8 @@ def process_data():
                                 nearest_front_km,
                                 omega_700=omega_700,
                                 surface_rh=rh_val,
+                                deep_layer_shear=deep_layer_shear,
+                                mid_level_rh=mid_level_rh,
                             ),
                             dtype=float,
                         ) * 100.0
@@ -1025,8 +1082,9 @@ def process_data():
                         )
                         convection_message = (
                             "ML-CAPE/CIN ICON-2I, convergenza 10 m smussata "
-                            "a 10 km, omega 700 hPa opzionale e distanza dai "
-                            "fronti OFA."
+                            "a 10 km, omega 700 hPa, shear di strato profondo "
+                            "(500 hPa vs 10 m), umidità a 700 hPa e distanza "
+                            "dai fronti OFA."
                         )
                     except Exception as convection_error:
                         convection_prob = None
@@ -1212,6 +1270,26 @@ def process_data():
                     }
                 )
 
+                # --- ISOIPSE 500 hPa: altezza di geopotenziale (m) ---
+                # FI e' il geopotenziale (m2/s2); l'altezza di geopotenziale e'
+                # FI/g. Opzionale: se il campo manca il layer isoipse resta
+                # semplicemente assente.
+                geopot500 = None
+                if icon_hazard_fields is not None:
+                    try:
+                        fi500 = icon_hazard_fields.field(
+                            "fi500", step_hours, lat, lon
+                        )
+                        if fi500 is not None:
+                            geopot500 = np.asarray(fi500, dtype=float) / 9.80665
+                    except Exception as geopot_error:
+                        geopot500 = None
+                        print(
+                            f" geopot500-{step_hours}h:{geopot_error}",
+                            end="",
+                            flush=True,
+                        )
+
                 step_data = {
                     "meta": header,
                     "wind_u": { "header": {**header, "parameterCategory": 2, "parameterNumber": 2}, "data": np.round(u_val, 1).flatten().tolist() },
@@ -1222,6 +1300,10 @@ def process_data():
                     "feels_like": None,
                     "rain": clean_for_json(rain, 2),
                     "press": clean_for_json(press, 1),
+                    "geopot500": (
+                        clean_for_json(geopot500, 0)
+                        if geopot500 is not None else None
+                    ),
                     "rh": clean_for_json(rh_val, 0),
                     "cloud": clean_for_json(cloud, 0),
                     "convection_prob": (

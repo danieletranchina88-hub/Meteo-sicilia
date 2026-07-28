@@ -13,6 +13,7 @@ from meteo_analysis.hazards.convection import (  # noqa: E402
     front_distance_km,
     horizontal_convergence,
     normalize_cin,
+    relative_humidity_from_specific_humidity,
     summarize_convection,
 )
 
@@ -111,5 +112,109 @@ check(not np.allclose(anti_saturation, 80.0), "ricomparso il valore fisso 80%")
 summary = summarize_convection(anti_saturation)
 check(summary["areaAbove70Pct"] < 5.0, "QC area alta non coerente")
 check(summary["areaExactly80Pct"] < 5.0, "QC valore fisso 80% non coerente")
+
+# --- New ingredients: deep-layer shear and mid-tropospheric moisture ---
+
+# A marginal-but-real setup (medium tier): CAPE + weak lid + some convergence.
+marg_cape = np.full(shape, 900.0)
+marg_cin = np.full(shape, 60.0)  # magnitude -> -60 J/kg, weak lid
+marg_conv = np.full(shape, 0.8e-4)
+base = np.asarray(
+    calculate_convection_probability(marg_cape, marg_cin, marg_conv, distance)
+) * 100.0
+sheared = np.asarray(
+    calculate_convection_probability(
+        marg_cape, marg_cin, marg_conv, distance,
+        deep_layer_shear=np.full(shape, 25.0),
+    )
+) * 100.0
+check(
+    float(np.nanmax(sheared)) > float(np.nanmax(base)) + 1.0,
+    "lo shear di strato profondo non rafforza un ambiente instabile",
+)
+
+# Shear without instability must not create a thunderstorm.
+no_cape_sheared = np.asarray(
+    calculate_convection_probability(
+        np.zeros(shape), np.full(shape, -300.0), np.zeros(shape), distance,
+        deep_layer_shear=np.full(shape, 30.0),
+    )
+) * 100.0
+check(
+    float(np.nanmax(no_cape_sheared)) <= 8.0,
+    "lo shear ha inventato convezione senza CAPE",
+)
+
+# Dry mid-troposphere suppresses; a moist one does not.  Tested below the
+# medium-tier convergence gate so the tier floor does not mask the moisture
+# modulation (the floor deliberately overrides in the medium/high tiers).
+weak_conv = np.full(shape, 0.3e-4)
+dry_aloft = np.asarray(
+    calculate_convection_probability(
+        marg_cape, marg_cin, weak_conv, distance,
+        mid_level_rh=np.full(shape, 12.0),
+    )
+) * 100.0
+moist_aloft = np.asarray(
+    calculate_convection_probability(
+        marg_cape, marg_cin, weak_conv, distance,
+        mid_level_rh=np.full(shape, 85.0),
+    )
+) * 100.0
+check(
+    float(np.nanmax(dry_aloft)) < float(np.nanmax(moist_aloft)),
+    "l'aria secca in quota non riduce la probabilità",
+)
+
+# The expert >=70% rule still requires the four core ingredients even with
+# generous shear and mid-level moisture supplied.
+gated = np.asarray(
+    calculate_convection_probability(
+        np.full(shape, 1_500.0), np.full(shape, -30.0),
+        np.zeros(shape),  # no convergence -> cannot be "high"
+        distance,
+        deep_layer_shear=np.full(shape, 30.0),
+        mid_level_rh=np.full(shape, 90.0),
+    )
+) * 100.0
+check(
+    float(np.nanmax(gated)) < 70.0,
+    "shear/umidità hanno superato la regola dei quattro ingredienti",
+)
+
+# Backward compatibility: omitting the new fields reproduces the old field.
+legacy = np.asarray(
+    calculate_convection_probability(
+        cape, cin_positive_magnitude, conv, distance,
+        surface_rh=np.full(shape, 75.0),
+    )
+)
+legacy_explicit_none = np.asarray(
+    calculate_convection_probability(
+        cape, cin_positive_magnitude, conv, distance,
+        surface_rh=np.full(shape, 75.0),
+        deep_layer_shear=None, mid_level_rh=None,
+    )
+)
+check(
+    np.allclose(legacy, legacy_explicit_none, equal_nan=True),
+    "i nuovi parametri opzionali alterano il comportamento predefinito",
+)
+
+# --- RH from specific humidity (mid-level moisture ingredient source) ---
+rh_moist = relative_humidity_from_specific_humidity(275.15, 0.0045, 700.0)
+rh_dry = relative_humidity_from_specific_humidity(275.15, 0.0004, 700.0)
+check(float(rh_moist) > 65.0, f"RH umida a 700 hPa troppo bassa: {rh_moist}")
+check(float(rh_dry) < 20.0, f"RH secca a 700 hPa troppo alta: {rh_dry}")
+# Celsius input and g/kg input are auto-detected and give the same answer.
+rh_celsius_gkg = relative_humidity_from_specific_humidity(2.0, 4.5, 700.0)
+check(
+    abs(float(rh_celsius_gkg) - float(rh_moist)) < 1.0,
+    "auto-rilevamento unità (°C / g kg-1) incoerente",
+)
+check(
+    np.isnan(relative_humidity_from_specific_humidity(np.nan, 0.004, 700.0)),
+    "input non finito non propagato a NaN",
+)
 
 print("Convection tests passed")

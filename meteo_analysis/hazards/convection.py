@@ -45,6 +45,40 @@ def _nan_gaussian(values: np.ndarray, sigma: tuple[float, float]) -> np.ndarray:
     return np.where(denominator > 0.05, smoothed, np.nan)
 
 
+def relative_humidity_from_specific_humidity(
+    temperature_k, specific_humidity, pressure_hpa: float
+) -> np.ndarray:
+    """Relative humidity (%) from temperature (K), specific humidity and level.
+
+    ``specific_humidity`` is accepted in kg/kg or g/kg (auto-detected).  The
+    saturation vapour pressure uses the Tetens formula over water.  Cells with
+    non-physical inputs return NaN so a missing mid-level humidity is never
+    silently treated as dry (or moist) air.
+    """
+    temperature = _as_float(temperature_k)
+    if np.isfinite(temperature).any() and np.nanmedian(temperature) < 150.0:
+        temperature = temperature + 273.15
+    q = _as_float(specific_humidity)
+    if np.isfinite(q).any() and np.nanmedian(np.abs(q)) > 0.2:
+        q = q / 1000.0  # provided in g/kg
+    valid = (
+        np.isfinite(temperature)
+        & np.isfinite(q)
+        & (temperature > 180.0)
+        & (temperature < 340.0)
+        & (q >= 0.0)
+        & (q < 0.06)
+    )
+    pressure_pa = float(pressure_hpa) * 100.0
+    mixing_ratio = q / np.maximum(1.0 - q, 1e-9)
+    vapour_pressure = pressure_pa * mixing_ratio / (0.622 + mixing_ratio)
+    celsius = temperature - 273.15
+    saturation = 611.2 * np.exp(17.67 * celsius / (celsius + 243.5))
+    with np.errstate(divide="ignore", invalid="ignore"):
+        rh = 100.0 * vapour_pressure / saturation
+    return np.where(valid, np.clip(rh, 0.0, 100.0), np.nan)
+
+
 def normalize_cin(cin) -> np.ndarray:
     """Normalise CIN to the meteorological signed convention (J/kg, <= 0).
 
@@ -183,16 +217,26 @@ def calculate_convection_probability(
     front_distance_km,
     omega_700=None,
     surface_rh=None,
+    deep_layer_shear=None,
+    mid_level_rh=None,
 ):
     """Calculate a conservative convective-initiation probability.
 
     Inputs are ML/MU-CAPE (J/kg), signed or magnitude CIN (J/kg), low-level
     convergence (s-1), nearest-front distance (km), optional 700-hPa omega
-    (Pa/s; negative is ascent) and optional surface RH (%).
+    (Pa/s; negative is ascent), optional surface RH (%), optional deep-layer
+    (0-6 km) bulk shear magnitude (m/s) and optional mid-tropospheric
+    (700-hPa) RH (%).
 
-    The expert high-probability rule is enforced exactly: CAPE > 800 J/kg,
-    CIN > -50 J/kg, convergence > 1e-4 s-1 and a front within 50 km.  Without
-    all four ingredients the result is capped below 70%.
+    The full ingredients-based recipe combines instability (CAPE), the lid
+    (CIN), lift (low-level convergence, synoptic ascent, front proximity),
+    moisture through the column (surface *and* mid-level RH) and storm
+    organisation (deep-layer shear).  Shear and mid-level moisture never
+    create a thunderstorm on their own: they only modulate a signal that
+    already has instability and lift.  The expert high-probability rule is
+    still enforced exactly - CAPE > 800 J/kg, CIN > -50 J/kg,
+    convergence > 1e-4 s-1 and a front within 50 km - so that no additional
+    ingredient can push a cell above 70% without those four present.
     """
     cape = _as_float(cape_ml)
     inhibition = normalize_cin(cin)
@@ -218,6 +262,18 @@ def calculate_convection_probability(
             np.isfinite(omega), np.clip((-omega - 0.02) / 0.28, 0.0, 1.0), 0.0
         )
 
+    # Deep-layer (0-6 km) bulk shear organises and sustains convection.  It is
+    # a persistence/organisation ingredient, so it only adds signal where
+    # instability already exists (multiplied by cape_score).  The 8->25 m/s
+    # ramp follows the usual weak/marginal/organised thresholds.
+    if deep_layer_shear is None:
+        shear_score = np.zeros_like(cape)
+    else:
+        shear = np.broadcast_to(_as_float(deep_layer_shear), cape.shape)
+        shear_score = np.where(
+            np.isfinite(shear), np.clip((shear - 8.0) / 17.0, 0.0, 1.0), 0.0
+        )
+
     if surface_rh is None:
         moisture_multiplier = np.ones_like(cape)
     else:
@@ -228,13 +284,28 @@ def calculate_convection_probability(
             1.0,
         )
 
+    # Mid-tropospheric moisture (700 hPa).  Dry air aloft entrains into the
+    # updraught and evaporatively erodes it, suppressing deep convection; a
+    # moist mid-troposphere lets it grow.  Applied as a gentle multiplier so a
+    # dry-aloft environment cannot be fully cancelled by surface humidity.
+    if mid_level_rh is None:
+        mid_moisture_multiplier = np.ones_like(cape)
+    else:
+        rh700 = np.broadcast_to(_as_float(mid_level_rh), cape.shape)
+        mid_moisture_multiplier = np.where(
+            np.isfinite(rh700),
+            0.78 + 0.25 * np.clip((rh700 - 25.0) / 45.0, 0.0, 1.0),
+            1.0,
+        )
+
     probability = (
         2.0
         + 32.0 * cape_score * cin_score
         + 24.0 * cape_score * convergence_score
         + 8.0 * cape_score * front_score
         + 6.0 * cape_score * ascent_score
-    ) * moisture_multiplier
+        + 5.0 * cape_score * shear_score
+    ) * moisture_multiplier * mid_moisture_multiplier
 
     high = (
         (cape > 800.0)
@@ -249,16 +320,21 @@ def calculate_convection_probability(
         & ~high
     )
 
+    # Organised environments (deep-layer shear present) reach the top of each
+    # tier more reliably, so shear lifts the floors - but only inside the
+    # medium/high masks, which already demand the core ingredients.
     medium_floor = (
         35.0
         + 9.0 * np.clip((cape - 400.0) / 800.0, 0.0, 1.0)
         + 7.0 * np.clip((convergence - 0.5e-4) / 1.0e-4, 0.0, 1.0)
+        + 4.0 * shear_score
     )
     high_floor = (
         72.0
         + 10.0 * np.clip((cape - 800.0) / 1_200.0, 0.0, 1.0)
         + 7.0 * np.clip((convergence - 1.0e-4) / 1.5e-4, 0.0, 1.0)
         + 5.0 * np.clip((50.0 - distance) / 50.0, 0.0, 1.0)
+        + 4.0 * shear_score
     )
     probability = np.where(medium, np.maximum(probability, medium_floor), probability)
     probability = np.where(high, np.maximum(probability, high_floor), probability)
@@ -273,6 +349,12 @@ def calculate_convection_probability(
     probability = np.where(
         convergence <= 0.0, np.minimum(probability, 25.0), probability
     )
+    # Very dry mid-troposphere (700-hPa RH < 20%) strongly entrains and caps
+    # deep-convection likelihood, unless the full high-probability rule holds.
+    if mid_level_rh is not None:
+        rh700_guard = np.broadcast_to(_as_float(mid_level_rh), cape.shape)
+        dry_aloft = np.isfinite(rh700_guard) & (rh700_guard < 20.0) & ~high
+        probability = np.where(dry_aloft, np.minimum(probability, 45.0), probability)
     probability = np.where(valid, np.clip(probability, 0.0, 95.0), np.nan)
     return _return_like(
         cape_ml,
