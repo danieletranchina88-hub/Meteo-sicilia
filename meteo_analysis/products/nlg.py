@@ -12,13 +12,36 @@ from typing import Any
 
 import numpy as np
 
-NLG_METHOD = "icon2i-conditional-nlg-v2"
+NLG_METHOD = "icon2i-conditional-nlg-v3"
 
 FRONT_NAMES = {
     "cold": "freddo",
     "warm": "caldo",
     "stationary": "stazionario",
     "occluded": "occluso",
+}
+
+# Weather typically associated with each front type.  These describe the
+# textbook signature of a front that the objective analysis has actually
+# detected - they are never used to infer a front that is not present.
+FRONT_WEATHER = {
+    "cold": (
+        "rovesci e temporali lungo la linea e nell'immediato post-fronte, "
+        "seguiti da calo termico e rotazione dei venti ai quadranti "
+        "occidentali o settentrionali"
+    ),
+    "warm": (
+        "nuvolosità stratiforme in aumento e precipitazioni più continue "
+        "in avvicinamento, con rialzo termico nel settore caldo retrostante"
+    ),
+    "occluded": (
+        "precipitazioni diffuse ma in graduale attenuazione, tipiche di un "
+        "sistema in fase di occlusione ormai maturo"
+    ),
+    "stationary": (
+        "tempo instabile persistente lungo la linea, che si muove poco e può "
+        "rinnovare le precipitazioni sulle stesse aree"
+    ),
 }
 
 
@@ -201,10 +224,65 @@ def _front_sentence(inputs: BulletinInputs) -> str | None:
         subject = f"un fronte {names[0]}"
     else:
         subject = "più strutture frontali (" + ", ".join(names) + ")"
-    return (
+    sentence = (
         f"L'analisi oggettiva individua {subject} su {inputs.area}. "
         "La posizione resta una stima del modello e può differire localmente."
     )
+    # Add the textbook weather signature for a single detected front type.
+    if len(inputs.front_types) == 1:
+        weather = FRONT_WEATHER.get(inputs.front_types[0])
+        if weather:
+            sentence += f" Al passaggio sono attesi {weather}."
+    return sentence
+
+
+def _sky_sentence(inputs: BulletinInputs) -> str | None:
+    """Describe sky cover from the cloud-fraction field (0-100%)."""
+    cloud = inputs.cloud
+    mean = cloud.get("mean")
+    if mean is None:
+        return None
+    p90 = cloud.get("p90")
+    if mean < 12.0:
+        state = "cielo in prevalenza sereno"
+    elif mean < 35.0:
+        state = "cielo poco nuvoloso"
+    elif mean < 65.0:
+        state = "cielo parzialmente nuvoloso, con nubi irregolari"
+    elif mean < 88.0:
+        state = "cielo da molto nuvoloso a nuvoloso"
+    else:
+        state = "cielo coperto"
+    sentence = f"Copertura nuvolosa: {state}"
+    if p90 is not None and p90 - mean >= 40.0:
+        sentence += ", con annuvolamenti anche compatti a carattere locale"
+    return sentence + "."
+
+
+def _pressure_pattern(inputs: BulletinInputs) -> str | None:
+    """Classify the synoptic pressure regime from the MSLP field."""
+    pressure = inputs.pressure
+    mean = pressure.get("mean")
+    if mean is None:
+        return None
+    spread = None
+    low = pressure.get("minimum")
+    high = pressure.get("maximum")
+    if low is not None and high is not None:
+        spread = high - low
+    if mean >= 1020.0:
+        pattern = "ampio campo di alta pressione"
+    elif mean >= 1015.0:
+        pattern = "promontorio anticiclonico o campo di pressione livellato"
+    elif mean <= 1005.0:
+        pattern = "area depressionaria"
+    elif mean <= 1010.0:
+        pattern = "campo di pressione relativamente basso o saccatura in transito"
+    else:
+        pattern = "campo di pressione debolmente strutturato"
+    if spread is not None and spread >= 12.0:
+        pattern += " con gradiente barico marcato"
+    return pattern
 
 
 def _convection_sentence(inputs: BulletinInputs) -> str:
@@ -294,7 +372,12 @@ def _wind_pressure_sentence(inputs: BulletinInputs) -> str | None:
         pieces.append(
             f"pressione media in {direction} di {abs(trend):.1f} hPa in {hours} ore"
         )
-    return "; ".join(pieces).capitalize() + "." if pieces else None
+    if not pieces:
+        return None
+    joined = "; ".join(pieces)
+    # Capitalise only the first character so units such as "hPa" and "km/h"
+    # keep their correct casing.
+    return joined[0].upper() + joined[1:] + "."
 
 
 def _hail_sentence(inputs: BulletinInputs) -> str | None:
@@ -312,6 +395,10 @@ def _hail_sentence(inputs: BulletinInputs) -> str | None:
 def _synoptic_overview_sentence(inputs: BulletinInputs) -> str | None:
     """Synthesize a synoptic overview from all available evidence."""
     signals = []
+    # Baseline pressure regime frames the whole picture.
+    pattern = _pressure_pattern(inputs)
+    if pattern:
+        signals.append(pattern)
     # Pressure trend indicates frontal dynamics
     pressure_trend = inputs.pressure_trend_hpa
     hours = inputs.trend_hours
@@ -368,6 +455,7 @@ def generate_bulletin_details(inputs: BulletinInputs) -> dict:
         for sentence in (
             _synoptic_overview_sentence(inputs),
             _front_sentence(inputs),
+            _sky_sentence(inputs),
             _convection_sentence(inputs),
             _precipitation_sentence(inputs),
             _temperature_sentence(inputs),

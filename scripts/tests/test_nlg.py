@@ -55,8 +55,14 @@ high_details = generate_bulletin_details(high)
 assert "fronte freddo" in high_details["text"].lower()
 assert "su Italia" in high_details["text"]
 assert "picchi del 78%" in high_details["text"]
-assert high_details["method"].endswith("-v2")
+assert high_details["method"].endswith("-v3")
 assert len(high_details["paragraphs"]) >= 4
+# Enriched bulletin: a cold front carries its textbook weather signature and
+# the sky cover is described (the cloud field was previously ignored).
+assert "calo termico" in high_details["text"].lower()
+assert "copertura nuvolosa" in high_details["text"].lower()
+# A synoptic pressure regime always frames the bulletin.
+assert "quadro sinottico" in high_details["text"].lower()
 
 unavailable = make_inputs(empty_fronts, np.full((12, 14), np.nan))
 unavailable_details = generate_bulletin_details(unavailable)
