@@ -1642,6 +1642,9 @@
               <button class="toggle-row" type="button" data-toggle="isohypses" aria-pressed="false">
                 <span><b>Isoipse 500 hPa</b><small>geopotenziale · passo 4 dam</small></span><span class="switch"></span>
               </button>
+              <button class="toggle-row" type="button" data-toggle="radar" aria-pressed="false">
+                <span><b>Radar precipitazioni</b><small>osservato in tempo reale · RainViewer</small></span><span class="switch"></span>
+              </button>
               <button class="toggle-row" type="button" data-toggle="fronts" aria-pressed="false">
                 <span><b>Fronti sinottici stimati</b><small id="front-source-label">ICON-2I · fisica 850/925 hPa</small></span><span class="switch"></span>
               </button>
@@ -2264,6 +2267,9 @@
       let showVectors = false;
       let showIsobars = false;
       let showIsohypses = false;
+      let showRadar = false;
+      let radarFrames = [];
+      let radarHost = "";
       let showFronts = false;
       let showTerrain = true;
       let showGraticule = false;
@@ -3253,6 +3259,7 @@
           vectors: showVectors,
           isobars: showIsobars,
           isohypses: showIsohypses,
+          radar: showRadar,
           fronts: showFronts,
           terrain: showTerrain,
           graticule: showGraticule,
@@ -3348,6 +3355,28 @@
           requestVectorRender();
           if (showIsohypses) {
             toast("Isoipse di geopotenziale a 500 hPa · passo 4 dam");
+          }
+        } else if (name === "radar") {
+          if (!map || !map.getLayer("radar-layer")) {
+            toast("Radar in tempo reale non disponibile al momento");
+            return;
+          }
+          showRadar = !showRadar;
+          map.setLayoutProperty(
+            "radar-layer", "visibility", showRadar ? "visible" : "none"
+          );
+          if (showRadar) {
+            const latest = radarFrames.length
+              ? radarFrames[radarFrames.length - 1] : null;
+            const when = latest
+              ? new Date(latest.time * 1000).toLocaleTimeString(
+                  "it-IT", { hour: "2-digit", minute: "2-digit" }
+                )
+              : "";
+            toast(
+              "Radar precipitazioni in tempo reale · RainViewer"
+              + (when ? " · agg. " + when : "")
+            );
           }
         } else if (name === "fronts") {
           if (
@@ -4889,6 +4918,41 @@
         if (isPlaying) setTimeout(playLoop, playbackDelay);
       }
 
+      async function setupRadarLayer() {
+        // Real-time observed precipitation from RainViewer (client-side tiles).
+        // Independent of the ICON-2I model field: this is the "now" reality
+        // layer. Failure is silent - the toggle simply reports unavailable.
+        try {
+          const maps = await fetch(
+            "https://api.rainviewer.com/public/weather-maps.json"
+          ).then(function (response) { return response.json(); });
+          radarHost = maps.host || "";
+          radarFrames = (maps.radar && maps.radar.past) ? maps.radar.past : [];
+          if (!radarHost || !radarFrames.length || !map || map.getSource("radar")) {
+            return;
+          }
+          const latest = radarFrames[radarFrames.length - 1];
+          map.addSource("radar", {
+            type: "raster",
+            tiles: [radarHost + latest.path + "/256/{z}/{x}/{y}/4/1_1.png"],
+            tileSize: 256,
+            attribution: "Radar © RainViewer"
+          });
+          map.addLayer(
+            {
+              id: "radar-layer",
+              type: "raster",
+              source: "radar",
+              layout: { visibility: "none" },
+              paint: { "raster-opacity": 0.72, "raster-fade-duration": 0 }
+            },
+            map.getLayer("labels-layer") ? "labels-layer" : undefined
+          );
+        } catch (error) {
+          console.warn("Radar RainViewer non disponibile:", error);
+        }
+      }
+
       function initialItalyView() {
         // Frame Italy so it always fills the viewport vertically (Sicily → Alps),
         // regardless of screen aspect. Fitting a wide Mediterranean box used to
@@ -5233,6 +5297,7 @@
 
           updateMapPresentation();
           await loadCatalog();
+          setupRadarLayer();
           const query = new URLSearchParams(window.location.search);
           const latParam = query.get("lat");
           const lonParam = query.get("lon");
