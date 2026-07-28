@@ -5234,9 +5234,21 @@
           updateMapPresentation();
           await loadCatalog();
           const query = new URLSearchParams(window.location.search);
-          const queryLatitude = Number(query.get("lat"));
-          const queryLongitude = Number(query.get("lon"));
-          if (Number.isFinite(queryLatitude) && Number.isFinite(queryLongitude)) {
+          const latParam = query.get("lat");
+          const lonParam = query.get("lon");
+          const queryLatitude = Number(latParam);
+          const queryLongitude = Number(lonParam);
+          // query.get() returns null when the parameter is absent, and
+          // Number(null) is 0 (not NaN): without the explicit null check the
+          // map flew to [0,0] - off the coast of Africa, at zoom 8.2 - on
+          // every plain visit. Require both params present and inside the
+          // ICON-2I domain before moving the view.
+          if (
+            latParam !== null && lonParam !== null &&
+            Number.isFinite(queryLatitude) && Number.isFinite(queryLongitude) &&
+            queryLatitude >= 33.7 && queryLatitude <= 48.9 &&
+            queryLongitude >= 3.0 && queryLongitude <= 22.0
+          ) {
             map.flyTo({
               center: [queryLongitude, queryLatitude],
               zoom: Math.max(map.getZoom(), 8.2),
