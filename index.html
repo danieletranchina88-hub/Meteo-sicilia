@@ -1648,6 +1648,9 @@
               <button class="toggle-row" type="button" data-toggle="radar" aria-pressed="false">
                 <span><b>Radar precipitazioni</b><small>osservato in tempo reale · RainViewer</small></span><span class="switch"></span>
               </button>
+              <button class="toggle-row" type="button" data-toggle="fusion" aria-pressed="false">
+                <span><b>Analisi osservata</b><small>ICON-2I fuso con stazioni METAR · T, P, UR</small></span><span class="switch"></span>
+              </button>
               <button class="toggle-row" type="button" data-toggle="fronts" aria-pressed="false">
                 <span><b>Fronti sinottici stimati</b><small id="front-source-label">ICON-2I · fisica 850/925 hPa</small></span><span class="switch"></span>
               </button>
@@ -2299,6 +2302,10 @@
       let showRadar = false;
       let radarFrames = [];
       let radarHost = "";
+      let showFusion = false;
+      let obsStations = [];
+      let obsFetchedAt = 0;
+      let obsFetching = false;
       let showFronts = false;
       let showTerrain = true;
       let showGraticule = false;
@@ -3289,6 +3296,7 @@
           isobars: showIsobars,
           isohypses: showIsohypses,
           radar: showRadar,
+          fusion: showFusion,
           fronts: showFronts,
           terrain: showTerrain,
           graticule: showGraticule,
@@ -3340,6 +3348,7 @@
         updateLegend();
         renderWeather();
         updateIsobars();
+        if (showFusion) updateStationMarkers();
         updateMapPresentation();
         requestVectorRender();
         refreshSelectedPoint();
@@ -3406,6 +3415,37 @@
               "Radar precipitazioni in tempo reale · RainViewer"
               + (when ? " · agg. " + when : "")
             );
+          }
+        } else if (name === "fusion") {
+          if (!showFusion && !fusionSupported(activeLayer)) {
+            toast(
+              "Fusione osservata disponibile su Temperatura, Pressione e "
+              + "Umidità: seleziona uno di questi campi"
+            );
+            return;
+          }
+          showFusion = !showFusion;
+          if (showFusion) {
+            toast("Analisi osservata: fondo ICON-2I con METAR reali…");
+            fetchObservations().then(function () {
+              if (!obsStations.length) {
+                toast("Osservazioni METAR non disponibili al momento");
+                showFusion = false;
+                updateLayerUi();
+                return;
+              }
+              if (currentData) currentData._fused = {};
+              updateStationMarkers();
+              renderWeather();
+              updateLayerUi();
+              toast(
+                "Analisi osservata attiva · " + obsStations.length
+                + " stazioni METAR fuse con ICON-2I"
+              );
+            });
+          } else {
+            updateStationMarkers();
+            renderWeather();
           }
         } else if (name === "fronts") {
           if (
@@ -3513,9 +3553,16 @@
           : sampleBilinear;
         const isWindField = activeLayer === "wind";
         const fieldKey = activeLayer === "feels" ? "feels_like" : activeLayer;
-        const fieldGrid = isWindField
+        let fieldGrid = isWindField
           ? null
           : getGrid(upperActive ? upperFieldArray(activeLayer) : currentData[fieldKey]);
+        // Observed analysis: fuse the surface field with live METAR (Cressman).
+        if (
+          showFusion && !isWindField && !upperActive && fieldGrid
+          && fusionSupported(activeLayer)
+        ) {
+          fieldGrid = buildFusedGrid(activeLayer, fieldGrid, fieldMeta);
+        }
         const windLevel = upperActive ? upperLevelData("wind") : null;
         const windUGrid = isWindField ? getGrid(windLevel ? windLevel.u : currentData.wind_u) : null;
         const windVGrid = isWindField ? getGrid(windLevel ? windLevel.v : currentData.wind_v) : null;
@@ -4982,6 +5029,159 @@
         }
       }
 
+      // ---- ANALISI OSSERVATA: fusione ICON-2I + METAR (Cressman) ----
+      // Client-side: il modello ICON e' il primo tentativo, le stazioni reali
+      // lo correggono. Nessun impatto sulla pipeline dati.
+      const FUSION_RADIUS_KM = 150;
+      const FUSION_FIELDS = { temp: "temp", press: "press", rh: "rh" };
+
+      async function fetchObservations() {
+        const now = Date.now();
+        if (obsFetching) return;
+        if (obsStations.length && now - obsFetchedAt < 10 * 60 * 1000) return;
+        obsFetching = true;
+        try {
+          // NOAA aviationweather: METAR JSON, CORS abilitato. bbox = latMin,lonMin,latMax,lonMax
+          const url =
+            "https://aviationweather.gov/api/data/metar?format=json&bbox=33.7,3,48.9,22";
+          const raw = await fetch(url).then(function (r) { return r.json(); });
+          const list = Array.isArray(raw) ? raw : [];
+          obsStations = list.map(function (m) {
+            const lat = Number(m.lat);
+            const lon = Number(m.lon);
+            if (!Number.isFinite(lat) || !Number.isFinite(lon)) return null;
+            const t = Number(m.temp);
+            const td = Number(m.dewp);
+            const ws = Number(m.wspd);
+            const p = Number(m.altim);
+            return {
+              id: m.icaoId || m.name || "",
+              lat: lat,
+              lon: lon,
+              tempC: Number.isFinite(t) ? t : null,
+              dewpC: Number.isFinite(td) ? td : null,
+              wspdKmh: Number.isFinite(ws) ? ws * 1.852 : null,
+              pressHpa: Number.isFinite(p) && p > 850 && p < 1080 ? p : null
+            };
+          }).filter(Boolean);
+          obsFetchedAt = now;
+        } catch (error) {
+          console.warn("Osservazioni METAR non disponibili:", error);
+        } finally {
+          obsFetching = false;
+        }
+      }
+
+      function fusionSupported(layerKey) {
+        return Object.prototype.hasOwnProperty.call(FUSION_FIELDS, layerKey);
+      }
+
+      function observationValue(station, layerKey) {
+        if (layerKey === "temp") return station.tempC;
+        if (layerKey === "press") return station.pressHpa;
+        if (layerKey === "rh") {
+          if (station.tempC === null || station.dewpC === null) return null;
+          const t = station.tempC;
+          const td = station.dewpC;
+          const rh = 100 * Math.exp((17.625 * td) / (243.04 + td))
+            / Math.exp((17.625 * t) / (243.04 + t));
+          return clamp(rh, 0, 100);
+        }
+        return null;
+      }
+
+      // Cressman objective analysis: fused = model + weighted mean of the
+      // (observation - model) increments, weight (R^2-d^2)/(R^2+d^2) for d<R.
+      function cressmanFused(baseGrid, meta, layerKey, radiusKm) {
+        const kmPerLat = 111.195;
+        const refLat = meta.la1 - ((meta.ny - 1) * meta.dy) / 2;
+        const kmPerLon = 111.195 * Math.cos((refLat * Math.PI) / 180);
+        const points = [];
+        for (let s = 0; s < obsStations.length; s += 1) {
+          const station = obsStations[s];
+          const obs = observationValue(station, layerKey);
+          if (obs === null || !Number.isFinite(obs)) continue;
+          const gx = (station.lon - meta.lo1) / meta.dx;
+          const gy = (meta.la1 - station.lat) / meta.dy;
+          const model = sampleBilinear(baseGrid, gx, gy, meta.nx, meta.ny);
+          if (!Number.isFinite(model)) continue;
+          points.push({
+            x: station.lon * kmPerLon,
+            y: station.lat * kmPerLat,
+            increment: obs - model
+          });
+        }
+        if (!points.length) return baseGrid;
+        const r2 = radiusKm * radiusKm;
+        const out = new Float32Array(baseGrid.length);
+        for (let j = 0; j < meta.ny; j += 1) {
+          const cy = (meta.la1 - j * meta.dy) * kmPerLat;
+          for (let i = 0; i < meta.nx; i += 1) {
+            const idx = j * meta.nx + i;
+            const base = baseGrid[idx];
+            if (!Number.isFinite(base)) { out[idx] = base; continue; }
+            const cx = (meta.lo1 + i * meta.dx) * kmPerLon;
+            let wsum = 0;
+            let csum = 0;
+            for (let p = 0; p < points.length; p += 1) {
+              const dx = cx - points[p].x;
+              const dy = cy - points[p].y;
+              const d2 = dx * dx + dy * dy;
+              if (d2 >= r2) continue;
+              const w = (r2 - d2) / (r2 + d2);
+              wsum += w;
+              csum += w * points[p].increment;
+            }
+            out[idx] = wsum > 0 ? base + csum / wsum : base;
+          }
+        }
+        return out;
+      }
+
+      function buildFusedGrid(layerKey, baseGrid, meta) {
+        if (!currentData) return baseGrid;
+        if (!currentData._fused) currentData._fused = {};
+        if (currentData._fused[layerKey]) return currentData._fused[layerKey];
+        const fused = cressmanFused(baseGrid, meta, layerKey, FUSION_RADIUS_KM);
+        currentData._fused[layerKey] = fused;
+        return fused;
+      }
+
+      function buildStationFeatures(layerKey, info) {
+        const features = [];
+        for (let s = 0; s < obsStations.length; s += 1) {
+          const station = obsStations[s];
+          const value = observationValue(station, layerKey);
+          if (value === null || !Number.isFinite(value)) continue;
+          const color = colorFor(value, info);
+          features.push({
+            type: "Feature",
+            properties: {
+              color: "rgb(" + Math.round(color[0]) + ","
+                + Math.round(color[1]) + "," + Math.round(color[2]) + ")",
+              value: value,
+              id: station.id
+            },
+            geometry: { type: "Point", coordinates: [station.lon, station.lat] }
+          });
+        }
+        return features;
+      }
+
+      function updateStationMarkers() {
+        if (!map || !map.getSource("obs-stations")) return;
+        const info = activeLayerInfo(activeLayer);
+        const features = (showFusion && fusionSupported(activeLayer))
+          ? buildStationFeatures(activeLayer, info) : [];
+        map.getSource("obs-stations").setData({
+          type: "FeatureCollection", features: features
+        });
+        const visibility = features.length ? "visible" : "none";
+        ["obs-stations-halo", "obs-stations-core"].forEach(function (id) {
+          if (map.getLayer(id)) map.setLayoutProperty(id, "visibility", visibility);
+        });
+      }
+
       function initialItalyView() {
         // Frame Italy so it always fills the viewport vertically (Sicily → Alps),
         // regardless of screen aspect. Fitting a wide Mediterranean box used to
@@ -5266,6 +5466,34 @@
               "text-color": ["match", ["get", "kind"], "A", "#b80f20", "B", "#0b4fae", "#122f43"],
               "text-halo-color": "rgba(255,255,255,0.94)",
               "text-halo-width": 1.6
+            }
+          });
+
+          map.addSource("obs-stations", {
+            type: "geojson",
+            data: { type: "FeatureCollection", features: [] }
+          });
+          map.addLayer({
+            id: "obs-stations-halo",
+            type: "circle",
+            source: "obs-stations",
+            layout: { visibility: "none" },
+            paint: {
+              "circle-radius": 6.5,
+              "circle-color": "#ffffff",
+              "circle-opacity": 0.92
+            }
+          });
+          map.addLayer({
+            id: "obs-stations-core",
+            type: "circle",
+            source: "obs-stations",
+            layout: { visibility: "none" },
+            paint: {
+              "circle-radius": 4.2,
+              "circle-color": ["get", "color"],
+              "circle-stroke-width": 1,
+              "circle-stroke-color": "rgba(10,20,30,0.6)"
             }
           });
 
