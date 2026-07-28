@@ -5012,6 +5012,8 @@
             type: "raster",
             tiles: [radarHost + latest.path + "/256/{z}/{x}/{y}/4/1_1.png"],
             tileSize: 256,
+            // Confine the radar tiles to the ICON-2I domain: [W, S, E, N].
+            bounds: [3.0, 33.7, 22.0, 48.9],
             attribution: "Radar © RainViewer"
           });
           map.addLayer(
@@ -5041,32 +5043,33 @@
         if (obsStations.length && now - obsFetchedAt < 10 * 60 * 1000) return;
         obsFetching = true;
         try {
-          // NOAA aviationweather: METAR JSON, CORS abilitato. bbox = latMin,lonMin,latMax,lonMax
-          const url =
-            "https://aviationweather.gov/api/data/metar?format=json&bbox=33.7,3,48.9,22";
-          const raw = await fetch(url).then(function (r) { return r.json(); });
-          const list = Array.isArray(raw) ? raw : [];
-          obsStations = list.map(function (m) {
-            const lat = Number(m.lat);
-            const lon = Number(m.lon);
+          // Read the pipeline-published METAR snapshot from the same origin.
+          // Fetching aviationweather.gov directly is blocked by CORS, so the
+          // GitHub Action fetches it server-side into data_weather/.
+          const payload = await fetch(
+            "data_weather/observations.json?t=" + Date.now()
+          ).then(function (r) {
+            if (!r.ok) throw new Error("observations.json non disponibile");
+            return r.json();
+          });
+          const list = (payload && payload.stations) ? payload.stations : [];
+          obsStations = list.map(function (s) {
+            const lat = Number(s.lat);
+            const lon = Number(s.lon);
             if (!Number.isFinite(lat) || !Number.isFinite(lon)) return null;
-            const t = Number(m.temp);
-            const td = Number(m.dewp);
-            const ws = Number(m.wspd);
-            const p = Number(m.altim);
             return {
-              id: m.icaoId || m.name || "",
+              id: s.id || s.name || "",
               lat: lat,
               lon: lon,
-              tempC: Number.isFinite(t) ? t : null,
-              dewpC: Number.isFinite(td) ? td : null,
-              wspdKmh: Number.isFinite(ws) ? ws * 1.852 : null,
-              pressHpa: Number.isFinite(p) && p > 850 && p < 1080 ? p : null
+              tempC: s.tempC === null || s.tempC === undefined ? null : Number(s.tempC),
+              dewpC: s.dewpC === null || s.dewpC === undefined ? null : Number(s.dewpC),
+              wspdKmh: s.wspdKmh === null || s.wspdKmh === undefined ? null : Number(s.wspdKmh),
+              pressHpa: s.pressHpa === null || s.pressHpa === undefined ? null : Number(s.pressHpa)
             };
           }).filter(Boolean);
           obsFetchedAt = now;
         } catch (error) {
-          console.warn("Osservazioni METAR non disponibili:", error);
+          console.warn("Osservazioni non disponibili:", error);
         } finally {
           obsFetching = false;
         }

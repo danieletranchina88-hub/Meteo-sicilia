@@ -198,6 +198,69 @@ def write_json_gzip_atomic(path, payload, compresslevel=6):
             os.remove(partial)
 
 
+def write_observations(output_dir):
+    """Fetch Italian-domain METAR observations and publish them for the
+    browser-side observed analysis (Cressman fusion). Server-side fetch avoids
+    the browser CORS block on aviationweather.gov. Non-fatal: on any error no
+    file is written and the fusion layer simply reports observations absent.
+    """
+    def _num(mapping, key):
+        try:
+            value = float(mapping.get(key))
+        except (TypeError, ValueError):
+            return None
+        return value if value == value else None  # drop NaN
+
+    try:
+        url = (
+            "https://aviationweather.gov/api/data/metar?format=json"
+            f"&bbox={LAT_MIN},{LON_MIN},{LAT_MAX},{LON_MAX}"
+        )
+        response = requests.get(
+            url, timeout=(15, 45),
+            headers={"User-Agent": "Meteo-Sicilia/1.0"},
+        )
+        response.raise_for_status()
+        raw = response.json()
+        stations = []
+        latest = 0
+        for report in raw if isinstance(raw, list) else []:
+            latitude = _num(report, "lat")
+            longitude = _num(report, "lon")
+            if latitude is None or longitude is None:
+                continue
+            if not (LAT_MIN <= latitude <= LAT_MAX and LON_MIN <= longitude <= LON_MAX):
+                continue
+            wind_kt = _num(report, "wspd")
+            pressure = _num(report, "altim")
+            obs_time = report.get("obsTime")
+            if isinstance(obs_time, (int, float)):
+                latest = max(latest, int(obs_time))
+            stations.append({
+                "id": report.get("icaoId") or "",
+                "name": report.get("name") or "",
+                "lat": round(latitude, 4),
+                "lon": round(longitude, 4),
+                "tempC": _num(report, "temp"),
+                "dewpC": _num(report, "dewp"),
+                "wspdKmh": round(wind_kt * 1.852, 1) if wind_kt is not None else None,
+                "wdir": _num(report, "wdir"),
+                "pressHpa": (
+                    pressure if pressure is not None and 850 < pressure < 1080 else None
+                ),
+            })
+        payload = {
+            "source": "NOAA aviationweather METAR",
+            "obsTime": latest,
+            "count": len(stations),
+            "stations": stations,
+        }
+        write_json_atomic(os.path.join(output_dir, "observations.json"), payload)
+        print(f"   Osservazioni METAR: {len(stations)} stazioni.", flush=True)
+    except Exception as error:
+        print(f"   Osservazioni METAR non disponibili: {error}", flush=True)
+
+
 def prepare_icon_front_analyzer(run_dt):
     """Build the ICON-2I-only, hourly, multilayer frontal analysis.
 
@@ -1529,6 +1592,8 @@ def process_data():
                 "archivio meteogrammi incompleto: "
                 f"{len(meteogram_manifest['hours'])}/{len(catalog)} scadenze"
             )
+
+        write_observations(TEMP_DIR)
 
         if os.path.exists(FINAL_DIR): shutil.rmtree(FINAL_DIR)
         shutil.move(TEMP_DIR, FINAL_DIR)
