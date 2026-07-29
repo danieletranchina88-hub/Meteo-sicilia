@@ -31,6 +31,71 @@
         --safe-bottom: env(safe-area-inset-bottom, 0px);
       }
 
+      /* ---------- MODALITA' PRO (console scientifica) ---------- */
+      body.pro-mode {
+        --radius: 3px;
+        --shadow: 0 1px 6px rgba(0, 0, 0, 0.4);
+        --surface: rgba(12, 20, 26, 0.96);
+        --surface-strong: rgba(8, 14, 18, 0.98);
+        --stroke: rgba(120, 165, 185, 0.22);
+        background: #0a0f13;
+      }
+      .pro-strip { display: none; }
+      body.pro-mode .pro-strip {
+        position: fixed;
+        z-index: 6;
+        top: calc(var(--safe-top) + 70px);
+        left: 12px;
+        display: flex;
+        flex-wrap: wrap;
+        max-width: min(680px, calc(100vw - 24px));
+        border: 1px solid var(--stroke);
+        background: var(--surface-strong);
+        font-family: "SFMono-Regular", ui-monospace, "JetBrains Mono", "Roboto Mono", Menlo, Consolas, monospace;
+        font-variant-numeric: tabular-nums;
+        box-shadow: var(--shadow);
+      }
+      .pro-strip .cell {
+        display: flex;
+        flex-direction: column;
+        gap: 1px;
+        padding: 5px 11px;
+        border-right: 1px solid var(--stroke);
+      }
+      .pro-strip .cell:last-child { border-right: 0; }
+      .pro-strip .k {
+        font-size: 7.5px; letter-spacing: .14em; text-transform: uppercase;
+        color: var(--deep-muted); font-weight: 700;
+      }
+      .pro-strip .v { font-size: 11px; color: var(--text); }
+      .pro-strip .v.acc { color: var(--accent-2); }
+      @media (max-width: 720px) {
+        body.pro-mode .pro-strip { font-size: 10px; top: calc(var(--safe-top) + 62px); }
+        .pro-strip .cell { padding: 4px 8px; }
+      }
+      #pro-button.on {
+        border-color: var(--stroke-strong);
+        background: rgba(49, 210, 233, 0.16);
+        color: var(--accent-2);
+      }
+      /* Flat, squadrato: superfici e controlli in modalità Pro. */
+      body.pro-mode .header-button,
+      body.pro-mode .brand-panel,
+      body.pro-mode .brand-mark,
+      body.pro-mode .surface,
+      body.pro-mode .layer-card,
+      body.pro-mode .toggle-row {
+        border-radius: 3px;
+      }
+      body.pro-mode .header-button.primary {
+        background: rgba(21, 159, 228, 0.16);
+        color: var(--accent-2);
+        box-shadow: none;
+      }
+      body.pro-mode .brand-mark {
+        background: rgba(21, 159, 228, 0.16);
+      }
+
       * {
         box-sizing: border-box;
         -webkit-tap-highlight-color: transparent;
@@ -1486,6 +1551,14 @@
           </svg>
           <span>Solo mappa</span>
         </button>
+        <button id="pro-button" class="header-button" type="button" aria-pressed="false" aria-label="Attiva la modalità Pro scientifica">
+          <svg class="icon" viewBox="0 0 24 24">
+            <path d="M9 3h6"></path>
+            <path d="M10 3v6l-4.6 8.3A2 2 0 0 0 7.2 20h9.6a2 2 0 0 0 1.8-2.7L14 9V3"></path>
+            <path d="M7.6 15h8.8"></path>
+          </svg>
+          <span>Pro</span>
+        </button>
         <button id="drawer-button" class="header-button primary" type="button" aria-expanded="false" aria-controls="drawer">
           <svg class="icon" viewBox="0 0 24 24">
             <path d="M4 6h16"></path>
@@ -1496,6 +1569,7 @@
         </button>
       </div>
     </header>
+    <div id="pro-strip" class="pro-strip" aria-hidden="true"></div>
 
     <section id="meta-card" class="surface" aria-label="Metadati della previsione">
       <div class="meta-item">
@@ -2227,6 +2301,8 @@
         drawerClose: document.getElementById("drawer-close"),
         drawerScrim: document.getElementById("drawer-scrim"),
         cleanButton: document.getElementById("clean-button"),
+        proButton: document.getElementById("pro-button"),
+        proStrip: document.getElementById("pro-strip"),
         bulletinButton: document.getElementById("bulletin-button"),
         drawerBulletinButton: document.getElementById("drawer-bulletin-button"),
         bulletinCard: document.getElementById("bulletin-card"),
@@ -2318,6 +2394,8 @@
       let showFronts = false;
       let showTerrain = true;
       let showGraticule = false;
+      let proMode = false;
+      try { proMode = localStorage.getItem("proMode") === "1"; } catch (error) { proMode = false; }
       let isMapMoving = false;
       let selectedPoint = null;
       let particleFrame = null;
@@ -3145,6 +3223,7 @@
           updateLegend();
           renderWeather();
           updateIsobars();
+          if (proMode) updateProStrip();
           updateMapPresentation();
           resetParticles();
           if (showParticles) startParticles();
@@ -3358,6 +3437,7 @@
         renderWeather();
         updateIsobars();
         if (showFusion) updateStationMarkers();
+        if (proMode) updateProStrip();
         updateMapPresentation();
         requestVectorRender();
         refreshSelectedPoint();
@@ -3661,12 +3741,78 @@
       function updateMapPresentation() {
         if (!mapLoaded) return;
 
+        // In modalità Pro il fondo diventa scuro e desaturato (carta di
+        // analisi) e la graticola è sempre attiva.
+        const graticuleOn = proMode || showGraticule;
         if (map.getLayer("graticule-layer")) {
-          map.setLayoutProperty("graticule-layer", "visibility", showGraticule ? "visible" : "none");
+          map.setLayoutProperty("graticule-layer", "visibility", graticuleOn ? "visible" : "none");
         }
         if (map.getLayer("terrain-detail")) {
-          map.setLayoutProperty("terrain-detail", "visibility", showTerrain ? "visible" : "none");
+          map.setLayoutProperty("terrain-detail", "visibility", (showTerrain && !proMode) ? "visible" : "none");
         }
+        if (map.getLayer("background")) {
+          map.setPaintProperty("background", "background-color", proMode ? "#0a0f13" : "#dfeaf1");
+        }
+        if (map.getLayer("basemap-layer")) {
+          map.setPaintProperty("basemap-layer", "raster-opacity", proMode ? 0.3 : 0.72);
+          map.setPaintProperty("basemap-layer", "raster-saturation", proMode ? -0.7 : -0.28);
+          map.setPaintProperty("basemap-layer", "raster-brightness-max", proMode ? 0.55 : 1);
+        }
+        if (map.getLayer("labels-layer")) {
+          map.setPaintProperty("labels-layer", "raster-opacity", proMode ? 0.42 : 0.86);
+        }
+      }
+
+      function proTime(iso) {
+        if (!iso) return "—";
+        const match = String(iso).match(/^(\d{4}-\d{2}-\d{2})T(\d{2})/);
+        return match ? (match[1] + " " + match[2] + "Z") : String(iso);
+      }
+
+      function updateProStrip() {
+        if (!ui.proStrip) return;
+        if (!proMode || !currentData || !currentData.meta) {
+          ui.proStrip.innerHTML = "";
+          return;
+        }
+        const meta = currentData.meta;
+        const info = activeLayerInfo(activeLayer);
+        const field = info ? (info.label + (info.unit ? " · " + info.unit : "")) : activeLayer;
+        const lead = Number.isFinite(meta.leadHours) ? " · +" + meta.leadHours + "h" : "";
+        const grid = (meta.nx && meta.ny) ? (meta.nx + "×" + meta.ny) : "761×761";
+        const cells = [
+          ["Model", "ICON-2I · 2.2 km", true],
+          ["Init", proTime(meta.runTime), false],
+          ["Valid", proTime(meta.validTime) + lead, true],
+          ["Field", field, false],
+          ["Grid", grid, false],
+          ["Units", "SI · K · hPa · m/s", false]
+        ];
+        ui.proStrip.innerHTML = cells.map(function (cell) {
+          return '<div class="cell"><span class="k">' + cell[0]
+            + '</span><span class="v' + (cell[2] ? " acc" : "") + '">' + cell[1]
+            + '</span></div>';
+        }).join("");
+      }
+
+      function applyProMode() {
+        document.body.classList.toggle("pro-mode", proMode);
+        if (ui.proButton) {
+          ui.proButton.classList.toggle("on", proMode);
+          ui.proButton.setAttribute("aria-pressed", proMode ? "true" : "false");
+        }
+        try { localStorage.setItem("proMode", proMode ? "1" : "0"); } catch (error) {}
+        updateMapPresentation();
+        updateProStrip();
+        if (mapLoaded && map) { renderWeather(); requestVectorRender(); }
+      }
+
+      function toggleProMode() {
+        proMode = !proMode;
+        applyProMode();
+        toast(proMode
+          ? "Modalità Pro attiva · console scientifica ICON-2I"
+          : "Modalità Pro disattivata");
       }
 
       function smoothPressureGrid(pressure, nx, ny, radius) {
@@ -5642,6 +5788,8 @@
       });
 
       ui.cleanButton.addEventListener("click", toggleCleanMode);
+      if (ui.proButton) ui.proButton.addEventListener("click", toggleProMode);
+      applyProMode();
       ui.gpsButton.addEventListener("click", locateUser);
       ui.readoutClose.addEventListener("click", closeReadout);
 
