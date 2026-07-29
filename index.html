@@ -2560,8 +2560,8 @@
       function colorFor(value, info) {
         if (!Number.isFinite(value)) return [0, 0, 0, 0];
 
-        const stops = info.stops;
-        if (info.discrete) {
+        const stops = fieldStops(info);
+        if (fieldDiscrete(info)) {
           let selected = stops[0];
           for (let i = 0; i < stops.length; i += 1) {
             if (value >= stops[i].v) selected = stops[i];
@@ -2994,6 +2994,77 @@
         return levelData[key];
       }
 
+      // ---- Palette scientifiche "ufficiali" usate solo in modalità Pro ----
+      // Colormap percettive/standard tipiche delle carte modellistiche:
+      // temperatura spettrale, precipitazione verde->viola, theta/Z500
+      // RdYlBu/rainbow. Stesso dominio delle scale normali: i tick restano
+      // allineati.
+      const PRO_TEMP = [
+        { v: -40, c: [126, 0, 158], a: .9 }, { v: -30, c: [70, 0, 200], a: .9 },
+        { v: -20, c: [0, 90, 225], a: .88 }, { v: -12, c: [0, 175, 240], a: .86 },
+        { v: -4, c: [120, 215, 205], a: .84 }, { v: 0, c: [200, 235, 205], a: .82 },
+        { v: 6, c: [120, 205, 90], a: .84 }, { v: 14, c: [235, 228, 90], a: .86 },
+        { v: 22, c: [245, 170, 55], a: .88 }, { v: 30, c: [232, 90, 50], a: .9 },
+        { v: 38, c: [178, 28, 40], a: .9 }, { v: 46, c: [132, 18, 92], a: .92 }
+      ];
+      const PRO_RAIN = [
+        { v: 0, c: [255, 255, 255], a: 0 }, { v: 0.2, c: [200, 235, 205], a: .35 },
+        { v: 1, c: [120, 205, 120], a: .7 }, { v: 4, c: [60, 160, 95], a: .82 },
+        { v: 10, c: [235, 228, 85], a: .86 }, { v: 20, c: [240, 150, 50], a: .88 },
+        { v: 40, c: [225, 60, 50], a: .9 }, { v: 80, c: [160, 30, 120], a: .92 }
+      ];
+      const PRO_WIND = [
+        { v: 0, c: [232, 240, 245], a: .18 }, { v: 20, c: [120, 190, 220], a: .6 },
+        { v: 40, c: [110, 200, 140], a: .75 }, { v: 60, c: [235, 225, 100], a: .82 },
+        { v: 80, c: [240, 160, 60], a: .86 }, { v: 100, c: [225, 70, 55], a: .9 },
+        { v: 130, c: [150, 40, 110], a: .92 }
+      ];
+      const PRO_RH = [
+        { v: 0, c: [140, 90, 40], a: .85 }, { v: 25, c: [200, 180, 140], a: .8 },
+        { v: 50, c: [232, 235, 225], a: .72 }, { v: 70, c: [110, 190, 150], a: .8 },
+        { v: 100, c: [28, 110, 180], a: .88 }
+      ];
+      const PRO_PRESS = [
+        { v: 960, c: [40, 50, 150], a: .85 }, { v: 990, c: [90, 150, 210], a: .8 },
+        { v: 1013, c: [236, 236, 236], a: .7 }, { v: 1030, c: [236, 150, 80], a: .82 },
+        { v: 1048, c: [190, 40, 40], a: .88 }
+      ];
+      const PRO_CONV = [
+        { v: 0, c: [255, 255, 255], a: 0 }, { v: 20, c: [255, 247, 160], a: .4 },
+        { v: 40, c: [250, 210, 90], a: .7 }, { v: 60, c: [245, 150, 60], a: .82 },
+        { v: 80, c: [235, 80, 55], a: .88 }, { v: 95, c: [180, 40, 110], a: .92 }
+      ];
+      const PRO_THETA = [
+        { v: 276, c: [49, 54, 149], a: .9 }, { v: 282, c: [69, 117, 180], a: .88 },
+        { v: 288, c: [145, 191, 219], a: .85 }, { v: 294, c: [255, 255, 191], a: .8 },
+        { v: 300, c: [253, 174, 97], a: .86 }, { v: 306, c: [244, 109, 67], a: .88 },
+        { v: 312, c: [178, 24, 43], a: .9 }
+      ];
+      const PRO_GEOPOT = [
+        { v: 5200, c: [80, 0, 120], a: .88 }, { v: 5400, c: [40, 40, 180], a: .86 },
+        { v: 5520, c: [0, 120, 205], a: .85 }, { v: 5640, c: [0, 180, 140], a: .84 },
+        { v: 5700, c: [140, 210, 70], a: .82 }, { v: 5760, c: [235, 228, 80], a: .84 },
+        { v: 5820, c: [245, 165, 50], a: .86 }, { v: 5880, c: [230, 80, 45], a: .88 },
+        { v: 5960, c: [150, 30, 90], a: .9 }
+      ];
+      const PRO_STOPS = {
+        temp: PRO_TEMP, feels: PRO_TEMP, t850: PRO_TEMP,
+        rain: PRO_RAIN, wind: PRO_WIND, rh: PRO_RH, press: PRO_PRESS,
+        convection_prob: PRO_CONV, theta850: PRO_THETA, geopot500: PRO_GEOPOT
+      };
+      Object.keys(PRO_STOPS).forEach(function (key) {
+        if (LAYER_INFO[key]) LAYER_INFO[key].proStops = PRO_STOPS[key];
+      });
+
+      // In Pro il campo usa la palette scientifica (interpolata) invece delle
+      // fasce nette dell'interfaccia normale.
+      function fieldStops(info) {
+        return (proMode && info && info.proStops) ? info.proStops : info.stops;
+      }
+      function fieldDiscrete(info) {
+        return (proMode && info && info.proStops) ? false : info.discrete;
+      }
+
       function activeLayerInfo(key) {
         const info = LAYER_INFO[key];
         if (!info) return info;
@@ -3334,7 +3405,8 @@
       }
 
       function makeLegendGradient(info) {
-        const stops = info.stops;
+        const stops = fieldStops(info);
+        const discrete = fieldDiscrete(info);
         const minimum = stops[0].v;
         const maximum = stops[stops.length - 1].v;
         const parts = [];
@@ -3346,7 +3418,7 @@
           const end = next ? ((next.v - minimum) / (maximum - minimum)) * 100 : 100;
           const alpha = current.a === undefined ? 1 : Math.max(current.a, 0.9);
 
-          if (info.discrete) {
+          if (discrete) {
             parts.push(rgba(current.c, alpha) + " " + start + "%");
             parts.push(rgba(current.c, alpha) + " " + end + "%");
           } else {
@@ -3359,8 +3431,9 @@
 
       function updateLegend() {
         const info = activeLayerInfo(activeLayer);
-        const minimum = info.stops[0].v;
-        const maximum = info.stops[info.stops.length - 1].v;
+        const legendStops = fieldStops(info);
+        const minimum = legendStops[0].v;
+        const maximum = legendStops[legendStops.length - 1].v;
 
         ui.legendTitle.textContent = info.label;
         ui.legendUnit.textContent = info.unit;
@@ -3819,6 +3892,7 @@
         try { localStorage.setItem("proMode", proMode ? "1" : "0"); } catch (error) {}
         updateMapPresentation();
         updateProStrip();
+        if (typeof updateLegend === "function") updateLegend();
         if (mapLoaded && map) { renderWeather(); requestVectorRender(); }
       }
 
@@ -4581,12 +4655,16 @@
               if (pointIndex === 0) vectorContext.moveTo(point.x, point.y);
               else vectorContext.lineTo(point.x, point.y);
             });
-            vectorContext.strokeStyle = "rgba(255,255,255," + (major ? "0.66" : "0.42") + ")";
+            vectorContext.strokeStyle = proMode
+              ? "rgba(8,14,18," + (major ? "0.7" : "0.45") + ")"
+              : "rgba(255,255,255," + (major ? "0.66" : "0.42") + ")";
             vectorContext.lineWidth = major ? 3.4 : 2.4;
             vectorContext.stroke();
 
             // Indigo distinguishes geopotential height from black isobars.
-            vectorContext.strokeStyle = major ? "rgba(60,24,132,0.95)" : "rgba(74,42,140,0.72)";
+            vectorContext.strokeStyle = proMode
+              ? (major ? "rgba(150,210,240,0.95)" : "rgba(120,180,215,0.7)")
+              : (major ? "rgba(60,24,132,0.95)" : "rgba(74,42,140,0.72)");
             vectorContext.lineWidth = major ? 1.5 : 0.85;
             vectorContext.stroke();
 
@@ -4615,11 +4693,15 @@
               if (pointIndex === 0) vectorContext.moveTo(point.x, point.y);
               else vectorContext.lineTo(point.x, point.y);
             });
-            vectorContext.strokeStyle = "rgba(255,255,255," + (major ? "0.72" : "0.48") + ")";
+            vectorContext.strokeStyle = proMode
+              ? "rgba(8,14,18," + (major ? "0.72" : "0.48") + ")"
+              : "rgba(255,255,255," + (major ? "0.72" : "0.48") + ")";
             vectorContext.lineWidth = major ? 3.5 : 2.5;
             vectorContext.stroke();
 
-            vectorContext.strokeStyle = major ? "rgba(5,12,18,0.96)" : "rgba(7,16,23,0.78)";
+            vectorContext.strokeStyle = proMode
+              ? (major ? "rgba(225,240,250,0.96)" : "rgba(180,205,222,0.78)")
+              : (major ? "rgba(5,12,18,0.96)" : "rgba(7,16,23,0.78)");
             vectorContext.lineWidth = major ? 1.45 : 0.82;
             vectorContext.stroke();
 
