@@ -1660,9 +1660,6 @@
               <button class="toggle-row" type="button" data-toggle="fusion" aria-pressed="false">
                 <span><b>Analisi osservata</b><small>ICON-2I fuso con stazioni METAR · T, P, UR</small></span><span class="switch"></span>
               </button>
-              <button class="toggle-row" type="button" data-toggle="lic" aria-pressed="false">
-                <span><b>Flusso vento LIC</b><small>texture fisica del campo (sperimentale)</small></span><span class="switch"></span>
-              </button>
               <button class="toggle-row" type="button" data-toggle="fronts" aria-pressed="false">
                 <span><b>Fronti sinottici stimati</b><small id="front-source-label">ICON-2I · fisica 850/925 hPa</small></span><span class="switch"></span>
               </button>
@@ -2318,9 +2315,6 @@
       let obsStations = [];
       let obsFetchedAt = 0;
       let obsFetching = false;
-      let showLIC = false;
-      let licDirty = true;
-      let licStep = -1;
       let showFronts = false;
       let showTerrain = true;
       let showGraticule = false;
@@ -2625,131 +2619,6 @@
         if (upper) return { meta: upper, u: upper.u, v: upper.v };
         if (!currentData) return null;
         return { meta: currentData.meta, u: currentData.wind_u, v: currentData.wind_v };
-      }
-
-      // Colore per velocità (km/h) della texture LIC.
-      function licColor(speedKmh) {
-        if (speedKmh < 10) return [70, 150, 205];
-        if (speedKmh < 20) return [40, 180, 205];
-        if (speedKmh < 35) return [40, 195, 150];
-        if (speedKmh < 50) return [210, 195, 70];
-        if (speedKmh < 70) return [240, 150, 60];
-        if (speedKmh < 90) return [225, 80, 60];
-        return [190, 70, 150];
-      }
-
-      // Line Integral Convolution: convoglia una texture di rumore lungo le
-      // linee di corrente del campo u/v, producendo la resa di flusso più
-      // fisica. Calcolato una volta per scadenza come immagine geo-riferita
-      // sul dominio; MapLibre la deforma durante pan/zoom senza ricalcolo.
-      function buildWindLIC() {
-        const wind = windField();
-        if (!wind) return null;
-        const meta = wind.meta;
-        const u = getGrid(wind.u);
-        const v = getGrid(wind.v);
-        if (!u || !v) return null;
-        const nx = meta.nx, ny = meta.ny;
-        if (!(nx > 2) || !(ny > 2)) return null;
-        const mobile = window.innerWidth < 900;
-        const W = mobile ? 340 : 460;
-        const H = mobile ? 300 : 400;
-        const K = mobile ? 10 : 13;
-        const stepLen = 0.6;
-
-        const noise = new Float32Array(W * H);
-        for (let i = 0; i < noise.length; i += 1) noise[i] = Math.random();
-        const lic = new Float32Array(W * H);
-
-        for (let py = 0; py < H; py += 1) {
-          const gyBase = (py / (H - 1)) * (ny - 1);
-          for (let px = 0; px < W; px += 1) {
-            const gxBase = (px / (W - 1)) * (nx - 1);
-            let sum = noise[py * W + px];
-            let count = 1;
-            for (let dir = -1; dir <= 1; dir += 2) {
-              let x = gxBase, y = gyBase;
-              for (let s = 0; s < K; s += 1) {
-                const uu = sampleBilinear(u, x, y, nx, ny);
-                const vv = sampleBilinear(v, x, y, nx, ny);
-                const mag = Math.hypot(uu, vv);
-                if (!(mag > 1e-4)) break;
-                x += dir * (uu / mag) * stepLen;
-                y -= dir * (vv / mag) * stepLen; // griglia y verso sud, v verso nord
-                if (x < 0 || y < 0 || x > nx - 1 || y > ny - 1) break;
-                const ox = Math.round((x / (nx - 1)) * (W - 1));
-                const oy = Math.round((y / (ny - 1)) * (H - 1));
-                if (ox < 0 || oy < 0 || ox >= W || oy >= H) break;
-                sum += noise[oy * W + ox];
-                count += 1;
-              }
-            }
-            lic[py * W + px] = sum / count;
-          }
-        }
-
-        const canvas = document.createElement("canvas");
-        canvas.width = W;
-        canvas.height = H;
-        const ctx = canvas.getContext("2d");
-        const image = ctx.createImageData(W, H);
-        const data = image.data;
-        for (let py = 0; py < H; py += 1) {
-          const gy = (py / (H - 1)) * (ny - 1);
-          for (let px = 0; px < W; px += 1) {
-            const gx = (px / (W - 1)) * (nx - 1);
-            const idx = py * W + px;
-            let luminance = (lic[idx] - 0.5) * 2.6 + 0.5; // contrasto
-            luminance = luminance < 0 ? 0 : (luminance > 1 ? 1 : luminance);
-            const uu = sampleBilinear(u, gx, gy, nx, ny);
-            const vv = sampleBilinear(v, gx, gy, nx, ny);
-            const speedKmh = Math.hypot(uu, vv) * 3.6;
-            const color = licColor(speedKmh);
-            const shade = 0.35 + 0.65 * luminance;
-            const o = idx * 4;
-            data[o] = color[0] * shade;
-            data[o + 1] = color[1] * shade;
-            data[o + 2] = color[2] * shade;
-            data[o + 3] = (Number.isFinite(uu) && Number.isFinite(vv))
-              ? Math.round(215 * (0.4 + 0.6 * luminance)) : 0;
-          }
-        }
-        ctx.putImageData(image, 0, 0);
-
-        const west = meta.lo1;
-        const east = meta.lo1 + (nx - 1) * meta.dx;
-        const north = meta.la1;
-        const south = meta.la1 - (ny - 1) * meta.dy;
-        return {
-          url: canvas.toDataURL("image/png"),
-          coords: [[west, north], [east, north], [east, south], [west, south]]
-        };
-      }
-
-      function updateLIC() {
-        if (!mapLoaded || !map || !map.getSource("wind-lic")) return;
-        if (!showLIC) {
-          if (map.getLayer("wind-lic-layer")) {
-            map.setLayoutProperty("wind-lic-layer", "visibility", "none");
-          }
-          return;
-        }
-        if (licDirty || licStep !== currentIndex) {
-          try {
-            const lic = buildWindLIC();
-            if (lic) {
-              map.getSource("wind-lic").updateImage({ url: lic.url, coordinates: lic.coords });
-              licDirty = false;
-              licStep = currentIndex;
-            }
-          } catch (error) {
-            console.warn("LIC non disponibile:", error);
-            return;
-          }
-        }
-        if (map.getLayer("wind-lic-layer")) {
-          map.setLayoutProperty("wind-lic-layer", "visibility", "visible");
-        }
       }
 
       const FRONT_TYPE_NAMES = {
@@ -3277,8 +3146,6 @@
           renderWeather();
           updateIsobars();
           updateMapPresentation();
-          licDirty = true;
-          if (showLIC) updateLIC();
           resetParticles();
           if (showParticles) startParticles();
           requestVectorRender();
@@ -3438,7 +3305,6 @@
           isobars: showIsobars,
           isohypses: showIsohypses,
           radar: showRadar,
-          lic: showLIC,
           fusion: showFusion,
           fronts: showFronts,
           terrain: showTerrain,
@@ -3492,7 +3358,6 @@
         renderWeather();
         updateIsobars();
         if (showFusion) updateStationMarkers();
-        if (showLIC) { licDirty = true; updateLIC(); }
         updateMapPresentation();
         requestVectorRender();
         refreshSelectedPoint();
@@ -3512,8 +3377,6 @@
         updateLayerUi();
         updateLegend();
         renderWeather();
-        licDirty = true;
-        if (showLIC) updateLIC();
         resetParticles();
         requestVectorRender();
         refreshSelectedPoint();
@@ -3592,18 +3455,6 @@
           } else {
             updateStationMarkers();
             renderWeather();
-          }
-        } else if (name === "lic") {
-          showLIC = !showLIC;
-          if (showLIC) {
-            // Il calcolo LIC è pesante (~una volta per scadenza): mostro
-            // prima il toast, poi calcolo al frame successivo per non
-            // congelare l'interfaccia senza feedback.
-            toast("Calcolo flusso LIC (texture fisica del vento)…");
-            licDirty = true;
-            setTimeout(function () { updateLIC(); }, 30);
-          } else {
-            updateLIC();
           }
         } else if (name === "fronts") {
           if (
@@ -5488,25 +5339,6 @@
               "raster-contrast": 0.04,
               "raster-brightness-min": 0,
               "raster-brightness-max": 1,
-              "raster-fade-duration": 0
-            }
-          });
-
-          // Sorgente/immagine per la texture LIC del vento (riempita a
-          // richiesta da updateLIC). Copre l'intero dominio ICON-2I.
-          map.addSource("wind-lic", {
-            type: "image",
-            url: "data:image/gif;base64,R0lGODlhAQABAAD/ACwAAAAAAQABAAACADs=",
-            coordinates: [[3, 48.9], [22, 48.9], [22, 33.7], [3, 33.7]]
-          });
-          map.addLayer({
-            id: "wind-lic-layer",
-            type: "raster",
-            source: "wind-lic",
-            layout: { visibility: "none" },
-            paint: {
-              "raster-opacity": 0.85,
-              "raster-resampling": "linear",
               "raster-fade-duration": 0
             }
           });
