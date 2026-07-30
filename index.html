@@ -31,86 +31,6 @@
         --safe-bottom: env(safe-area-inset-bottom, 0px);
       }
 
-      /* ---------- MODALITA' PRO (console scientifica) ---------- */
-      body.pro-mode {
-        --radius: 3px;
-        --shadow: 0 1px 6px rgba(0, 0, 0, 0.4);
-        --surface: rgba(12, 20, 26, 0.96);
-        --surface-strong: rgba(8, 14, 18, 0.98);
-        --stroke: rgba(120, 165, 185, 0.22);
-        background: #0a0f13;
-      }
-      .pro-strip { display: none; }
-      body.pro-mode .pro-strip {
-        position: fixed;
-        z-index: 41;
-        top: var(--safe-top);
-        left: 0;
-        right: 0;
-        height: 36px;
-        display: flex;
-        flex-wrap: nowrap;
-        align-items: stretch;
-        overflow-x: auto;
-        overflow-y: hidden;
-        white-space: nowrap;
-        border-bottom: 1px solid var(--stroke);
-        background: var(--surface-strong);
-        font-family: "SFMono-Regular", ui-monospace, "JetBrains Mono", "Roboto Mono", Menlo, Consolas, monospace;
-        font-variant-numeric: tabular-nums;
-        scrollbar-width: none;
-        -webkit-overflow-scrolling: touch;
-      }
-      body.pro-mode .pro-strip::-webkit-scrollbar { display: none; }
-      body.pro-mode .pro-strip:empty { display: none; }
-      .pro-strip .cell {
-        flex: 0 0 auto;
-        display: flex;
-        flex-direction: column;
-        justify-content: center;
-        gap: 1px;
-        padding: 4px 13px;
-        border-right: 1px solid var(--stroke);
-      }
-      .pro-strip .cell:last-child { border-right: 0; padding-right: 22px; }
-      .pro-strip .k {
-        font-size: 7.5px; letter-spacing: .14em; text-transform: uppercase;
-        color: var(--deep-muted); font-weight: 700; line-height: 1;
-      }
-      .pro-strip .v { font-size: 11.5px; color: var(--text); line-height: 1.15; }
-      .pro-strip .v.acc { color: var(--accent-2); }
-      /* La barra di stato è la fascia superiore: l'header scende sotto di
-         essa così su cellulare non si sovrappongono mai. */
-      body.pro-mode #app-header { top: calc(var(--safe-top) + 44px); }
-      @media (max-width: 720px) {
-        body.pro-mode .pro-strip { height: 34px; }
-        .pro-strip .cell { padding: 3px 10px; }
-        .pro-strip .v { font-size: 11px; }
-        body.pro-mode #app-header { top: calc(var(--safe-top) + 42px); }
-      }
-      #pro-button.on {
-        border-color: var(--stroke-strong);
-        background: rgba(49, 210, 233, 0.16);
-        color: var(--accent-2);
-      }
-      /* Flat, squadrato: superfici e controlli in modalità Pro. */
-      body.pro-mode .header-button,
-      body.pro-mode .brand-panel,
-      body.pro-mode .brand-mark,
-      body.pro-mode .surface,
-      body.pro-mode .layer-card,
-      body.pro-mode .toggle-row {
-        border-radius: 3px;
-      }
-      body.pro-mode .header-button.primary {
-        background: rgba(21, 159, 228, 0.16);
-        color: var(--accent-2);
-        box-shadow: none;
-      }
-      body.pro-mode .brand-mark {
-        background: rgba(21, 159, 228, 0.16);
-      }
-
       * {
         box-sizing: border-box;
         -webkit-tap-highlight-color: transparent;
@@ -1566,14 +1486,6 @@
           </svg>
           <span>Solo mappa</span>
         </button>
-        <button id="pro-button" class="header-button" type="button" aria-pressed="false" aria-label="Attiva la modalità Pro scientifica">
-          <svg class="icon" viewBox="0 0 24 24">
-            <path d="M9 3h6"></path>
-            <path d="M10 3v6l-4.6 8.3A2 2 0 0 0 7.2 20h9.6a2 2 0 0 0 1.8-2.7L14 9V3"></path>
-            <path d="M7.6 15h8.8"></path>
-          </svg>
-          <span>Pro</span>
-        </button>
         <button id="drawer-button" class="header-button primary" type="button" aria-expanded="false" aria-controls="drawer">
           <svg class="icon" viewBox="0 0 24 24">
             <path d="M4 6h16"></path>
@@ -1584,7 +1496,6 @@
         </button>
       </div>
     </header>
-    <div id="pro-strip" class="pro-strip" aria-hidden="true"></div>
 
     <section id="meta-card" class="surface" aria-label="Metadati della previsione">
       <div class="meta-item">
@@ -2316,8 +2227,6 @@
         drawerClose: document.getElementById("drawer-close"),
         drawerScrim: document.getElementById("drawer-scrim"),
         cleanButton: document.getElementById("clean-button"),
-        proButton: document.getElementById("pro-button"),
-        proStrip: document.getElementById("pro-strip"),
         bulletinButton: document.getElementById("bulletin-button"),
         drawerBulletinButton: document.getElementById("drawer-bulletin-button"),
         bulletinCard: document.getElementById("bulletin-card"),
@@ -2409,8 +2318,6 @@
       let showFronts = false;
       let showTerrain = true;
       let showGraticule = false;
-      let proMode = false;
-      try { proMode = localStorage.getItem("proMode") === "1"; } catch (error) { proMode = false; }
       let isMapMoving = false;
       let selectedPoint = null;
       let particleFrame = null;
@@ -2560,8 +2467,8 @@
       function colorFor(value, info) {
         if (!Number.isFinite(value)) return [0, 0, 0, 0];
 
-        const stops = fieldStops(info);
-        if (fieldDiscrete(info)) {
+        const stops = info.stops;
+        if (info.discrete) {
           let selected = stops[0];
           for (let i = 0; i < stops.length; i += 1) {
             if (value >= stops[i].v) selected = stops[i];
@@ -2994,77 +2901,6 @@
         return levelData[key];
       }
 
-      // ---- Palette scientifiche "ufficiali" usate solo in modalità Pro ----
-      // Colormap percettive/standard tipiche delle carte modellistiche:
-      // temperatura spettrale, precipitazione verde->viola, theta/Z500
-      // RdYlBu/rainbow. Stesso dominio delle scale normali: i tick restano
-      // allineati.
-      const PRO_TEMP = [
-        { v: -40, c: [126, 0, 158], a: .9 }, { v: -30, c: [70, 0, 200], a: .9 },
-        { v: -20, c: [0, 90, 225], a: .88 }, { v: -12, c: [0, 175, 240], a: .86 },
-        { v: -4, c: [120, 215, 205], a: .84 }, { v: 0, c: [200, 235, 205], a: .82 },
-        { v: 6, c: [120, 205, 90], a: .84 }, { v: 14, c: [235, 228, 90], a: .86 },
-        { v: 22, c: [245, 170, 55], a: .88 }, { v: 30, c: [232, 90, 50], a: .9 },
-        { v: 38, c: [178, 28, 40], a: .9 }, { v: 46, c: [132, 18, 92], a: .92 }
-      ];
-      const PRO_RAIN = [
-        { v: 0, c: [255, 255, 255], a: 0 }, { v: 0.2, c: [200, 235, 205], a: .35 },
-        { v: 1, c: [120, 205, 120], a: .7 }, { v: 4, c: [60, 160, 95], a: .82 },
-        { v: 10, c: [235, 228, 85], a: .86 }, { v: 20, c: [240, 150, 50], a: .88 },
-        { v: 40, c: [225, 60, 50], a: .9 }, { v: 80, c: [160, 30, 120], a: .92 }
-      ];
-      const PRO_WIND = [
-        { v: 0, c: [232, 240, 245], a: .18 }, { v: 20, c: [120, 190, 220], a: .6 },
-        { v: 40, c: [110, 200, 140], a: .75 }, { v: 60, c: [235, 225, 100], a: .82 },
-        { v: 80, c: [240, 160, 60], a: .86 }, { v: 100, c: [225, 70, 55], a: .9 },
-        { v: 130, c: [150, 40, 110], a: .92 }
-      ];
-      const PRO_RH = [
-        { v: 0, c: [140, 90, 40], a: .85 }, { v: 25, c: [200, 180, 140], a: .8 },
-        { v: 50, c: [232, 235, 225], a: .72 }, { v: 70, c: [110, 190, 150], a: .8 },
-        { v: 100, c: [28, 110, 180], a: .88 }
-      ];
-      const PRO_PRESS = [
-        { v: 960, c: [40, 50, 150], a: .85 }, { v: 990, c: [90, 150, 210], a: .8 },
-        { v: 1013, c: [236, 236, 236], a: .7 }, { v: 1030, c: [236, 150, 80], a: .82 },
-        { v: 1048, c: [190, 40, 40], a: .88 }
-      ];
-      const PRO_CONV = [
-        { v: 0, c: [255, 255, 255], a: 0 }, { v: 20, c: [255, 247, 160], a: .4 },
-        { v: 40, c: [250, 210, 90], a: .7 }, { v: 60, c: [245, 150, 60], a: .82 },
-        { v: 80, c: [235, 80, 55], a: .88 }, { v: 95, c: [180, 40, 110], a: .92 }
-      ];
-      const PRO_THETA = [
-        { v: 276, c: [49, 54, 149], a: .9 }, { v: 282, c: [69, 117, 180], a: .88 },
-        { v: 288, c: [145, 191, 219], a: .85 }, { v: 294, c: [255, 255, 191], a: .8 },
-        { v: 300, c: [253, 174, 97], a: .86 }, { v: 306, c: [244, 109, 67], a: .88 },
-        { v: 312, c: [178, 24, 43], a: .9 }
-      ];
-      const PRO_GEOPOT = [
-        { v: 5200, c: [80, 0, 120], a: .88 }, { v: 5400, c: [40, 40, 180], a: .86 },
-        { v: 5520, c: [0, 120, 205], a: .85 }, { v: 5640, c: [0, 180, 140], a: .84 },
-        { v: 5700, c: [140, 210, 70], a: .82 }, { v: 5760, c: [235, 228, 80], a: .84 },
-        { v: 5820, c: [245, 165, 50], a: .86 }, { v: 5880, c: [230, 80, 45], a: .88 },
-        { v: 5960, c: [150, 30, 90], a: .9 }
-      ];
-      const PRO_STOPS = {
-        temp: PRO_TEMP, feels: PRO_TEMP, t850: PRO_TEMP,
-        rain: PRO_RAIN, wind: PRO_WIND, rh: PRO_RH, press: PRO_PRESS,
-        convection_prob: PRO_CONV, theta850: PRO_THETA, geopot500: PRO_GEOPOT
-      };
-      Object.keys(PRO_STOPS).forEach(function (key) {
-        if (LAYER_INFO[key]) LAYER_INFO[key].proStops = PRO_STOPS[key];
-      });
-
-      // In Pro il campo usa la palette scientifica (interpolata) invece delle
-      // fasce nette dell'interfaccia normale.
-      function fieldStops(info) {
-        return (proMode && info && info.proStops) ? info.proStops : info.stops;
-      }
-      function fieldDiscrete(info) {
-        return (proMode && info && info.proStops) ? false : info.discrete;
-      }
-
       function activeLayerInfo(key) {
         const info = LAYER_INFO[key];
         if (!info) return info;
@@ -3309,7 +3145,6 @@
           updateLegend();
           renderWeather();
           updateIsobars();
-          if (proMode) updateProStrip();
           updateMapPresentation();
           resetParticles();
           if (showParticles) startParticles();
@@ -3405,8 +3240,7 @@
       }
 
       function makeLegendGradient(info) {
-        const stops = fieldStops(info);
-        const discrete = fieldDiscrete(info);
+        const stops = info.stops;
         const minimum = stops[0].v;
         const maximum = stops[stops.length - 1].v;
         const parts = [];
@@ -3418,7 +3252,7 @@
           const end = next ? ((next.v - minimum) / (maximum - minimum)) * 100 : 100;
           const alpha = current.a === undefined ? 1 : Math.max(current.a, 0.9);
 
-          if (discrete) {
+          if (info.discrete) {
             parts.push(rgba(current.c, alpha) + " " + start + "%");
             parts.push(rgba(current.c, alpha) + " " + end + "%");
           } else {
@@ -3431,9 +3265,8 @@
 
       function updateLegend() {
         const info = activeLayerInfo(activeLayer);
-        const legendStops = fieldStops(info);
-        const minimum = legendStops[0].v;
-        const maximum = legendStops[legendStops.length - 1].v;
+        const minimum = info.stops[0].v;
+        const maximum = info.stops[info.stops.length - 1].v;
 
         ui.legendTitle.textContent = info.label;
         ui.legendUnit.textContent = info.unit;
@@ -3525,7 +3358,6 @@
         renderWeather();
         updateIsobars();
         if (showFusion) updateStationMarkers();
-        if (proMode) updateProStrip();
         updateMapPresentation();
         requestVectorRender();
         refreshSelectedPoint();
@@ -3829,79 +3661,12 @@
       function updateMapPresentation() {
         if (!mapLoaded) return;
 
-        // In modalità Pro il fondo diventa scuro e desaturato (carta di
-        // analisi) e la graticola è sempre attiva.
-        const graticuleOn = proMode || showGraticule;
         if (map.getLayer("graticule-layer")) {
-          map.setLayoutProperty("graticule-layer", "visibility", graticuleOn ? "visible" : "none");
+          map.setLayoutProperty("graticule-layer", "visibility", showGraticule ? "visible" : "none");
         }
         if (map.getLayer("terrain-detail")) {
-          map.setLayoutProperty("terrain-detail", "visibility", (showTerrain && !proMode) ? "visible" : "none");
+          map.setLayoutProperty("terrain-detail", "visibility", showTerrain ? "visible" : "none");
         }
-        if (map.getLayer("background")) {
-          map.setPaintProperty("background", "background-color", proMode ? "#0a0f13" : "#dfeaf1");
-        }
-        if (map.getLayer("basemap-layer")) {
-          map.setPaintProperty("basemap-layer", "raster-opacity", proMode ? 0.3 : 0.72);
-          map.setPaintProperty("basemap-layer", "raster-saturation", proMode ? -0.7 : -0.28);
-          map.setPaintProperty("basemap-layer", "raster-brightness-max", proMode ? 0.55 : 1);
-        }
-        if (map.getLayer("labels-layer")) {
-          map.setPaintProperty("labels-layer", "raster-opacity", proMode ? 0.42 : 0.86);
-        }
-      }
-
-      function proTime(iso) {
-        if (!iso) return "—";
-        const match = String(iso).match(/^(\d{4}-\d{2}-\d{2})T(\d{2})/);
-        return match ? (match[1] + " " + match[2] + "Z") : String(iso);
-      }
-
-      function updateProStrip() {
-        if (!ui.proStrip) return;
-        if (!proMode || !currentData || !currentData.meta) {
-          ui.proStrip.innerHTML = "";
-          return;
-        }
-        const meta = currentData.meta;
-        const info = activeLayerInfo(activeLayer);
-        const field = info ? (info.label + (info.unit ? " · " + info.unit : "")) : activeLayer;
-        const lead = Number.isFinite(meta.leadHours) ? " · +" + meta.leadHours + "h" : "";
-        const grid = (meta.nx && meta.ny) ? (meta.nx + "×" + meta.ny) : "761×761";
-        const cells = [
-          ["Model", "ICON-2I · 2.2 km", true],
-          ["Init", proTime(meta.runTime), false],
-          ["Valid", proTime(meta.validTime) + lead, true],
-          ["Field", field, false],
-          ["Grid", grid, false],
-          ["Units", "SI · K · hPa · m/s", false]
-        ];
-        ui.proStrip.innerHTML = cells.map(function (cell) {
-          return '<div class="cell"><span class="k">' + cell[0]
-            + '</span><span class="v' + (cell[2] ? " acc" : "") + '">' + cell[1]
-            + '</span></div>';
-        }).join("");
-      }
-
-      function applyProMode() {
-        document.body.classList.toggle("pro-mode", proMode);
-        if (ui.proButton) {
-          ui.proButton.classList.toggle("on", proMode);
-          ui.proButton.setAttribute("aria-pressed", proMode ? "true" : "false");
-        }
-        try { localStorage.setItem("proMode", proMode ? "1" : "0"); } catch (error) {}
-        updateMapPresentation();
-        updateProStrip();
-        if (typeof updateLegend === "function") updateLegend();
-        if (mapLoaded && map) { renderWeather(); requestVectorRender(); }
-      }
-
-      function toggleProMode() {
-        proMode = !proMode;
-        applyProMode();
-        toast(proMode
-          ? "Modalità Pro attiva · console scientifica ICON-2I"
-          : "Modalità Pro disattivata");
       }
 
       function smoothPressureGrid(pressure, nx, ny, radius) {
@@ -4655,16 +4420,12 @@
               if (pointIndex === 0) vectorContext.moveTo(point.x, point.y);
               else vectorContext.lineTo(point.x, point.y);
             });
-            vectorContext.strokeStyle = proMode
-              ? "rgba(8,14,18," + (major ? "0.7" : "0.45") + ")"
-              : "rgba(255,255,255," + (major ? "0.66" : "0.42") + ")";
+            vectorContext.strokeStyle = "rgba(255,255,255," + (major ? "0.66" : "0.42") + ")";
             vectorContext.lineWidth = major ? 3.4 : 2.4;
             vectorContext.stroke();
 
             // Indigo distinguishes geopotential height from black isobars.
-            vectorContext.strokeStyle = proMode
-              ? (major ? "rgba(150,210,240,0.95)" : "rgba(120,180,215,0.7)")
-              : (major ? "rgba(60,24,132,0.95)" : "rgba(74,42,140,0.72)");
+            vectorContext.strokeStyle = major ? "rgba(60,24,132,0.95)" : "rgba(74,42,140,0.72)";
             vectorContext.lineWidth = major ? 1.5 : 0.85;
             vectorContext.stroke();
 
@@ -4693,15 +4454,11 @@
               if (pointIndex === 0) vectorContext.moveTo(point.x, point.y);
               else vectorContext.lineTo(point.x, point.y);
             });
-            vectorContext.strokeStyle = proMode
-              ? "rgba(8,14,18," + (major ? "0.72" : "0.48") + ")"
-              : "rgba(255,255,255," + (major ? "0.72" : "0.48") + ")";
+            vectorContext.strokeStyle = "rgba(255,255,255," + (major ? "0.72" : "0.48") + ")";
             vectorContext.lineWidth = major ? 3.5 : 2.5;
             vectorContext.stroke();
 
-            vectorContext.strokeStyle = proMode
-              ? (major ? "rgba(225,240,250,0.96)" : "rgba(180,205,222,0.78)")
-              : (major ? "rgba(5,12,18,0.96)" : "rgba(7,16,23,0.78)");
+            vectorContext.strokeStyle = major ? "rgba(5,12,18,0.96)" : "rgba(7,16,23,0.78)";
             vectorContext.lineWidth = major ? 1.45 : 0.82;
             vectorContext.stroke();
 
@@ -5885,8 +5642,6 @@
       });
 
       ui.cleanButton.addEventListener("click", toggleCleanMode);
-      if (ui.proButton) ui.proButton.addEventListener("click", toggleProMode);
-      applyProMode();
       ui.gpsButton.addEventListener("click", locateUser);
       ui.readoutClose.addEventListener("click", closeReadout);
 
