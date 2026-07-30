@@ -2210,7 +2210,7 @@
 
       const PARTICLE_CONFIG = {
         targetFps: 30,
-        fade: 0.86,
+        fade: 0.9,
         minLife: 46,
         maxLife: 112,
         minimumSpeed: 0.45
@@ -4285,7 +4285,7 @@
       function calculateParticleTarget() {
         const area = Math.max(window.innerWidth * window.innerHeight, 1);
         const mobile = window.innerWidth < 900;
-        particleTarget = Math.round(clamp(area / (mobile ? 1500 : 1050), mobile ? 260 : 420, mobile ? 760 : 1280));
+        particleTarget = Math.round(clamp(area / (mobile ? 1150 : 760), mobile ? 340 : 620, mobile ? 1050 : 2000));
       }
 
       function resizeCanvases() {
@@ -4427,10 +4427,19 @@
           const distance = Math.hypot(end.x - start.x, end.y - start.y);
 
           if (distance > 0.24) {
-            const style = particleStyle(speedKmh);
-            const key = style.color + "|" + style.width;
-            if (!buckets[key]) buckets[key] = [];
-            buckets[key].push([start.x, start.y, end.x, end.y]);
+            // Dissolvenza in nascita/morte: le particelle appaiono e
+            // svaniscono gradualmente invece di comparire/sparire di colpo.
+            const ageFraction = particle.age / particle.maxAge;
+            const fadeIn = clamp(ageFraction / 0.12, 0, 1);
+            const fadeOut = clamp((1 - ageFraction) / 0.18, 0, 1);
+            const alphaMultiplier = Math.min(fadeIn, fadeOut);
+            if (alphaMultiplier > 0.06) {
+              const style = particleStyle(speedKmh);
+              const alphaLevel = Math.max(0.12, Math.round(alphaMultiplier * 8) / 8);
+              const key = style.color + "|" + style.width + "|" + alphaLevel;
+              if (!buckets[key]) buckets[key] = [];
+              buckets[key].push([start.x, start.y, end.x, end.y]);
+            }
           }
 
           particle.age += 1 + clamp(speedKmh / 110, 0, 1.2);
@@ -4438,6 +4447,7 @@
 
         Object.keys(buckets).forEach(function (key) {
           const pieces = key.split("|");
+          particleContext.globalAlpha = Number(pieces[2]);
           particleContext.beginPath();
           particleContext.strokeStyle = pieces[0];
           particleContext.lineWidth = Number(pieces[1]);
@@ -4449,6 +4459,7 @@
 
           particleContext.stroke();
         });
+        particleContext.globalAlpha = 1;
 
         particleContext.restore();
         particleFrame = requestAnimationFrame(animateParticles);
