@@ -20,21 +20,28 @@ inlineScripts.forEach((source) => {
 
 assert.match(html, /maplibre-gl@5\.24\.0/, "MapLibre v5 stabile non caricata");
 assert.doesNotMatch(html, /map\.transform\b/, "uso di API MapLibre interna e fragile");
-assert.match(html, /type:\s*"canvas"[\s\S]*canvas:\s*terrainParticleCanvas/,
-  "texture geografica delle particelle 3D assente");
-assert.match(html, /id:\s*"terrain-particles-layer"[\s\S]*type:\s*"raster"/,
-  "layer drappeggiato delle particelle assente");
-assert.match(html, /source\.setCoordinates\(/,
-  "le coordinate della texture vento non seguono la vista");
 assert.match(html, /map\.setSky\(/, "cielo MapLibre nativo assente");
 assert.match(html, /function terrainExaggerationForZoom\(/,
   "esagerazione verticale adattiva assente");
 assert.match(html, /rasterCanvas\.toBlob\(/,
   "pubblicazione raster asincrona assente");
 
-const particlesLayer = html.indexOf('id: "terrain-particles-layer"');
-const labelsLayer = html.indexOf('id: "labels-layer"');
-assert.ok(particlesLayer > 0 && labelsLayer > particlesLayer,
-  "le particelle devono restare sotto etichette e toponimi");
+const projectParticle = html.match(
+  /function projectParticle\([\s\S]*?\n\s*\}/
+);
+assert.ok(projectParticle, "proiezione particelle assente");
+assert.match(projectParticle[0], /map\.project\(\[longitude, latitude\]\)/,
+  "le particelle non usano la proiezione pubblica compatibile col terreno");
+
+const startParticles = html.match(
+  /function startParticles\([\s\S]*?\n\s*\}/
+);
+assert.ok(startParticles, "avvio particelle assente");
+assert.doesNotMatch(startParticles[0], /prefersReducedMotion/,
+  "l'attivazione manuale non deve essere bloccata dal movimento ridotto");
+assert.doesNotMatch(html, /particleCanvas\.style\.visibility\s*=\s*show3D/,
+  "il canvas visibile non deve sparire quando si attiva il 3D");
+assert.doesNotMatch(html, /terrain-particles-layer/,
+  "la CanvasSource 3D incompatibile con alcuni browser mobili è tornata");
 
 console.log("3D map regression checks: OK");

@@ -2231,15 +2231,11 @@
 
       const PARTICLE_CONFIG = {
         targetFps: 30,
-        terrainFps: 24,
+        terrainFps: 22,
         fade: 0.93,
         minLife: 46,
         maxLife: 112,
-        minimumSpeed: 0.3,
-        terrainMaxDimensionMobile: 720,
-        terrainMaxDimensionDesktop: 960,
-        terrainPixelLimitMobile: 430000,
-        terrainPixelLimitDesktop: 720000
+        minimumSpeed: 0.3
       };
 
       const RASTER_CONFIG = {
@@ -2317,14 +2313,6 @@
       const rasterContext = rasterCanvas.getContext("2d");
       const particleCanvas = document.getElementById("particle-canvas");
       const particleContext = particleCanvas.getContext("2d", { alpha: true });
-      // In 3D le particelle vengono disegnate in coordinate geografiche su
-      // questa texture. MapLibre la drappeggia sul DEM e usa lo stesso depth
-      // buffer del terreno: creste e versanti possono quindi occultare il
-      // vento correttamente, senza migliaia di interrogazioni DEM per frame.
-      const terrainParticleCanvas = document.createElement("canvas");
-      terrainParticleCanvas.width = 2;
-      terrainParticleCanvas.height = 2;
-      const terrainParticleContext = terrainParticleCanvas.getContext("2d", { alpha: true });
       const vectorCanvas = document.getElementById("vector-canvas");
       const vectorContext = vectorCanvas.getContext("2d", { alpha: true });
 
@@ -2365,7 +2353,6 @@
       let lastParticleTime = performance.now();
       let particles = [];
       let particleTarget = 420;
-      let terrainParticleBounds = null;
       let currentTerrainExaggeration = 0;
       let rasterPublishToken = 0;
       let rasterObjectUrl = "";
@@ -4015,7 +4002,6 @@
             duration: 950
           });
           updateMapPresentation();
-          configureTerrainParticleSurface();
           resetParticles();
           if (showParticles) startParticles();
           // Applico subito rilievo e luce solare, senza aspettare il prossimo
@@ -4032,7 +4018,6 @@
           if (map.dragRotate) map.dragRotate.disable();
           if (map.touchZoomRotate) map.touchZoomRotate.disableRotation();
           if (map.touchPitch) map.touchPitch.disable();
-          setTerrainParticleVisibility(false);
           resetParticles();
           // Rimuovo il rilievo solo quando la vista è tornata davvero piana:
           // toglierlo mentre la mappa è ancora inclinata farebbe "collassare"
@@ -4518,127 +4503,12 @@
       function resetParticles() {
         particles = [];
         particleContext.clearRect(0, 0, window.innerWidth, window.innerHeight);
-        terrainParticleContext.clearRect(
-          0, 0, terrainParticleCanvas.width, terrainParticleCanvas.height
-        );
       }
 
       function calculateParticleTarget() {
         const area = Math.max(window.innerWidth * window.innerHeight, 1);
         const mobile = window.innerWidth < 900;
         particleTarget = Math.round(clamp(area / (mobile ? 820 : 480), mobile ? 520 : 1000, mobile ? 1500 : 3400));
-      }
-
-      function particleMercatorY(latitude) {
-        const safeLatitude = clamp(latitude, -85, 85) * Math.PI / 180;
-        return Math.log(Math.tan(Math.PI / 4 + safeLatitude / 2));
-      }
-
-      function configureTerrainParticleSurface() {
-        const wind = windField();
-        if (!show3D || !map || !wind || !wind.meta) return false;
-        const meta = wind.meta;
-        const modelWest = meta.lo1;
-        const modelEast = meta.lo1 + (meta.nx - 1) * meta.dx;
-        const modelNorth = meta.la1;
-        const modelSouth = meta.la1 - (meta.ny - 1) * meta.dy;
-        const view = map.getBounds();
-        let west = Math.max(modelWest, view.getWest());
-        let east = Math.min(modelEast, view.getEast());
-        let south = Math.max(modelSouth, view.getSouth());
-        let north = Math.min(modelNorth, view.getNorth());
-        if (east <= west || north <= south) return false;
-
-        // Il margine evita buchi ai lati durante i piccoli assestamenti della
-        // camera. La texture viene comunque ricostruita a fine gesto.
-        const longitudePadding = (east - west) * 0.12;
-        const latitudePadding = (north - south) * 0.12;
-        west = Math.max(modelWest, west - longitudePadding);
-        east = Math.min(modelEast, east + longitudePadding);
-        south = Math.max(modelSouth, south - latitudePadding);
-        north = Math.min(modelNorth, north + latitudePadding);
-
-        const topMercator = particleMercatorY(north);
-        const bottomMercator = particleMercatorY(south);
-        const longitudeRadians = Math.max((east - west) * Math.PI / 180, 0.0001);
-        const mercatorHeight = Math.max(Math.abs(topMercator - bottomMercator), 0.0001);
-        const aspect = longitudeRadians / mercatorHeight;
-        const mobile = window.innerWidth < 900;
-        const maximum = mobile
-          ? PARTICLE_CONFIG.terrainMaxDimensionMobile
-          : PARTICLE_CONFIG.terrainMaxDimensionDesktop;
-        let width = aspect >= 1 ? maximum : Math.round(maximum * aspect);
-        let height = aspect >= 1 ? Math.round(maximum / aspect) : maximum;
-        width = Math.max(width, 240);
-        height = Math.max(height, 240);
-        const pixelLimit = mobile
-          ? PARTICLE_CONFIG.terrainPixelLimitMobile
-          : PARTICLE_CONFIG.terrainPixelLimitDesktop;
-        if (width * height > pixelLimit) {
-          const reduction = Math.sqrt(pixelLimit / (width * height));
-          width = Math.max(240, Math.round(width * reduction));
-          height = Math.max(240, Math.round(height * reduction));
-        }
-
-        if (terrainParticleCanvas.width !== width || terrainParticleCanvas.height !== height) {
-          terrainParticleCanvas.width = width;
-          terrainParticleCanvas.height = height;
-        } else {
-          terrainParticleContext.clearRect(0, 0, width, height);
-        }
-        terrainParticleBounds = {
-          west: west,
-          east: east,
-          south: south,
-          north: north,
-          topMercator: topMercator,
-          bottomMercator: bottomMercator
-        };
-
-        const source = map.getSource("terrain-particles");
-        if (source && typeof source.setCoordinates === "function") {
-          source.setCoordinates([
-            [west, north], [east, north], [east, south], [west, south]
-          ]);
-        }
-        return true;
-      }
-
-      function setTerrainParticleVisibility(visible) {
-        const enabled = Boolean(visible && show3D && showParticles);
-        particleCanvas.style.visibility = show3D ? "hidden" : "visible";
-        if (!mapLoaded || !map) return;
-        if (map.getLayer("terrain-particles-layer")) {
-          map.setLayoutProperty(
-            "terrain-particles-layer", "visibility", enabled ? "visible" : "none"
-          );
-        }
-        const source = map.getSource("terrain-particles");
-        if (source) {
-          if (!enabled && typeof source.pause === "function") source.pause();
-        }
-      }
-
-      function refreshTerrainParticleTexture() {
-        if (!show3D || !map) return;
-        const source = map.getSource("terrain-particles");
-        if (!source || typeof source.play !== "function" || typeof source.pause !== "function") return;
-        // CanvasSource aggiorna la texture in prepare(). Il rapido play/pause
-        // forza un solo upload per frame particellare, senza lasciare MapLibre
-        // in repaint continuo a 60 fps quando i dati cambiano a 24 fps.
-        source.play();
-        source.pause();
-        map.triggerRepaint();
-      }
-
-      function terrainParticlePoint(longitude, latitude) {
-        if (!terrainParticleBounds) return null;
-        const bounds = terrainParticleBounds;
-        const x = (longitude - bounds.west) /
-          Math.max(bounds.east - bounds.west, 0.0001) * terrainParticleCanvas.width;
-        const y = (bounds.topMercator - particleMercatorY(latitude)) /
-          Math.max(bounds.topMercator - bounds.bottomMercator, 0.0001) * terrainParticleCanvas.height;
-        return { x: x, y: y };
       }
 
       function resizeCanvases() {
@@ -4667,18 +4537,10 @@
         if (!field) return;
         const meta = field.meta;
         const bounds = map.getBounds();
-        const west = show3D && terrainParticleBounds
-          ? terrainParticleBounds.west
-          : Math.max(bounds.getWest(), meta.lo1);
-        const east = show3D && terrainParticleBounds
-          ? terrainParticleBounds.east
-          : Math.min(bounds.getEast(), meta.lo1 + (meta.nx - 1) * meta.dx);
-        const south = show3D && terrainParticleBounds
-          ? terrainParticleBounds.south
-          : Math.max(bounds.getSouth(), meta.la1 - (meta.ny - 1) * meta.dy);
-        const north = show3D && terrainParticleBounds
-          ? terrainParticleBounds.north
-          : Math.min(bounds.getNorth(), meta.la1);
+        const west = Math.max(bounds.getWest(), meta.lo1);
+        const east = Math.min(bounds.getEast(), meta.lo1 + (meta.nx - 1) * meta.dx);
+        const south = Math.max(bounds.getSouth(), meta.la1 - (meta.ny - 1) * meta.dy);
+        const north = Math.min(bounds.getNorth(), meta.la1);
 
         if (east <= west || north <= south) {
           particle.age = 999;
@@ -4698,9 +4560,10 @@
       }
 
       function projectParticle(longitude, latitude) {
-        return show3D
-          ? terrainParticlePoint(longitude, latitude)
-          : map.project([longitude, latitude]);
+        // MapLibre 5 include il terreno nella proiezione pubblica map.project:
+        // lo stesso percorso funziona quindi in 2D e 3D senza una CanvasSource
+        // drappeggiata, non supportata in modo uniforme dai browser Android.
+        return map.project([longitude, latitude]);
       }
 
       function particleStyle(speed) {
@@ -4714,9 +4577,9 @@
       }
 
       function startParticles() {
-        if (prefersReducedMotion || !showParticles || particleFrame) return;
-        if (show3D && !configureTerrainParticleSurface()) return;
-        setTerrainParticleVisibility(show3D);
+        // La preferenza di sistema limita solo l'attivazione automatica. Se
+        // l'utente preme esplicitamente "Flusso", l'animazione deve partire.
+        if (!showParticles || particleFrame) return;
         lastParticleTime = performance.now();
         lastParticleFrame = 0;
         particleFrame = requestAnimationFrame(animateParticles);
@@ -4725,11 +4588,7 @@
       function stopParticles() {
         if (particleFrame) cancelAnimationFrame(particleFrame);
         particleFrame = null;
-        setTerrainParticleVisibility(false);
         particleContext.clearRect(0, 0, window.innerWidth, window.innerHeight);
-        terrainParticleContext.clearRect(
-          0, 0, terrainParticleCanvas.width, terrainParticleCanvas.height
-        );
       }
 
       function animateParticles(timestamp) {
@@ -4737,10 +4596,6 @@
         if (!showParticles || !currentData || !map || !wind || !wind.u || !wind.v) {
           particleFrame = null;
           particleContext.clearRect(0, 0, window.innerWidth, window.innerHeight);
-          terrainParticleContext.clearRect(
-            0, 0, terrainParticleCanvas.width, terrainParticleCanvas.height
-          );
-          setTerrainParticleVisibility(false);
           return;
         }
 
@@ -4755,9 +4610,9 @@
         lastParticleTime = timestamp;
         lastParticleFrame = timestamp;
 
-        const drawingContext = show3D ? terrainParticleContext : particleContext;
-        const drawingWidth = show3D ? terrainParticleCanvas.width : window.innerWidth;
-        const drawingHeight = show3D ? terrainParticleCanvas.height : window.innerHeight;
+        const drawingContext = particleContext;
+        const drawingWidth = window.innerWidth;
+        const drawingHeight = window.innerHeight;
 
         if (isMapMoving) {
           drawingContext.clearRect(0, 0, drawingWidth, drawingHeight);
@@ -4766,14 +4621,13 @@
         }
 
         // Con la mappa inclinata i tratti lontani si affollano verso
-        // l'orizzonte: un taglio contenuto basta a tenere pulito il disegno
-        // (il costo per particella è lo stesso del 2D, la proiezione non
-        // interroga il terreno).
+        // l'orizzonte: riduco densità e frequenza solo quanto basta a mantenere
+        // l'animazione fluida sui telefoni.
         const pitch = map.getPitch ? map.getPitch() : 0;
         const aerial = pitch > 4;
         const mobileParticles = window.innerWidth < 900;
         const effectiveTarget = aerial
-          ? Math.round(Math.max(mobileParticles ? 500 : 900, particleTarget * 0.82))
+          ? Math.round(Math.max(mobileParticles ? 420 : 800, particleTarget * 0.72))
           : particleTarget;
 
         while (particles.length < effectiveTarget) particles.push(createParticle(true));
@@ -4789,9 +4643,6 @@
 
         const meta = wind.meta;
         const visualScale = 6900 * clamp(Math.pow(2, 6 - map.getZoom()), 0.22, 3.4);
-        const terrainLineScale = show3D
-          ? clamp(drawingWidth / Math.max(window.innerWidth, 1), 0.45, 2.4)
-          : 1;
         const buckets = {};
 
         particles.forEach(function (particle) {
@@ -4824,6 +4675,14 @@
             particle.age = particle.maxAge + 1;
             return;
           }
+          const margin = 80;
+          if (
+            end.x < -margin || end.x > drawingWidth + margin ||
+            end.y < -margin || end.y > drawingHeight + margin
+          ) {
+            particle.age = particle.maxAge + 1;
+            return;
+          }
           const distance = Math.hypot(end.x - start.x, end.y - start.y);
 
           if (distance > 0.24) {
@@ -4833,14 +4692,16 @@
             const fadeIn = clamp(ageFraction / 0.12, 0, 1);
             const fadeOut = clamp((1 - ageFraction) / 0.18, 0, 1);
             let alphaMultiplier = Math.min(fadeIn, fadeOut);
-            // In 3D la prospettiva aerea è applicata dal fog nativo dopo il
-            // drappeggio. Attenuare qui in base alla Y della texture farebbe
-            // dipendere la trasparenza dalla latitudine anziché dalla distanza.
+            if (aerial) {
+              // Sul canvas schermo la Y è una buona approssimazione della
+              // distanza prospettica: vicino all'orizzonte il vento resta
+              // leggibile ma più tenue, in primo piano è più netto.
+              alphaMultiplier *= 0.38 + 0.62 * clamp(start.y / drawingHeight, 0, 1);
+            }
             if (alphaMultiplier > 0.06) {
               const style = particleStyle(speedKmh);
               const alphaLevel = Math.max(0.12, Math.round(alphaMultiplier * 8) / 8);
-              const key = style.color + "|" +
-                (style.width * terrainLineScale).toFixed(2) + "|" + alphaLevel;
+              const key = style.color + "|" + style.width.toFixed(2) + "|" + alphaLevel;
               if (!buckets[key]) buckets[key] = [];
               buckets[key].push([start.x, start.y, end.x, end.y]);
             }
@@ -4866,7 +4727,6 @@
         drawingContext.globalAlpha = 1;
 
         drawingContext.restore();
-        if (show3D) refreshTerrainParticleTexture();
         particleFrame = requestAnimationFrame(animateParticles);
       }
 
@@ -5931,25 +5791,6 @@
             }
           });
 
-          map.addSource("terrain-particles", {
-            type: "canvas",
-            canvas: terrainParticleCanvas,
-            animate: false,
-            coordinates: [[3, 48.9], [22, 48.9], [22, 33.7], [3, 33.7]]
-          });
-
-          map.addLayer({
-            id: "terrain-particles-layer",
-            type: "raster",
-            source: "terrain-particles",
-            layout: { visibility: "none" },
-            paint: {
-              "raster-opacity": 0.96,
-              "raster-resampling": "linear",
-              "raster-fade-duration": 0
-            }
-          });
-
           map.addLayer({
             id: "labels-layer",
             type: "raster",
@@ -6153,7 +5994,6 @@
 
           map.on("movestart", function () {
             isMapMoving = true;
-            setTerrainParticleVisibility(false);
             resetParticles();
             clearVectors();
           });
@@ -6166,9 +6006,7 @@
           map.on("moveend", function () {
             isMapMoving = false;
             syncTerrainExaggeration();
-            if (show3D) configureTerrainParticleSurface();
             resetParticles();
-            setTerrainParticleVisibility(show3D);
             updateHazeStrength();
             renderWeather();
             requestVectorRender();
@@ -6286,7 +6124,6 @@
         resizeCanvases();
         setTimeout(function () {
           if (map) map.resize();
-          if (show3D) configureTerrainParticleSurface();
           renderWeather();
           requestVectorRender();
         }, 80);
@@ -6297,7 +6134,6 @@
           resizeCanvases();
           setTimeout(function () {
             if (map) map.resize();
-            if (show3D) configureTerrainParticleSurface();
             renderWeather();
             requestVectorRender();
           }, 80);
@@ -6308,7 +6144,6 @@
         if (document.hidden) {
           if (particleFrame) cancelAnimationFrame(particleFrame);
           particleFrame = null;
-          setTerrainParticleVisibility(false);
         } else {
           startParticles();
         }
