@@ -116,18 +116,14 @@
         height: 100%;
         pointer-events: none;
         z-index: 5;
-        opacity: 0;
-        transition: opacity 0.9s ease, background 1.2s ease;
+        opacity: var(--haze-strength, 0);
+        transition: opacity 0.45s linear, background 1.2s ease;
         background: linear-gradient(
           180deg,
-          var(--sky-top, rgba(96, 150, 212, 0.72)) 0%,
-          var(--sky-mid, rgba(158, 190, 224, 0.4)) 26%,
-          rgba(198, 214, 230, 0) 52%
+          var(--sky-top, rgba(168, 188, 208, 0.6)) 0%,
+          var(--sky-mid, rgba(190, 205, 220, 0.28)) 24%,
+          rgba(200, 212, 224, 0) 48%
         );
-      }
-
-      body.is-3d #sky-haze {
-        opacity: 1;
       }
 
       .surface {
@@ -3243,64 +3239,68 @@
         const when = date || parseCatalogDate(catalog[currentIndex] || {}) || new Date();
         const sun = solarPosition(when, SOLAR_CENTER.lat, SOLAR_CENTER.lon);
         const elev = sun.elevation;
-        const warmth = clamp((12 - elev) / 16, 0, 1);   // luce dorata a Sole basso
-        const lowSun = clamp((14 - elev) / 20, 0, 1);   // ombre lunghe a Sole basso
-        let shadowColor;
-        let highlightColor;
+        // Fattore diurno continuo (0 = notte piena, 1 = Sole alto): tutte le
+        // transizioni sono graduali, così scorrendo la timeline non compaiono
+        // salti di tono.
+        const day = clamp((elev + 6) / 18, 0, 1);
+        // Quanta luce *direzionale* c'è: piena a Sole alto, nulla sotto
+        // l'orizzonte (di notte resta solo la luce diffusa del cielo).
+        const direct = clamp((elev + 4) / 10, 0, 1);
+        // Luce radente: a Sole basso le ombre sono lunghe e il rilievo si
+        // legge molto di più che a mezzogiorno, quando il Sole appiattisce.
+        const raking = clamp((45 - elev) / 45, 0, 1);
 
-        if (elev < -6) {
-          // Notte: contrasto morbido, ombre blu profonde, quasi nessuna luce.
-          shadowColor = "rgba(16,24,42,0.5)";
-          highlightColor = "rgba(120,150,205,0.05)";
-        } else if (elev < 3) {
-          // Crepuscolo: ombre bluastre e allungate, tocco caldo sui crinali.
-          shadowColor = "rgba(28,36,60,0.66)";
-          highlightColor = "rgba(255,214,170,0.12)";
-        } else {
-          // Giorno: ombra neutra più intensa quando il Sole è basso; alba/tramonto
-          // aggiungono una luce calda sui versanti esposti.
-          const shadowAlpha = (0.5 + 0.22 * lowSun).toFixed(3);
-          const highlightAlpha = (0.12 * warmth).toFixed(3);
-          shadowColor = "rgba(26,34,46," + shadowAlpha + ")";
-          highlightColor = "rgba(255,240,214," + highlightAlpha + ")";
-        }
+        // Sotto l'orizzonte non esiste una direzione di illuminazione reale:
+        // torno alla convenzione cartografica (315°). Il passaggio avviene
+        // dove la componente direzionale è già svanita, quindi non si vede.
+        const illumination = direct > 0 ? Math.round(sun.azimuth) : 315;
+        // Ombra grigio-neutra: base ambientale sempre presente perché la
+        // mappa resti leggibile, più la componente direzionale del Sole.
+        const shadowAlpha = (0.34 + 0.3 * raking * direct).toFixed(3);
 
-        map.setPaintProperty("terrain-detail", "hillshade-illumination-direction", Math.round(sun.azimuth));
-        map.setPaintProperty("terrain-detail", "hillshade-shadow-color", shadowColor);
-        map.setPaintProperty("terrain-detail", "hillshade-highlight-color", highlightColor);
-        updateSkyPalette(elev);
+        map.setPaintProperty("terrain-detail", "hillshade-illumination-direction", illumination);
+        map.setPaintProperty("terrain-detail", "hillshade-shadow-color", "rgba(28,36,48," + shadowAlpha + ")");
+        map.setPaintProperty("terrain-detail", "hillshade-highlight-color", "rgba(255,255,255,0)");
+        updateSkyPalette(day);
       }
 
-      // Il cielo della vista 3D segue davvero il Sole: azzurro pieno a
-      // mezzogiorno, oro caldo all'alba/tramonto, indaco profondo di notte.
-      // È l'indizio visivo più immediato dell'ora della previsione.
-      function updateSkyPalette(elev) {
-        let top;
-        let mid;
-        if (elev >= 18) {
-          // Pieno giorno: azzurro limpido.
-          top = "rgba(84,146,214,0.74)";
-          mid = "rgba(150,188,226,0.4)";
-        } else if (elev >= 6) {
-          // Mattina/pomeriggio: azzurro più tenue.
-          top = "rgba(120,168,214,0.72)";
-          mid = "rgba(176,200,224,0.4)";
-        } else if (elev >= -3) {
-          // Alba/tramonto: fascia dorata calda sull'orizzonte.
-          top = "rgba(236,158,96,0.74)";
-          mid = "rgba(240,192,150,0.42)";
-        } else if (elev >= -12) {
-          // Crepuscolo: viola/malva.
-          top = "rgba(120,104,168,0.7)";
-          mid = "rgba(150,140,186,0.4)";
-        } else {
-          // Notte: indaco profondo.
-          top = "rgba(30,42,82,0.76)";
-          mid = "rgba(56,70,112,0.42)";
-        }
+      // Foschia atmosferica neutra: nessuna tinta artificiale, solo la
+      // luminosità che segue il Sole (chiara di giorno, ardesia di notte),
+      // come la prospettiva aerea reale verso l'orizzonte.
+      function updateSkyPalette(day) {
+        const mix = function (nightValue, dayValue) {
+          return Math.round(nightValue + (dayValue - nightValue) * day);
+        };
+        const r = mix(52, 178);
+        const g = mix(64, 196);
+        const b = mix(82, 214);
         const root = document.documentElement;
-        root.style.setProperty("--sky-top", top);
-        root.style.setProperty("--sky-mid", mid);
+        root.style.setProperty("--sky-top", "rgba(" + r + "," + g + "," + b + ",0.6)");
+        root.style.setProperty("--sky-mid", "rgba(" + r + "," + g + "," + b + ",0.26)");
+
+        // Oltre il bordo del terreno si vede lo sfondo della mappa: in 3D lo
+        // tengo coerente con la stessa luce, altrimenti di notte resterebbe
+        // un rettangolo chiaro dietro un rilievo buio.
+        if (show3D && map.getLayer("background")) {
+          map.setPaintProperty(
+            "background",
+            "background-color",
+            "rgb(" + mix(38, 188) + "," + mix(48, 204) + "," + mix(64, 218) + ")"
+          );
+        }
+      }
+
+      // La foschia esiste solo se c'è un orizzonte da velare: cresce con
+      // l'inclinazione e sparisce quando la mappa torna a vista zenitale,
+      // anche se l'utente raddrizza la vista a mano con il 3D ancora attivo.
+      let hazeLevel = -1;
+
+      function updateHazeStrength() {
+        const pitch = show3D && map && map.getPitch ? map.getPitch() : 0;
+        const level = Math.round(clamp((pitch - 12) / 48, 0, 1) * 20) / 20;
+        if (level === hazeLevel) return;
+        hazeLevel = level;
+        document.documentElement.style.setProperty("--haze-strength", String(level));
       }
 
       async function updateBulletinUi(force) {
@@ -3676,7 +3676,14 @@
           Math.max(Math.abs(visibleTopMercator - visibleBottomMercator), 0.001);
         let width = Math.max(2, Math.round(mapElement.clientWidth * density * widthExpansion));
         let height = Math.max(2, Math.round(mapElement.clientHeight * density * heightExpansion));
-        const pixelLimit = RASTER_CONFIG.pixelLimit;
+        // Con la mappa inclinata l'area inquadrata esplode fino all'orizzonte,
+        // ma quella porzione lontana occupa pochi pixel sullo schermo: tenere
+        // il budget pieno significherebbe ricalcolare milioni di pixel a ogni
+        // spostamento senza guadagno visibile.
+        const tilt = map.getPitch ? map.getPitch() : 0;
+        const pixelLimit = tilt > 20
+          ? Math.round(RASTER_CONFIG.pixelLimit * 0.55)
+          : RASTER_CONFIG.pixelLimit;
 
         if (width * height > pixelLimit) {
           const reduction = Math.sqrt(pixelLimit / (width * height));
@@ -3824,38 +3831,38 @@
           if (!map.getTerrain()) {
             map.setTerrain({ source: "terrain-dem", exaggeration: TERRAIN_3D.exaggeration });
           }
-          document.body.classList.add("is-3d");
-          if (map.getLayer("background")) {
-            map.setPaintProperty("background", "background-color", "#bcd0e2");
-          }
           map.setMaxPitch(TERRAIN_3D.maxPitch);
           if (map.dragRotate) map.dragRotate.enable();
           if (map.touchZoomRotate) map.touchZoomRotate.enableRotation();
           if (map.touchPitch) map.touchPitch.enable();
           map.easeTo({ pitch: TERRAIN_3D.pitch, duration: 950 });
-          // Applico subito il rilievo scolpito forte e la luce solare, senza
-          // aspettare il prossimo render della griglia.
+          // Applico subito rilievo e luce solare, senza aspettare il prossimo
+          // render della griglia.
           renderWeather();
           updateSolarLighting();
           toast("Vista 3D attiva · ruota e inclina con due dita");
         } else {
-          document.body.classList.remove("is-3d");
           if (map.getLayer("background")) {
             map.setPaintProperty("background", "background-color", "#dfeaf1");
           }
           if (map.dragRotate) map.dragRotate.disable();
           if (map.touchZoomRotate) map.touchZoomRotate.disableRotation();
-          // Rimuovo il rilievo solo a fine animazione: toglierlo mentre la
-          // mappa è ancora inclinata farebbe "collassare" la scena di scatto.
+          // Rimuovo il rilievo solo quando la vista è tornata davvero piana:
+          // toglierlo mentre la mappa è ancora inclinata farebbe "collassare"
+          // la scena di scatto. Un moveend può arrivare anche da una panoramica
+          // dell'utente a metà discesa, perciò controllo il pitch reale.
           terrain3DEaseCleanup = function () {
-            if (!show3D && map.getTerrain()) map.setTerrain(null);
+            if (show3D) return;
+            if (map.getPitch() > 0.5) return;
+            if (map.getTerrain()) map.setTerrain(null);
             map.setMaxPitch(60);
             map.off("moveend", terrain3DEaseCleanup);
             terrain3DEaseCleanup = null;
+            updateHazeStrength();
+            renderWeather();
           };
           map.on("moveend", terrain3DEaseCleanup);
           map.easeTo({ pitch: 0, bearing: 0, duration: 750 });
-          renderWeather();
         }
       }
 
@@ -4377,6 +4384,34 @@
         return particle;
       }
 
+      // Proiezione al livello del mare per le particelle.
+      //
+      // Con il terreno 3D attivo map.project() interroga il DEM per ogni
+      // punto: due chiamate per particella per frame sono decine di migliaia
+      // di letture di quota al secondo, il costo che fa scattare
+      // l'animazione sul telefono. In più le particelle sobbalzerebbero ogni
+      // volta che arriva una nuova tile di elevazione.
+      //
+      // La proiezione piatta è stabile e molto più economica, e non toglie
+      // nulla alla fisica: l'incanalamento del vento tra i rilievi viene dai
+      // dati ICON-2I, non dal drappeggio sul terreno.
+      const flatLngLat = { lng: 0, lat: 0 };
+      let flatProjectionAvailable = true;
+
+      function projectFlat(lng, lat) {
+        if (flatProjectionAvailable && map.transform && map.transform.locationPoint) {
+          try {
+            flatLngLat.lng = lng;
+            flatLngLat.lat = lat;
+            return map.transform.locationPoint(flatLngLat);
+          } catch (error) {
+            // API interna assente in questa versione: torno all'API pubblica.
+            flatProjectionAvailable = false;
+          }
+        }
+        return map.project([lng, lat]);
+      }
+
       function particleStyle(speed) {
         if (speed < 10) return { color: "rgba(30,103,159,0.68)", width: 0.7 };
         if (speed < 20) return { color: "rgba(18,161,200,0.74)", width: 0.85 };
@@ -4424,12 +4459,13 @@
           return;
         }
 
-        // In vista 3D la proiezione consulta la quota del terreno (più costosa)
-        // e i tratti lontani si affollano vicino all'orizzonte: alleggerisco il
-        // numero di particelle per tenere il frame rate fluido.
+        // Con la mappa inclinata i tratti lontani si affollano verso
+        // l'orizzonte: un taglio contenuto basta a tenere pulito il disegno
+        // (il costo per particella è lo stesso del 2D, la proiezione non
+        // interroga il terreno).
         const pitch = map.getPitch ? map.getPitch() : 0;
         const aerial = pitch > 4;
-        const effectiveTarget = aerial ? Math.round(particleTarget * 0.72) : particleTarget;
+        const effectiveTarget = aerial ? Math.round(particleTarget * 0.85) : particleTarget;
 
         while (particles.length < effectiveTarget) particles.push(createParticle(true));
         if (particles.length > effectiveTarget) particles.length = effectiveTarget;
@@ -4468,11 +4504,11 @@
             return;
           }
 
-          const start = map.project([particle.lng, particle.lat]);
+          const start = projectFlat(particle.lng, particle.lat);
           const cosineLatitude = Math.max(Math.cos(particle.lat * Math.PI / 180), 0.25);
           particle.lng += (u * dt * visualScale) / (111320 * cosineLatitude);
           particle.lat += (v * dt * visualScale) / 111320;
-          const end = map.project([particle.lng, particle.lat]);
+          const end = projectFlat(particle.lng, particle.lat);
           const distance = Math.hypot(end.x - start.x, end.y - start.y);
 
           if (distance > 0.24) {
@@ -5770,11 +5806,13 @@
 
           map.on("move", function () {
             clearVectors();
+            updateHazeStrength();
           });
 
           map.on("moveend", function () {
             isMapMoving = false;
             resetParticles();
+            updateHazeStrength();
             renderWeather();
             requestVectorRender();
           });
