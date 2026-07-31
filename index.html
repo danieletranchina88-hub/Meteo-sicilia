@@ -106,6 +106,30 @@
           linear-gradient(90deg, rgba(255, 255, 255, 0.06), transparent 26%, transparent 74%, rgba(255, 255, 255, 0.06));
       }
 
+      /* Foschia atmosferica: compare solo in vista 3D, sfuma verso l'orizzonte
+         come la prospettiva aerea reale. Sotto le particelle (z-index 5) per
+         non offuscarne il tratto. */
+      #sky-haze {
+        position: fixed;
+        inset: 0;
+        width: 100%;
+        height: 100%;
+        pointer-events: none;
+        z-index: 5;
+        opacity: 0;
+        transition: opacity 0.8s ease;
+        background: linear-gradient(
+          180deg,
+          rgba(150, 178, 208, 0.55) 0%,
+          rgba(176, 198, 220, 0.3) 18%,
+          rgba(198, 214, 230, 0) 40%
+        );
+      }
+
+      body.is-3d #sky-haze {
+        opacity: 1;
+      }
+
       .surface {
         background: var(--surface);
         border: 1px solid var(--stroke);
@@ -1432,6 +1456,7 @@
     <div id="map" aria-label="Mappa meteorologica interattiva"></div>
     <canvas id="particle-canvas" aria-hidden="true"></canvas>
     <canvas id="vector-canvas" aria-hidden="true"></canvas>
+    <div id="sky-haze" aria-hidden="true"></div>
     <div id="map-vignette" aria-hidden="true"></div>
 
     <header id="app-header">
@@ -3177,6 +3202,72 @@
         ui.timeLabel.textContent = formatDateTime(date);
         ui.leadLabel.textContent = lead === null ? "--" : "+" + lead + " h";
         ui.slider.setAttribute("aria-valuetext", formatDateTime(date));
+        updateSolarLighting(date);
+      }
+
+      // Posizione solare (algoritmo NOAA a bassa risoluzione, errore < 0.5°):
+      // serve a illuminare il rilievo dalla direzione reale del Sole all'ora
+      // di validità della previsione, così ombre e versanti sono fisicamente
+      // corretti — evidente soprattutto in vista 3D.
+      function solarPosition(date, latDeg, lonDeg) {
+        const rad = Math.PI / 180, deg = 180 / Math.PI;
+        const jd = date.getTime() / 86400000 + 2440587.5;
+        const n = jd - 2451545.0;
+        const L = (((280.460 + 0.9856474 * n) % 360) + 360) % 360;
+        const g = ((((357.528 + 0.9856003 * n) % 360) + 360) % 360) * rad;
+        const lambda = (L + 1.915 * Math.sin(g) + 0.020 * Math.sin(2 * g)) * rad;
+        const epsilon = (23.439 - 0.0000004 * n) * rad;
+        const alpha = Math.atan2(Math.cos(epsilon) * Math.sin(lambda), Math.cos(lambda));
+        const delta = Math.asin(Math.sin(epsilon) * Math.sin(lambda));
+        const gmst = (((280.46061837 + 360.98564736629 * n) % 360) + 360) % 360;
+        const hourAngle = (gmst + lonDeg) * rad - alpha;
+        const lat = latDeg * rad;
+        const elevation = Math.asin(
+          Math.sin(lat) * Math.sin(delta) + Math.cos(lat) * Math.cos(delta) * Math.cos(hourAngle)
+        );
+        let az = Math.atan2(
+          Math.sin(hourAngle),
+          Math.cos(hourAngle) * Math.sin(lat) - Math.tan(delta) * Math.cos(lat)
+        );
+        az = (az * deg + 180) % 360;
+        return { elevation: elevation * deg, azimuth: (az + 360) % 360 };
+      }
+
+      // Centro geometrico del dominio: una singola sorgente di luce coerente su
+      // tutta la scena (il Sole è di fatto all'infinito, la parallasse sul
+      // dominio è trascurabile per l'ombreggiatura).
+      const SOLAR_CENTER = { lat: 41.0, lon: 13.5 };
+
+      function updateSolarLighting(date) {
+        if (!mapLoaded || !map.getLayer("terrain-detail")) return;
+        const when = date || parseCatalogDate(catalog[currentIndex] || {}) || new Date();
+        const sun = solarPosition(when, SOLAR_CENTER.lat, SOLAR_CENTER.lon);
+        const elev = sun.elevation;
+        const warmth = clamp((12 - elev) / 16, 0, 1);   // luce dorata a Sole basso
+        const lowSun = clamp((14 - elev) / 20, 0, 1);   // ombre lunghe a Sole basso
+        let shadowColor;
+        let highlightColor;
+
+        if (elev < -6) {
+          // Notte: contrasto morbido, ombre blu profonde, quasi nessuna luce.
+          shadowColor = "rgba(16,24,42,0.5)";
+          highlightColor = "rgba(120,150,205,0.05)";
+        } else if (elev < 3) {
+          // Crepuscolo: ombre bluastre e allungate, tocco caldo sui crinali.
+          shadowColor = "rgba(28,36,60,0.66)";
+          highlightColor = "rgba(255,214,170,0.12)";
+        } else {
+          // Giorno: ombra neutra più intensa quando il Sole è basso; alba/tramonto
+          // aggiungono una luce calda sui versanti esposti.
+          const shadowAlpha = (0.5 + 0.22 * lowSun).toFixed(3);
+          const highlightAlpha = (0.12 * warmth).toFixed(3);
+          shadowColor = "rgba(26,34,46," + shadowAlpha + ")";
+          highlightColor = "rgba(255,240,214," + highlightAlpha + ")";
+        }
+
+        map.setPaintProperty("terrain-detail", "hillshade-illumination-direction", Math.round(sun.azimuth));
+        map.setPaintProperty("terrain-detail", "hillshade-shadow-color", shadowColor);
+        map.setPaintProperty("terrain-detail", "hillshade-highlight-color", highlightColor);
       }
 
       async function updateBulletinUi(force) {
@@ -3697,6 +3788,10 @@
           if (!map.getTerrain()) {
             map.setTerrain({ source: "terrain-dem", exaggeration: TERRAIN_3D.exaggeration });
           }
+          document.body.classList.add("is-3d");
+          if (map.getLayer("background")) {
+            map.setPaintProperty("background", "background-color", "#bcd0e2");
+          }
           map.setMaxPitch(TERRAIN_3D.maxPitch);
           if (map.dragRotate) map.dragRotate.enable();
           if (map.touchZoomRotate) map.touchZoomRotate.enableRotation();
@@ -3704,6 +3799,10 @@
           map.easeTo({ pitch: TERRAIN_3D.pitch, duration: 950 });
           toast("Vista 3D attiva · ruota e inclina con due dita");
         } else {
+          document.body.classList.remove("is-3d");
+          if (map.getLayer("background")) {
+            map.setPaintProperty("background", "background-color", "#dfeaf1");
+          }
           if (map.dragRotate) map.dragRotate.disable();
           if (map.touchZoomRotate) map.touchZoomRotate.disableRotation();
           // Rimuovo il rilievo solo a fine animazione: toglierlo mentre la
@@ -4284,8 +4383,15 @@
           return;
         }
 
-        while (particles.length < particleTarget) particles.push(createParticle(true));
-        if (particles.length > particleTarget) particles.length = particleTarget;
+        // In vista 3D la proiezione consulta la quota del terreno (più costosa)
+        // e i tratti lontani si affollano vicino all'orizzonte: alleggerisco il
+        // numero di particelle per tenere il frame rate fluido.
+        const pitch = map.getPitch ? map.getPitch() : 0;
+        const aerial = pitch > 4;
+        const effectiveTarget = aerial ? Math.round(particleTarget * 0.72) : particleTarget;
+
+        while (particles.length < effectiveTarget) particles.push(createParticle(true));
+        if (particles.length > effectiveTarget) particles.length = effectiveTarget;
 
         particleContext.save();
         particleContext.globalCompositeOperation = "destination-in";
@@ -4297,6 +4403,7 @@
 
         const meta = wind.meta;
         const visualScale = 6900 * clamp(Math.pow(2, 6 - map.getZoom()), 0.22, 3.4);
+        const viewportHeight = window.innerHeight || 1;
         const buckets = {};
 
         particles.forEach(function (particle) {
@@ -4333,7 +4440,13 @@
             const ageFraction = particle.age / particle.maxAge;
             const fadeIn = clamp(ageFraction / 0.12, 0, 1);
             const fadeOut = clamp((1 - ageFraction) / 0.18, 0, 1);
-            const alphaMultiplier = Math.min(fadeIn, fadeOut);
+            let alphaMultiplier = Math.min(fadeIn, fadeOut);
+            // Prospettiva aerea: in 3D i tratti alti (lontani, verso l'orizzonte)
+            // si attenuano; quelli in basso (vicini) restano pieni.
+            if (aerial) {
+              const nearness = clamp(start.y / viewportHeight, 0, 1);
+              alphaMultiplier *= 0.4 + 0.6 * nearness;
+            }
             if (alphaMultiplier > 0.06) {
               const style = particleStyle(speedKmh);
               const alphaLevel = Math.max(0.12, Math.round(alphaMultiplier * 8) / 8);
