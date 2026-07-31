@@ -117,12 +117,12 @@
         pointer-events: none;
         z-index: 5;
         opacity: 0;
-        transition: opacity 0.8s ease;
+        transition: opacity 0.9s ease, background 1.2s ease;
         background: linear-gradient(
           180deg,
-          rgba(150, 178, 208, 0.55) 0%,
-          rgba(176, 198, 220, 0.3) 18%,
-          rgba(198, 214, 230, 0) 40%
+          var(--sky-top, rgba(96, 150, 212, 0.72)) 0%,
+          var(--sky-mid, rgba(158, 190, 224, 0.4)) 26%,
+          rgba(198, 214, 230, 0) 52%
         );
       }
 
@@ -3268,6 +3268,39 @@
         map.setPaintProperty("terrain-detail", "hillshade-illumination-direction", Math.round(sun.azimuth));
         map.setPaintProperty("terrain-detail", "hillshade-shadow-color", shadowColor);
         map.setPaintProperty("terrain-detail", "hillshade-highlight-color", highlightColor);
+        updateSkyPalette(elev);
+      }
+
+      // Il cielo della vista 3D segue davvero il Sole: azzurro pieno a
+      // mezzogiorno, oro caldo all'alba/tramonto, indaco profondo di notte.
+      // È l'indizio visivo più immediato dell'ora della previsione.
+      function updateSkyPalette(elev) {
+        let top;
+        let mid;
+        if (elev >= 18) {
+          // Pieno giorno: azzurro limpido.
+          top = "rgba(84,146,214,0.74)";
+          mid = "rgba(150,188,226,0.4)";
+        } else if (elev >= 6) {
+          // Mattina/pomeriggio: azzurro più tenue.
+          top = "rgba(120,168,214,0.72)";
+          mid = "rgba(176,200,224,0.4)";
+        } else if (elev >= -3) {
+          // Alba/tramonto: fascia dorata calda sull'orizzonte.
+          top = "rgba(236,158,96,0.74)";
+          mid = "rgba(240,192,150,0.42)";
+        } else if (elev >= -12) {
+          // Crepuscolo: viola/malva.
+          top = "rgba(120,104,168,0.7)";
+          mid = "rgba(150,140,186,0.4)";
+        } else {
+          // Notte: indaco profondo.
+          top = "rgba(30,42,82,0.76)";
+          mid = "rgba(56,70,112,0.42)";
+        }
+        const root = document.documentElement;
+        root.style.setProperty("--sky-top", top);
+        root.style.setProperty("--sky-mid", mid);
       }
 
       async function updateBulletinUi(force) {
@@ -3720,10 +3753,13 @@
         map.setPaintProperty("weather-layer", "raster-opacity", info.opacity);
 
         if (map.getLayer("terrain-detail")) {
+          // In 3D il rilievo va scolpito molto più forte: l'ombreggiatura fa
+          // "leggere" i versanti illuminati dal Sole reale.
+          const relief = info.terrainOpacity * (show3D ? 2.4 : 1.28);
           map.setPaintProperty(
             "terrain-detail",
             "hillshade-exaggeration",
-            showTerrain ? clamp(info.terrainOpacity * 1.28, 0, 1) : 0
+            showTerrain ? clamp(relief, 0, 1) : 0
           );
         }
 
@@ -3773,7 +3809,7 @@
       // drappeggiano da soli sul terreno; le particelle di vento seguono il
       // rilievo perché map.project() è consapevole della quota quando il
       // terrain è attivo — così si vede il flusso incanalarsi tra i monti.
-      const TERRAIN_3D = { exaggeration: 1.5, pitch: 66, maxPitch: 78 };
+      const TERRAIN_3D = { exaggeration: 1.85, pitch: 68, maxPitch: 80 };
       let terrain3DEaseCleanup = null;
 
       function updateTerrain3D() {
@@ -3797,6 +3833,10 @@
           if (map.touchZoomRotate) map.touchZoomRotate.enableRotation();
           if (map.touchPitch) map.touchPitch.enable();
           map.easeTo({ pitch: TERRAIN_3D.pitch, duration: 950 });
+          // Applico subito il rilievo scolpito forte e la luce solare, senza
+          // aspettare il prossimo render della griglia.
+          renderWeather();
+          updateSolarLighting();
           toast("Vista 3D attiva · ruota e inclina con due dita");
         } else {
           document.body.classList.remove("is-3d");
@@ -3815,6 +3855,7 @@
           };
           map.on("moveend", terrain3DEaseCleanup);
           map.easeTo({ pitch: 0, bearing: 0, duration: 750 });
+          renderWeather();
         }
       }
 
@@ -4445,7 +4486,7 @@
             // si attenuano; quelli in basso (vicini) restano pieni.
             if (aerial) {
               const nearness = clamp(start.y / viewportHeight, 0, 1);
-              alphaMultiplier *= 0.4 + 0.6 * nearness;
+              alphaMultiplier *= 0.28 + 0.72 * nearness;
             }
             if (alphaMultiplier > 0.06) {
               const style = particleStyle(speedKmh);
