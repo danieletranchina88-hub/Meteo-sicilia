@@ -1698,6 +1698,9 @@
               <button class="toggle-row active" type="button" data-toggle="terrain" aria-pressed="true">
                 <span><b>Rilievo topografico</b><small>ombreggiatura del terreno</small></span><span class="switch"></span>
               </button>
+              <button class="toggle-row" type="button" data-toggle="threed" aria-pressed="false">
+                <span><b>Vista 3D</b><small>terreno in rilievo, mappa inclinabile</small></span><span class="switch"></span>
+              </button>
               <button class="toggle-row" type="button" data-toggle="graticule" aria-pressed="false">
                 <span><b>Reticolo geografico</b><small>coordinate intere</small></span><span class="switch"></span>
               </button>
@@ -2317,6 +2320,7 @@
       let obsFetching = false;
       let showFronts = false;
       let showTerrain = true;
+      let show3D = false;
       let showGraticule = false;
       let isMapMoving = false;
       let selectedPoint = null;
@@ -3308,6 +3312,7 @@
           fusion: showFusion,
           fronts: showFronts,
           terrain: showTerrain,
+          threed: show3D,
           graticule: showGraticule,
           raw: useNearestCell
         };
@@ -3484,6 +3489,9 @@
           showTerrain = !showTerrain;
           updateMapPresentation();
           renderWeather();
+        } else if (name === "threed") {
+          show3D = !show3D;
+          updateTerrain3D();
         } else if (name === "graticule") {
           showGraticule = !showGraticule;
           updateMapPresentation();
@@ -3666,6 +3674,48 @@
         }
         if (map.getLayer("terrain-detail")) {
           map.setLayoutProperty("terrain-detail", "visibility", showTerrain ? "visible" : "none");
+        }
+      }
+
+      // Vista 3D: il DEM (terrain-dem, già usato per l'ombreggiatura) diventa
+      // un vero rilievo. I raster ICON-2I (temperatura, ecc.) e le isolinee si
+      // drappeggiano da soli sul terreno; le particelle di vento seguono il
+      // rilievo perché map.project() è consapevole della quota quando il
+      // terrain è attivo — così si vede il flusso incanalarsi tra i monti.
+      const TERRAIN_3D = { exaggeration: 1.5, pitch: 66, maxPitch: 78 };
+      let terrain3DEaseCleanup = null;
+
+      function updateTerrain3D() {
+        if (!mapLoaded || !map) return;
+
+        if (terrain3DEaseCleanup) {
+          map.off("moveend", terrain3DEaseCleanup);
+          terrain3DEaseCleanup = null;
+        }
+
+        if (show3D) {
+          if (!map.getTerrain()) {
+            map.setTerrain({ source: "terrain-dem", exaggeration: TERRAIN_3D.exaggeration });
+          }
+          map.setMaxPitch(TERRAIN_3D.maxPitch);
+          if (map.dragRotate) map.dragRotate.enable();
+          if (map.touchZoomRotate) map.touchZoomRotate.enableRotation();
+          if (map.touchPitch) map.touchPitch.enable();
+          map.easeTo({ pitch: TERRAIN_3D.pitch, duration: 950 });
+          toast("Vista 3D attiva · ruota e inclina con due dita");
+        } else {
+          if (map.dragRotate) map.dragRotate.disable();
+          if (map.touchZoomRotate) map.touchZoomRotate.disableRotation();
+          // Rimuovo il rilievo solo a fine animazione: toglierlo mentre la
+          // mappa è ancora inclinata farebbe "collassare" la scena di scatto.
+          terrain3DEaseCleanup = function () {
+            if (!show3D && map.getTerrain()) map.setTerrain(null);
+            map.setMaxPitch(60);
+            map.off("moveend", terrain3DEaseCleanup);
+            terrain3DEaseCleanup = null;
+          };
+          map.on("moveend", terrain3DEaseCleanup);
+          map.easeTo({ pitch: 0, bearing: 0, duration: 750 });
         }
       }
 
