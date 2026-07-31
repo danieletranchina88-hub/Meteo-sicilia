@@ -3631,6 +3631,30 @@
         closeDrawerOnMobile();
       }
 
+      // Firma dell'ultimo raster prodotto: evita di rigenerare un'immagine
+      // identica quando il riquadro non dipende più dalla vista.
+      let lastRasterSignature = "";
+
+      // I valori sono già interpolati durante la generazione del raster ad alta
+      // densità. Un secondo filtro lineare in MapLibre mescolerebbe nuovamente
+      // i colori delle fasce: nearest qui conserva i contorni senza mostrare la
+      // griglia del modello, perché il raster è prodotto alla risoluzione display.
+      function applyWeatherPaint(info) {
+        map.setPaintProperty("weather-layer", "raster-resampling", "nearest");
+        map.setPaintProperty("weather-layer", "raster-opacity", info.opacity);
+
+        if (map.getLayer("terrain-detail")) {
+          // In 3D il rilievo va scolpito più forte: l'ombreggiatura fa
+          // "leggere" i versanti illuminati dal Sole reale.
+          const relief = info.terrainOpacity * (show3D ? 2.4 : 1.28);
+          map.setPaintProperty(
+            "terrain-detail",
+            "hillshade-exaggeration",
+            showTerrain ? clamp(relief, 0, 1) : 0
+          );
+        }
+      }
+
       function renderWeather() {
         if (!mapLoaded || !currentData || !map.getSource("weather")) return;
 
@@ -3654,12 +3678,41 @@
         const visibleEast = bounds.getEast();
         const visibleSouth = bounds.getSouth();
         const visibleNorth = bounds.getNorth();
-        const longitudePadding = Math.max((visibleEast - visibleWest) * RASTER_CONFIG.padding, fieldMeta.dx * 2);
-        const latitudePadding = Math.max((visibleNorth - visibleSouth) * RASTER_CONFIG.padding, fieldMeta.dy * 2);
-        const leftLongitude = Math.max(dataWest, visibleWest - longitudePadding);
-        const rightLongitude = Math.min(dataEast, visibleEast + longitudePadding);
-        const bottomLatitude = Math.max(dataSouth, visibleSouth - latitudePadding);
-        const topLatitude = Math.min(dataNorth, visibleNorth + latitudePadding);
+        // Il raster si ridisegna solo a fine gesto. Con la mappa inclinata
+        // l'area inquadrata è enorme e cambia in fretta (a pitch 68 la
+        // latitudine visibile passa da ~1,9° a ~14°), quindi il margine fisso
+        // del 20% non basta più: durante e subito dopo il gesto il riquadro
+        // vecchio lascia scoperta una fetta di mappa, con un bordo netto.
+        const tilt = map.getPitch ? map.getPitch() : 0;
+        const paddingFactor = RASTER_CONFIG.padding * (1 + tilt / 18);
+        const longitudePadding = Math.max((visibleEast - visibleWest) * paddingFactor, fieldMeta.dx * 2);
+        const latitudePadding = Math.max((visibleNorth - visibleSouth) * paddingFactor, fieldMeta.dy * 2);
+        let leftLongitude = Math.max(dataWest, visibleWest - longitudePadding);
+        let rightLongitude = Math.min(dataEast, visibleEast + longitudePadding);
+        let bottomLatitude = Math.max(dataSouth, visibleSouth - latitudePadding);
+        let topLatitude = Math.min(dataNorth, visibleNorth + latitudePadding);
+
+        // Quando la vista copre già gran parte del dominio conviene disegnarlo
+        // tutto: il riquadro diventa indipendente dalla vista, quindi non può
+        // più restare indietro rispetto a spostamenti, zoom e rotazioni. Non si
+        // perde nulla in nitidezza, perché a questa scala il raster resta
+        // comunque più fitto della griglia del modello.
+        //
+        // In vista 3D non troppo ravvicinata lo faccio sempre: inclinando, la
+        // porzione inquadrata si allarga di colpo (da ~1,9° a ~14° di
+        // latitudine) e un riquadro calcolato da piatto lascerebbe scoperta
+        // metà mappa per tutta la durata dell'animazione.
+        const domainWidth = dataEast - dataWest;
+        const domainHeight = dataNorth - dataSouth;
+        const wideTilted = show3D && map.getZoom() < 9.5;
+        if (wideTilted ||
+            (rightLongitude - leftLongitude >= domainWidth * 0.6 &&
+             topLatitude - bottomLatitude >= domainHeight * 0.6)) {
+          leftLongitude = dataWest;
+          rightLongitude = dataEast;
+          bottomLatitude = dataSouth;
+          topLatitude = dataNorth;
+        }
 
         if (rightLongitude <= leftLongitude || topLatitude <= bottomLatitude) return;
 
@@ -3676,20 +3729,33 @@
           Math.max(Math.abs(visibleTopMercator - visibleBottomMercator), 0.001);
         let width = Math.max(2, Math.round(mapElement.clientWidth * density * widthExpansion));
         let height = Math.max(2, Math.round(mapElement.clientHeight * density * heightExpansion));
-        // Con la mappa inclinata l'area inquadrata esplode fino all'orizzonte,
-        // ma quella porzione lontana occupa pochi pixel sullo schermo: tenere
-        // il budget pieno significherebbe ricalcolare milioni di pixel a ogni
-        // spostamento senza guadagno visibile.
-        const tilt = map.getPitch ? map.getPitch() : 0;
-        const pixelLimit = tilt > 20
-          ? Math.round(RASTER_CONFIG.pixelLimit * 0.55)
-          : RASTER_CONFIG.pixelLimit;
+        // Budget pieno anche da inclinato: l'area coperta è molto più ampia,
+        // quindi ridurre i pixel qui toglierebbe nitidezza anche al primo piano.
+        const pixelLimit = RASTER_CONFIG.pixelLimit;
 
         if (width * height > pixelLimit) {
           const reduction = Math.sqrt(pixelLimit / (width * height));
           width = Math.max(2, Math.round(width * reduction));
           height = Math.max(2, Math.round(height * reduction));
         }
+
+        // Agganciato al dominio il riquadro non cambia più muovendo la mappa:
+        // senza questa guardia rigenereremmo milioni di pixel identici a ogni
+        // spostamento. Le proprietà di stile restano fuori dalla firma perché
+        // vengono riapplicate comunque più sotto.
+        const renderSignature = [
+          activeLayer, selectedLevel, activeModel, currentIndex,
+          currentData.meta && currentData.meta.validTime,
+          useNearestCell, showFusion, width, height,
+          leftLongitude.toFixed(4), rightLongitude.toFixed(4),
+          bottomLatitude.toFixed(4), topLatitude.toFixed(4)
+        ].join("|");
+        const sameRaster = renderSignature === lastRasterSignature;
+
+        applyWeatherPaint(info);
+
+        if (sameRaster) return;
+        lastRasterSignature = renderSignature;
 
         rasterCanvas.width = width;
         rasterCanvas.height = height;
@@ -3752,23 +3818,6 @@
         }
 
         rasterContext.putImageData(image, 0, 0);
-        // I valori sono già interpolati durante la generazione del raster ad alta
-        // densità. Un secondo filtro lineare in MapLibre mescolerebbe nuovamente
-        // i colori delle fasce: nearest qui conserva i contorni senza mostrare la
-        // griglia del modello, perché il raster è prodotto alla risoluzione display.
-        map.setPaintProperty("weather-layer", "raster-resampling", "nearest");
-        map.setPaintProperty("weather-layer", "raster-opacity", info.opacity);
-
-        if (map.getLayer("terrain-detail")) {
-          // In 3D il rilievo va scolpito molto più forte: l'ombreggiatura fa
-          // "leggere" i versanti illuminati dal Sole reale.
-          const relief = info.terrainOpacity * (show3D ? 2.4 : 1.28);
-          map.setPaintProperty(
-            "terrain-detail",
-            "hillshade-exaggeration",
-            showTerrain ? clamp(relief, 0, 1) : 0
-          );
-        }
 
         map.getSource("weather").updateImage({
           url: rasterCanvas.toDataURL("image/png"),
