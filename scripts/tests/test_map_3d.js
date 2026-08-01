@@ -44,4 +44,31 @@ assert.doesNotMatch(html, /particleCanvas\.style\.visibility\s*=\s*show3D/,
 assert.doesNotMatch(html, /terrain-particles-layer/,
   "la CanvasSource 3D incompatibile con alcuni browser mobili è tornata");
 
+const animate = html.match(/function animateParticles\([\s\S]*?\n {6}\}/);
+assert.ok(animate, "ciclo di animazione delle particelle assente");
+// In 3D ogni map.project interroga il DEM: riusare la posizione proiettata al
+// frame precedente come punto di partenza dimezza quelle interrogazioni. Vale
+// perche' le particelle vengono azzerate a ogni movimento della mappa.
+assert.match(animate[0], /particle\.projected/,
+  "cache della proiezione delle particelle assente");
+assert.match(animate[0], /particle\.px\s*=\s*end\.x/,
+  "la posizione proiettata non viene memorizzata per il frame successivo");
+// La cache va invalidata quando la particella salta altrove.
+const respawn = html.match(/function respawnParticle\([\s\S]*?\n {6}\}/);
+assert.ok(respawn, "respawnParticle assente");
+assert.match(respawn[0], /particle\.projected\s*=\s*false/,
+  "la cache della proiezione non viene invalidata al respawn");
+// Vicino all'orizzonte un passo minimo diventa una corsa enorme sullo schermo.
+assert.match(animate[0], /maximumStreak/,
+  "tetto alla lunghezza dei tratti vicino all'orizzonte assente");
+
+// La quota del DEM arriva moltiplicata per l'esagerazione verticale: senza
+// dividerla i rilievi risulterebbero molto piu' alti del vero.
+const elevation = html.match(/function terrainElevationText\([\s\S]*?\n {6}\}/);
+assert.ok(elevation, "lettura della quota del terreno assente");
+assert.match(elevation[0], /queryTerrainElevation/,
+  "la quota non usa l'API pubblica queryTerrainElevation");
+assert.match(elevation[0], /raw \/ exaggeration/,
+  "la quota non viene divisa per l'esagerazione verticale");
+
 console.log("3D map regression checks: OK");

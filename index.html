@@ -1779,6 +1779,7 @@
         <div class="point-detail"><b>Visibilità</b><span id="detail-visibility">--</span></div>
         <div class="point-detail"><b>Gelicidio</b><span id="detail-freezing">--</span></div>
         <div class="point-detail"><b>Foehn</b><span id="detail-foehn">--</span></div>
+        <div class="point-detail"><b>Altitudine</b><span id="detail-elevation">--</span></div>
       </div>
     </section>
 
@@ -2305,6 +2306,7 @@
         detailVisibility: document.getElementById("detail-visibility"),
         detailFreezing: document.getElementById("detail-freezing"),
         detailFoehn: document.getElementById("detail-foehn"),
+        detailElevation: document.getElementById("detail-elevation"),
         levelPicker: document.getElementById("level-picker"),
         levelSelect: document.getElementById("level-select")
       };
@@ -4551,6 +4553,9 @@
         particle.lat = south + Math.random() * (north - south);
         particle.maxAge = PARTICLE_CONFIG.minLife + Math.random() * (PARTICLE_CONFIG.maxLife - PARTICLE_CONFIG.minLife);
         particle.age = randomAge ? Math.random() * particle.maxAge : 0;
+        // La particella è saltata altrove: la posizione proiettata in cache
+        // non vale più.
+        particle.projected = false;
       }
 
       function createParticle(randomAge) {
@@ -4666,15 +4671,26 @@
             return;
           }
 
-          const start = projectParticle(particle.lng, particle.lat);
+          // La posizione proiettata al frame precedente è esattamente il punto
+          // di partenza di questo: riusandola si dimezzano le proiezioni. In
+          // 3D ognuna interroga il DEM, ed è il costo che domina l'animazione.
+          // Le particelle vengono azzerate a ogni movimento della mappa, quindi
+          // fra due frame disegnati la camera è ferma e la cache resta valida.
+          const start = particle.projected
+            ? { x: particle.px, y: particle.py }
+            : projectParticle(particle.lng, particle.lat);
           const cosineLatitude = Math.max(Math.cos(particle.lat * Math.PI / 180), 0.25);
           particle.lng += (u * dt * visualScale) / (111320 * cosineLatitude);
           particle.lat += (v * dt * visualScale) / 111320;
           const end = projectParticle(particle.lng, particle.lat);
-          if (!start || !end) {
+          if (!start || !end || !Number.isFinite(end.x) || !Number.isFinite(end.y)) {
+            particle.projected = false;
             particle.age = particle.maxAge + 1;
             return;
           }
+          particle.px = end.x;
+          particle.py = end.y;
+          particle.projected = true;
           const margin = 80;
           if (
             end.x < -margin || end.x > drawingWidth + margin ||
@@ -4684,6 +4700,14 @@
             return;
           }
           const distance = Math.hypot(end.x - start.x, end.y - start.y);
+          // Vicino all'orizzonte un passo geografico minimo si proietta in una
+          // corsa enorme sullo schermo: senza un tetto compaiono strisciate che
+          // attraversano la vista. Non tocca i tratti normali, lunghi pochi px.
+          const maximumStreak = Math.max(48, drawingHeight * 0.08);
+          if (distance > maximumStreak) {
+            particle.age = particle.maxAge + 1;
+            return;
+          }
 
           if (distance > 0.24) {
             // Dissolvenza in nascita/morte: le particelle appaiono e
@@ -4692,16 +4716,22 @@
             const fadeIn = clamp(ageFraction / 0.12, 0, 1);
             const fadeOut = clamp((1 - ageFraction) / 0.18, 0, 1);
             let alphaMultiplier = Math.min(fadeIn, fadeOut);
+            // Sul canvas schermo la Y è una buona approssimazione della
+            // distanza prospettica: 0 all'orizzonte, 1 in primo piano.
+            const nearness = aerial ? clamp(start.y / drawingHeight, 0, 1) : 1;
             if (aerial) {
-              // Sul canvas schermo la Y è una buona approssimazione della
-              // distanza prospettica: vicino all'orizzonte il vento resta
-              // leggibile ma più tenue, in primo piano è più netto.
-              alphaMultiplier *= 0.38 + 0.62 * clamp(start.y / drawingHeight, 0, 1);
+              // Vicino all'orizzonte il vento resta leggibile ma più tenue,
+              // in primo piano è più netto.
+              alphaMultiplier *= 0.38 + 0.62 * nearness;
             }
             if (alphaMultiplier > 0.06) {
               const style = particleStyle(speedKmh);
+              // Anche il tratto si assottiglia con la distanza: da solo il calo
+              // di opacità non basta a dare profondità, perché una linea lontana
+              // larga quanto una vicina continua a leggersi come vicina.
+              const width = aerial ? style.width * (0.58 + 0.42 * nearness) : style.width;
               const alphaLevel = Math.max(0.12, Math.round(alphaMultiplier * 8) / 8);
-              const key = style.color + "|" + style.width.toFixed(2) + "|" + alphaLevel;
+              const key = style.color + "|" + width.toFixed(2) + "|" + alphaLevel;
               if (!buckets[key]) buckets[key] = [];
               buckets[key].push([start.x, start.y, end.x, end.y]);
             }
@@ -5336,9 +5366,28 @@
         ui.detailFoehn.textContent = formatFoehn(
           fieldValue("foehn", point.gx, point.gy)
         );
+        ui.detailElevation.textContent = terrainElevationText(selectedPoint);
 
         ui.readout.classList.add("visible");
         document.body.classList.add("readout-open");
+      }
+
+      // Quota del suolo nel punto scelto, letta dal DEM del rilievo. Spiega da
+      // sola buona parte degli scarti di temperatura fra costa e interno.
+      function terrainElevationText(point) {
+        if (!point || !map || typeof map.queryTerrainElevation !== "function") return "--";
+        const raw = map.queryTerrainElevation([point.lng, point.lat]);
+        // Il DEM è caricato come rilievo solo in vista 3D: senza terreno
+        // MapLibre restituisce null e non c'è quota da mostrare.
+        if (!Number.isFinite(raw)) return "con vista 3D";
+        // La quota arriva già moltiplicata per l'esagerazione verticale usata
+        // dal rendering: va divisa, altrimenti i rilievi risulterebbero alti
+        // quasi il doppio del vero.
+        const options = map.getTerrain && map.getTerrain();
+        const exaggeration = options && Number.isFinite(options.exaggeration) && options.exaggeration > 0
+          ? options.exaggeration
+          : 1;
+        return Math.round(raw / exaggeration) + " m";
       }
 
       function closeReadout() {
