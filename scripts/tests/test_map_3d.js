@@ -77,9 +77,12 @@ const style = html.match(/function particleStyle\([\s\S]*?\n {6}\}/);
 assert.ok(style, "particleStyle assente");
 assert.doesNotMatch(style[0], /rgba\((?!255,\s*255,\s*255)/,
   "le particelle sono tornate colorate");
-// Sopra un campo chiaro il bianco puro sparirebbe senza un alone.
-assert.match(html, /Alone scuro sotto il tratto bianco/,
-  "alone di leggibilita' delle particelle assente");
+// Nessun contorno scuro: su tratti sottili un alone piu' largo copre piu'
+// superficie del bianco e le particelle si leggono scure.
+assert.doesNotMatch(animate[0], /strokeStyle\s*=\s*"rgba\((?!255,\s*255,\s*255)/,
+  "le particelle hanno di nuovo un contorno scuro");
+assert.doesNotMatch(animate[0], /lineWidth\s*=\s*lineWidth\s*\+/,
+  "traccia allargata da alone attorno alle particelle");
 
 // Opzioni utente: densita' e lunghezza delle scie.
 assert.match(html, /id="particle-density-select"/, "selettore densita' assente");
