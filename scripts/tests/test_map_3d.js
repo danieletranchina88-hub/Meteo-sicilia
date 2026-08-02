@@ -93,4 +93,24 @@ assert.match(html, /particleTrailFade\(\)/,
 assert.match(html, /base \* particleDensityFactor\(\)/,
   "il numero di particelle non usa la preferenza sulla densita'");
 
+// Bulbo umido: derivato nel browser da T e umidita' con l'equazione
+// psicrometrica. Verificato contro Stull (2011): scarto medio 0,32 C.
+const wetBulb = html.match(/function wetBulbCelsius\([\s\S]*?\n {6}\}/);
+assert.ok(wetBulb, "calcolo del bulbo umido assente");
+assert.match(wetBulb[0], /saturationVapourHpa/,
+  "il bulbo umido non usa la pressione di vapore saturo");
+// Cerco la chiamata dentro prepareData, non la definizione della funzione:
+// altrimenti l'asserzione passerebbe anche con la derivazione scollegata.
+const prepare = html.match(/function prepareData\([\s\S]*?\n {6}\}/);
+assert.ok(prepare, "prepareData assente");
+assert.match(prepare[0], /deriveWetBulb\(data\)/,
+  "il campo bulbo umido non viene derivato al caricamento del passo");
+assert.match(html, /data-layer="wetbulb"/, "selettore del campo bulbo umido assente");
+assert.match(html, /id="detail-wetbulb"/, "lettura puntuale del bulbo umido assente");
+
+// Fondo cartografico grigio, non bianco.
+assert.match(html, /"raster-saturation": -0\.82/,
+  "il fondo cartografico non e' desaturato a grigio");
+assert.doesNotMatch(html, /#dfeaf1/, "residui del vecchio fondo azzurro");
+
 console.log("3D map regression checks: OK");

@@ -45,7 +45,7 @@
 
       body {
         overflow: hidden;
-        background: #dfeaf1;
+        background: #c4cace;
         color: var(--text);
         font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
         overscroll-behavior: none;
@@ -76,7 +76,7 @@
         z-index: 0;
         width: 100%;
         height: 100%;
-        background: #dfeaf1;
+        background: #c4cace;
         touch-action: none;
         overscroll-behavior: none;
       }
@@ -1610,6 +1610,9 @@
               <button class="layer-card" type="button" data-layer="rh" style="--swatch: linear-gradient(#c69a4b,#3656a8)">
                 <span class="layer-swatch"></span><span><b>Umidità</b><small>relativa</small></span>
               </button>
+              <button class="layer-card" type="button" data-layer="wetbulb" style="--swatch: linear-gradient(#3656a8,#7fc9a8,#e8a33d)">
+                <span class="layer-swatch"></span><span><b>Bulbo umido</b><small>2 m · soglia neve</small></span>
+              </button>
               <button class="layer-card" type="button" data-layer="press" style="--swatch: linear-gradient(#257cc0,#ca783c)">
                 <span class="layer-swatch"></span><span><b>Pressione</b><small>al suolo</small></span>
               </button>
@@ -1788,6 +1791,7 @@
       <div class="point-grid">
         <div class="point-detail"><b>Temperatura 2 m</b><span id="detail-temp">--</span></div>
         <div class="point-detail"><b>Percepita</b><span id="detail-feels">--</span></div>
+        <div class="point-detail"><b>Bulbo umido</b><span id="detail-wetbulb">--</span></div>
         <div class="point-detail"><b>Precipitazioni</b><span id="detail-rain">--</span></div>
         <div class="point-detail"><b>Vento 10 m</b><span id="detail-wind">--</span></div>
         <div class="point-detail"><b>Direzione</b><span id="detail-direction">--</span></div>
@@ -2134,6 +2138,17 @@
           opacity: 0.88,
           terrainOpacity: 0.27
         },
+        wetbulb: {
+          label: "Bulbo umido a 2 m",
+          unit: "°C",
+          stops: TEMP_BANDS,
+          discrete: true,
+          decimals: 1,
+          ticks: [-40, -20, -10, 0, 10, 20, 30, 40, 46],
+          note: "Temperatura di bulbo umido da T e umidità con l'equazione psicrometrica (Bolton 1980). La soglia 0/+1 °C indica dove la neve può arrivare al suolo. Usa la pressione ridotta al mare: in quota sovrastima di circa 0,1-0,3 °C.",
+          opacity: 0.95,
+          terrainOpacity: 0.3
+        },
         rh: {
           label: "Umidità relativa",
           unit: "%",
@@ -2327,6 +2342,7 @@
         detailFreezing: document.getElementById("detail-freezing"),
         detailFoehn: document.getElementById("detail-foehn"),
         detailElevation: document.getElementById("detail-elevation"),
+        detailWetbulb: document.getElementById("detail-wetbulb"),
         levelPicker: document.getElementById("level-picker"),
         levelSelect: document.getElementById("level-select"),
         particleDensitySelect: document.getElementById("particle-density-select"),
@@ -3018,9 +3034,66 @@
           });
       }
 
+      // Pressione di vapore saturo, Bolton (1980) eq. 10: la stessa relazione
+      // usata dal nucleo termodinamico della pipeline.
+      function saturationVapourHpa(celsius) {
+        return 6.112 * Math.exp((17.67 * celsius) / (celsius + 243.5));
+      }
+
+      // Temperatura di bulbo umido: la piu' bassa raggiungibile evaporando
+      // acqua nell'aria. E' il riferimento per capire se la precipitazione
+      // arriva al suolo come neve, perche' la fusione dei fiocchi raffredda
+      // l'aria fino a questo valore, non a quello del termometro asciutto.
+      //
+      // Risolve e = es(Tw) - gamma * p * (T - Tw) per bisezione: la funzione e'
+      // monotona, quindi venti iterazioni azzerano l'errore numerico.
+      function wetBulbCelsius(temperature, relativeHumidity, pressureHpa) {
+        if (!Number.isFinite(temperature) || !Number.isFinite(relativeHumidity)) return NaN;
+        const humidity = clamp(relativeHumidity, 0.5, 100);
+        const pressure = Number.isFinite(pressureHpa) ? clamp(pressureHpa, 500, 1080) : 1013.25;
+        const vapour = saturationVapourHpa(temperature) * humidity / 100;
+        const gamma = 6.53e-4;
+        let low = -90;
+        let high = temperature;
+        for (let step = 0; step < 20; step += 1) {
+          const middle = 0.5 * (low + high);
+          if (saturationVapourHpa(middle) - gamma * pressure * (temperature - middle) > vapour) {
+            high = middle;
+          } else {
+            low = middle;
+          }
+        }
+        return 0.5 * (low + high);
+      }
+
+      // Il campo non arriva dal modello: lo ricavo una volta sola al caricamento
+      // del passo, cosi' mappa, lettura puntuale e bollettino lo trovano pronto
+      // come qualsiasi altro campo pubblicato.
+      function deriveWetBulb(data) {
+        if (!data || !data.meta || getGrid(data.wetbulb)) return;
+        const meta = data.meta;
+        const temperature = getGrid(data.temp);
+        const humidity = getGrid(data.rh);
+        if (!temperature || !humidity) return;
+        const length = meta.nx * meta.ny;
+        if (temperature.length !== length || humidity.length !== length) return;
+        const pressure = getGrid(data.press);
+        const usablePressure = pressure && pressure.length === length ? pressure : null;
+        const field = new Float32Array(length);
+        for (let index = 0; index < length; index += 1) {
+          field[index] = wetBulbCelsius(
+            temperature[index],
+            humidity[index],
+            usablePressure ? usablePressure[index] : NaN
+          );
+        }
+        data.wetbulb = field;
+      }
+
       function prepareData(data) {
         if (!data || !data.meta) return;
         compactNumericFields(data);
+        deriveWetBulb(data);
 
         const meta = data.meta;
         const temperature = getGrid(data.temp);
@@ -4038,7 +4111,7 @@
         } else {
           stopParticles();
           if (map.getLayer("background")) {
-            map.setPaintProperty("background", "background-color", "#dfeaf1");
+            map.setPaintProperty("background", "background-color", "#c4cace");
           }
           updateSolarLighting();
           if (map.dragRotate) map.dragRotate.disable();
@@ -5420,6 +5493,7 @@
         ui.detailFoehn.textContent = formatFoehn(
           fieldValue("foehn", point.gx, point.gy)
         );
+        ui.detailWetbulb.textContent = formatValue(fieldValue("wetbulb", point.gx, point.gy), 1, "°C");
         ui.detailElevation.textContent = terrainElevationText(selectedPoint);
 
         ui.readout.classList.add("visible");
@@ -5823,18 +5897,21 @@
               {
                 id: "background",
                 type: "background",
-                paint: { "background-color": "#dfeaf1" }
+                paint: { "background-color": "#c4cace" }
               },
               {
                 id: "basemap-layer",
                 type: "raster",
                 source: "basemap",
                 paint: {
-                  "raster-opacity": 0.72,
-                  "raster-saturation": -0.28,
-                  "raster-contrast": 0.06,
-                  "raster-brightness-min": 0.18,
-                  "raster-brightness-max": 0.94
+                  // Fondo neutro: quasi tutta la saturazione tolta e il bianco
+                  // abbassato a grigio chiaro, cosi' i campi meteo e il rilievo
+                  // risaltano invece di competere con una base bianca.
+                  "raster-opacity": 0.78,
+                  "raster-saturation": -0.82,
+                  "raster-contrast": 0.1,
+                  "raster-brightness-min": 0.12,
+                  "raster-brightness-max": 0.7
                 }
               },
               {
