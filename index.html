@@ -2395,6 +2395,10 @@
       let particleTarget = 420;
       let particleDensity = "medium";
       let particleTrail = "medium";
+      let particlePhase = 0;
+      let particleStride = 2;
+      let particleWorkAverage = 0;
+      let strideAdjustedAt = 0;
       let currentTerrainExaggeration = 0;
       let rasterPublishToken = 0;
       let rasterObjectUrl = "";
@@ -4753,6 +4757,18 @@
             ))
           : particleTarget;
 
+        // In 3D ogni proiezione interroga il modello di elevazione, ed è il
+        // costo che domina il frame. Invece di diradare le particelle, ne
+        // aggiorno solo una parte per frame a rotazione: la densità sullo
+        // schermo resta quella scelta, ma le interrogazioni al DEM si
+        // dividono per il passo. Ogni particella avanza con un dt
+        // proporzionalmente più lungo, quindi la velocità non cambia; le scie
+        // già disegnate restano visibili grazie alla dissolvenza.
+        const stride = aerial ? particleStride : 1;
+        particlePhase = (particlePhase + 1) % stride;
+        const phase = particlePhase;
+        const strideDt = dt * stride;
+
         while (particles.length < effectiveTarget) particles.push(createParticle(true));
         if (particles.length > effectiveTarget) particles.length = effectiveTarget;
 
@@ -4767,8 +4783,10 @@
         const meta = wind.meta;
         const visualScale = 6900 * clamp(Math.pow(2, 6 - map.getZoom()), 0.22, 3.4);
         const buckets = {};
+        const workStart = performance.now();
 
-        particles.forEach(function (particle) {
+        particles.forEach(function (particle, particleIndex) {
+          if (stride > 1 && particleIndex % stride !== phase) return;
           if (particle.age > particle.maxAge) respawnParticle(particle, false);
 
           const gx = (particle.lng - meta.lo1) / meta.dx;
@@ -4798,8 +4816,8 @@
             ? { x: particle.px, y: particle.py }
             : projectParticle(particle.lng, particle.lat);
           const cosineLatitude = Math.max(Math.cos(particle.lat * Math.PI / 180), 0.25);
-          particle.lng += (u * dt * visualScale) / (111320 * cosineLatitude);
-          particle.lat += (v * dt * visualScale) / 111320;
+          particle.lng += (u * strideDt * visualScale) / (111320 * cosineLatitude);
+          particle.lat += (v * strideDt * visualScale) / 111320;
           const end = projectParticle(particle.lng, particle.lat);
           if (!start || !end || !Number.isFinite(end.x) || !Number.isFinite(end.y)) {
             particle.projected = false;
@@ -4855,7 +4873,7 @@
             }
           }
 
-          particle.age += 1 + clamp(speedKmh / 110, 0, 1.2);
+          particle.age += (1 + clamp(speedKmh / 110, 0, 1.2)) * stride;
         });
 
         Object.keys(buckets).forEach(function (key) {
@@ -4880,6 +4898,29 @@
         drawingContext.globalAlpha = 1;
 
         drawingContext.restore();
+
+        // Quanto costa davvero questo ciclo su questo dispositivo. Non posso
+        // saperlo in anticipo: un telefono lento e uno recente differiscono di
+        // parecchie volte, quindi lo misuro e regolo il passo di conseguenza.
+        // Media mobile per non inseguire il singolo frame anomalo.
+        const workMs = performance.now() - workStart;
+        particleWorkAverage = particleWorkAverage
+          ? particleWorkAverage * 0.9 + workMs * 0.1
+          : workMs;
+
+        if (aerial && timestamp - strideAdjustedAt > 1200) {
+          // Mi tengo entro meta' del tempo disponibile per frame: il resto
+          // serve a MapLibre per disegnare il terreno.
+          const budget = frameInterval * 0.5;
+          if (particleWorkAverage > budget && particleStride < 4) {
+            particleStride += 1;
+            strideAdjustedAt = timestamp;
+          } else if (particleWorkAverage < budget * 0.45 && particleStride > 2) {
+            particleStride -= 1;
+            strideAdjustedAt = timestamp;
+          }
+        }
+
         particleFrame = requestAnimationFrame(animateParticles);
       }
 

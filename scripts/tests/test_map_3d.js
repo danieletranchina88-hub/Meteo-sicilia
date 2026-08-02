@@ -116,4 +116,20 @@ assert.match(html, /"raster-saturation": -0\.82/,
   "il fondo cartografico non e' desaturato a grigio");
 assert.doesNotMatch(html, /#dfeaf1/, "residui del vecchio fondo azzurro");
 
+// In 3D ogni proiezione interroga il DEM. Le particelle si aggiornano a
+// rotazione, un sottoinsieme per frame, e il passo si adatta al costo
+// misurato sul dispositivo: la densita' a schermo resta quella scelta.
+assert.match(animate[0], /particleIndex % stride !== phase/,
+  "aggiornamento a rotazione delle particelle assente");
+assert.match(animate[0], /const strideDt = dt \* stride;/,
+  "il passo temporale non compensa la rotazione: la velocita' del vento cambierebbe");
+assert.match(animate[0], /particle\.lng \+= \(u \* strideDt/,
+  "l'avanzamento non usa il passo temporale compensato");
+assert.match(animate[0], /particleWorkAverage/,
+  "misura del costo del ciclo assente");
+assert.match(animate[0], /particleStride \+= 1/,
+  "il passo non aumenta sui dispositivi lenti");
+assert.match(animate[0], /particleStride -= 1/,
+  "il passo non torna a diminuire quando c'e' margine");
+
 console.log("3D map regression checks: OK");
