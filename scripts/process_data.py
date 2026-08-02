@@ -812,15 +812,34 @@ def process_data():
     for idx, filename in enumerate(file_list):
         print(f"   [{idx+1:02d}] DL {filename}...", end=" ", flush=True)
 
-        try:
-            with requests.get(f"{API_DOWNLOAD_URL}/{filename}", stream=True, timeout=60) as r:
-                r.raise_for_status()
-                with open(TEMP_FILE, 'wb') as f:
-                    for chunk in r.iter_content(chunk_size=1024 * 1024):
-                        f.write(chunk)
-            print("OK", end=" ", flush=True)
-        except Exception as e:
-            print(f"KO ({e})", flush=True)
+        # Un singolo tentativo rendeva l'intero aggiornamento ostaggio di una
+        # disconnessione passeggera di MeteoHub: se la lista contiene un solo
+        # file, un "read timed out" faceva terminare la pipeline senza dati.
+        # Ritento la stessa richiesta, con attesa crescente. La lettura ha un
+        # limite piu' largo perche' questi GRIB pesano decine di megabyte e il
+        # timeout scatta sull'inattivita', non sulla durata totale.
+        downloaded = False
+        for attempt in range(1, 4):
+            try:
+                with requests.get(
+                    f"{API_DOWNLOAD_URL}/{filename}",
+                    stream=True,
+                    timeout=(30, 180),
+                ) as r:
+                    r.raise_for_status()
+                    with open(TEMP_FILE, 'wb') as f:
+                        for chunk in r.iter_content(chunk_size=1024 * 1024):
+                            f.write(chunk)
+                downloaded = True
+                print("OK", end=" ", flush=True)
+                break
+            except Exception as e:
+                if attempt == 3:
+                    print(f"KO ({e})", flush=True)
+                else:
+                    print(f"retry {attempt}/3 ({e})...", end=" ", flush=True)
+                    time.sleep(attempt * 5)
+        if not downloaded:
             continue
 
         if os.path.exists(f"{TEMP_FILE}.idx"):
