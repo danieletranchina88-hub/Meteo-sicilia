@@ -1685,6 +1685,26 @@
                 <span><b>Fronti sinottici stimati</b><small id="front-source-label">ICON-2I · fisica 850/925 hPa</small></span><span class="switch"></span>
               </button>
             </div>
+            <div id="particle-density-picker" class="level-picker">
+              <label for="particle-density-select">Particelle · densità
+                <small>più densa riempie meglio, ma pesa di più</small>
+              </label>
+              <select id="particle-density-select" aria-label="Densità delle particelle di vento">
+                <option value="light">Leggera</option>
+                <option value="medium" selected>Media</option>
+                <option value="dense">Densa</option>
+              </select>
+            </div>
+            <div id="particle-trail-picker" class="level-picker">
+              <label for="particle-trail-select">Particelle · scie
+                <small>quanto restano visibili i tratti</small>
+              </label>
+              <select id="particle-trail-select" aria-label="Lunghezza delle scie delle particelle">
+                <option value="short">Corte</option>
+                <option value="medium" selected>Medie</option>
+                <option value="long">Lunghe</option>
+              </select>
+            </div>
             <details class="front-guide">
               <summary>Il passaggio di un fronte: cosa aspettarsi</summary>
               <p class="front-guide-intro">Un fronte è il confine tra due masse d'aria di densità diversa. Il suo passaggio segue una sequenza tipica:</p>
@@ -2308,7 +2328,9 @@
         detailFoehn: document.getElementById("detail-foehn"),
         detailElevation: document.getElementById("detail-elevation"),
         levelPicker: document.getElementById("level-picker"),
-        levelSelect: document.getElementById("level-select")
+        levelSelect: document.getElementById("level-select"),
+        particleDensitySelect: document.getElementById("particle-density-select"),
+        particleTrailSelect: document.getElementById("particle-trail-select")
       };
 
       const rasterCanvas = document.createElement("canvas");
@@ -2355,6 +2377,8 @@
       let lastParticleTime = performance.now();
       let particles = [];
       let particleTarget = 420;
+      let particleDensity = "medium";
+      let particleTrail = "medium";
       let currentTerrainExaggeration = 0;
       let rasterPublishToken = 0;
       let rasterObjectUrl = "";
@@ -4507,10 +4531,25 @@
         particleContext.clearRect(0, 0, window.innerWidth, window.innerHeight);
       }
 
+      // Preferenze delle particelle. La densità moltiplica il numero calcolato
+      // per lo schermo; le scie regolano quanto lentamente il tratto svanisce
+      // (valore più alto = coda più lunga, aspetto da texture di flusso).
+      const PARTICLE_DENSITY_FACTOR = { light: 0.55, medium: 1, dense: 1.6 };
+      const PARTICLE_TRAIL_FADE = { short: 0.86, medium: 0.93, long: 0.965 };
+
+      function particleDensityFactor() {
+        return PARTICLE_DENSITY_FACTOR[particleDensity] || 1;
+      }
+
+      function particleTrailFade() {
+        return PARTICLE_TRAIL_FADE[particleTrail] || PARTICLE_CONFIG.fade;
+      }
+
       function calculateParticleTarget() {
         const area = Math.max(window.innerWidth * window.innerHeight, 1);
         const mobile = window.innerWidth < 900;
-        particleTarget = Math.round(clamp(area / (mobile ? 820 : 480), mobile ? 520 : 1000, mobile ? 1500 : 3400));
+        const base = clamp(area / (mobile ? 820 : 480), mobile ? 520 : 1000, mobile ? 1500 : 3400);
+        particleTarget = Math.round(base * particleDensityFactor());
       }
 
       function resizeCanvases() {
@@ -4571,14 +4610,17 @@
         return map.project([longitude, latitude]);
       }
 
+      // Tratto bianco: il colore per fascia di velocità competeva con la scala
+      // cromatica del campo sotto (temperatura, pioggia), che è l'informazione
+      // principale. La velocità resta leggibile da spessore e luminosità.
       function particleStyle(speed) {
-        if (speed < 10) return { color: "rgba(30,103,159,0.68)", width: 0.7 };
-        if (speed < 20) return { color: "rgba(18,161,200,0.74)", width: 0.85 };
-        if (speed < 35) return { color: "rgba(12,174,128,0.8)", width: 1 };
-        if (speed < 50) return { color: "rgba(197,180,31,0.88)", width: 1.2 };
-        if (speed < 70) return { color: "rgba(240,132,24,0.92)", width: 1.45 };
-        if (speed < 90) return { color: "rgba(219,59,41,0.95)", width: 1.7 };
-        return { color: "rgba(168,41,137,0.98)", width: 1.9 };
+        if (speed < 10) return { color: "rgba(255,255,255,0.44)", width: 0.7 };
+        if (speed < 20) return { color: "rgba(255,255,255,0.54)", width: 0.85 };
+        if (speed < 35) return { color: "rgba(255,255,255,0.64)", width: 1 };
+        if (speed < 50) return { color: "rgba(255,255,255,0.74)", width: 1.2 };
+        if (speed < 70) return { color: "rgba(255,255,255,0.83)", width: 1.45 };
+        if (speed < 90) return { color: "rgba(255,255,255,0.91)", width: 1.7 };
+        return { color: "rgba(255,255,255,0.98)", width: 1.9 };
       }
 
       function startParticles() {
@@ -4632,7 +4674,10 @@
         const aerial = pitch > 4;
         const mobileParticles = window.innerWidth < 900;
         const effectiveTarget = aerial
-          ? Math.round(Math.max(mobileParticles ? 420 : 800, particleTarget * 0.72))
+          ? Math.round(Math.max(
+              (mobileParticles ? 420 : 800) * particleDensityFactor(),
+              particleTarget * 0.72
+            ))
           : particleTarget;
 
         while (particles.length < effectiveTarget) particles.push(createParticle(true));
@@ -4640,7 +4685,7 @@
 
         drawingContext.save();
         drawingContext.globalCompositeOperation = "destination-in";
-        drawingContext.fillStyle = "rgba(0,0,0," + PARTICLE_CONFIG.fade + ")";
+        drawingContext.fillStyle = "rgba(0,0,0," + particleTrailFade() + ")";
         drawingContext.fillRect(0, 0, drawingWidth, drawingHeight);
         drawingContext.globalCompositeOperation = "source-over";
         drawingContext.lineCap = "round";
@@ -4742,16 +4787,25 @@
 
         Object.keys(buckets).forEach(function (key) {
           const pieces = key.split("|");
+          const lineWidth = Number(pieces[1]);
           drawingContext.globalAlpha = Number(pieces[2]);
           drawingContext.beginPath();
-          drawingContext.strokeStyle = pieces[0];
-          drawingContext.lineWidth = Number(pieces[1]);
 
           buckets[key].forEach(function (line) {
             drawingContext.moveTo(line[0], line[1]);
             drawingContext.lineTo(line[2], line[3]);
           });
 
+          // Alone scuro sotto il tratto bianco: sopra un campo chiaro (o il
+          // terreno grigio in 3D) il bianco puro sparirebbe. Il percorso è già
+          // costruito, quindi il costo è una passata per gruppo, non per
+          // particella.
+          drawingContext.strokeStyle = "rgba(10,18,28,0.3)";
+          drawingContext.lineWidth = lineWidth + 0.9;
+          drawingContext.stroke();
+
+          drawingContext.strokeStyle = pieces[0];
+          drawingContext.lineWidth = lineWidth;
           drawingContext.stroke();
         });
         drawingContext.globalAlpha = 1;
@@ -6105,6 +6159,21 @@
 
       ui.levelSelect.addEventListener("change", function () {
         setLevel(ui.levelSelect.value);
+      });
+
+      ui.particleDensitySelect.addEventListener("change", function () {
+        particleDensity = ui.particleDensitySelect.value;
+        calculateParticleTarget();
+        // Azzero cosi' il nuovo numero si applica subito invece di
+        // arrivare a poco a poco con i ricambi naturali.
+        resetParticles();
+      });
+
+      ui.particleTrailSelect.addEventListener("change", function () {
+        particleTrail = ui.particleTrailSelect.value;
+        // Le scie gia' disegnate hanno la vecchia coda: ripartendo da
+        // pulito il cambio si vede immediatamente.
+        resetParticles();
       });
 
       document.querySelectorAll("[data-toggle]").forEach(function (button) {

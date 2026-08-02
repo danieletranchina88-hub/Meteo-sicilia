@@ -71,4 +71,26 @@ assert.match(elevation[0], /queryTerrainElevation/,
 assert.match(elevation[0], /raw \/ exaggeration/,
   "la quota non viene divisa per l'esagerazione verticale");
 
+// Le particelle sono bianche: il colore per velocita' competeva con la scala
+// cromatica del campo sotto. La velocita' resta leggibile da spessore e alfa.
+const style = html.match(/function particleStyle\([\s\S]*?\n {6}\}/);
+assert.ok(style, "particleStyle assente");
+assert.doesNotMatch(style[0], /rgba\((?!255,\s*255,\s*255)/,
+  "le particelle sono tornate colorate");
+// Sopra un campo chiaro il bianco puro sparirebbe senza un alone.
+assert.match(html, /Alone scuro sotto il tratto bianco/,
+  "alone di leggibilita' delle particelle assente");
+
+// Opzioni utente: densita' e lunghezza delle scie.
+assert.match(html, /id="particle-density-select"/, "selettore densita' assente");
+assert.match(html, /id="particle-trail-select"/, "selettore scie assente");
+assert.match(html, /PARTICLE_DENSITY_FACTOR\s*=\s*\{[^}]*light[^}]*medium[^}]*dense/,
+  "fattori di densita' incompleti");
+assert.match(html, /PARTICLE_TRAIL_FADE\s*=\s*\{[^}]*short[^}]*medium[^}]*long/,
+  "fattori delle scie incompleti");
+assert.match(html, /particleTrailFade\(\)/,
+  "la dissolvenza non usa la preferenza sulle scie");
+assert.match(html, /base \* particleDensityFactor\(\)/,
+  "il numero di particelle non usa la preferenza sulla densita'");
+
 console.log("3D map regression checks: OK");
