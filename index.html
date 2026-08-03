@@ -1742,6 +1742,9 @@
               <button class="toggle-row active" type="button" data-toggle="terrain" aria-pressed="true">
                 <span><b>Rilievo topografico</b><small>ombreggiatura del terreno</small></span><span class="switch"></span>
               </button>
+              <button class="toggle-row" type="button" data-toggle="satellite" aria-pressed="false">
+                <span><b>Terreno reale</b><small>ortofoto satellitare al posto della carta</small></span><span class="switch"></span>
+              </button>
               <button class="toggle-row" type="button" data-toggle="threed" aria-pressed="false">
                 <span><b>Vista 3D</b><small>terreno in rilievo, mappa inclinabile</small></span><span class="switch"></span>
               </button>
@@ -2399,6 +2402,7 @@
       let showFronts = false;
       let showTerrain = true;
       let show3D = false;
+      let showSatellite = false;
       let showGraticule = false;
       let isMapMoving = false;
       let selectedPoint = null;
@@ -3587,6 +3591,7 @@
           fusion: showFusion,
           fronts: showFronts,
           terrain: showTerrain,
+          satellite: showSatellite,
           threed: show3D,
           graticule: showGraticule,
           raw: useNearestCell
@@ -3764,6 +3769,9 @@
           showTerrain = !showTerrain;
           updateMapPresentation();
           renderWeather();
+        } else if (name === "satellite") {
+          showSatellite = !showSatellite;
+          updateSatelliteBase();
         } else if (name === "threed") {
           show3D = !show3D;
           updateTerrain3D();
@@ -4095,6 +4103,42 @@
         if (!force && Math.abs(exaggeration - currentTerrainExaggeration) < 0.035) return;
         currentTerrainExaggeration = exaggeration;
         map.setTerrain({ source: "terrain-dem", exaggeration: exaggeration });
+      }
+
+      // Base fotorealistica. Sull'ortofoto i toponimi scuri della carta
+      // sparirebbero: passo a testo bianco con contorno scuro, e li riporto ai
+      // colori originali quando si torna alla carta.
+      function updateSatelliteBase() {
+        if (!mapLoaded || !map) return;
+        if (map.getLayer("satellite-layer")) {
+          map.setLayoutProperty(
+            "satellite-layer", "visibility", showSatellite ? "visible" : "none"
+          );
+        }
+        if (map.getLayer("basemap-layer")) {
+          map.setLayoutProperty(
+            "basemap-layer", "visibility", showSatellite ? "none" : "visible"
+          );
+        }
+        CARTO_LABEL_LAYERS.forEach(function (definition) {
+          if (!map.getLayer(definition.id)) return;
+          const paint = definition.paint || {};
+          if (showSatellite) {
+            map.setPaintProperty(definition.id, "text-color", "#ffffff");
+            map.setPaintProperty(definition.id, "text-halo-color", "rgba(0,0,0,0.8)");
+            map.setPaintProperty(definition.id, "text-halo-width", 1.4);
+          } else {
+            if (paint["text-color"] !== undefined) {
+              map.setPaintProperty(definition.id, "text-color", paint["text-color"]);
+            }
+            if (paint["text-halo-color"] !== undefined) {
+              map.setPaintProperty(definition.id, "text-halo-color", paint["text-halo-color"]);
+            }
+            if (paint["text-halo-width"] !== undefined) {
+              map.setPaintProperty(definition.id, "text-halo-width", paint["text-halo-width"]);
+            }
+          }
+        });
       }
 
       function updateTerrain3D() {
@@ -6025,6 +6069,15 @@
                 tileSize: 256,
                 attribution: "World Hillshade © Esri"
               },
+              satellite: {
+                type: "raster",
+                tiles: [
+                  "https://services.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}"
+                ],
+                tileSize: 256,
+                maxzoom: 18,
+                attribution: "World Imagery © Esri, Maxar, Earthstar Geographics"
+              },
               "terrain-dem": {
                 type: "raster-dem",
                 tiles: [
@@ -6056,6 +6109,16 @@
                   "raster-brightness-min": 0.12,
                   "raster-brightness-max": 0.7
                 }
+              },
+              {
+                // Base fotorealistica, spenta di default: il grigio resta
+                // preferibile per leggere i campi meteo. Accesa, il rilievo 3D
+                // diventa un paesaggio vero invece di una carta in rilievo.
+                id: "satellite-layer",
+                type: "raster",
+                source: "satellite",
+                layout: { visibility: "none" },
+                paint: { "raster-opacity": 1, "raster-fade-duration": 0 }
               },
               {
                 id: "terrain-base",
