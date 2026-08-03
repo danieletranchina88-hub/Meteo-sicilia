@@ -169,4 +169,11 @@ assert.match(html, /const isoElevated = Boolean\(isoTerrain\) && show3D;/,
 assert.match(html, /projectParticle\(\s*coordinates\[index\]\[0\], coordinates\[index\]\[1\], height\s*\)/,
   "le isoipse non usano la proiezione con quota");
 
+// Sull'ortofoto il campo si alleggerisce zoomando, per lasciar riconoscere il
+// terreno sotto. Espressione legata allo zoom: valutata a ogni fotogramma,
+// quindi segue la pinch invece di scattare a fine gesto.
+assert.match(html, /showSatellite\s*\?\s*\[\s*\n\s*"interpolate", \["linear"\], \["zoom"\]/,
+  "il campo non si alleggerisce zoomando sull'ortofoto");
+assert.match(html, /id: "satellite-layer"/, "base fotorealistica assente");
+
 console.log("3D map regression checks: OK");

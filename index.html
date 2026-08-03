@@ -3804,7 +3804,24 @@
         // del chiaroscuro senza alterare in modo apprezzabile i colori della
         // legenda. I layer categorici di pericolo restano più coprenti.
         const terrainBlend = show3D ? (info.categorical ? 0.99 : 0.95) : 1;
-        map.setPaintProperty("weather-layer", "raster-opacity", info.opacity * terrainBlend);
+        const baseOpacity = info.opacity * terrainBlend;
+        // Sull'ortofoto il velo del campo si alleggerisce avvicinandosi. A scala
+        // sinottica il colore e' l'informazione, quindi resta pieno; zoomando su
+        // una zona si vuole invece riconoscere il terreno sotto, e un campo che
+        // varia poco su pochi chilometri non perde nulla a farsi trasparente.
+        // Espressione legata allo zoom: MapLibre la valuta a ogni fotogramma,
+        // quindi la transizione segue la pinch invece di scattare a fine gesto.
+        map.setPaintProperty(
+          "weather-layer",
+          "raster-opacity",
+          showSatellite
+            ? [
+                "interpolate", ["linear"], ["zoom"],
+                7, baseOpacity,
+                10.5, Math.max(baseOpacity * (info.categorical ? 0.55 : 0.4), 0.26)
+              ]
+            : baseOpacity
+        );
 
         if (map.getLayer("terrain-detail")) {
           // Il volume vero del DEM richiede meno ombra del vecchio falso 3D:
@@ -4139,6 +4156,8 @@
             }
           }
         });
+        // Il velo del campo dipende dalla base scelta: lo riapplico subito.
+        renderWeather();
       }
 
       function updateTerrain3D() {
@@ -5846,7 +5865,12 @@
               type: "raster",
               source: "radar",
               layout: { visibility: "none" },
-              paint: { "raster-opacity": 0.72, "raster-fade-duration": 0 }
+              paint: {
+                "raster-opacity": [
+                  "interpolate", ["linear"], ["zoom"], 7, 0.72, 10.5, 0.42
+                ],
+                "raster-fade-duration": 0
+              }
             },
             firstLabelLayerId()
           );
