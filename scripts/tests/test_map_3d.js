@@ -27,11 +27,23 @@ assert.match(html, /rasterCanvas\.toBlob\(/,
   "pubblicazione raster asincrona assente");
 
 const projectParticle = html.match(
-  /function projectParticle\([\s\S]*?\n\s*\}/
+  /function projectParticle\([\s\S]*?\n {6}\}/
 );
 assert.ok(projectParticle, "proiezione particelle assente");
-assert.match(projectParticle[0], /map\.project\(\[longitude, latitude\]\)/,
-  "le particelle non usano la proiezione pubblica compatibile col terreno");
+// Le particelle si proiettano con la matrice della scena, ottenuta da un layer
+// custom: evita di interrogare il modello di elevazione a ogni punto. Verificata
+// identica a map.project (0,000000 px) su nove configurazioni di camera.
+assert.match(projectParticle[0], /if \(particleMatrix && window\.maplibregl/,
+  "proiezione tramite la matrice della scena assente");
+assert.match(projectParticle[0], /MercatorCoordinate\.fromLngLat\(/,
+  "la quota non entra nella proiezione: il vento in quota resterebbe al suolo");
+// Il ripiego pubblico deve restare: se su un dispositivo il layer custom non
+// venisse mai disegnato, la matrice resta nulla e si torna a map.project
+// invece di lasciare le particelle ferme.
+assert.match(projectParticle[0], /return map\.project\(\[longitude, latitude\]\);/,
+  "manca il ripiego sulla proiezione pubblica");
+assert.match(html, /id: "wind-projection-probe"/,
+  "layer custom che fornisce la matrice assente");
 
 const startParticles = html.match(
   /function startParticles\([\s\S]*?\n\s*\}/
@@ -131,5 +143,23 @@ assert.match(animate[0], /particleStride \+= 1/,
   "il passo non aumenta sui dispositivi lenti");
 assert.match(animate[0], /particleStride -= 1/,
   "il passo non torna a diminuire quando c'e' margine");
+
+// Vento in quota: in 3D le particelle salgono all'altezza del livello barico,
+// con la stessa esagerazione verticale del terreno per restare coerenti.
+assert.match(html, /LEVEL_ALTITUDE\s*=\s*\{\s*"925"[^}]*"850"/,
+  "quote dei livelli barici assenti");
+assert.match(animate[0], /levelAltitude = particleLevelAltitude\(\) \* verticalScale/,
+  "la quota del vento non segue l'esagerazione verticale del terreno");
+assert.match(animate[0], /queryTerrainElevation/,
+  "la quota del suolo non viene letta per posare le particelle sul rilievo");
+assert.match(animate[0], /particle\.groundAt/,
+  "la quota del suolo non viene messa in cache: tornerebbe il costo per frame");
+
+// Etichette vettoriali: quelle raster si stiravano sul terreno inclinato.
+assert.match(html, /CARTO_LABEL_LAYERS/, "livelli di etichetta vettoriali assenti");
+assert.match(html, /tiles\.basemaps\.cartocdn\.com\/fonts/,
+  "font delle etichette vettoriali non configurati");
+assert.doesNotMatch(html, /id: "labels-layer"/,
+  "le etichette raster, che si stirano in 3D, sono tornate");
 
 console.log("3D map regression checks: OK");
