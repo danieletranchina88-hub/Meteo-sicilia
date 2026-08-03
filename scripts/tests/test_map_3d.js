@@ -162,4 +162,11 @@ assert.match(html, /tiles\.basemaps\.cartocdn\.com\/fonts/,
 assert.doesNotMatch(html, /id: "labels-layer"/,
   "le etichette raster, che si stirano in 3D, sono tornate");
 
+// Le isoipse a 500 hPa in 3D vanno alla loro quota vera: e' una superficie
+// che sta davvero a circa 5,5 km e che si avvalla nelle saccature.
+assert.match(html, /const isoElevated = Boolean\(isoTerrain\) && show3D;/,
+  "le isoipse non salgono alla loro quota in 3D");
+assert.match(html, /projectParticle\(\s*coordinates\[index\]\[0\], coordinates\[index\]\[1\], height\s*\)/,
+  "le isoipse non usano la proiezione con quota");
+
 console.log("3D map regression checks: OK");

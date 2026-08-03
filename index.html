@@ -5118,12 +5118,34 @@
         if (showIsohypses) {
           if (!currentData.isohypses) buildGeopotentialProducts(currentData);
           const isoFeatures = currentData.isohypses ? currentData.isohypses.features : [];
+          // In 3D le isoipse smettono di essere linee appoggiate al suolo e
+          // vanno alla loro quota vera. La superficie a 500 hPa sta davvero
+          // intorno ai 5,5 km e si avvalla nelle saccature, si gonfia nei
+          // promontori: e' l'unico modo corretto di mostrarla, e la terza
+          // dimensione qui porta informazione invece che decorazione.
+          // Applico l'esagerazione verticale del terreno per restare in
+          // proporzione con i rilievi sotto.
+          const isoTerrain = map.getTerrain && map.getTerrain();
+          const isoScale = isoTerrain && Number.isFinite(isoTerrain.exaggeration)
+            ? isoTerrain.exaggeration
+            : 1;
+          const isoElevated = Boolean(isoTerrain) && show3D;
           isoFeatures.forEach(function (feature, featureIndex) {
             const coordinates = feature.geometry && feature.geometry.coordinates;
             if (!coordinates || coordinates.length < 2) return;
-            const points = coordinates.map(function (coordinate) {
-              return map.project(coordinate);
-            });
+            const height = isoElevated
+              ? (Number(feature.properties && feature.properties.value) || 0) * isoScale
+              : 0;
+            const points = [];
+            for (let index = 0; index < coordinates.length; index += 1) {
+              const projected = projectParticle(
+                coordinates[index][0], coordinates[index][1], height
+              );
+              // Un punto dietro la camera non si proietta: salto l'isoipsa
+              // intera invece di chiudere il tracciato con una linea storta.
+              if (!projected) return;
+              points.push(projected);
+            }
             const major = Boolean(feature.properties && feature.properties.major);
 
             vectorContext.beginPath();
