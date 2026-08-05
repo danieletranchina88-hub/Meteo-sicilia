@@ -236,4 +236,14 @@ assert.match(html, /vectorElevated \? 1\.55 : 1/,
 assert.match(html, /const length = clamp\(9 \+ speed \* 0\.13/,
   "la lunghezza delle frecce varia troppo per un campo fitto");
 
+// Fondo scuro: il rilievo va invertito, altrimenti le ombre non hanno contro
+// cosa staccare e le montagne spariscono. Su scuro sono i versanti illuminati
+// ad accendersi, che e' anche piu' fedele alla luce solare reale.
+assert.match(html, /const onDark = showDarkBase && !showSatellite;/,
+  "il rilievo non distingue il fondo scuro");
+assert.match(html, /onDark\s*\n?\s*\? \(0\.16 \+ 0\.42 \* direct\)/,
+  "su fondo scuro i versanti illuminati non si accendono");
+assert.match(html, /data-toggle="darkbase"/, "interruttore fondo scuro assente");
+assert.match(html, /id: "basemap-dark-layer"/, "base scura assente");
+
 console.log("3D map regression checks: OK");

@@ -1758,6 +1758,9 @@
               <button class="toggle-row active" type="button" data-toggle="terrain" aria-pressed="true">
                 <span><b>Rilievo topografico</b><small>ombreggiatura del terreno</small></span><span class="switch"></span>
               </button>
+              <button class="toggle-row" type="button" data-toggle="darkbase" aria-pressed="false">
+                <span><b>Fondo scuro</b><small>colori più vividi · rilievo illuminato dal Sole</small></span><span class="switch"></span>
+              </button>
               <button class="toggle-row" type="button" data-toggle="satellite" aria-pressed="false">
                 <span><b>Terreno reale</b><small>ortofoto satellitare al posto della carta</small></span><span class="switch"></span>
               </button>
@@ -2420,6 +2423,7 @@
       let showTerrain = true;
       let show3D = false;
       let showSatellite = false;
+      let showDarkBase = false;
       let showGraticule = false;
       let isMapMoving = false;
       let selectedPoint = null;
@@ -3406,13 +3410,26 @@
         // mappa resti leggibile, più la componente direzionale del Sole. La
         // componente chiara evita il vecchio effetto "ritaglio scuro" sui
         // versanti esposti e rende il volume leggibile anche sotto i raster.
-        const shadowAlpha = (0.28 + 0.24 * raking * direct).toFixed(3);
-        const highlightAlpha = (0.08 + 0.16 * direct).toFixed(3);
+        // Su fondo chiaro il rilievo si legge scurendo i versanti in ombra. Su
+        // fondo scuro quelle ombre non hanno piu' contro cosa staccare e le
+        // montagne diventano una macchia: va invertito, sono i versanti
+        // illuminati ad accendersi. E' anche piu' fedele alla luce reale, che
+        // gia' calcoliamo, perche' il Sole illumina invece di scurire.
+        const onDark = showDarkBase && !showSatellite;
+        const shadowAlpha = onDark
+          ? (0.1 + 0.1 * raking * direct).toFixed(3)
+          : (0.28 + 0.24 * raking * direct).toFixed(3);
+        const highlightAlpha = onDark
+          ? (0.16 + 0.42 * direct).toFixed(3)
+          : (0.08 + 0.16 * direct).toFixed(3);
 
         map.setPaintProperty("terrain-detail", "hillshade-illumination-direction", illumination);
-        map.setPaintProperty("terrain-detail", "hillshade-shadow-color", "rgba(28,36,48," + shadowAlpha + ")");
-        map.setPaintProperty("terrain-detail", "hillshade-highlight-color", "rgba(255,250,238," + highlightAlpha + ")");
-        map.setPaintProperty("terrain-detail", "hillshade-accent-color", "rgba(65,70,68,0.18)");
+        map.setPaintProperty("terrain-detail", "hillshade-shadow-color",
+          (onDark ? "rgba(0,0,0," : "rgba(28,36,48,") + shadowAlpha + ")");
+        map.setPaintProperty("terrain-detail", "hillshade-highlight-color",
+          (onDark ? "rgba(196,224,255," : "rgba(255,250,238,") + highlightAlpha + ")");
+        map.setPaintProperty("terrain-detail", "hillshade-accent-color",
+          onDark ? "rgba(120,150,190,0.28)" : "rgba(65,70,68,0.18)");
         updateSkyPalette(day, elev);
       }
 
@@ -3640,6 +3657,7 @@
           fronts: showFronts,
           terrain: showTerrain,
           satellite: showSatellite,
+          darkbase: showDarkBase,
           threed: show3D,
           graticule: showGraticule,
           raw: useNearestCell
@@ -3820,6 +3838,10 @@
           showTerrain = !showTerrain;
           updateMapPresentation();
           renderWeather();
+        } else if (name === "darkbase") {
+          showDarkBase = !showDarkBase;
+          updateSatelliteBase();
+          updateSolarLighting();
         } else if (name === "satellite") {
           showSatellite = !showSatellite;
           updateSatelliteBase();
@@ -4178,20 +4200,33 @@
       // colori originali quando si torna alla carta.
       function updateSatelliteBase() {
         if (!mapLoaded || !map) return;
+        // Tre basi possibili, una sola visibile. L'ortofoto ha la precedenza:
+        // e' gia' una foto, il fondo scuro sotto non servirebbe.
+        const dark = showDarkBase && !showSatellite;
         if (map.getLayer("satellite-layer")) {
           map.setLayoutProperty(
             "satellite-layer", "visibility", showSatellite ? "visible" : "none"
           );
         }
+        if (map.getLayer("basemap-dark-layer")) {
+          map.setLayoutProperty(
+            "basemap-dark-layer", "visibility", dark ? "visible" : "none"
+          );
+        }
         if (map.getLayer("basemap-layer")) {
           map.setLayoutProperty(
-            "basemap-layer", "visibility", showSatellite ? "none" : "visible"
+            "basemap-layer", "visibility", (showSatellite || dark) ? "none" : "visible"
+          );
+        }
+        if (map.getLayer("background")) {
+          map.setPaintProperty(
+            "background", "background-color", dark ? "#0a1018" : "#c4cace"
           );
         }
         CARTO_LABEL_LAYERS.forEach(function (definition) {
           if (!map.getLayer(definition.id)) return;
           const paint = definition.paint || {};
-          if (showSatellite) {
+          if (showSatellite || dark) {
             map.setPaintProperty(definition.id, "text-color", "#ffffff");
             map.setPaintProperty(definition.id, "text-halo-color", "rgba(0,0,0,0.8)");
             map.setPaintProperty(definition.id, "text-halo-width", 1.4);
@@ -6333,6 +6368,16 @@
                 tileSize: 256,
                 attribution: "World Hillshade © Esri"
               },
+              basemapDark: {
+                type: "raster",
+                tiles: [
+                  "https://a.basemaps.cartocdn.com/dark_nolabels/{z}/{x}/{y}.png",
+                  "https://b.basemaps.cartocdn.com/dark_nolabels/{z}/{x}/{y}.png",
+                  "https://c.basemaps.cartocdn.com/dark_nolabels/{z}/{x}/{y}.png"
+                ],
+                tileSize: 256,
+                attribution: "© CARTO © OpenStreetMap contributors"
+              },
               satellite: {
                 type: "raster",
                 tiles: [
@@ -6373,6 +6418,16 @@
                   "raster-brightness-min": 0.12,
                   "raster-brightness-max": 0.7
                 }
+              },
+              {
+                // Fondo scuro: i colori dei campi e delle frecce risaltano molto
+                // di piu', come nelle mappe vettoriali dei modelli. Spento di
+                // default perche' sul chiaro i campi caldi si leggono meglio.
+                id: "basemap-dark-layer",
+                type: "raster",
+                source: "basemapDark",
+                layout: { visibility: "none" },
+                paint: { "raster-opacity": 0.9, "raster-fade-duration": 0 }
               },
               {
                 // Base fotorealistica, spenta di default: il grigio resta
