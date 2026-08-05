@@ -233,8 +233,11 @@ assert.match(html, /const denseSpacing = \(mobile \? 27 : 31\)/,
   "il campo di frecce non e' fitto");
 assert.match(html, /vectorElevated \? 1\.55 : 1/,
   "in 3D il passo delle frecce non si allarga: ricavare la posizione costa di piu'");
-assert.match(html, /const length = clamp\(9 \+ speed \* 0\.13/,
-  "la lunghezza delle frecce varia troppo per un campo fitto");
+// La lunghezza deve variare molto: cortissima con la calma, oltre il passo
+// della griglia con vento forte, cosi' le frecce si fondono in linee continue
+// lungo il flusso. E' quello a dare l'aspetto di corrente.
+assert.match(html, /const length = clamp\(5 \+ speed \* 0\.46/,
+  "la lunghezza delle frecce non segue abbastanza la velocita'");
 
 // Fondo scuro: il rilievo va invertito, altrimenti le ombre non hanno contro
 // cosa staccare e le montagne spariscono. Su scuro sono i versanti illuminati
