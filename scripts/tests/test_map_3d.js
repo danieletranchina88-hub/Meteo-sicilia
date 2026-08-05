@@ -185,6 +185,13 @@ assert.match(html, /createContourFeatures\(temperature, meta, 2, 10\)/,
 assert.match(html, /const freezing = Math\.abs\(value\) < 0\.01;/,
   "lo zero termico non e' distinto dalle altre isoterme");
 assert.match(html, /data-toggle="isotherms"/, "interruttore isoterme assente");
+// Non basta che il codice esista: deve essere raggiungibile. La guardia del
+// disegno sinottico deve elencare ogni prodotto, altrimenti accendendo solo
+// le isoterme la funzione esce subito e non compare nulla.
+const synoptic = html.match(/function drawSynopticCanvas\([\s\S]*?\n {8}if \([^\n]*\n/);
+assert.ok(synoptic, "guardia del disegno sinottico non trovata");
+assert.match(synoptic[0], /!showIsotherms/,
+  "le isoterme non superano la guardia del disegno sinottico");
 
 // Avviso dati vecchi: servire l'ultimo dato riuscito va bene, non dichiararlo no.
 assert.match(html, /const STALE_RUN_HOURS = 9;/, "soglia dati vecchi assente");
