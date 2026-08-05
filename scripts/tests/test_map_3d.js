@@ -227,9 +227,9 @@ assert.match(html, /const centerPoint = projectParticle\(location\.lng, location
 assert.doesNotMatch(html, /const centerPoint = map\.project\(location\);/,
   "proiezione costosa delle frecce ancora presente");
 
-// Campo di frecce fitto e regolare, con dimensione quasi uniforme: a quella
-// densita' l'intensita' la porta il colore, non la lunghezza.
-assert.match(html, /const denseSpacing = \(mobile \? 27 : 31\)/,
+// Campo di frecce fitto e regolare, leggibile come un flusso continuo anche
+// sullo schermo stretto di un telefono.
+assert.match(html, /const denseSpacing = \(mobile \? 20 : 23\)/,
   "il campo di frecce non e' fitto");
 assert.match(html, /vectorElevated \? 1\.55 : 1/,
   "in 3D il passo delle frecce non si allarga: ricavare la posizione costa di piu'");
@@ -238,15 +238,30 @@ assert.match(html, /vectorElevated \? 1\.55 : 1/,
 // lungo il flusso. E' quello a dare l'aspetto di corrente.
 assert.match(html, /const length = clamp\(5 \+ speed \* 0\.46/,
   "la lunghezza delle frecce non segue abbastanza la velocita'");
+assert.match(html, /function strokeArrowPath\(/,
+  "la freccia non usa il tratto a punta aperta");
+assert.doesNotMatch(html, /function drawArrow[\s\S]*?closePath\(\)[\s\S]*?function drawVectors/,
+  "la punta dei vettori e' tornata a triangolo pieno");
 
-// Fondo scuro: il rilievo va invertito, altrimenti le ombre non hanno contro
-// cosa staccare e le montagne spariscono. Su scuro sono i versanti illuminati
-// ad accendersi, che e' anche piu' fedele alla luce solare reale.
-assert.match(html, /const onDark = showDarkBase && !showSatellite;/,
+// Fondo scuro e piatto predefinito. Il chiaro e il rilievo sono due scelte
+// esplicite, mentre su scuro il rilievo (quando richiesto) inverte la luce.
+assert.match(html, /let showTerrain = false;/,
+  "il rilievo e' ancora attivo all'avvio");
+assert.match(html, /let showLightBase = false;/,
+  "il fondo chiaro e' ancora attivo all'avvio");
+assert.match(html, /const onDark = !showLightBase && !showSatellite;/,
   "il rilievo non distingue il fondo scuro");
 assert.match(html, /onDark\s*\n?\s*\? \(0\.16 \+ 0\.42 \* direct\)/,
   "su fondo scuro i versanti illuminati non si accendono");
-assert.match(html, /data-toggle="darkbase"/, "interruttore fondo scuro assente");
+assert.match(html, /data-toggle="lightbase"/, "interruttore fondo chiaro assente");
 assert.match(html, /id: "basemap-dark-layer"/, "base scura assente");
+assert.match(html, /id: "basemap-layer"[\s\S]*?layout: \{ visibility: "none" \}/,
+  "la base chiara non e' spenta nello stile iniziale");
+assert.match(html, /id: "terrain-base"[\s\S]*?layout: \{ visibility: "none" \}/,
+  "il rilievo raster non e' spento nello stile iniziale");
+assert.match(html, /id: "terrain-detail"[\s\S]*?layout: \{ visibility: "none" \}/,
+  "il rilievo DEM non e' spento nello stile iniziale");
+assert.match(html, /#map\s*\{[\s\S]*?background: #0a1018;/,
+  "prima del caricamento compare ancora un lampo di fondo chiaro");
 
 console.log("3D map regression checks: OK");

@@ -45,7 +45,7 @@
 
       body {
         overflow: hidden;
-        background: #c4cace;
+        background: #0a1018;
         color: var(--text);
         font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
         overscroll-behavior: none;
@@ -76,7 +76,7 @@
         z-index: 0;
         width: 100%;
         height: 100%;
-        background: #c4cace;
+        background: #0a1018;
         touch-action: none;
         overscroll-behavior: none;
       }
@@ -1683,7 +1683,7 @@
                 <span><b>Particelle di vento</b><small>flusso reale da u/v</small></span><span class="switch"></span>
               </button>
               <button class="toggle-row" type="button" data-toggle="vectors" aria-pressed="false">
-                <span><b>Vettori di vento</b><small>direzione del flusso</small></span><span class="switch"></span>
+                <span><b>Vettori di vento</b><small>direzione · colore e lunghezza = velocità</small></span><span class="switch"></span>
               </button>
               <button class="toggle-row" type="button" data-toggle="isotherms" aria-pressed="false">
                 <span><b>Isoterme</b><small>passo 2 °C · linea dello zero evidenziata</small></span><span class="switch"></span>
@@ -1755,11 +1755,11 @@
               <span>lettura della griglia</span>
             </div>
             <div class="toggle-list">
-              <button class="toggle-row active" type="button" data-toggle="terrain" aria-pressed="true">
+              <button class="toggle-row" type="button" data-toggle="terrain" aria-pressed="false">
                 <span><b>Rilievo topografico</b><small>ombreggiatura del terreno</small></span><span class="switch"></span>
               </button>
-              <button class="toggle-row" type="button" data-toggle="darkbase" aria-pressed="false">
-                <span><b>Fondo scuro</b><small>colori più vividi · rilievo illuminato dal Sole</small></span><span class="switch"></span>
+              <button class="toggle-row" type="button" data-toggle="lightbase" aria-pressed="false">
+                <span><b>Fondo chiaro</b><small>alternativa alla carta scura predefinita</small></span><span class="switch"></span>
               </button>
               <button class="toggle-row" type="button" data-toggle="satellite" aria-pressed="false">
                 <span><b>Terreno reale</b><small>ortofoto satellitare al posto della carta</small></span><span class="switch"></span>
@@ -2420,10 +2420,10 @@
       let obsFetchedAt = 0;
       let obsFetching = false;
       let showFronts = false;
-      let showTerrain = true;
+      let showTerrain = false;
       let show3D = false;
       let showSatellite = false;
-      let showDarkBase = false;
+      let showLightBase = false;
       let showGraticule = false;
       let isMapMoving = false;
       let selectedPoint = null;
@@ -3415,7 +3415,7 @@
         // montagne diventano una macchia: va invertito, sono i versanti
         // illuminati ad accendersi. E' anche piu' fedele alla luce reale, che
         // gia' calcoliamo, perche' il Sole illumina invece di scurire.
-        const onDark = showDarkBase && !showSatellite;
+        const onDark = !showLightBase && !showSatellite;
         const shadowAlpha = onDark
           ? (0.1 + 0.1 * raking * direct).toFixed(3)
           : (0.28 + 0.24 * raking * direct).toFixed(3);
@@ -3657,7 +3657,7 @@
           fronts: showFronts,
           terrain: showTerrain,
           satellite: showSatellite,
-          darkbase: showDarkBase,
+          lightbase: showLightBase,
           threed: show3D,
           graticule: showGraticule,
           raw: useNearestCell
@@ -3838,8 +3838,8 @@
           showTerrain = !showTerrain;
           updateMapPresentation();
           renderWeather();
-        } else if (name === "darkbase") {
-          showDarkBase = !showDarkBase;
+        } else if (name === "lightbase") {
+          showLightBase = !showLightBase;
           updateSatelliteBase();
           updateSolarLighting();
         } else if (name === "satellite") {
@@ -4202,7 +4202,7 @@
         if (!mapLoaded || !map) return;
         // Tre basi possibili, una sola visibile. L'ortofoto ha la precedenza:
         // e' gia' una foto, il fondo scuro sotto non servirebbe.
-        const dark = showDarkBase && !showSatellite;
+        const dark = !showLightBase && !showSatellite;
         if (map.getLayer("satellite-layer")) {
           map.setLayoutProperty(
             "satellite-layer", "visibility", showSatellite ? "visible" : "none"
@@ -4221,6 +4221,23 @@
         if (map.getLayer("background")) {
           map.setPaintProperty(
             "background", "background-color", dark ? "#0a1018" : "#c4cace"
+          );
+        }
+        // Sul fondo scuro confini e reticolo devono restare leggibili senza
+        // diventare protagonisti. Sul chiaro ripristino il tratto originale.
+        if (map.getLayer("regions-layer")) {
+          map.setPaintProperty(
+            "regions-layer", "line-color",
+            dark || showSatellite ? "rgba(222,235,250,0.88)" : "rgba(22,52,70,0.76)"
+          );
+          map.setPaintProperty(
+            "regions-layer", "line-opacity", dark || showSatellite ? 0.68 : 0.44
+          );
+        }
+        if (map.getLayer("graticule-layer")) {
+          map.setPaintProperty(
+            "graticule-layer", "line-color",
+            dark || showSatellite ? "rgba(177,207,232,0.64)" : "rgba(18,66,93,0.68)"
           );
         }
         CARTO_LABEL_LAYERS.forEach(function (definition) {
@@ -4281,7 +4298,10 @@
         } else {
           stopParticles();
           if (map.getLayer("background")) {
-            map.setPaintProperty("background", "background-color", "#c4cace");
+            map.setPaintProperty(
+              "background", "background-color",
+              !showLightBase && !showSatellite ? "#0a1018" : "#c4cace"
+            );
           }
           updateSolarLighting();
           if (map.dragRotate) map.dragRotate.disable();
@@ -5755,38 +5775,41 @@
         vectorContext.restore();
       }
 
+      function strokeArrowPath(
+        startX, startY, endX, endY, leftX, leftY, rightX, rightY, color, lineWidth
+      ) {
+        vectorContext.strokeStyle = color;
+        vectorContext.lineWidth = lineWidth;
+        vectorContext.beginPath();
+        vectorContext.moveTo(startX, startY);
+        vectorContext.lineTo(endX, endY);
+        vectorContext.stroke();
+        // Punta a V aperta: a questa densita' rimane nitida e non forma le
+        // macchie triangolari delle vecchie punte piene.
+        vectorContext.beginPath();
+        vectorContext.moveTo(leftX, leftY);
+        vectorContext.lineTo(endX, endY);
+        vectorContext.lineTo(rightX, rightY);
+        vectorContext.stroke();
+      }
+
       function drawArrow(startX, startY, endX, endY, width, headSize, fill) {
         const angle = Math.atan2(endY - startY, endX - startX);
-        // Contorno chiaro sotto: la freccia deve staccare sia sul campo
-        // colorato sia sull'ortofoto, dove il nero puro sparirebbe.
-        vectorContext.strokeStyle = "rgba(255,255,255,0.5)";
-        vectorContext.fillStyle = "rgba(255,255,255,0.5)";
-        vectorContext.lineWidth = width + 0.7;
-        vectorContext.beginPath();
-        vectorContext.moveTo(startX, startY);
-        vectorContext.lineTo(endX, endY);
-        vectorContext.stroke();
-        vectorContext.beginPath();
-        vectorContext.moveTo(endX, endY);
-        vectorContext.lineTo(endX - Math.cos(angle - Math.PI / 7) * headSize, endY - Math.sin(angle - Math.PI / 7) * headSize);
-        vectorContext.lineTo(endX - Math.cos(angle + Math.PI / 7) * headSize, endY - Math.sin(angle + Math.PI / 7) * headSize);
-        vectorContext.closePath();
-        vectorContext.fill();
+        const leftX = endX - Math.cos(angle - Math.PI / 6) * headSize;
+        const leftY = endY - Math.sin(angle - Math.PI / 6) * headSize;
+        const rightX = endX - Math.cos(angle + Math.PI / 6) * headSize;
+        const rightY = endY - Math.sin(angle + Math.PI / 6) * headSize;
 
-        const body = fill || "rgba(4,7,9,0.92)";
-        vectorContext.strokeStyle = body;
-        vectorContext.fillStyle = body;
-        vectorContext.lineWidth = width;
-        vectorContext.beginPath();
-        vectorContext.moveTo(startX, startY);
-        vectorContext.lineTo(endX, endY);
-        vectorContext.stroke();
-        vectorContext.beginPath();
-        vectorContext.moveTo(endX, endY);
-        vectorContext.lineTo(endX - Math.cos(angle - Math.PI / 7) * headSize, endY - Math.sin(angle - Math.PI / 7) * headSize);
-        vectorContext.lineTo(endX - Math.cos(angle + Math.PI / 7) * headSize, endY - Math.sin(angle + Math.PI / 7) * headSize);
-        vectorContext.closePath();
-        vectorContext.fill();
+        // Un bordo scuro molto sottile separa la freccia sia dal campo vento
+        // colorato sia dalla cartografia, senza scolorire blu e ciano.
+        strokeArrowPath(
+          startX, startY, endX, endY, leftX, leftY, rightX, rightY,
+          "rgba(1,7,18,0.72)", width + 1.05
+        );
+        strokeArrowPath(
+          startX, startY, endX, endY, leftX, leftY, rightX, rightY,
+          fill || "rgba(80,190,255,0.96)", width
+        );
       }
 
       function drawVectors() {
@@ -5808,9 +5831,9 @@
         // frecce coprono la mappa invece di essere sparse, e il flusso si legge
         // come un disegno continuo. In 3D il passo si allarga, perche' li'
         // ricavare la posizione geografica di ogni punto costa molto di piu'.
-        const denseSpacing = (mobile ? 27 : 31) * (vectorElevated ? 1.55 : 1);
-        const spacing = clamp(denseSpacing + (6 - map.getZoom()) * 1.5,
-          mobile ? 22 : 25, mobile ? 58 : 66);
+        const denseSpacing = (mobile ? 20 : 23) * (vectorElevated ? 1.55 : 1);
+        const spacing = clamp(denseSpacing + (6 - map.getZoom()) * 0.9,
+          mobile ? 17 : 19, mobile ? 44 : 50);
         const topInset = mobile ? 118 : 54;
         const bottomInset = mobile ? 88 : 56;
 
@@ -5873,8 +5896,8 @@
             if (!Number.isFinite(projectedLength) || projectedLength < 0.2) continue;
             const dx = (directionPoint.x - centerPoint.x) / projectedLength;
             const dy = (directionPoint.y - centerPoint.y) / projectedLength;
-            const lineWidth = clamp(0.75 + speed * 0.012, 0.8, mobile ? 1.9 : 2.2);
-            const head = clamp(2.9 + speed * 0.028, 3.2, mobile ? 7.4 : 8.4);
+            const lineWidth = clamp(0.72 + speed * 0.008, 0.78, mobile ? 1.5 : 1.7);
+            const head = clamp(3.1 + speed * 0.022, 3.2, mobile ? 6.2 : 6.8);
             // Stesso colore che il campo vento userebbe per quella velocita':
             // la freccia si legge con la legenda gia' presente, invece di
             // introdurre una scala inventata.
@@ -6405,12 +6428,13 @@
               {
                 id: "background",
                 type: "background",
-                paint: { "background-color": "#c4cace" }
+                paint: { "background-color": "#0a1018" }
               },
               {
                 id: "basemap-layer",
                 type: "raster",
                 source: "basemap",
+                layout: { visibility: "none" },
                 paint: {
                   // Fondo neutro: quasi tutta la saturazione tolta e il bianco
                   // abbassato a grigio chiaro, cosi' i campi meteo e il rilievo
@@ -6423,13 +6447,11 @@
                 }
               },
               {
-                // Fondo scuro: i colori dei campi e delle frecce risaltano molto
-                // di piu', come nelle mappe vettoriali dei modelli. Spento di
-                // default perche' sul chiaro i campi caldi si leggono meglio.
+                // Fondo scuro predefinito: fa emergere frecce, campi e linee
+                // sinottiche. Il fondo chiaro resta disponibile dal pannello.
                 id: "basemap-dark-layer",
                 type: "raster",
                 source: "basemapDark",
-                layout: { visibility: "none" },
                 paint: { "raster-opacity": 0.9, "raster-fade-duration": 0 }
               },
               {
@@ -6446,6 +6468,7 @@
                 id: "terrain-base",
                 type: "raster",
                 source: "hillshade",
+                layout: { visibility: "none" },
                 paint: {
                   "raster-opacity": 0.24,
                   "raster-saturation": -1,
@@ -6489,6 +6512,7 @@
             id: "terrain-detail",
             type: "hillshade",
             source: "terrain-dem",
+            layout: { visibility: "none" },
             paint: {
               "hillshade-illumination-direction": 315,
               "hillshade-illumination-anchor": "map",
@@ -6739,6 +6763,7 @@
             requestVectorRender();
           });
 
+          updateSatelliteBase();
           updateMapPresentation();
           await loadCatalog();
           setupRadarLayer();
