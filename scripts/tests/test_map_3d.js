@@ -227,4 +227,13 @@ assert.match(html, /const centerPoint = projectParticle\(location\.lng, location
 assert.doesNotMatch(html, /const centerPoint = map\.project\(location\);/,
   "proiezione costosa delle frecce ancora presente");
 
+// Campo di frecce fitto e regolare, con dimensione quasi uniforme: a quella
+// densita' l'intensita' la porta il colore, non la lunghezza.
+assert.match(html, /const denseSpacing = \(mobile \? 27 : 31\)/,
+  "il campo di frecce non e' fitto");
+assert.match(html, /vectorElevated \? 1\.55 : 1/,
+  "in 3D il passo delle frecce non si allarga: ricavare la posizione costa di piu'");
+assert.match(html, /const length = clamp\(9 \+ speed \* 0\.13/,
+  "la lunghezza delle frecce varia troppo per un campo fitto");
+
 console.log("3D map regression checks: OK");
