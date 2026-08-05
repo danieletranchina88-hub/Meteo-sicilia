@@ -5720,11 +5720,12 @@
         vectorContext.restore();
       }
 
-      function drawArrow(startX, startY, endX, endY, width, headSize) {
+      function drawArrow(startX, startY, endX, endY, width, headSize, fill) {
         const angle = Math.atan2(endY - startY, endX - startX);
-
-        vectorContext.strokeStyle = "rgba(255,255,255,0.68)";
-        vectorContext.fillStyle = "rgba(255,255,255,0.68)";
+        // Contorno chiaro sotto: la freccia deve staccare sia sul campo
+        // colorato sia sull'ortofoto, dove il nero puro sparirebbe.
+        vectorContext.strokeStyle = "rgba(255,255,255,0.72)";
+        vectorContext.fillStyle = "rgba(255,255,255,0.72)";
         vectorContext.lineWidth = width + 1.15;
         vectorContext.beginPath();
         vectorContext.moveTo(startX, startY);
@@ -5737,8 +5738,9 @@
         vectorContext.closePath();
         vectorContext.fill();
 
-        vectorContext.strokeStyle = "rgba(4,7,9,0.92)";
-        vectorContext.fillStyle = "rgba(4,7,9,0.92)";
+        const body = fill || "rgba(4,7,9,0.92)";
+        vectorContext.strokeStyle = body;
+        vectorContext.fillStyle = body;
         vectorContext.lineWidth = width;
         vectorContext.beginPath();
         vectorContext.moveTo(startX, startY);
@@ -5765,6 +5767,8 @@
         if (!wind || !wind.u || !wind.v) return;
         const meta = wind.meta;
         const mobile = window.innerWidth < 900;
+        const vectorTerrain = map.getTerrain && map.getTerrain();
+        const vectorElevated = Boolean(vectorTerrain) && show3D;
         const spacing = clamp((mobile ? 69 : 84) + (6 - map.getZoom()) * 3, mobile ? 58 : 66, mobile ? 86 : 102);
         const topInset = mobile ? 118 : 54;
         const bottomInset = mobile ? 88 : 56;
@@ -5786,7 +5790,9 @@
             const speed = Math.hypot(u, v) * 3.6;
             if (!Number.isFinite(speed) || speed < 1.5) continue;
 
-            const length = clamp(12 + speed * 0.39, mobile ? 15 : 17, mobile ? 39 : 49);
+            // Scala piu' espressiva: a colpo d'occhio si distingue una brezza
+            // da una burrasca anche senza leggere la legenda.
+            const length = clamp(11 + speed * 0.52, mobile ? 14 : 16, mobile ? 46 : 58);
             const norm = Math.hypot(u, v) || 1;
             // Ricavo la direzione sullo schermo proiettando un breve segmento
             // geografico. Così la freccia resta corretta con bearing, pitch e
@@ -5796,11 +5802,21 @@
             const cosineLatitude = Math.max(
               Math.cos(location.lat * Math.PI / 180), 0.25
             );
-            const directionPoint = map.project([
+            // In 3D map.project interroga il modello di elevazione a ogni
+            // chiamata: con due chiamate per freccia il costo si somma a quello
+            // gia' tolto alle isolinee. Uso la proiezione con matrice, con la
+            // quota del suolo letta una sola volta per freccia; le frecce sono
+            // decine, non migliaia, quindi qui una lettura ciascuna va bene.
+            const groundHeight = vectorElevated && map.queryTerrainElevation
+              ? (map.queryTerrainElevation([location.lng, location.lat]) || 0)
+              : 0;
+            const directionPoint = projectParticle(
               location.lng + (u / norm) * probeMetres / (111320 * cosineLatitude),
-              location.lat + (v / norm) * probeMetres / 111320
-            ]);
-            const centerPoint = map.project(location);
+              location.lat + (v / norm) * probeMetres / 111320,
+              groundHeight
+            );
+            const centerPoint = projectParticle(location.lng, location.lat, groundHeight);
+            if (!directionPoint || !centerPoint) continue;
             const projectedLength = Math.hypot(
               directionPoint.x - centerPoint.x,
               directionPoint.y - centerPoint.y
@@ -5808,8 +5824,14 @@
             if (!Number.isFinite(projectedLength) || projectedLength < 0.2) continue;
             const dx = (directionPoint.x - centerPoint.x) / projectedLength;
             const dy = (directionPoint.y - centerPoint.y) / projectedLength;
-            const lineWidth = clamp(0.72 + speed * 0.0045, 0.8, mobile ? 1.18 : 1.28);
-            const head = clamp(4.2 + speed * 0.018, 4.8, mobile ? 6.4 : 7);
+            const lineWidth = clamp(0.9 + speed * 0.016, 1, mobile ? 2.1 : 2.5);
+            const head = clamp(4.4 + speed * 0.032, 5, mobile ? 8.2 : 9.4);
+            // Stesso colore che il campo vento userebbe per quella velocita':
+            // la freccia si legge con la legenda gia' presente, invece di
+            // introdurre una scala inventata.
+            const shade = colorFor(speed, LAYER_INFO.wind);
+            const body = "rgba(" + Math.round(shade[0]) + "," + Math.round(shade[1]) +
+              "," + Math.round(shade[2]) + ",0.96)";
 
             drawArrow(
               centerPoint.x - dx * length * 0.42,
@@ -5817,7 +5839,8 @@
               centerPoint.x + dx * length * 0.58,
               centerPoint.y + dy * length * 0.58,
               lineWidth,
-              head
+              head,
+              body
             );
           }
         }

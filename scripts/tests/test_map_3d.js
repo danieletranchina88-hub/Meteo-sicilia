@@ -217,4 +217,14 @@ assert.ok(drawVectors, "drawVectors assente");
 assert.match(drawVectors[0], /syncProjectionViewport\(\)/,
   "senza particelle attive le isolinee userebbero un viewport non aggiornato");
 
+// Frecce del vento: colorate con la stessa scala del campo vento, quindi
+// leggibili con la legenda gia' presente, e proiettate senza interrogare il
+// DEM a ogni chiamata.
+assert.match(html, /const shade = colorFor\(speed, LAYER_INFO\.wind\);/,
+  "le frecce non usano la scala di colore del campo vento");
+assert.match(html, /const centerPoint = projectParticle\(location\.lng, location\.lat, groundHeight\);/,
+  "le frecce usano ancora una proiezione che interroga il DEM");
+assert.doesNotMatch(html, /const centerPoint = map\.project\(location\);/,
+  "proiezione costosa delle frecce ancora presente");
+
 console.log("3D map regression checks: OK");
