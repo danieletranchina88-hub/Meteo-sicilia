@@ -4846,6 +4846,56 @@
       // modello di elevazione a ogni chiamata ed e' il costo che domina il 3D;
       // qui la quota la forniamo noi, quindi resta una moltiplicazione di
       // matrice. Senza matrice disponibile si torna all'API pubblica.
+      // Le dimensioni del viewport servono a riportare la proiezione da
+      // coordinate normalizzate a pixel. Vanno aggiornate da chiunque proietti,
+      // non solo dal ciclo delle particelle: con le particelle spente restavano
+      // a 1 e le isolinee finivano fuori schermo.
+      function syncProjectionViewport() {
+        const element = map && map.getContainer ? map.getContainer() : null;
+        projectionWidth = (element && element.clientWidth) || window.innerWidth || 1;
+        projectionHeight = (element && element.clientHeight) || window.innerHeight || 1;
+      }
+
+      // Quota del suolo lungo una isolinea, in metri reali. Interrogare il DEM
+      // per ogni vertice blocca il disegno: le isolinee ne hanno migliaia e in
+      // 3D ogni interrogazione costa. Campiono un vertice ogni sei e interpolo
+      // in mezzo, poi tengo il profilo in cache sulla feature, che non cambia
+      // finche' non cambia il passo temporale. Memorizzo il valore senza
+      // esagerazione verticale, cosi' resta valido quando lo zoom la cambia.
+      const GROUND_SAMPLE_STRIDE = 6;
+
+      function synopticGroundProfile(feature, coordinates) {
+        if (feature.groundProfile && feature.groundProfile.length === coordinates.length) {
+          return feature.groundProfile;
+        }
+        if (!map.queryTerrainElevation) return null;
+        const options = map.getTerrain && map.getTerrain();
+        const scale = options && Number.isFinite(options.exaggeration) && options.exaggeration > 0
+          ? options.exaggeration
+          : 1;
+        const profile = new Float32Array(coordinates.length);
+        let previousIndex = 0;
+        let previousValue = 0;
+        let measured = false;
+        for (let index = 0; index < coordinates.length; index += 1) {
+          if (index % GROUND_SAMPLE_STRIDE !== 0 && index !== coordinates.length - 1) continue;
+          const raw = map.queryTerrainElevation(coordinates[index]);
+          const value = Number.isFinite(raw) ? raw / scale : 0;
+          if (value) measured = true;
+          for (let fill = previousIndex + 1; fill < index; fill += 1) {
+            const t = (fill - previousIndex) / (index - previousIndex);
+            profile[fill] = previousValue + (value - previousValue) * t;
+          }
+          profile[index] = value;
+          previousIndex = index;
+          previousValue = value;
+        }
+        // Se il DEM non era ancora caricato ho misurato solo zeri: non li
+        // congelo in cache, altrimenti resterebbero sbagliati per sempre.
+        if (measured) feature.groundProfile = profile;
+        return profile;
+      }
+
       function projectParticle(longitude, latitude, altitude) {
         if (particleMatrix && window.maplibregl && maplibregl.MercatorCoordinate) {
           const point = maplibregl.MercatorCoordinate.fromLngLat(
@@ -4928,9 +4978,7 @@
         const drawingHeight = window.innerHeight;
         // La matrice porta a coordinate normalizzate: servono le dimensioni in
         // pixel CSS del contenitore per tornare a pixel di schermo.
-        const mapElement = map.getContainer();
-        projectionWidth = mapElement.clientWidth || drawingWidth;
-        projectionHeight = mapElement.clientHeight || drawingHeight;
+        syncProjectionViewport();
         particleFrameCount += 1;
 
         if (isMapMoving) {
@@ -5247,6 +5295,15 @@
         vectorContext.lineCap = "round";
         vectorContext.lineJoin = "round";
 
+        // In 3D le isolinee non possono usare map.project: ognuna interroga il
+        // modello di elevazione e con migliaia di vertici il disegno si blocca.
+        // Uso la proiezione con matrice, fornendo io la quota.
+        const synTerrain = map.getTerrain && map.getTerrain();
+        const synScale = synTerrain && Number.isFinite(synTerrain.exaggeration)
+          ? synTerrain.exaggeration
+          : 1;
+        const synElevated = Boolean(synTerrain) && show3D;
+
         // Isoterme sotto tutto il resto: sono il campo di fondo, pressione e
         // fronti devono restare leggibili sopra.
         if (showIsotherms) {
@@ -5260,9 +5317,20 @@
             // Lo zero termico e' la soglia che separa pioggia e neve: va
             // riconosciuta a colpo d'occhio fra tutte le altre isoterme.
             const freezing = Math.abs(value) < 0.01;
-            const points = coordinates.map(function (coordinate) {
-              return map.project(coordinate);
-            });
+            // La temperatura a 2 m e' un campo del suolo: in 3D le isoterme
+            // seguono il rilievo, altrimenti resterebbero appese nel vuoto
+            // sopra le montagne.
+            const ground = synElevated ? synopticGroundProfile(feature, coordinates) : null;
+            const points = [];
+            for (let index = 0; index < coordinates.length; index += 1) {
+              const projected = projectParticle(
+                coordinates[index][0],
+                coordinates[index][1],
+                ground ? ground[index] * synScale : 0
+              );
+              if (!projected) return;
+              points.push(projected);
+            }
 
             vectorContext.beginPath();
             points.forEach(function (point, pointIndex) {
@@ -5351,9 +5419,17 @@
           features.forEach(function (feature, featureIndex) {
             const coordinates = feature.geometry && feature.geometry.coordinates;
             if (!coordinates || coordinates.length < 2) return;
-            const points = coordinates.map(function (coordinate) {
-              return map.project(coordinate);
-            });
+            // La pressione e' ridotta al livello del mare: nessuna quota da
+            // seguire, sarebbe inventata. Resta a zero, e cosi' costa anche
+            // meno perche' non serve leggere il suolo.
+            const points = [];
+            for (let index = 0; index < coordinates.length; index += 1) {
+              const projected = projectParticle(
+                coordinates[index][0], coordinates[index][1], 0
+              );
+              if (!projected) return;
+              points.push(projected);
+            }
             const major = Boolean(feature.properties && feature.properties.major);
 
             vectorContext.beginPath();
@@ -5587,6 +5663,14 @@
       function drawFrontsCanvas() {
         if (!showFronts || !currentData || !map || !currentData.fronts) return;
         const features = currentData.fronts.features || [];
+        // Stessa ragione delle isoterme: in 3D map.project interroga il DEM a
+        // ogni vertice. I fronti pubblicati sono la loro traccia al suolo,
+        // quindi seguono il rilievo.
+        const frontTerrain = map.getTerrain && map.getTerrain();
+        const frontScale = frontTerrain && Number.isFinite(frontTerrain.exaggeration)
+          ? frontTerrain.exaggeration
+          : 1;
+        const frontElevated = Boolean(frontTerrain) && show3D;
         vectorContext.save();
         vectorContext.lineCap = "round";
         vectorContext.lineJoin = "round";
@@ -5600,9 +5684,19 @@
             : "uncertain";
           const confidence = Number(properties.confidence);
           const alpha = Number.isFinite(confidence) ? clamp(0.72 + confidence * 0.28, 0.78, 1) : 0.92;
-          const points = coordinates.map(function (coordinate) {
-            return map.project(coordinate);
-          });
+          const frontGround = frontElevated
+            ? synopticGroundProfile(feature, coordinates)
+            : null;
+          const points = [];
+          for (let index = 0; index < coordinates.length; index += 1) {
+            const projected = projectParticle(
+              coordinates[index][0],
+              coordinates[index][1],
+              frontGround ? frontGround[index] * frontScale : 0
+            );
+            if (!projected) return;
+            points.push(projected);
+          }
 
           // A single front line may carry per-segment character (cold on one
           // end, quasi-stationary on the other). Draw each segment with its
@@ -5661,6 +5755,7 @@
       function drawVectors() {
         clearVectors();
         if (!currentData || !map || isMapMoving) return;
+        syncProjectionViewport();
 
         drawSynopticCanvas();
         drawFrontsCanvas();

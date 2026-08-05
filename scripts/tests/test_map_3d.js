@@ -199,4 +199,22 @@ assert.match(html, /function markStaleRun\(/, "avviso dati vecchi assente");
 assert.match(html, /ui\.runValue\.classList\.toggle\("stale", stale\)/,
   "l'avviso non viene applicato all'intestazione");
 
+// In 3D map.project interroga il DEM a ogni vertice: sulle isolinee, che ne
+// hanno migliaia, il disegno si bloccava. Nessun disegno vettoriale deve piu'
+// usarla.
+assert.doesNotMatch(html, /map\.project\(coordinate\)/,
+  "il disegno vettoriale usa ancora la proiezione che interroga il DEM a ogni vertice");
+assert.match(html, /function synopticGroundProfile\(/,
+  "profilo del suolo campionato assente");
+assert.match(html, /const GROUND_SAMPLE_STRIDE = 6;/,
+  "campionamento del profilo del suolo assente");
+assert.match(html, /if \(measured\) feature\.groundProfile = profile;/,
+  "un profilo tutto a zero verrebbe congelato in cache prima che il DEM sia pronto");
+// Il viewport della proiezione va aggiornato anche senza particelle attive.
+assert.match(html, /function syncProjectionViewport\(/, "sincronizzazione viewport assente");
+const drawVectors = html.match(/function drawVectors\([\s\S]*?\n {6}\}/);
+assert.ok(drawVectors, "drawVectors assente");
+assert.match(drawVectors[0], /syncProjectionViewport\(\)/,
+  "senza particelle attive le isolinee userebbero un viewport non aggiornato");
+
 console.log("3D map regression checks: OK");
