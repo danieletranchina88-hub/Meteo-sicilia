@@ -126,6 +126,19 @@
         );
       }
 
+      /* Avviso dati vecchi: quando la pipeline fallisce il sito continua a
+         servire l'ultimo aggiornamento riuscito, ed e' giusto. Ma va detto,
+         altrimenti una previsione di ieri si legge come attuale. */
+      #run-value.stale {
+        color: #ffcf70;
+      }
+
+      #run-value.stale::after {
+        content: " · non aggiornato";
+        font-weight: 700;
+        opacity: 0.9;
+      }
+
       .surface {
         background: var(--surface);
         border: 1px solid var(--stroke);
@@ -1672,6 +1685,9 @@
               <button class="toggle-row" type="button" data-toggle="vectors" aria-pressed="false">
                 <span><b>Vettori di vento</b><small>direzione del flusso</small></span><span class="switch"></span>
               </button>
+              <button class="toggle-row" type="button" data-toggle="isotherms" aria-pressed="false">
+                <span><b>Isoterme</b><small>passo 2 °C · linea dello zero evidenziata</small></span><span class="switch"></span>
+              </button>
               <button class="toggle-row" type="button" data-toggle="isobars" aria-pressed="false">
                 <span><b>Isobare e A/B</b><small>passo 2 hPa</small></span><span class="switch"></span>
               </button>
@@ -2391,6 +2407,7 @@
       let showParticles = false;
       let showVectors = false;
       let showIsobars = false;
+      let showIsotherms = false;
       let showIsohypses = false;
       let showRadar = false;
       let radarFrames = [];
@@ -3324,6 +3341,7 @@
         const lead = leadHours(currentIndex);
 
         ui.runValue.textContent = formatRun(item);
+        markStaleRun(item);
         ui.validValue.textContent = formatDateTime(date);
         ui.timeLabel.textContent = formatDateTime(date);
         ui.leadLabel.textContent = lead === null ? "--" : "+" + lead + " h";
@@ -3522,6 +3540,35 @@
         }
       }
 
+      // Il modello gira ogni sei ore: oltre le nove il dato pubblicato non e'
+      // piu' l'ultimo previsto, segno che un aggiornamento non e' andato a
+      // buon fine. Non nascondo i dati vecchi, che sono meglio di niente:
+      // li dichiaro.
+      const STALE_RUN_HOURS = 9;
+
+      function markStaleRun(item) {
+        if (!ui.runValue) return;
+        const run = item && (item.runTime || item.run || item.model_run || item.init || item.init_time);
+        const date = run ? new Date(run) : null;
+        if (!date || Number.isNaN(date.getTime())) {
+          ui.runValue.classList.remove("stale");
+          ui.runValue.removeAttribute("title");
+          return;
+        }
+        const hours = (Date.now() - date.getTime()) / 3600000;
+        const stale = hours > STALE_RUN_HOURS;
+        ui.runValue.classList.toggle("stale", stale);
+        if (stale) {
+          ui.runValue.setAttribute(
+            "title",
+            "Ultima corsa disponibile: " + Math.round(hours) +
+              " ore fa. Un aggiornamento non e' andato a buon fine."
+          );
+        } else {
+          ui.runValue.removeAttribute("title");
+        }
+      }
+
       function makeLegendGradient(info) {
         const stops = info.stops;
         const minimum = stops[0].v;
@@ -3586,6 +3633,7 @@
           flow: showParticles,
           vectors: showVectors,
           isobars: showIsobars,
+          isotherms: showIsotherms,
           isohypses: showIsohypses,
           radar: showRadar,
           fusion: showFusion,
@@ -3674,6 +3722,9 @@
           else stopParticles();
         } else if (name === "vectors") {
           showVectors = !showVectors;
+          requestVectorRender();
+        } else if (name === "isotherms") {
+          showIsotherms = !showIsotherms;
           requestVectorRender();
         } else if (name === "isobars") {
           showIsobars = !showIsobars;
@@ -4599,6 +4650,23 @@
         return features;
       }
 
+      // Isoterme ogni 2 gradi, marcate ogni 10. Servono soprattutto con
+      // l'ortofoto: quando il colore del campo si alleggerisce per lasciar
+      // vedere il terreno, la lettura in gradi la conservano le linee.
+      function buildTemperatureProducts(data) {
+        if (data.isotherms) return;
+        const meta = data.meta;
+        const temperature = getGrid(data.temp);
+        if (!temperature) {
+          data.isotherms = { type: "FeatureCollection", features: [] };
+          return;
+        }
+        data.isotherms = {
+          type: "FeatureCollection",
+          features: createContourFeatures(temperature, meta, 2, 10)
+        };
+      }
+
       function buildPressureProducts(data) {
         if (data.isobars && data.pressureCenters) return;
 
@@ -5176,6 +5244,47 @@
         vectorContext.save();
         vectorContext.lineCap = "round";
         vectorContext.lineJoin = "round";
+
+        // Isoterme sotto tutto il resto: sono il campo di fondo, pressione e
+        // fronti devono restare leggibili sopra.
+        if (showIsotherms) {
+          if (!currentData.isotherms) buildTemperatureProducts(currentData);
+          const thermFeatures = currentData.isotherms ? currentData.isotherms.features : [];
+          thermFeatures.forEach(function (feature, featureIndex) {
+            const coordinates = feature.geometry && feature.geometry.coordinates;
+            if (!coordinates || coordinates.length < 2) return;
+            const value = Number(feature.properties && feature.properties.value);
+            const major = Boolean(feature.properties && feature.properties.major);
+            // Lo zero termico e' la soglia che separa pioggia e neve: va
+            // riconosciuta a colpo d'occhio fra tutte le altre isoterme.
+            const freezing = Math.abs(value) < 0.01;
+            const points = coordinates.map(function (coordinate) {
+              return map.project(coordinate);
+            });
+
+            vectorContext.beginPath();
+            points.forEach(function (point, pointIndex) {
+              if (pointIndex === 0) vectorContext.moveTo(point.x, point.y);
+              else vectorContext.lineTo(point.x, point.y);
+            });
+            // Alone chiaro: sotto c'e' il campo colorato o l'ortofoto, e senza
+            // stacco la linea sparirebbe su meta' delle tinte.
+            vectorContext.strokeStyle = "rgba(255,255,255," +
+              (freezing ? "0.82" : major ? "0.6" : "0.4") + ")";
+            vectorContext.lineWidth = freezing ? 3.8 : major ? 3 : 2.1;
+            vectorContext.stroke();
+
+            vectorContext.strokeStyle = freezing
+              ? "rgba(12,74,160,0.96)"
+              : major ? "rgba(28,32,38,0.9)" : "rgba(34,38,44,0.62)";
+            vectorContext.lineWidth = freezing ? 1.7 : major ? 1.25 : 0.7;
+            vectorContext.stroke();
+
+            if (major || freezing) {
+              drawLabelsAlongIsobar(points, Math.round(value), featureIndex);
+            }
+          });
+        }
 
         // 500 hPa isohypses first, so isobars and fronts read on top.
         if (showIsohypses) {

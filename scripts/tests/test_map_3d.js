@@ -176,4 +176,20 @@ assert.match(html, /showSatellite\s*\?\s*\[\s*\n\s*"interpolate", \["linear"\], 
   "il campo non si alleggerisce zoomando sull'ortofoto");
 assert.match(html, /id: "satellite-layer"/, "base fotorealistica assente");
 
+// Isoterme: recuperano la lettura in gradi quando il colore del campo si
+// alleggerisce sull'ortofoto. Lo zero termico e' evidenziato perche' separa
+// pioggia e neve.
+assert.match(html, /function buildTemperatureProducts\(/, "isoterme assenti");
+assert.match(html, /createContourFeatures\(temperature, meta, 2, 10\)/,
+  "passo delle isoterme non conforme (2 gradi, marcate ogni 10)");
+assert.match(html, /const freezing = Math\.abs\(value\) < 0\.01;/,
+  "lo zero termico non e' distinto dalle altre isoterme");
+assert.match(html, /data-toggle="isotherms"/, "interruttore isoterme assente");
+
+// Avviso dati vecchi: servire l'ultimo dato riuscito va bene, non dichiararlo no.
+assert.match(html, /const STALE_RUN_HOURS = 9;/, "soglia dati vecchi assente");
+assert.match(html, /function markStaleRun\(/, "avviso dati vecchi assente");
+assert.match(html, /ui\.runValue\.classList\.toggle\("stale", stale\)/,
+  "l'avviso non viene applicato all'intestazione");
+
 console.log("3D map regression checks: OK");
