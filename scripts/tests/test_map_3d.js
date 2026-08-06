@@ -264,4 +264,37 @@ assert.match(html, /id: "terrain-detail"[\s\S]*?layout: \{ visibility: "none" \}
 assert.match(html, /#map\s*\{[\s\S]*?background: #0a1018;/,
   "prima del caricamento compare ancora un lampo di fondo chiaro");
 
+// Interfaccia: i pannelli galleggiano sulla mappa, quindi il campo di vento
+// arriva ai bordi dello schermo invece di lasciare fasce vuote.
+assert.match(html, /const edgeInset = 2;/,
+  "le frecce non arrivano ai bordi dello schermo");
+assert.match(
+  html,
+  /for \(let y = edgeInset; y < window\.innerHeight - edgeInset; y \+= spacing\) \{\s*\n\s*for \(let x = edgeInset; x < window\.innerWidth - edgeInset; x \+= spacing\) \{/,
+  "la griglia delle frecce non copre tutto il riquadro"
+);
+assert.doesNotMatch(html, /const topInset =|const bottomInset =/,
+  "i vecchi margini che lasciavano i lati scoperti sono tornati");
+
+// I pannelli coprono la mappa: restano leggibili grazie alla sfocatura, ma
+// lasciano intravedere il campo sotto.
+assert.match(html, /--surface: rgba\(8, 24, 38, 0\.72\);/,
+  "i pannelli sono tornati opachi sulla mappa");
+assert.match(html, /#bulletin-card \{[\s\S]*?background: rgba\(6, 18, 29, 0\.94\);/,
+  "il bollettino, che e' testo lungo, deve restare piu' opaco degli altri pannelli");
+
+// Header: su telefono il pannello del marchio cresceva in altezza e finiva
+// sopra la scheda dei metadati. Su mobile resta il solo marchio.
+assert.match(html, /\.brand-panel \.eyebrow,\s*\n\s*\.brand-panel \.brand-subtitle \{\s*\n\s*display: none;/,
+  "su mobile la riga di contesto del marchio invade ancora la mappa");
+assert.match(
+  html,
+  /@media \(min-width: 960px\) \{[\s\S]*?\.brand-panel \.eyebrow,\s*\n\s*\.brand-panel \.brand-subtitle \{\s*\n\s*display: block;/,
+  "sul desktop, dove c'e' spazio, il marchio completo non torna"
+);
+assert.match(html, /\.brand-copy \{\s*\n\s*min-width: 0;/,
+  "senza min-width il testo del marchio non puo' stringersi e sfonda l'header");
+assert.match(html, /class="brand-copy"/,
+  "il blocco di testo del marchio non ha la classe che lo rende comprimibile");
+
 console.log("3D map regression checks: OK");
