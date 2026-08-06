@@ -289,6 +289,13 @@ def prepare_icon_front_analyzer(run_dt):
         "u_wind_925": (f"{run_base}/U/{pressure_file_925}", "u925.grib"),
         "v_wind_925": (f"{run_base}/V/{pressure_file_925}", "v925.grib"),
         "omega_700": (f"{run_base}/OMEGA/{pressure_file_700}", "omega700.grib"),
+        # 700 hPa T/QV corroborate the vertical structure aloft (sez. 5). They
+        # are OPTIONAL: if MeteoHub does not expose them for this dataset the
+        # download degrades and the analyzer runs 925/850 only, signalling the
+        # missing level via reason codes -- no invented data.
+        # The "_ml" suffix keeps these files distinct from the convective
+        # download, which fetches the same 700/500 hPa fields under the plain
+        # names into its own directory.
         "temperature_700": (f"{run_base}/T/{pressure_file_700}", "t700_ml.grib"),
         "humidity_700": (f"{run_base}/QV/{pressure_file_700}", "q700_ml.grib"),
         "u_wind_500": (f"{run_base}/U/{pressure_file_500}", "u500_ml.grib"),
@@ -394,6 +401,8 @@ def prepare_icon_front_analyzer(run_dt):
             lower_u_wind_path=paths.get("u_wind_925"),
             lower_v_wind_path=paths.get("v_wind_925"),
             omega_700_path=paths.get("omega_700"),
+            upper_temperature_path=paths.get("temperature_700"),
+            upper_humidity_path=paths.get("humidity_700"),
             downsample=4,
             bounds=(3.0, 22.0, 33.7, 48.9),
             method=ICON_FRONT_METHOD,

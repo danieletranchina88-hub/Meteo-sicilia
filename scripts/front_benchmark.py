@@ -127,6 +127,74 @@ def load_fronts(path: str | os.PathLike[str]) -> list[dict[str, Any]]:
     return fronts
 
 
+EARTH_KM_PER_DEG = 111.32
+
+
+def _polyline_length_km(line: np.ndarray) -> float:
+    line = np.asarray(line, dtype=float)
+    if len(line) < 2:
+        return 0.0
+    mean_lat = np.deg2rad(float(np.mean(line[:, 1])))
+    dx = np.diff(line[:, 0]) * EARTH_KM_PER_DEG * np.cos(mean_lat)
+    dy = np.diff(line[:, 1]) * EARTH_KM_PER_DEG
+    return float(np.sum(np.hypot(dx, dy)))
+
+
+def _resample_km(line: np.ndarray, step_km: float = 15.0) -> np.ndarray:
+    """Uniform arc-length resampling so per-vertex stats are density-fair."""
+    line = np.asarray(line, dtype=float)
+    if len(line) < 2:
+        return line
+    mean_lat = np.deg2rad(float(np.mean(line[:, 1])))
+    seg = np.hypot(np.diff(line[:, 0]) * EARTH_KM_PER_DEG * np.cos(mean_lat),
+                   np.diff(line[:, 1]) * EARTH_KM_PER_DEG)
+    cumulative = np.concatenate(([0.0], np.cumsum(seg)))
+    total = float(cumulative[-1])
+    if total <= 0.0:
+        return line
+    targets = np.arange(0.0, total + step_km, step_km)
+    return np.column_stack((np.interp(targets, cumulative, line[:, 0]),
+                            np.interp(targets, cumulative, line[:, 1])))
+
+
+def _min_distances_km(points: np.ndarray, line: np.ndarray) -> np.ndarray:
+    """Nearest distance (km) from each of ``points`` (as-is) to ``line``."""
+    a = np.asarray(points, dtype=float)
+    b = _resample_km(line)
+    if len(a) == 0 or len(b) == 0:
+        return np.array([])
+    mean_lat = np.deg2rad(float(np.mean(np.concatenate([a[:, 1], b[:, 1]]))))
+    ax = a[:, 0] * EARTH_KM_PER_DEG * np.cos(mean_lat)
+    ay = a[:, 1] * EARTH_KM_PER_DEG
+    bx = b[:, 0] * EARTH_KM_PER_DEG * np.cos(mean_lat)
+    by = b[:, 1] * EARTH_KM_PER_DEG
+    d = np.hypot(ax[:, None] - bx[None, :], ay[:, None] - by[None, :])
+    return np.min(d, axis=1)
+
+
+def _symmetric_mean_distance_km(a: np.ndarray, b: np.ndarray) -> float:
+    """Mean symmetric nearest-neighbour distance between two lines (km)."""
+    da = _min_distances_km(_resample_km(a), b)
+    db = _min_distances_km(_resample_km(b), a)
+    both = np.concatenate([da, db])
+    return float(np.mean(both)) if len(both) else float("nan")
+
+
+def _covered_length_km(line: np.ndarray, others: list[np.ndarray],
+                       radius_km: float) -> float:
+    """Length of ``line`` whose points lie within ``radius_km`` of any other line."""
+    line = np.asarray(line, dtype=float)
+    if len(line) < 2 or not others:
+        return 0.0
+    dense = _resample_km(line, step_km=5.0)
+    covered = np.zeros(len(dense), dtype=bool)
+    for other in others:
+        d = _min_distances_km(dense, other)
+        if len(d) == len(dense):
+            covered |= d <= radius_km
+    return _polyline_length_km(line) * float(np.mean(covered))
+
+
 def line_match_score(
     prediction: np.ndarray,
     label: np.ndarray,
@@ -208,6 +276,50 @@ def evaluate_case(
     false_negatives = len(labels) - len(matched_labels)
     typed = [match for match in matches if match["typeCorrect"] is not None]
     correct_types = sum(match["typeCorrect"] is True for match in typed)
+
+    # Symmetric nearest-neighbour distance over the accepted matches.
+    match_distances = []
+    for match in matches:
+        prediction = predictions[match["predictionIndex"]]["coordinates"]
+        label = labels[match["labelIndex"]]["coordinates"]
+        distance = _symmetric_mean_distance_km(prediction, label)
+        if np.isfinite(distance):
+            match_distances.append(distance)
+
+    # Length-based accounting: a front matched only over a short stretch is
+    # not fully detected. detected/missed reference length and false predicted
+    # length capture position quality that TP/FP/FN counts miss.
+    prediction_lines = [p["coordinates"] for p in predictions]
+    label_lines = [l["coordinates"] for l in labels]
+    reference_length = sum(_polyline_length_km(l) for l in label_lines)
+    predicted_length = sum(_polyline_length_km(p) for p in prediction_lines)
+    detected_length = sum(
+        _covered_length_km(l, prediction_lines, radius_km) for l in label_lines
+    )
+    false_length = sum(
+        _polyline_length_km(p) - _covered_length_km(p, label_lines, radius_km)
+        for p in prediction_lines
+    )
+
+    # Fragmentation / split-merge: how many predictions fall within radius of
+    # each label (>1 = the reference front was split) and vice versa.
+    preds_per_label = [
+        sum(1 for p in prediction_lines
+            if _covered_length_km(l, [p], radius_km) > 0.1 * _polyline_length_km(l))
+        for l in label_lines
+    ]
+    labels_per_pred = [
+        sum(1 for l in label_lines
+            if _covered_length_km(p, [l], radius_km) > 0.1 * _polyline_length_km(p))
+        for p in prediction_lines
+    ]
+    split_events = sum(1 for n in preds_per_label if n >= 2)
+    merge_events = sum(1 for n in labels_per_pred if n >= 2)
+
+    # Type confusion pairs (only over matched, typed pairs).
+    type_confusion = [
+        [match["labelledType"], match["predictedType"]] for match in typed
+    ]
     return {
         "predictionCount": len(predictions),
         "labelCount": len(labels),
@@ -217,6 +329,15 @@ def evaluate_case(
         "frontCountError": len(predictions) - len(labels),
         "typedMatches": len(typed),
         "correctTypes": correct_types,
+        "referenceLengthKm": round(reference_length, 1),
+        "predictedLengthKm": round(predicted_length, 1),
+        "detectedReferenceLengthKm": round(detected_length, 1),
+        "missedLengthKm": round(max(0.0, reference_length - detected_length), 1),
+        "falsePredictedLengthKm": round(max(0.0, false_length), 1),
+        "splitEvents": split_events,
+        "mergeEvents": merge_events,
+        "matchDistancesKm": match_distances,
+        "typeConfusionPairs": type_confusion,
         "matches": matches,
         "predictionOutcomes": [
             {
@@ -257,11 +378,63 @@ def _score_bins(outcomes: list[dict[str, Any]]) -> list[dict[str, Any]]:
     return result
 
 
+def _lead_band(lead_hours) -> str:
+    try:
+        lead = float(lead_hours)
+    except (TypeError, ValueError):
+        return "unknown"
+    if lead <= 12:
+        return "0-12h"
+    if lead <= 36:
+        return "12-36h"
+    return "36-72h"
+
+
+def _stratified(case_reports: list[dict[str, Any]]) -> dict[str, Any]:
+    """Presence metrics grouped by case metadata (season, lead band, surface,
+    orography, front type, lifecycle). Only groups that carry the field."""
+    dimensions = {
+        "season": lambda c: c.get("season"),
+        "localHour": lambda c: c.get("localHour"),
+        "surface": lambda c: c.get("surface"),
+        "orography": lambda c: c.get("orography"),
+        "lifecycle": lambda c: c.get("lifecycle"),
+        "leadBand": lambda c: _lead_band(c.get("leadHours")),
+    }
+    out: dict[str, Any] = {}
+    for name, getter in dimensions.items():
+        groups: dict[str, dict[str, int]] = {}
+        for case in case_reports:
+            key = getter(case)
+            if key is None:
+                continue
+            bucket = groups.setdefault(
+                str(key), {"tp": 0, "fp": 0, "fn": 0, "cases": 0}
+            )
+            bucket["tp"] += case["truePositives"]
+            bucket["fp"] += case["falsePositives"]
+            bucket["fn"] += case["falseNegatives"]
+            bucket["cases"] += 1
+        if not groups:
+            continue
+        out[name] = {
+            key: {
+                "pod": _round_metric(_safe_div(g["tp"], g["tp"] + g["fn"])),
+                "successRatio": _round_metric(_safe_div(g["tp"], g["tp"] + g["fp"])),
+                "csi": _round_metric(_safe_div(g["tp"], g["tp"] + g["fp"] + g["fn"])),
+                "cases": g["cases"],
+            }
+            for key, g in groups.items()
+        }
+    return out
+
+
 def evaluate_manifest(
     manifest_path: str | os.PathLike[str],
     split: str | None = "test",
     radius_km: float = DEFAULT_RADIUS_KM,
     minimum_overlap: float = DEFAULT_MIN_OVERLAP,
+    mode: str | None = None,
 ) -> dict[str, Any]:
     manifest_path = Path(manifest_path).resolve()
     with open(manifest_path, encoding="utf-8") as handle:
@@ -270,7 +443,8 @@ def evaluate_manifest(
     selected = [
         case
         for case in manifest.get("cases", [])
-        if split is None or case.get("split") == split
+        if (split is None or case.get("split") == split)
+        and (mode is None or case.get("mode", "forecast") == mode)
     ]
     case_reports = []
     warnings = []
@@ -292,6 +466,13 @@ def evaluate_manifest(
                 "id": case_id,
                 "validTime": case.get("validTime"),
                 "labelSource": case.get("labelSource"),
+                "mode": case.get("mode", "forecast"),
+                "season": case.get("season"),
+                "localHour": case.get("localHour"),
+                "surface": case.get("surface"),
+                "orography": case.get("orography"),
+                "lifecycle": case.get("lifecycle"),
+                "leadHours": case.get("leadHours"),
                 **metrics,
             }
         )
@@ -309,6 +490,36 @@ def evaluate_manifest(
             "correctTypes",
         )
     }
+    length_totals = {
+        key: round(sum(case[key] for case in case_reports), 1)
+        for key in (
+            "referenceLengthKm",
+            "predictedLengthKm",
+            "detectedReferenceLengthKm",
+            "missedLengthKm",
+            "falsePredictedLengthKm",
+        )
+    }
+    continuity_totals = {
+        key: sum(case[key] for case in case_reports)
+        for key in ("splitEvents", "mergeEvents")
+    }
+    all_distances = [
+        distance for case in case_reports for distance in case["matchDistancesKm"]
+    ]
+    length_recall = _safe_div(
+        length_totals["detectedReferenceLengthKm"], length_totals["referenceLengthKm"]
+    )
+    false_length_ratio = _safe_div(
+        length_totals["falsePredictedLengthKm"], length_totals["predictedLengthKm"]
+    )
+    confusion: dict[str, dict[str, int]] = {}
+    for case in case_reports:
+        for labelled, predicted in case["typeConfusionPairs"]:
+            confusion.setdefault(labelled, {})
+            confusion[labelled][predicted] = (
+                confusion[labelled].get(predicted, 0) + 1
+            )
     precision = _safe_div(
         totals["truePositives"],
         totals["truePositives"] + totals["falsePositives"],
@@ -343,9 +554,10 @@ def evaluate_manifest(
         and totals["predictionCount"] >= MIN_PROBABILITY_PREDICTIONS
     )
     return {
-        "schemaVersion": 1,
+        "schemaVersion": 2,
         "manifest": str(manifest_path),
         "split": split if split is not None else "all",
+        "evaluationMode": mode if mode is not None else "all",
         "spatialToleranceKm": radius_km,
         "minimumBidirectionalOverlap": minimum_overlap,
         "caseCount": len(case_reports),
@@ -375,7 +587,29 @@ def evaluate_manifest(
                 if case_reports
                 else None
             ),
+            "lengthRecall": _round_metric(length_recall),
+            "falseLengthRatio": _round_metric(false_length_ratio),
+            "meanSymmetricDistanceKm": _round_metric(
+                float(np.mean(all_distances)) if all_distances else None, 1
+            ),
+            "medianSymmetricDistanceKm": _round_metric(
+                float(np.median(all_distances)) if all_distances else None, 1
+            ),
+            "p95SymmetricDistanceKm": _round_metric(
+                float(np.percentile(all_distances, 95)) if all_distances else None, 1
+            ),
         },
+        "lengthAccountingKm": {
+            "reference": length_totals["referenceLengthKm"],
+            "predicted": length_totals["predictedLengthKm"],
+            "detectedReference": length_totals["detectedReferenceLengthKm"],
+            "missed": length_totals["missedLengthKm"],
+            "falsePredicted": length_totals["falsePredictedLengthKm"],
+        },
+        "continuity": continuity_totals,
+        "typeConfusionMatrix": confusion,
+        "matchTypePolicy": "presence type-independent; typeAccuracy over matched pairs",
+        "stratification": _stratified(case_reports),
         "qualityScoreDiagnostic": {
             "interpretation": (
                 "Empirical match rate by heuristic quality score; not a probability."
@@ -397,6 +631,7 @@ def radius_sensitivity(
     radii_km: list[float],
     split: str | None = "test",
     minimum_overlap: float = DEFAULT_MIN_OVERLAP,
+    mode: str | None = None,
 ) -> list[dict[str, Any]]:
     """Re-run the benchmark at several spatial tolerances.
 
@@ -407,7 +642,7 @@ def radius_sensitivity(
     rows = []
     for radius in sorted(set(float(r) for r in radii_km)):
         report = evaluate_manifest(
-            manifest_path, split, radius, minimum_overlap
+            manifest_path, split, radius, minimum_overlap, mode
         )
         rows.append({
             "radiusKm": radius,
@@ -416,6 +651,8 @@ def radius_sensitivity(
             "successRatio": report["metrics"]["successRatio"],
             "csi": report["metrics"]["csi"],
             "f1": report["metrics"]["f1"],
+            "lengthRecall": report["metrics"]["lengthRecall"],
+            "medianSymmetricDistanceKm": report["metrics"]["medianSymmetricDistanceKm"],
             "typeAccuracy": report["metrics"]["typeAccuracy"],
         })
     return rows
@@ -429,18 +666,22 @@ def main() -> None:
     parser.add_argument("--min-overlap", type=float, default=DEFAULT_MIN_OVERLAP)
     parser.add_argument(
         "--radius-grid-km",
-        help="lista di raggi (es. 50,75,100,150) per la sezione radiusSensitivity",
+        help="lista di raggi (es. 25,50,100,150) per la sezione radiusSensitivity",
+    )
+    parser.add_argument(
+        "--mode", choices=["detector", "forecast"], default=None,
+        help="detector = ICON-2I-ASSIM/analisi; forecast = previsione deterministica",
     )
     parser.add_argument("--out", help="scrive il report JSON; altrimenti stdout")
     args = parser.parse_args()
     split = None if args.split == "all" else args.split
     report = evaluate_manifest(
-        args.manifest, split, args.radius_km, args.min_overlap
+        args.manifest, split, args.radius_km, args.min_overlap, args.mode
     )
     if args.radius_grid_km:
         radii = [float(token) for token in args.radius_grid_km.split(",") if token.strip()]
         report["radiusSensitivity"] = radius_sensitivity(
-            args.manifest, radii, split, args.min_overlap
+            args.manifest, radii, split, args.min_overlap, args.mode
         )
     rendered = json.dumps(report, indent=2, ensure_ascii=False)
     if args.out:

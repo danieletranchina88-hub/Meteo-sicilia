@@ -19,6 +19,7 @@ import os
 import numpy as np
 
 import front_detection as fd
+import front_geometry as fgeo
 import front_locator as fl
 import front_occlusion as focc
 import front_physics as fp
@@ -172,6 +173,8 @@ class IconSynopticFrontAnalyzer(SynopticFrontAnalyzer):
         lower_u_wind_path: str | None = None,
         lower_v_wind_path: str | None = None,
         omega_700_path: str | None = None,
+        upper_temperature_path: str | None = None,
+        upper_humidity_path: str | None = None,
         ml_guidance=None,
         **kwargs,
     ) -> None:
@@ -264,6 +267,38 @@ class IconSynopticFrontAnalyzer(SynopticFrontAnalyzer):
                     self.datasets.pop(key).close()
                     self.keys.pop(key, None)
 
+        # Optional 700 hPa thermodynamics (sez. 5): corroborates aloft and is
+        # the fallback reference where 850 hPa is close to the ground. Absent
+        # by default (MeteoHub currently exposes omega at 700 but not T/QV):
+        # missing is neutral, signalled downstream, never counter-evidence.
+        if upper_temperature_path and upper_humidity_path:
+            added = []
+            opened = None
+            try:
+                for key, path in (
+                    ("t700", upper_temperature_path),
+                    ("q700", upper_humidity_path),
+                ):
+                    opened = self._open_field(path, key)
+                    self._validate_optional_dataset(opened, key, 700.0)
+                    variable = next(iter(opened.data_vars))
+                    values = np.asarray(opened[variable].values, dtype=float)
+                    median = _finite_median(values)
+                    if key == "t700" and not 180.0 < median < 320.0:
+                        raise ValueError("T700 non espressa in kelvin")
+                    if key == "q700" and not 0.0 <= median < 0.1:
+                        raise ValueError("QV700 non espressa in kg/kg")
+                    self.datasets[key] = opened
+                    self.keys[key] = variable
+                    added.append(key)
+                    opened = None
+            except Exception:
+                if opened is not None:
+                    opened.close()
+                for key in added:
+                    self.datasets.pop(key).close()
+                    self.keys.pop(key, None)
+
         if omega_700_path:
             try:
                 dataset = self._open_field(omega_700_path, "omega700")
@@ -315,6 +350,10 @@ class IconSynopticFrontAnalyzer(SynopticFrontAnalyzer):
     @property
     def has_lower_wind(self) -> bool:
         return "u925" in self.datasets and "v925" in self.datasets
+
+    @property
+    def has_upper_level(self) -> bool:
+        return "t700" in self.datasets and "q700" in self.datasets
 
     @staticmethod
     def _offset_points(
@@ -571,6 +610,11 @@ class IconSynopticFrontAnalyzer(SynopticFrontAnalyzer):
         if self.has_lower_level:
             theta_w_925 = self._theta_w(hour, 925).copy()
             theta_w_925[self.terrain > 650.0] = np.nan
+        theta_w_700 = None
+        if self.has_upper_level:
+            # 700 hPa sits above most terrain, so no orographic mask is needed;
+            # it is the fallback reference where 850 is close to the ground.
+            theta_w_700 = self._theta_w(hour, 700).copy()
 
         accepted = []
         rejected: list[dict] = []
@@ -855,15 +899,29 @@ class IconSynopticFrontAnalyzer(SynopticFrontAnalyzer):
                 theta_w, self.longitudes, self.latitudes, coordinates, normal,
             ))
             metrics.update(section_850)
+            section_925 = section_700 = None
             if theta_w_925 is not None:
                 section_925 = fsec.profile_diagnostics(fsec.cross_profiles(
                     theta_w_925, self.longitudes, self.latitudes,
                     coordinates, normal,
                 ))
                 metrics["frontWidth925Km"] = section_925.get("frontWidthKm")
-                coherence = fsec.vertical_coherence(section_850, section_925)
-                if coherence is not None:
-                    metrics["verticalCoherence"] = coherence
+            if theta_w_700 is not None:
+                section_700 = fsec.profile_diagnostics(fsec.cross_profiles(
+                    theta_w_700, self.longitudes, self.latitudes,
+                    coordinates, normal,
+                ))
+                metrics["frontWidth700Km"] = section_700.get("frontWidthKm")
+            if section_925 is not None or section_700 is not None:
+                coherence = fsec.multilevel_coherence(
+                    section_850, section_925, section_700,
+                    terrain_fraction=metrics.get("terrainFraction", 0.0),
+                )
+                if coherence["verticalCoherence"] is not None:
+                    metrics["verticalCoherence"] = coherence["verticalCoherence"]
+                if coherence["coherence700"] is not None:
+                    metrics["verticalCoherence700"] = coherence["coherence700"]
+                metrics["verticalSupportLevels"] = coherence["supportedLevels"]
 
             evidence = fp.candidate_evidence(metrics)
             metrics.update(evidence)
@@ -873,6 +931,21 @@ class IconSynopticFrontAnalyzer(SynopticFrontAnalyzer):
                 metrics, gates = self.ml_guidance.evaluate(
                     hour, metrics["coordinates"], metrics, gates
                 )
+            # Continuous geometric penalties (sez. 8) + machine reason codes
+            # (sez. 11): computed only for candidates that will be published or
+            # kept for weak-phase recovery, so the O(n^2) shape scan never runs
+            # on discarded noise. Never veto a shape -- only describe it; a
+            # closed loop keeps confidence only with cyclonic support.
+            # Runs after the ML fusion so the codes describe the gates as they
+            # are finally published, not an intermediate state.
+            if gates["continuationPass"] or gates.get("diagnosis") == "synoptic-front":
+                geometry = fgeo.geometry_metrics(coordinates)
+                for key in ("meanTurningDegPerStep", "maxTurningDeg",
+                            "tangentReversals", "selfIntersections", "closedLoop",
+                            "enclosedAreaKm2", "isoperimetricPenalty",
+                            "curvaturePenalty"):
+                    metrics[key] = geometry[key]
+                metrics["reasonCodes"] = fp.reason_codes(metrics)
             if not gates["continuationPass"]:
                 # A rejected candidate is recorded, not silently dropped, so
                 # the reason is inspectable (diagnostic mode / QC).
@@ -1272,6 +1345,10 @@ class IconSynopticFrontAnalyzer(SynopticFrontAnalyzer):
             observation = (track.get("observations") or {}).get(hour) or {}
             hour_diagnostics = observation.get("diagnostics") or {}
             properties["gateStatus"] = observation.get("gateStatus")
+            properties["reasonCodes"] = list(observation.get("reasonCodes", []))
+            properties["rawPhysicalScore"] = _json_number(
+                observation.get("candidateEvidence"), 3
+            )
             properties["fusion"] = {
                 "decision": observation.get("fusionDecision", "physics-only"),
                 "mlFrontProbability": _json_number(
@@ -1342,6 +1419,32 @@ class IconSynopticFrontAnalyzer(SynopticFrontAnalyzer):
             )
             properties["gateStatus"] = None
             properties["recovered"] = False
+            properties["reasonCodes"] = ["INTERPOLATED_HOUR"]
+            properties["rawPhysicalScore"] = None
+
+        # Explicit score separation (sez. 11): instantaneous physical quality
+        # vs temporally-filtered track quality. calibratedProbability stays
+        # null until a calibrator is trained on independent cases -- the
+        # heuristic score is never presented as a probability.
+        hourly_uncertainty = float(properties["uncertaintyIndex"])
+        properties["physicalQuality"] = properties["qualityScore"]
+        properties["trackQuality"] = properties["trackQualityScore"]
+        properties["calibratedProbability"] = None
+        properties["confidenceLevel"] = (
+            "high" if hourly_uncertainty <= 0.36
+            else "moderate" if hourly_uncertainty <= 0.52 else "low"
+        )
+        # Instantaneous vs temporally-filtered type (sez. 10): the hour's own
+        # local classification vs the track's dominant type. Both exposed so
+        # a genuine change is visible and the smoothing is auditable.
+        local = (track.get("localClassifications") or {}).get(hour) or {}
+        properties["instantType"] = local.get(
+            "frontType", classification.get("frontType")
+        )
+        properties["trackType"] = track.get("frontType")
+        properties["lifecycleEvents"] = (
+            track.get("lifecycle") or {}
+        ).get("events", [])
         return properties
 
     def analyze(self, hour: int) -> dict:

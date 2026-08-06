@@ -216,6 +216,84 @@ def vertical_coherence(diagnostics_850: dict, diagnostics_925: dict | None):
     return round(float(np.clip(coherence, 0.0, 1.0)), 3)
 
 
+def _pair_coherence(diagnostics_a: dict, diagnostics_b: dict, min_valid=0.20):
+    """Coherence of two cross-front profiles (same metric-offset diagnostics).
+
+    Returns None (neutral) when the second profile is unavailable or almost
+    entirely invalid, else a [0, 1] score from same-sign contrast, gradient
+    ratio, distance between the gradient maxima and width similarity.
+    """
+    if not diagnostics_b:
+        return None
+    valid_b = float(diagnostics_b.get("profileValidFraction") or 0.0)
+    if valid_b < min_valid:
+        return None
+    sign = min(
+        float(diagnostics_a.get("profileThermalSupport") or 0.0),
+        float(diagnostics_b.get("profileThermalSupport") or 0.0),
+    )
+    pa = diagnostics_a.get("profilePeakGradient")
+    pb = diagnostics_b.get("profilePeakGradient")
+    ratio = (
+        float(np.clip(min(pa, pb) / max(pa, pb), 0.0, 1.0))
+        if _finite(pa) and _finite(pb) and max(pa, pb) > 0 else 0.0
+    )
+    oa = diagnostics_a.get("frontOffsetKm")
+    ob = diagnostics_b.get("frontOffsetKm")
+    offset = (
+        float(np.clip(1.0 - abs(oa - ob) / 60.0, 0.0, 1.0))
+        if _finite(oa) and _finite(ob) else 0.0
+    )
+    wa = diagnostics_a.get("frontWidthKm")
+    wb = diagnostics_b.get("frontWidthKm")
+    width = (
+        float(np.clip(min(wa, wb) / max(wa, wb), 0.0, 1.0))
+        if _finite(wa) and _finite(wb) and max(wa, wb) > 0 else 0.0
+    )
+    both_valid = min(
+        float(diagnostics_a.get("profileValidFraction") or 0.0), valid_b
+    )
+    score = (0.35 * sign + 0.25 * ratio + 0.20 * offset + 0.20 * width) \
+        * float(np.clip(both_valid / 0.60, 0.0, 1.0))
+    return round(float(np.clip(score, 0.0, 1.0)), 3)
+
+
+def multilevel_coherence(diagnostics_850, diagnostics_925, diagnostics_700=None,
+                         terrain_fraction=0.0):
+    """Vertical coherence across 925/850/700 hPa (sez. 5).
+
+    850 hPa is the reference. 925 hPa checks the link to the low levels;
+    700 hPa corroborates aloft and becomes the FALLBACK reference when 850 is
+    close to the ground (high ``terrain_fraction``), where the 850 signal is
+    unreliable. Missing levels are neutral (contribute nothing), never
+    counter-evidence. Returns a dict with the combined score and the
+    per-level breakdown plus which levels supported the object.
+    """
+    coherence_925 = _pair_coherence(diagnostics_850, diagnostics_925)
+    coherence_700 = _pair_coherence(diagnostics_850, diagnostics_700)
+    parts = []
+    levels = []
+    # near the ground the 850 anchor is weak: lean on 700 more heavily
+    orographic = float(np.clip(terrain_fraction, 0.0, 1.0))
+    if coherence_925 is not None:
+        parts.append((coherence_925, 1.0))
+        levels.append("925")
+    if coherence_700 is not None:
+        parts.append((coherence_700, 1.0 + 1.5 * orographic))
+        levels.append("700")
+    if not parts:
+        combined = None
+    else:
+        weight_sum = sum(w for _, w in parts)
+        combined = round(sum(c * w for c, w in parts) / weight_sum, 3)
+    return {
+        "verticalCoherence": combined,
+        "coherence925": coherence_925,
+        "coherence700": coherence_700,
+        "supportedLevels": levels,
+    }
+
+
 def _finite(value) -> bool:
     try:
         return np.isfinite(float(value))

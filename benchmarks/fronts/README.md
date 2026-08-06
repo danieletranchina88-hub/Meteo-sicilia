@@ -101,6 +101,39 @@ verifica previsionale:
 - **CSI** (critical success index) — `TP / (TP + FP + FN)`: un solo numero
   che paga sia i falsi allarmi sia i fronti mancati.
 
+### Metriche di lunghezza, distanza, continuità e tipo (schema v2)
+
+Oltre ai conteggi, il report espone:
+
+- **contabilità delle lunghezze** (`lengthAccountingKm`): `reference`,
+  `predicted`, `detectedReference` (quanta lunghezza etichettata è coperta da
+  una previsione entro il raggio), `missed`, `falsePredicted`;
+- **`lengthRecall`** = detectedReference / reference e **`falseLengthRatio`**
+  = falsePredicted / predicted: catturano gli errori di posizione che i soli
+  TP/FP/FN nascondono (un fronte agganciato solo su un tratto breve non è
+  rilevato per intero);
+- **distanze simmetriche** media / mediana / 95° percentile fra le linee
+  accoppiate (`meanSymmetricDistanceKm`, `medianSymmetricDistanceKm`,
+  `p95SymmetricDistanceKm`);
+- **continuità** (`continuity`): `splitEvents` (un fronte di riferimento
+  spezzato in più previsioni) e `mergeEvents` (più fronti fusi in uno);
+- **matrice di confusione dei tipi** (`typeConfusionMatrix`) sulle coppie
+  accoppiate; il matching della presenza è **indipendente dal tipo**, la
+  correttezza del tipo è valutata a parte (`matchTypePolicy`);
+- **stratificazione** (`stratification`): POD / success ratio / CSI raggruppati
+  per `season`, `localHour`, `surface`, `orography`, `lifecycle` e banda di
+  lead (`0-12h` / `12-36h` / `36-72h`), quando i casi del manifest portano
+  quei campi.
+
+### Detector vs forecast (sez. 14)
+
+`--mode detector` valuta solo i casi che nel manifest hanno `mode: detector`
+(algoritmo applicato a ICON-2I-ASSIM o al campo più vicino a un'analisi →
+misura soprattutto l'errore del **rilevatore**); `--mode forecast` valuta i
+casi di previsione deterministica (errore di previsione + rilevazione).
+Nessun altro modello numerico è usato come verità: le etichette restano
+carte frontali umane.
+
 ### Sensibilità al raggio spaziale
 
 Con `--radius-grid-km 50,75,100,150` il report include la sezione

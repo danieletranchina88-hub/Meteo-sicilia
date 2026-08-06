@@ -392,6 +392,19 @@ superficie interseca il terreno, già mascherate — sono **neutri**, mai prova
 contraria: una grave incoerenza riduce l'evidenza ma non cancella da sola un
 fronte ben sostenuto a 850 hPa.
 
+**Coerenza multilivello 925/850/700.** Quando anche i campi termodinamici a
+**700 hPa** sono disponibili (`upper_temperature_path`/`upper_humidity_path`),
+`multilevel_coherence` estende il confronto a tre quote: 850 resta il
+riferimento, 925 verifica il collegamento con gli strati bassi sopra mare e
+pianure, **700 corrobora in quota e diventa il riferimento di ripiego dove
+850 è vicino al terreno** (peso maggiore all'aumentare della frazione
+orografica). Ogni livello mancante è neutro, mai contrario; i codici
+`VERTICAL_SUPPORT_700` / `MISSING_OPTIONAL_FIELD_700` rendono esplicito il
+contributo. **Stato dati:** MeteoHub oggi espone omega a 700 hPa ma non T/QV;
+il download di `t700`/`q700` è quindi opzionale e degrada in modo sicuro
+(analisi 925/850). Per attivarlo basta che il dataset ICON-2I serva T e QV a
+700 hPa: `process_data.py` li scarica già come campi opzionali.
+
 ## 6. Significato dell'incertezza
 
 L'indice aumenta con prove fisiche deboli, scarsa continuità, moto instabile,
@@ -426,6 +439,28 @@ espone, oltre a `qualityScore`/`uncertaintyIndex` e ai `diagnostics` numerici:
 
 La spiegazione non introduce nuova fisica: rende leggibile ciò che i punteggi
 codificano, così l'utente vede *perché* una linea è un fronte.
+
+**Codici macchina (`reasonCodes`) e separazione degli score.** Oltre alla
+spiegazione in linguaggio umano, ogni ora osservata espone una lista di
+codici leggibili da macchina derivati *dalle diagnostiche già calcolate*
+(`front_physics.reason_codes`), con soglie **configurabili e documentate**
+(`REASON_CODE_THRESHOLDS`) che non filtrano il rilevamento ma etichettano
+soltanto: `STRONG_DRY_THERMAL_GRADIENT`, `STRONG_THETAW_CONTRAST`,
+`MOISTURE_DOMINATED`, `VERTICAL_SUPPORT_925`, `VERTICAL_INCOHERENCE`,
+`ASCENT_700_CONFIRMED`, `WIND_SHIFT_CONFIRMED`, `CONVERGENCE_CONFIRMED`,
+`COLD_/WARM_ADVECTION_CONFIRMED`, `CYCLONE_ASSOCIATED`, `OROGRAPHIC_PENALTY`,
+`LEVEL_BELOW_GROUND_925`, `MISSING_OPTIONAL_FIELD_*`. Un codice `MISSING_*`
+è informazione neutra (campo assente o campione non valido per quell'oggetto),
+mai una penalità. Le ore interpolate portano `INTERPOLATED_HOUR`.
+
+Gli score sono esposti separati e con nomi espliciti (additivi, il GeoJSON
+resta compatibile): `rawPhysicalScore` (evidenza fisica grezza dell'ora),
+`physicalQuality` (= `qualityScore` orario), `trackQuality`
+(= `trackQualityScore`, filtrato nel tempo), `confidenceLevel`
+(high/moderate/low dall'incertezza oraria) e `calibratedProbability`, che
+resta **`null`** finché un calibratore non sarà addestrato su casi
+indipendenti: un punteggio euristico non viene mai presentato come
+probabilità.
 
 ## 6c. Campo continuo di supporto (Fase B, ispirato a Biard & Kunkel 2019)
 

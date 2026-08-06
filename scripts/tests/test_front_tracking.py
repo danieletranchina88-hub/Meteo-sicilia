@@ -374,5 +374,38 @@ if tr_weakhour:
 else:
     print("R) FAIL: traccia con ora debole assente"); ok = False
 
+# S) Life-cycle events: two tracks ending where one begins -> merge/split ---
+# Build three tracks by hand and annotate; A(6-8) and B(6-8) both end near
+# C(9-11)'s start -> C is a merge, A and B are splits.
+def _line(lat0, lat1):
+    return {"coordinates": np.column_stack((np.linspace(8, 18, 10),
+                                            np.linspace(lat0, lat1, 10))),
+            "warmNormal": np.tile([0.0, -1.0], (10, 1)), "lengthKm": 900.0}
+
+def _mk(track_id, hours, lat):
+    r = {"id": track_id, "hours": list(hours),
+         "lines": {h: _line(lat, lat)["coordinates"] for h in hours},
+         "frontType": "cold", "segmentTypes": {}}
+    return r
+
+# merge group at lat ~43 (A,B end at 8 -> M starts at 9); split group at
+# lat ~46 far away (S ends at 8 -> X,Y start at 9): >300 km apart so the two
+# groups never cross-associate.
+res = [
+    _mk(0, [6, 7, 8], 43.00), _mk(1, [6, 7, 8], 43.05),  # A, B  -> merge into M
+    _mk(2, [9, 10, 11], 43.02),                           # M (merge)
+    _mk(3, [6, 7, 8], 46.00),                             # S -> split into X, Y
+    _mk(4, [9, 10, 11], 46.00), _mk(5, [9, 10, 11], 46.05),  # X, Y
+]
+ft.annotate_lifecycle(res, gate_km=170.0)
+events = {r["id"]: r["lifecycle"]["events"] for r in res}
+print("S) eventi lifecycle:", events)
+if "merge" not in events[2]:
+    print("  FAIL: due tracce che confluiscono in una -> merge non riconosciuto"); ok = False
+if "split" not in events[3]:
+    print("  FAIL: una traccia che si biforca in due -> split non riconosciuto"); ok = False
+if not all("genesis" in events[i] and "lysis" in events[i] for i in range(6)):
+    print("  FAIL: genesis/lysis devono essere sempre presenti"); ok = False
+
 print("\nESITO:", "SUPERATO" if ok else "DA RIVEDERE")
 raise SystemExit(0 if ok else 1)
