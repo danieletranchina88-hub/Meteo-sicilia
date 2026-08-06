@@ -1741,6 +1741,18 @@
               <button class="toggle-row" type="button" data-toggle="satclouds" aria-pressed="false">
                 <span><b>Nubi da satellite</b><small id="satclouds-note">MTG infrarosso 10.5 µm · 1 km · in tempo reale</small></span><span class="switch"></span>
               </button>
+              <div id="satclouds-picker" class="level-picker" style="display: none">
+                <label for="satclouds-select">Satellite · formato
+                  <small>canale e risoluzione dello strumento</small>
+                </label>
+                <select id="satclouds-select" aria-label="Formato dell'immagine satellitare">
+                  <option value="ir105" selected>Infrarosso 10.5 µm · 1 km · giorno e notte</option>
+                  <option value="vis06">Visibile 0.6 µm · 500 m · solo di giorno</option>
+                  <option value="truecolour">Colori reali · 500 m · solo di giorno</option>
+                  <option value="geocolour">GeoColour · colori di giorno, infrarosso di notte</option>
+                  <option value="cloudtype">Tipo di nube · spessore, quota e fase</option>
+                </select>
+              </div>
               <button class="toggle-row" type="button" data-toggle="fusion" aria-pressed="false">
                 <span><b>Analisi osservata</b><small>ICON-2I fuso con stazioni METAR · T, P, UR</small></span><span class="switch"></span>
               </button>
@@ -2425,6 +2437,7 @@
         detailWetbulb: document.getElementById("detail-wetbulb"),
         levelPicker: document.getElementById("level-picker"),
         levelSelect: document.getElementById("level-select"),
+        satcloudsSelect: document.getElementById("satclouds-select"),
         particleDensitySelect: document.getElementById("particle-density-select"),
         particleTrailSelect: document.getElementById("particle-trail-select")
       };
@@ -3467,59 +3480,123 @@
       }
 
       // ===============================================================
-      // Nubi osservate dal satellite
+      // Nubi osservate dal satellite, in tempo reale
       //
-      // Sorgente: MTG-I1 / FCI, canale infrarosso a 10.5 micrometri, 1 km di
-      // risoluzione e un'immagine ogni 10 minuti (EUMETSAT, servizio pubblico
-      // EUMETView). L'infrarosso misura la temperatura di brillanza della cima
-      // della nube: le nubi sono piu' fredde dello sfondo e quindi chiare, e
-      // si vedono anche di notte -- al contrario del canale visibile, che al
-      // buio non esiste. E' la scelta giusta per una mappa che si guarda a
-      // qualsiasi ora.
+      // Sorgente: Meteosat Third Generation (MTG-I1), strumento FCI, servizio
+      // pubblico EUMETView di EUMETSAT. Un'immagine ogni 10 minuti su tutto
+      // il disco; qui si sceglie il canale.
       //
-      // EUMETSAT serve l'immagine come PNG opaco in scala di grigi. Una
-      // sovrapposizione utile deve invece lasciar vedere la mappa dove il
-      // cielo e' sereno, e MapLibre non sa ricavare l'opacita' dal colore di
-      // un raster: "raster-color" e' un'estensione di Mapbox e in MapLibre 5
-      // non esiste (verificato nel bundle 5.24.0, che espone solo opacity,
-      // contrast, saturation, hue-rotate e brightness). Quindi scarico una
-      // sola immagine su tutto il dominio, la trasformo su una canvas --
-      // grigio dell'infrarosso -> opacita' -- e la pubblico come sorgente
-      // immagine, che MapLibre drappeggia anche sul terreno in vista 3D.
+      // Tre cose vanno fatte bene, e ognuna e' stata misurata prima di
+      // scriverla.
+      //
+      // 1. TRASPARENZA. EUMETSAT serve immagini opache: mostrano anche mare e
+      //    terra, quindi coprirebbero la mappa invece di sovrapporsi. E
+      //    MapLibre non sa ricavare l'opacita' dal colore di un raster --
+      //    "raster-color" e' un'estensione di Mapbox, nel bundle MapLibre
+      //    5.24.0 non c'e' (espone solo opacity, contrast, saturation,
+      //    hue-rotate, brightness). Quindi l'immagine passa da una canvas che
+      //    ne calcola il canale alfa e la ripubblica come sorgente immagine,
+      //    che MapLibre drappeggia anche sul terreno in vista 3D.
+      //
+      // 2. ISTANTE ESPLICITO. Senza parametro "time" il servizio compone il
+      //    mosaico con tessere di passaggi diversi e sull'intero dominio si
+      //    vedono i riquadri con esposizioni differenti -- provato, e' molto
+      //    evidente sui prodotti a colori. Fissando l'istante il mosaico e'
+      //    uniforme. Chiedo uno slot gia' passato di una ventina di minuti,
+      //    che e' la latenza di diffusione osservata: cosi' esiste sempre, e
+      //    se manca il servizio prende il piu' vicino invece di dare errore.
+      //    In cambio so davvero l'ora della ripresa e posso scriverla.
+      //
+      // 3. RISOLUZIONE. Il pixel nativo e' 500 m nel visibile e 1 km
+      //    nell'infrarosso. Invece di una sola immagine fissa sul dominio,
+      //    chiedo il riquadro che si sta guardando alla risoluzione dello
+      //    strumento: zoomando sulla Sicilia l'immagine e' piccola da
+      //    scaricare e piena di dettaglio, mentre a scala sinottica copre
+      //    tutta l'Italia. Il servizio limita le richieste (20 per finestra,
+      //    lo dichiara nelle sue risposte), quindi ricarico solo quando il
+      //    riquadro esce da quello gia' scaricato o quando c'e' davvero
+      //    dettaglio da guadagnare, e comunque non prima di mezzo secondo
+      //    dalla fine del gesto.
       // ===============================================================
 
-      // Stessi angoli del raster del modello: cosi' la nube e il campo
-      // previsto sono inquadrati sullo stesso riquadro.
-      const CLOUD_CORNERS = [[6, 48], [20, 48], [20, 35], [6, 35]];
       const CLOUD_WMS = "https://view.eumetsat.int/geoserver/wms";
-      const CLOUD_WMS_LAYER = "mtg_fd:ir105_hrfi";
-      // Il satellite produce un'immagine ogni 10 minuti. Senza parametro
-      // "time" il servizio restituisce sempre l'ultima disponibile (verificato:
-      // la risposta e' identica byte per byte a quella con il time esplicito
-      // dell'ultimo slot). Ma dichiara anche cache-control di una settimana,
-      // quindi senza qualcosa che cambi nell'indirizzo il browser continuerebbe
-      // a mostrare per giorni la stessa immagine: ci penso con un contatore
-      // legato al decadale.
+      // Il dominio oltre il quale non ha senso spingersi: e' quello del
+      // modello, ed e' anche il riquadro usato a scala sinottica.
+      const CLOUD_DOMAIN = { west: 6, south: 35, east: 20, north: 48 };
       const CLOUD_SLOT_MS = 10 * 60 * 1000;
-      // Il servizio applica un limite di richieste (dichiarato nelle sue
-      // risposte: 20 per finestra, oltre si viene rallentati). Una sola
-      // immagine ogni cinque minuti per utente ci sta larghissima, ed e'
-      // anche il motivo per cui scarico un'unica immagine sul dominio invece
-      // di centinaia di tessere.
-      // Soglie sul grigio dell'infrarosso, calibrate sul dominio italiano:
-      // sotto la prima e' cielo sereno o superficie, sopra la seconda e' nube
-      // spessa. Fra le due l'opacita' sale con una smoothstep, cosi' il bordo
-      // sfuma invece di tagliare netto.
-      const CLOUD_CLEAR_LEVEL = 38;
-      const CLOUD_SOLID_LEVEL = 105;
-      // Oltre questo grigio la cima e' cosi' fredda da essere sicuramente
-      // convettiva: e' l'estremo bianco della scala di tono.
-      const CLOUD_COLD_LEVEL = 150;
+      // Latenza di diffusione misurata sul servizio: alle 13:43 UTC l'ultima
+      // immagine disponibile era quella delle 13:20.
+      const CLOUD_LATENCY_MS = 22 * 60 * 1000;
 
+      // I formati offerti. Le soglie non sono inventate: vengono dalle
+      // statistiche di immagini vere sul dominio italiano.
+      //
+      // "grey"  -> prodotto in scala di grigi: la nube e' chiara, l'alfa
+      //            segue la luminanza e il colore va dal grigio-azzurro
+      //            (nube tiepida) al bianco (cima fredda).
+      // "rgb"   -> prodotto a colori sopra la superficie: la nube e' chiara
+      //            *e poco satura*, mentre mare e terra hanno un colore
+      //            deciso. Servono entrambe le condizioni, altrimenti la
+      //            sabbia e i campi finirebbero fra le nubi. Il colore
+      //            originale viene mantenuto.
+      // "black" -> prodotto a colori su fondo nero (le RGB diagnostiche):
+      //            basta la luminanza, e il colore e' l'informazione.
+      const CLOUD_PRODUCTS = {
+        ir105: {
+          layer: "mtg_fd:ir105_hrfi",
+          name: "Infrarosso 10.5 µm",
+          detail: "1 km · giorno e notte",
+          metres: 1000,
+          mode: "grey",
+          clear: 38, solid: 105, cold: 150
+        },
+        vis06: {
+          layer: "mtg_fd:vis06_hrfi",
+          name: "Visibile 0.6 µm",
+          detail: "500 m · massimo dettaglio · solo di giorno",
+          metres: 500,
+          mode: "grey",
+          dayOnly: true,
+          clear: 95, solid: 175, cold: 235
+        },
+        truecolour: {
+          layer: "mtg_fd:rgb_truecolour",
+          name: "Colori reali",
+          detail: "500 m · come si vedrebbe da lassu' · solo di giorno",
+          metres: 500,
+          mode: "rgb",
+          dayOnly: true,
+          clear: 95, solid: 165, colourSat: 0.34, cloudSat: 0.14
+        },
+        geocolour: {
+          layer: "mtg_fd:rgb_geocolour",
+          name: "GeoColour",
+          detail: "colori reali di giorno, infrarosso di notte",
+          metres: 500,
+          mode: "rgb",
+          clear: 95, solid: 165, colourSat: 0.34, cloudSat: 0.14
+        },
+        cloudtype: {
+          layer: "mtg_fd:rgb_cloudtype",
+          name: "Tipo di nube",
+          detail: "spessore, quota e fase in una sola immagine",
+          metres: 1000,
+          mode: "black",
+          clear: 26, solid: 70
+        }
+      };
+
+      let cloudProduct = "ir105";
       let cloudCanvas = null;
       let cloudObjectUrl = "";
       let cloudTimer = 0;
       let cloudToken = 0;
+      let cloudReloadTimer = 0;
+      // Riquadro e passo dell'immagine gia' pubblicata: servono a decidere se
+      // una nuova richiesta aggiungerebbe qualcosa.
+      let cloudLoadedBox = null;
+      let cloudLoadedMetres = 0;
+      let cloudLoadedSlot = 0;
 
       function mercatorMetresX(longitude) {
         return longitude * 20037508.34 / 180;
@@ -3530,64 +3607,190 @@
           / (Math.PI / 180) * 20037508.34 / 180;
       }
 
-      function satelliteCloudUrl(width, height) {
-        const west = mercatorMetresX(CLOUD_CORNERS[0][0]);
-        const east = mercatorMetresX(CLOUD_CORNERS[1][0]);
-        const south = mercatorMetresY(CLOUD_CORNERS[2][1]);
-        const north = mercatorMetresY(CLOUD_CORNERS[0][1]);
-        // Chiedo l'immagine gia' in proiezione Mercatore: gli angoli in
-        // longitudine e latitudine che passo a MapLibre corrispondono allora
-        // esattamente ai bordi del riquadro, senza deformazioni.
-        return CLOUD_WMS
-          + "?service=WMS&version=1.1.1&request=GetMap&styles="
-          + "&layers=" + encodeURIComponent(CLOUD_WMS_LAYER)
-          + "&srs=EPSG:3857&format=image/png&transparent=true"
-          + "&bbox=" + [west, south, east, north].map(function (value) {
-              return value.toFixed(1);
-            }).join(",")
-          + "&width=" + width + "&height=" + height
-          + "&slot=" + Math.floor(Date.now() / CLOUD_SLOT_MS);
+      // Istante da chiedere al servizio, arrotondato al decadale del
+      // satellite. Restituisce anche la data, per poterla mostrare.
+      function cloudSlot() {
+        const slot = Math.floor((Date.now() - CLOUD_LATENCY_MS) / CLOUD_SLOT_MS)
+          * CLOUD_SLOT_MS;
+        return {
+          value: slot,
+          date: new Date(slot),
+          iso: new Date(slot).toISOString().replace(/\.\d{3}Z$/, ".000Z")
+        };
       }
 
-      function publishSatelliteClouds(image, width, height) {
+      // Il riquadro da chiedere: quello che si sta guardando, allargato di
+      // "pad" perche' una panoramica breve non costringa subito a ricaricare,
+      // e comunque mai fuori dal dominio. Con pad = 0 restituisce il riquadro
+      // davvero visibile, che serve a decidere se il margine e' esaurito.
+      function cloudRequestBox(pad) {
+        const domain = CLOUD_DOMAIN;
+        let west = domain.west, south = domain.south;
+        let east = domain.east, north = domain.north;
+        if (map && map.getBounds) {
+          const bounds = map.getBounds();
+          const padX = (bounds.getEast() - bounds.getWest()) * pad;
+          const padY = (bounds.getNorth() - bounds.getSouth()) * pad;
+          west = Math.max(domain.west, bounds.getWest() - padX);
+          east = Math.min(domain.east, bounds.getEast() + padX);
+          south = Math.max(domain.south, bounds.getSouth() - padY);
+          north = Math.min(domain.north, bounds.getNorth() + padY);
+        }
+        // Vista storta o fuori dominio: torno al riquadro intero invece di
+        // chiedere un rettangolo degenere.
+        if (!(east > west) || !(north > south)) {
+          west = domain.west; east = domain.east;
+          south = domain.south; north = domain.north;
+        }
+        // Quando la vista copre quasi tutto, tanto vale prendere tutto: si
+        // evita di ricaricare a ogni piccolo spostamento a scala sinottica.
+        if ((east - west) > (domain.east - domain.west) * 0.82
+          && (north - south) > (domain.north - domain.south) * 0.82) {
+          west = domain.west; east = domain.east;
+          south = domain.south; north = domain.north;
+        }
+        return { west: west, south: south, east: east, north: north };
+      }
+
+      // Quanti pixel chiedere: mai piu' di quanti ne abbia lo strumento --
+      // oltre il pixel nativo si interpolerebbe soltanto, pagando banda e
+      // memoria di texture per niente.
+      function cloudRequestSize(box, product) {
+        const spanX = mercatorMetresX(box.east) - mercatorMetresX(box.west);
+        const spanY = mercatorMetresY(box.north) - mercatorMetresY(box.south);
+        const maxWidth = window.innerWidth < 900 ? 1280 : 2048;
+        const native = Math.ceil(spanX / product.metres);
+        const width = Math.max(384, Math.min(native, maxWidth));
+        const height = Math.max(384, Math.round(width * spanY / spanX));
+        return { width: width, height: height, metres: spanX / width };
+      }
+
+      function cloudUrl(box, size, product, slot) {
+        return CLOUD_WMS
+          + "?service=WMS&version=1.1.1&request=GetMap&styles="
+          + "&layers=" + encodeURIComponent(product.layer)
+          + "&srs=EPSG:3857&format=image/png&transparent=true"
+          + "&bbox=" + [
+              mercatorMetresX(box.west), mercatorMetresY(box.south),
+              mercatorMetresX(box.east), mercatorMetresY(box.north)
+            ].map(function (value) { return value.toFixed(1); }).join(",")
+          + "&width=" + size.width + "&height=" + size.height
+          + "&time=" + slot.iso;
+      }
+
+      // Vale la pena rifare la richiesta? Solo se il riquadro esce da quello
+      // gia' pubblicato, se avvicinandosi si guadagna davvero dettaglio, o se
+      // e' arrivata un'immagine nuova dal satellite.
+      // Nota: il confronto usa il riquadro *visibile*, non quello allargato.
+      // Confrontando quello allargato ogni minima panoramica sforava di un
+      // lato e faceva ripartire una richiesta -- misurato, un movimento del
+      // 7% della larghezza bastava. Il margine serve proprio a evitarlo.
+      function cloudNeedsReload(visible, size, slot) {
+        if (!cloudLoadedBox) return true;
+        if (slot.value !== cloudLoadedSlot) return true;
+        const outside = visible.west < cloudLoadedBox.west - 1e-6
+          || visible.east > cloudLoadedBox.east + 1e-6
+          || visible.south < cloudLoadedBox.south - 1e-6
+          || visible.north > cloudLoadedBox.north + 1e-6;
+        if (outside) return true;
+        // Con 1.9 avvicinandosi non si ricaricava quasi mai e il pixel
+        // nativo dello strumento non si raggiungeva: misurato, uno zoom sulla
+        // Sicilia guadagnava 1.5x e restava fuori soglia. A 1.35 il guadagno
+        // c'e' davvero, e la panoramica dentro il riquadro gia' scaricato
+        // continua a non chiedere nulla.
+        return cloudLoadedMetres > size.metres * 1.35;
+      }
+
+      function markCloudFreshness(slot) {
+        const label = document.getElementById("satclouds-note");
+        if (!label) return;
+        const product = CLOUD_PRODUCTS[cloudProduct];
+        const time = slot.date.toLocaleTimeString("it-IT", {
+          hour: "2-digit", minute: "2-digit"
+        });
+        label.textContent = product.name + " · immagine delle " + time;
+      }
+
+      // Da immagine opaca a sovrapposizione: il calcolo dell'alfa dipende dal
+      // tipo di prodotto (vedi il commento su CLOUD_PRODUCTS).
+      function publishSatelliteClouds(image, box, size, product, slot) {
         const source = map.getSource("satellite-clouds");
         if (!source) return;
         if (!cloudCanvas) cloudCanvas = document.createElement("canvas");
-        cloudCanvas.width = width;
-        cloudCanvas.height = height;
+        cloudCanvas.width = size.width;
+        cloudCanvas.height = size.height;
         const context = cloudCanvas.getContext("2d", { willReadFrequently: true });
         if (!context) return;
-        context.clearRect(0, 0, width, height);
-        context.drawImage(image, 0, 0, width, height);
+        context.clearRect(0, 0, size.width, size.height);
+        context.drawImage(image, 0, 0, size.width, size.height);
 
-        const frame = context.getImageData(0, 0, width, height);
+        const frame = context.getImageData(0, 0, size.width, size.height);
         const pixels = frame.data;
-        const span = CLOUD_SOLID_LEVEL - CLOUD_CLEAR_LEVEL;
-        const coldSpan = CLOUD_COLD_LEVEL - CLOUD_CLEAR_LEVEL;
+        const span = product.solid - product.clear;
+        const coldSpan = (product.cold || product.solid) - product.clear;
+        const satSpan = (product.colourSat || 1) - (product.cloudSat || 0);
         for (let i = 0; i < pixels.length; i += 4) {
-          // Il prodotto e' in scala di grigi: i tre canali sono uguali, ne
-          // basta uno.
-          const grey = pixels[i];
-          let level = (grey - CLOUD_CLEAR_LEVEL) / span;
+          const red = pixels[i], green = pixels[i + 1], blue = pixels[i + 2];
+          const luminance = 0.299 * red + 0.587 * green + 0.114 * blue;
+          let level = (luminance - product.clear) / span;
           level = level < 0 ? 0 : (level > 1 ? 1 : level);
-          const alpha = level * level * (3 - 2 * level);
-          // Nube tiepida (bassa) grigio-azzurra, cima fredda bianca: e' la
-          // lettura classica dell'infrarosso e distingue a colpo d'occhio lo
-          // strato dal cumulonembo.
-          let cold = (grey - CLOUD_CLEAR_LEVEL) / coldSpan;
-          cold = cold < 0 ? 0 : (cold > 1 ? 1 : cold);
-          const tone = 196 + 59 * cold;
-          pixels[i] = tone;
-          pixels[i + 1] = tone + 8 > 255 ? 255 : tone + 8;
-          pixels[i + 2] = tone + 18 > 255 ? 255 : tone + 18;
+          // Smoothstep: il bordo della nube sfuma invece di tagliare netto,
+          // come si vede davvero al limite di una formazione.
+          let alpha = level * level * (3 - 2 * level);
+
+          if (product.mode === "rgb") {
+            // La nube e' bianca: poco satura. Mare e terra hanno un colore
+            // deciso e vanno tolti anche quando sono chiari.
+            const high = red > green ? (red > blue ? red : blue) : (green > blue ? green : blue);
+            const low = red < green ? (red < blue ? red : blue) : (green < blue ? green : blue);
+            const saturation = high > 0 ? (high - low) / high : 0;
+            let colourLevel = (product.colourSat - saturation) / satSpan;
+            colourLevel = colourLevel < 0 ? 0 : (colourLevel > 1 ? 1 : colourLevel);
+            alpha *= colourLevel * colourLevel * (3 - 2 * colourLevel);
+          }
+
+          if (product.mode === "grey") {
+            // Nube tiepida (bassa) grigio-azzurra, cima fredda bianca: e' la
+            // lettura classica dei canali in scala di grigi, e distingue a
+            // colpo d'occhio lo strato dal cumulonembo.
+            let cold = (luminance - product.clear) / coldSpan;
+            cold = cold < 0 ? 0 : (cold > 1 ? 1 : cold);
+            const tone = 196 + 59 * cold;
+            pixels[i] = tone;
+            pixels[i + 1] = tone + 8 > 255 ? 255 : tone + 8;
+            pixels[i + 2] = tone + 18 > 255 ? 255 : tone + 18;
+          }
+          // Negli altri modi il colore originale e' informazione e resta
+          // com'e': cambia solo la trasparenza.
           pixels[i + 3] = Math.round(alpha * 255);
         }
         context.putImageData(frame, 0, 0);
 
+        // Di notte il visibile non riceve luce: l'immagine e' nera e il
+        // livello resterebbe vuoto senza spiegazione. Meglio dirlo e
+        // indicare i canali che di notte funzionano.
+        if (product.dayOnly) {
+          let lit = 0;
+          for (let i = 3; i < pixels.length; i += 4) {
+            if (pixels[i] > 10) lit++;
+          }
+          if (lit < pixels.length / 4 * 0.002) {
+            toast("Su questa zona e' notte: il visibile non vede nulla, usa"
+              + " infrarosso o GeoColour");
+          }
+        }
+
+        const corners = [
+          [box.west, box.north], [box.east, box.north],
+          [box.east, box.south], [box.west, box.south]
+        ];
         const update = function (url, isObjectUrl) {
           try {
-            source.updateImage({ url: url, coordinates: CLOUD_CORNERS });
-            markCloudFreshness(new Date());
+            source.updateImage({ url: url, coordinates: corners });
+            cloudLoadedBox = box;
+            cloudLoadedMetres = size.metres;
+            cloudLoadedSlot = slot.value;
+            markCloudFreshness(slot);
             if (cloudObjectUrl) {
               const previous = cloudObjectUrl;
               setTimeout(function () { URL.revokeObjectURL(previous); }, 1600);
@@ -3613,40 +3816,20 @@
         }
       }
 
-      // Il satellite guarda l'adesso, la timeline guarda la previsione: sono
-      // due orologi diversi e chi legge deve poterlo vedere. Qui scrivo
-      // l'ora dello scaricamento sotto l'interruttore. L'osservazione vera e'
-      // qualche minuto piu' vecchia -- la diffusione di EUMETSAT ha una
-      // latenza di circa venti minuti -- e non la posso leggere dal browser,
-      // perche' il servizio la dichiara in un'intestazione che le regole CORS
-      // non espongono. Quindi dico quello che so davvero, senza inventare un
-      // orario di ripresa.
-      function markCloudFreshness(when) {
-        const label = document.getElementById("satclouds-note");
-        if (!label) return;
-        const time = when.toLocaleTimeString("it-IT", {
-          hour: "2-digit", minute: "2-digit"
-        });
-        label.textContent = "MTG infrarosso 10.5 µm · ultimo passaggio alle " + time;
-      }
-
-      function loadSatelliteClouds() {
+      function loadSatelliteClouds(force) {
         if (!mapLoaded || !showSatelliteClouds) return;
+        if (!map.getSource("satellite-clouds")) return;
         // In una scheda in secondo piano nessuno sta guardando: inutile
         // pesare sul servizio, si riprende alla prossima occasione.
         if (typeof document.hidden === "boolean" && document.hidden) return;
-        if (!map.getSource("satellite-clouds")) return;
-        const token = ++cloudToken;
-        // Su telefono un'immagine piu' piccola: a 1024 px il pixel vale circa
-        // 1.1 km, cioe' gia' la risoluzione vera del satellite, e la texture
-        // occupa un quarto della memoria di quella da desktop.
-        const width = window.innerWidth < 900 ? 1024 : 1536;
-        const spanX = mercatorMetresX(CLOUD_CORNERS[1][0])
-          - mercatorMetresX(CLOUD_CORNERS[0][0]);
-        const spanY = mercatorMetresY(CLOUD_CORNERS[0][1])
-          - mercatorMetresY(CLOUD_CORNERS[2][1]);
-        const height = Math.round(width * spanY / spanX);
 
+        const product = CLOUD_PRODUCTS[cloudProduct] || CLOUD_PRODUCTS.ir105;
+        const slot = cloudSlot();
+        const box = cloudRequestBox(0.22);
+        const size = cloudRequestSize(box, product);
+        if (!force && !cloudNeedsReload(cloudRequestBox(0), size, slot)) return;
+
+        const token = ++cloudToken;
         const image = new Image();
         // La canvas va riletta pixel per pixel: senza CORS il browser la
         // marcherebbe come "sporca" e getImageData fallirebbe. EUMETView
@@ -3655,7 +3838,7 @@
         image.onload = function () {
           if (token !== cloudToken || !showSatelliteClouds) return;
           try {
-            publishSatelliteClouds(image, width, height);
+            publishSatelliteClouds(image, box, size, product, slot);
           } catch (error) {
             console.error("Nubi satellitari non elaborate", error);
             toast("Immagine satellitare non elaborabile");
@@ -3665,26 +3848,47 @@
           if (token !== cloudToken) return;
           toast("Satellite EUMETSAT non raggiungibile");
         };
-        image.src = satelliteCloudUrl(width, height);
+        image.src = cloudUrl(box, size, product, slot);
       }
 
-      function updateSatelliteClouds() {
+      // Dopo un gesto la vista e' cambiata: forse serve un'immagine piu'
+      // stretta e piu' fitta. Aspetto che il gesto sia finito davvero, poi
+      // lascio decidere a cloudNeedsReload.
+      function scheduleCloudReload() {
+        if (!showSatelliteClouds) return;
+        if (cloudReloadTimer) clearTimeout(cloudReloadTimer);
+        cloudReloadTimer = setTimeout(function () {
+          cloudReloadTimer = 0;
+          loadSatelliteClouds(false);
+        }, 600);
+      }
+
+      function updateSatelliteClouds(changedProduct) {
         if (!mapLoaded || !map.getLayer("satellite-clouds-layer")) return;
         map.setLayoutProperty(
           "satellite-clouds-layer", "visibility",
           showSatelliteClouds ? "visible" : "none"
         );
+        const picker = document.getElementById("satclouds-picker");
+        if (picker) picker.style.display = showSatelliteClouds ? "" : "none";
         if (cloudTimer) {
           clearInterval(cloudTimer);
           cloudTimer = 0;
         }
         if (!showSatelliteClouds) return;
-        loadSatelliteClouds();
-        // Ricontrollo a meta' decadale: chiedere piu' spesso non produrrebbe
-        // un'immagine nuova, ma con questo passo non si resta indietro di un
-        // giro quando l'orologio del telefono non e' allineato al satellite.
-        cloudTimer = setInterval(loadSatelliteClouds, CLOUD_SLOT_MS / 2);
-        toast("Nubi osservate ora dal satellite · non seguono l'ora della previsione");
+        if (changedProduct) {
+          // Cambiando canale l'immagine pubblicata non vale piu' nulla,
+          // qualunque sia il riquadro.
+          cloudLoadedBox = null;
+        }
+        loadSatelliteClouds(true);
+        // Ogni cinque minuti controllo se il satellite ha prodotto un
+        // passaggio nuovo: la richiesta parte solo se lo slot e' cambiato.
+        cloudTimer = setInterval(function () { loadSatelliteClouds(false); },
+          CLOUD_SLOT_MS / 2);
+        const product = CLOUD_PRODUCTS[cloudProduct] || CLOUD_PRODUCTS.ir105;
+        toast("Satellite MTG · " + product.name
+          + " · osservazione di adesso, non della scadenza scelta");
       }
 
       // La foschia esiste solo se c'è un orizzonte da velare: cresce con
@@ -6747,8 +6951,17 @@
           map.addSource("satellite-clouds", {
             type: "image",
             url: "data:image/gif;base64,R0lGODlhAQABAAD/ACwAAAAAAQABAAACADs=",
-            coordinates: CLOUD_CORNERS
+            coordinates: [
+              [CLOUD_DOMAIN.west, CLOUD_DOMAIN.north],
+              [CLOUD_DOMAIN.east, CLOUD_DOMAIN.north],
+              [CLOUD_DOMAIN.east, CLOUD_DOMAIN.south],
+              [CLOUD_DOMAIN.west, CLOUD_DOMAIN.south]
+            ]
           });
+
+          // Zoom e panoramica cambiano il riquadro da chiedere: avvicinandosi
+          // si guadagna dettaglio fino al pixel nativo dello strumento.
+          map.on("moveend", scheduleCloudReload);
 
           map.addLayer({
             id: "satellite-clouds-layer",
@@ -7047,6 +7260,11 @@
 
       ui.levelSelect.addEventListener("change", function () {
         setLevel(ui.levelSelect.value);
+      });
+
+      ui.satcloudsSelect.addEventListener("change", function () {
+        cloudProduct = ui.satcloudsSelect.value;
+        updateSatelliteClouds(true);
       });
 
       ui.particleDensitySelect.addEventListener("change", function () {
