@@ -251,8 +251,18 @@ assert.match(html, /let showLightBase = false;/,
   "il fondo chiaro e' ancora attivo all'avvio");
 assert.match(html, /const onDark = !showLightBase && !showSatellite;/,
   "il rilievo non distingue il fondo scuro");
-assert.match(html, /onDark\s*\n?\s*\? \(0\.16 \+ 0\.42 \* direct\)/,
-  "su fondo scuro i versanti illuminati non si accendono");
+// Niente piu' simulazione del Sole: il rilievo ha una luce cartografica
+// fissa da nord-ovest, uguale a qualunque ora della previsione.
+assert.match(html, /const RELIEF_ILLUMINATION = 315;/,
+  "manca la luce cartografica fissa del rilievo");
+assert.match(html, /"hillshade-illumination-direction", RELIEF_ILLUMINATION/,
+  "il rilievo non usa la direzione di luce fissa");
+assert.match(html, /onDark \? "rgba\(196,224,255,0\.44\)" : "rgba\(255,250,238,0\.18\)"/,
+  "su fondo scuro i versanti esposti non si accendono");
+assert.doesNotMatch(html, /solarPosition|SOLAR_CENTER|updateSolarLighting/,
+  "la simulazione della luce solare e' tornata");
+assert.doesNotMatch(html, /updateSkyPalette\(day/,
+  "il cielo dipende ancora dall'altezza del Sole");
 assert.match(html, /data-toggle="lightbase"/, "interruttore fondo chiaro assente");
 assert.match(html, /id: "basemap-dark-layer"/, "base scura assente");
 assert.match(html, /id: "basemap-layer"[\s\S]*?layout: \{ visibility: "none" \}/,
@@ -296,5 +306,38 @@ assert.match(html, /\.brand-copy \{\s*\n\s*min-width: 0;/,
   "senza min-width il testo del marchio non puo' stringersi e sfonda l'header");
 assert.match(html, /class="brand-copy"/,
   "il blocco di testo del marchio non ha la classe che lo rende comprimibile");
+
+// Nubi osservate dal satellite in tempo reale: una sola immagine sul dominio,
+// resa trasparente sulla canvas perche' MapLibre non sa ricavare l'opacita'
+// dal colore di un raster.
+assert.match(html, /const CLOUD_WMS_LAYER = "mtg_fd:ir105_hrfi";/,
+  "sorgente satellitare assente o cambiata");
+assert.match(html, /image\.crossOrigin = "anonymous";/,
+  "senza CORS la canvas resta sporca e getImageData fallisce");
+assert.match(html, /const alpha = level \* level \* \(3 - 2 \* level\);/,
+  "manca la rampa di opacita' che rende trasparente il cielo sereno");
+assert.match(html, /pixels\[i \+ 3\] = Math\.round\(alpha \* 255\);/,
+  "l'opacita' calcolata non finisce nel canale alfa");
+assert.match(html, /id: "satellite-clouds-layer"/, "layer delle nubi assente");
+assert.match(
+  html,
+  /id: "satellite-clouds-layer"[\s\S]{0,400}?layout: \{ visibility: "none" \}/,
+  "le nubi satellitari non sono spente all'avvio"
+);
+assert.match(html, /data-toggle="satclouds"/, "interruttore delle nubi assente");
+assert.match(html, /satclouds: showSatelliteClouds,/,
+  "lo stato dell'interruttore nubi non e' riportato nell'interfaccia");
+assert.match(html, /} else if \(name === "satclouds"\) \{\s*\n\s*showSatelliteClouds = !showSatelliteClouds;/,
+  "l'interruttore delle nubi non e' collegato");
+assert.match(html, /cloudTimer = setInterval\(loadSatelliteClouds, CLOUD_SLOT_MS \/ 2\);/,
+  "le nubi non si aggiornano da sole: non sarebbero in tempo reale");
+assert.match(html, /if \(typeof document\.hidden === "boolean" && document\.hidden\) return;/,
+  "in secondo piano si continua a chiedere immagini al servizio");
+// L'ordine conta: le nubi coprono il campo previsto, non i confini.
+const cloudsAt = html.indexOf('id: "satellite-clouds-layer"');
+const weatherAt = html.indexOf('id: "weather-layer"');
+const regionsAt = html.indexOf('id: "regions-layer"');
+assert.ok(weatherAt > 0 && cloudsAt > weatherAt && regionsAt > cloudsAt,
+  "le nubi non stanno fra il campo del modello e i confini");
 
 console.log("3D map regression checks: OK");
