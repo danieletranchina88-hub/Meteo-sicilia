@@ -325,6 +325,13 @@ assert.match(
   "le nubi satellitari non sono spente all'avvio"
 );
 assert.match(html, /data-toggle="satclouds"/, "interruttore delle nubi assente");
+// Il satellite e' un'osservazione come il radar e sta accanto a lui: in fondo
+// alla sezione della presentazione grafica nessuno lo trovava.
+assert.match(
+  html,
+  /data-toggle="radar"[\s\S]{0,260}?data-toggle="satclouds"/,
+  "l'interruttore delle nubi non e' accanto al radar"
+);
 assert.match(html, /satclouds: showSatelliteClouds,/,
   "lo stato dell'interruttore nubi non e' riportato nell'interfaccia");
 assert.match(html, /} else if \(name === "satclouds"\) \{\s*\n\s*showSatelliteClouds = !showSatelliteClouds;/,
