@@ -1130,6 +1130,28 @@
         white-space: nowrap;
       }
 
+      /* Quando le nubi osservate sono accese la timeline resta ferma
+         sull'ora del satellite: si vede che e' bloccata, e perche'. */
+      #satellite-lock {
+        padding: 1px 7px;
+        border: 1px solid rgba(120, 214, 255, 0.5);
+        border-radius: 999px;
+        color: #a9e4ff;
+        font-size: 8.5px;
+        font-weight: 800;
+        letter-spacing: 0.02em;
+        text-transform: uppercase;
+        white-space: nowrap;
+      }
+
+      #timeline.satellite-locked #time-slider {
+        opacity: 0.45;
+      }
+
+      #timeline.satellite-locked #play-button {
+        opacity: 0.4;
+      }
+
       #timeline {
         position: fixed;
         z-index: 42;
@@ -1833,7 +1855,7 @@
           </section>
 
           <p id="scientific-note" class="scientific-note">
-            Dati numerici ICON-2I. Le letture puntuali usano l'interpolazione selezionata e non sostituiscono allerte o bollettini ufficiali. Nubi osservate: Meteosat Third Generation (FCI) via EUMETSAT — sono l'ora corrente, non la scadenza scelta.
+            Dati numerici ICON-2I. Le letture puntuali usano l'interpolazione selezionata e non sostituiscono allerte o bollettini ufficiali. Nubi osservate: Meteosat Third Generation (FCI) via EUMETSAT. Sono l'osservazione di adesso, quindi con quel livello acceso la timeline resta ancorata all'ora dell'immagine: campo previsto e nubi raccontano lo stesso istante.
           </p>
         </div>
       </div>
@@ -1917,6 +1939,7 @@
         <input id="time-slider" type="range" min="0" max="0" value="0" aria-label="Orario della previsione" />
         <div class="timeline-meta">
           <span id="time-label">In attesa dei dati</span>
+          <span id="satellite-lock" hidden>ancorato al satellite</span>
           <span id="lead-label">--</span>
         </div>
       </div>
@@ -2438,6 +2461,7 @@
         levelPicker: document.getElementById("level-picker"),
         levelSelect: document.getElementById("level-select"),
         satcloudsSelect: document.getElementById("satclouds-select"),
+        satelliteLock: document.getElementById("satellite-lock"),
         particleDensitySelect: document.getElementById("particle-density-select"),
         particleTrailSelect: document.getElementById("particle-trail-select")
       };
@@ -2963,6 +2987,13 @@
         if (!match) return null;
         const now = new Date();
         return new Date(now.getFullYear(), Number(match[2]) - 1, Number(match[1]), Number(match[3]), Number(match[4]));
+      }
+
+      function formatClockTime(date) {
+        if (!date) return "--";
+        return new Intl.DateTimeFormat("it-IT", {
+          timeZone: "Europe/Rome", hour: "2-digit", minute: "2-digit"
+        }).format(date);
       }
 
       function formatDateTime(date) {
@@ -3705,10 +3736,8 @@
         const label = document.getElementById("satclouds-note");
         if (!label) return;
         const product = CLOUD_PRODUCTS[cloudProduct];
-        const time = slot.date.toLocaleTimeString("it-IT", {
-          hour: "2-digit", minute: "2-digit"
-        });
-        label.textContent = product.name + " · immagine delle " + time;
+        label.textContent = product.name + " · immagine delle "
+          + formatClockTime(slot.date);
       }
 
       // Da immagine opaca a sovrapposizione: il calcolo dell'alfa dipende dal
@@ -3791,6 +3820,7 @@
             cloudLoadedMetres = size.metres;
             cloudLoadedSlot = slot.value;
             markCloudFreshness(slot);
+            syncTimelineToSatellite(slot);
             if (cloudObjectUrl) {
               const previous = cloudObjectUrl;
               setTimeout(function () { URL.revokeObjectURL(previous); }, 1600);
@@ -3814,6 +3844,69 @@
         } else {
           update(cloudCanvas.toDataURL("image/png"), false);
         }
+      }
+
+      // ---------------------------------------------------------------
+      // Ancoraggio della timeline al satellite
+      //
+      // Le nubi osservate si sovrappongono al campo previsto, quindi le due
+      // cose devono raccontare lo stesso istante. Se si potesse scorrere in
+      // avanti con le nubi ferme, la mappa mostrerebbe la previsione di
+      // domani sotto le nubi di adesso: una lettura falsa, e per giunta
+      // credibile. Con il livello acceso la timeline si ferma sulla scadenza
+      // piu' vicina all'immagine, e quando il satellite manda un passaggio
+      // nuovo la timeline lo segue da sola.
+      // ---------------------------------------------------------------
+
+      function nearestStepTo(when) {
+        let best = -1;
+        let smallest = Infinity;
+        catalog.forEach(function (item, index) {
+          const date = parseCatalogDate(item);
+          if (!date) return;
+          const distance = Math.abs(when - date.getTime());
+          if (distance < smallest) {
+            smallest = distance;
+            best = index;
+          }
+        });
+        return { index: best, distance: smallest };
+      }
+
+      function updateSatelliteLockUi(slot) {
+        const locked = Boolean(showSatelliteClouds);
+        if (locked && isPlaying) setPlaying(false);
+        const timeline = document.getElementById("timeline");
+        if (timeline) timeline.classList.toggle("satellite-locked", locked);
+        if (ui.slider) ui.slider.disabled = locked;
+        if (ui.playButton) ui.playButton.disabled = locked;
+        if (!ui.satelliteLock) return;
+        ui.satelliteLock.hidden = !locked;
+        if (locked) {
+          const time = slot ? formatClockTime(slot.date) : "";
+          ui.satelliteLock.textContent = time
+            ? "ancorato al satellite · " + time
+            : "ancorato al satellite";
+        }
+      }
+
+      // Chiamata a ogni pubblicazione dell'immagine. Il passo del modello e'
+      // orario e quello del satellite decadale, quindi quasi sempre la
+      // scadenza piu' vicina resta la stessa e non si ricarica nulla: solo
+      // quando cambia davvero si muove la timeline.
+      function syncTimelineToSatellite(slot) {
+        if (!showSatelliteClouds || !catalog.length) return;
+        const target = nearestStepTo(slot.date.getTime());
+        updateSatelliteLockUi(slot);
+        if (target.index < 0) return;
+        // Se la scadenza piu' vicina e' lontana piu' di un'ora e mezza,
+        // l'ancoraggio non ha piu' senso fisico: il modello e' vecchio o non
+        // copre l'adesso, e va detto invece di far credere a una coincidenza.
+        if (target.distance > 90 * 60 * 1000) {
+          toast("Il modello non copre l'ora del satellite: le nubi sono di"
+            + " adesso, il campo e' la scadenza piu' vicina");
+        }
+        if (target.index !== currentIndex) loadStep(target.index);
       }
 
       function loadSatelliteClouds(force) {
@@ -3871,6 +3964,9 @@
         );
         const picker = document.getElementById("satclouds-picker");
         if (picker) picker.style.display = showSatelliteClouds ? "" : "none";
+        // Spegnendo il livello la timeline torna libera subito, senza
+        // aspettare che arrivi o fallisca un'immagine.
+        updateSatelliteLockUi(showSatelliteClouds ? cloudSlot() : null);
         if (cloudTimer) {
           clearInterval(cloudTimer);
           cloudTimer = 0;
@@ -3888,7 +3984,7 @@
           CLOUD_SLOT_MS / 2);
         const product = CLOUD_PRODUCTS[cloudProduct] || CLOUD_PRODUCTS.ir105;
         toast("Satellite MTG · " + product.name
-          + " · osservazione di adesso, non della scadenza scelta");
+          + " · la timeline resta ancorata all'ora dell'immagine");
       }
 
       // La foschia esiste solo se c'è un orizzonte da velare: cresce con
@@ -7331,10 +7427,25 @@
       });
 
       ui.slider.addEventListener("input", function () {
+        // L'attributo disabled ferma il dito, non il codice: un evento
+        // "input" sintetico passerebbe lo stesso e porterebbe il campo a una
+        // scadenza diversa da quella delle nubi. La guardia sta qui, dove la
+        // decisione viene presa davvero.
+        if (showSatelliteClouds) {
+          ui.slider.value = String(currentIndex);
+          toast("Timeline ancorata al satellite: spegni le nubi osservate per"
+            + " scorrere le scadenze");
+          return;
+        }
         loadStep(Number(ui.slider.value));
       });
 
       ui.playButton.addEventListener("click", function () {
+        if (showSatelliteClouds) {
+          toast("Timeline ancorata al satellite: spegni le nubi osservate per"
+            + " animare la previsione");
+          return;
+        }
         setPlaying(!isPlaying);
       });
 

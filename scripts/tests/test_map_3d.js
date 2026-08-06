@@ -395,4 +395,37 @@ const regionsAt = html.indexOf('id: "regions-layer"');
 assert.ok(weatherAt > 0 && cloudsAt > weatherAt && regionsAt > cloudsAt,
   "le nubi non stanno fra il campo del modello e i confini");
 
+// Le nubi osservate si sovrappongono al campo previsto: i due devono
+// raccontare lo stesso istante, altrimenti si leggerebbe la previsione di
+// domani sotto le nubi di adesso.
+assert.match(html, /function syncTimelineToSatellite\(slot\)/,
+  "manca l'ancoraggio della timeline al satellite");
+assert.match(html, /markCloudFreshness\(slot\);\s*\n\s*syncTimelineToSatellite\(slot\);/,
+  "la timeline non segue il satellite quando arriva un passaggio nuovo");
+assert.match(html, /function nearestStepTo\(when\)/,
+  "manca la ricerca della scadenza piu' vicina all'immagine");
+assert.match(html, /if \(target\.index !== currentIndex\) loadStep\(target\.index\);/,
+  "la timeline non si sposta sulla scadenza del satellite");
+assert.match(html, /if \(locked && isPlaying\) setPlaying\(false\);/,
+  "con il livello acceso l'animazione continuerebbe a scorrere");
+assert.match(html, /if \(ui\.slider\) ui\.slider\.disabled = locked;/,
+  "il cursore del tempo resta manovrabile con le nubi accese");
+assert.match(html, /if \(ui\.playButton\) ui\.playButton\.disabled = locked;/,
+  "il tasto di riproduzione resta attivo con le nubi accese");
+assert.match(html, /id="satellite-lock"/, "manca l'indicazione visibile dell'ancoraggio");
+// L'attributo disabled ferma il dito, non un evento sintetico: la guardia
+// vera sta nei gestori.
+assert.match(
+  html,
+  /ui\.slider\.addEventListener\("input"[\s\S]{0,600}?if \(showSatelliteClouds\) \{[\s\S]{0,300}?ui\.slider\.value = String\(currentIndex\);/,
+  "un evento sintetico sul cursore sfuggirebbe all'ancoraggio"
+);
+assert.match(
+  html,
+  /ui\.playButton\.addEventListener\("click"[\s\S]{0,300}?if \(showSatelliteClouds\) \{/,
+  "il tasto di riproduzione sfuggirebbe all'ancoraggio"
+);
+assert.match(html, /if \(target\.distance > 90 \* 60 \* 1000\)/,
+  "un modello che non copre l'ora del satellite passerebbe per una coincidenza");
+
 console.log("3D map regression checks: OK");
