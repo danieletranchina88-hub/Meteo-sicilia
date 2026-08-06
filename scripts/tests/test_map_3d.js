@@ -310,11 +310,56 @@ assert.match(html, /class="brand-copy"/,
 // Nubi osservate dal satellite in tempo reale: una sola immagine sul dominio,
 // resa trasparente sulla canvas perche' MapLibre non sa ricavare l'opacita'
 // dal colore di un raster.
-assert.match(html, /const CLOUD_WMS_LAYER = "mtg_fd:ir105_hrfi";/,
-  "sorgente satellitare assente o cambiata");
+// Tutti i formati offerti, ognuno con il pixel nativo dello strumento.
+assert.match(html, /layer: "mtg_fd:ir105_hrfi"[\s\S]{0,200}?metres: 1000/,
+  "canale infrarosso assente o con risoluzione sbagliata");
+assert.match(html, /layer: "mtg_fd:vis06_hrfi"[\s\S]{0,200}?metres: 500/,
+  "canale visibile a 500 m assente: e' la risoluzione migliore disponibile");
+assert.match(html, /layer: "mtg_fd:rgb_truecolour"/, "colori reali assenti");
+assert.match(html, /layer: "mtg_fd:rgb_geocolour"/, "GeoColour assente");
+assert.match(html, /layer: "mtg_fd:rgb_cloudtype"/, "tipo di nube assente");
+assert.match(html, /id="satclouds-select"/, "manca il selettore del formato");
+["ir105", "vis06", "truecolour", "geocolour", "cloudtype"].forEach((key) => {
+  assert.ok(html.includes('value="' + key + '"'),
+    "il formato " + key + " non e' selezionabile dall'interfaccia");
+});
+
+// L'istante va fissato: senza, il servizio compone il mosaico con passaggi
+// diversi e sul dominio intero si vedono i riquadri.
+assert.match(html, /"&time=" \+ slot\.iso/,
+  "senza istante esplicito il mosaico mescola passaggi diversi");
+assert.match(html, /const CLOUD_LATENCY_MS = 22 \* 60 \* 1000;/,
+  "manca la latenza di diffusione: si chiederebbe uno slot inesistente");
+
+// Risoluzione: mai piu' pixel di quanti ne ha lo strumento, e il riquadro
+// segue la vista.
+assert.match(html, /const native = Math\.ceil\(spanX \/ product\.metres\);/,
+  "la richiesta non e' legata al pixel nativo dello strumento");
+assert.match(html, /function cloudRequestBox\(pad\)/, "il riquadro non segue la vista");
+// Il margine serve a non ricaricare a ogni panoramica: quindi il confronto
+// deve usare il riquadro visibile, non quello gia' allargato.
+assert.match(html, /cloudNeedsReload\(cloudRequestBox\(0\), size, slot\)/,
+  "il margine e' inutile se si confronta il riquadro allargato");
+// L'ascolto va registrato dove la mappa esiste: setupMap() gira dopo il
+// blocco dei listener dell'interfaccia, e li' "map" e' ancora undefined.
+assert.match(
+  html,
+  /map\.on\("load"[\s\S]*?map\.on\("moveend", scheduleCloudReload\);[\s\S]*?id: "satellite-clouds-layer"/,
+  "l'ascolto del movimento non e' dentro il caricamento della mappa"
+);
+assert.match(html, /return cloudLoadedMetres > size\.metres \* 1\.35;/,
+  "la soglia di ricarica non lascia raggiungere il pixel nativo");
+
+// Il discriminante di nube sui prodotti a colori: chiara E poco satura,
+// altrimenti sabbia e campi finirebbero fra le nubi.
+assert.match(html, /const saturation = high > 0 \? \(high - low\) \/ high : 0;/,
+  "sui prodotti a colori manca il criterio di saturazione");
+// Di notte il visibile e' cieco: va detto invece di mostrare un livello vuoto.
+assert.match(html, /if \(product\.dayOnly\) \{[\s\S]{0,420}?e' notte: il visibile non vede nulla/,
+  "di notte il visibile resta vuoto senza spiegazione");
 assert.match(html, /image\.crossOrigin = "anonymous";/,
   "senza CORS la canvas resta sporca e getImageData fallisce");
-assert.match(html, /const alpha = level \* level \* \(3 - 2 \* level\);/,
+assert.match(html, /let alpha = level \* level \* \(3 - 2 \* level\);/,
   "manca la rampa di opacita' che rende trasparente il cielo sereno");
 assert.match(html, /pixels\[i \+ 3\] = Math\.round\(alpha \* 255\);/,
   "l'opacita' calcolata non finisce nel canale alfa");
@@ -336,8 +381,11 @@ assert.match(html, /satclouds: showSatelliteClouds,/,
   "lo stato dell'interruttore nubi non e' riportato nell'interfaccia");
 assert.match(html, /} else if \(name === "satclouds"\) \{\s*\n\s*showSatelliteClouds = !showSatelliteClouds;/,
   "l'interruttore delle nubi non e' collegato");
-assert.match(html, /cloudTimer = setInterval\(loadSatelliteClouds, CLOUD_SLOT_MS \/ 2\);/,
-  "le nubi non si aggiornano da sole: non sarebbero in tempo reale");
+assert.match(
+  html,
+  /cloudTimer = setInterval\(function \(\) \{ loadSatelliteClouds\(false\); \},\s*\n\s*CLOUD_SLOT_MS \/ 2\);/,
+  "le nubi non si aggiornano da sole: non sarebbero in tempo reale"
+);
 assert.match(html, /if \(typeof document\.hidden === "boolean" && document\.hidden\) return;/,
   "in secondo piano si continua a chiedere immagini al servizio");
 // L'ordine conta: le nubi coprono il campo previsto, non i confini.
