@@ -1805,6 +1805,9 @@
               <button class="toggle-row" type="button" data-toggle="satellite" aria-pressed="false">
                 <span><b>Terreno reale</b><small>ortofoto satellitare al posto della carta</small></span><span class="switch"></span>
               </button>
+              <button class="toggle-row" type="button" data-toggle="satclouds" aria-pressed="false">
+                <span><b>Nubi da satellite</b><small id="satclouds-note">MTG infrarosso 10.5 µm · 1 km · in tempo reale</small></span><span class="switch"></span>
+              </button>
               <button class="toggle-row" type="button" data-toggle="threed" aria-pressed="false">
                 <span><b>Vista 3D</b><small>terreno in rilievo, mappa inclinabile</small></span><span class="switch"></span>
               </button>
@@ -1818,7 +1821,7 @@
           </section>
 
           <p id="scientific-note" class="scientific-note">
-            Dati numerici ICON-2I. Le letture puntuali usano l'interpolazione selezionata e non sostituiscono allerte o bollettini ufficiali.
+            Dati numerici ICON-2I. Le letture puntuali usano l'interpolazione selezionata e non sostituiscono allerte o bollettini ufficiali. Nubi osservate: Meteosat Third Generation (FCI) via EUMETSAT — sono l'ora corrente, non la scadenza scelta.
           </p>
         </div>
       </div>
@@ -2464,6 +2467,7 @@
       let showTerrain = false;
       let show3D = false;
       let showSatellite = false;
+      let showSatelliteClouds = false;
       let showLightBase = false;
       let showGraticule = false;
       let isMapMoving = false;
@@ -3391,103 +3395,46 @@
         ui.timeLabel.textContent = formatDateTime(date);
         ui.leadLabel.textContent = lead === null ? "--" : "+" + lead + " h";
         ui.slider.setAttribute("aria-valuetext", formatDateTime(date));
-        updateSolarLighting(date);
       }
 
-      // Posizione solare (algoritmo NOAA a bassa risoluzione, errore < 0.5°):
-      // serve a illuminare il rilievo dalla direzione reale del Sole all'ora
-      // di validità della previsione, così ombre e versanti sono fisicamente
-      // corretti — evidente soprattutto in vista 3D.
-      function solarPosition(date, latDeg, lonDeg) {
-        const rad = Math.PI / 180, deg = 180 / Math.PI;
-        const jd = date.getTime() / 86400000 + 2440587.5;
-        const n = jd - 2451545.0;
-        const L = (((280.460 + 0.9856474 * n) % 360) + 360) % 360;
-        const g = ((((357.528 + 0.9856003 * n) % 360) + 360) % 360) * rad;
-        const lambda = (L + 1.915 * Math.sin(g) + 0.020 * Math.sin(2 * g)) * rad;
-        const epsilon = (23.439 - 0.0000004 * n) * rad;
-        const alpha = Math.atan2(Math.cos(epsilon) * Math.sin(lambda), Math.cos(lambda));
-        const delta = Math.asin(Math.sin(epsilon) * Math.sin(lambda));
-        const gmst = (((280.46061837 + 360.98564736629 * n) % 360) + 360) % 360;
-        const hourAngle = (gmst + lonDeg) * rad - alpha;
-        const lat = latDeg * rad;
-        const elevation = Math.asin(
-          Math.sin(lat) * Math.sin(delta) + Math.cos(lat) * Math.cos(delta) * Math.cos(hourAngle)
-        );
-        let az = Math.atan2(
-          Math.sin(hourAngle),
-          Math.cos(hourAngle) * Math.sin(lat) - Math.tan(delta) * Math.cos(lat)
-        );
-        az = (az * deg + 180) % 360;
-        return { elevation: elevation * deg, azimuth: (az + 360) % 360 };
-      }
+      // Il rilievo e' illuminato da nord-ovest (315 gradi), la convenzione
+      // delle carte topografiche. Non c'e' piu' nessuna simulazione della
+      // posizione del Sole: il volume delle montagne si legge sempre allo
+      // stesso modo, a qualunque ora della previsione, e la scena non cambia
+      // tono scorrendo la timeline.
+      const RELIEF_ILLUMINATION = 315;
 
-      // Centro geometrico del dominio: una singola sorgente di luce coerente su
-      // tutta la scena (il Sole è di fatto all'infinito, la parallasse sul
-      // dominio è trascurabile per l'ombreggiatura).
-      const SOLAR_CENTER = { lat: 41.0, lon: 13.5 };
-
-      function updateSolarLighting(date) {
+      function updateReliefShading() {
         if (!mapLoaded || !map.getLayer("terrain-detail")) return;
-        const when = date || parseCatalogDate(catalog[currentIndex] || {}) || new Date();
-        const sun = solarPosition(when, SOLAR_CENTER.lat, SOLAR_CENTER.lon);
-        const elev = sun.elevation;
-        // Fattore diurno continuo (0 = notte piena, 1 = Sole alto): tutte le
-        // transizioni sono graduali, così scorrendo la timeline non compaiono
-        // salti di tono.
-        const day = clamp((elev + 6) / 18, 0, 1);
-        // Quanta luce *direzionale* c'è: piena a Sole alto, nulla sotto
-        // l'orizzonte (di notte resta solo la luce diffusa del cielo).
-        const direct = clamp((elev + 4) / 10, 0, 1);
-        // Luce radente: a Sole basso le ombre sono lunghe e il rilievo si
-        // legge molto di più che a mezzogiorno, quando il Sole appiattisce.
-        const raking = clamp((45 - elev) / 45, 0, 1);
-
-        // Sotto l'orizzonte non esiste una direzione di illuminazione reale:
-        // torno alla convenzione cartografica (315°). Il passaggio avviene
-        // dove la componente direzionale è già svanita, quindi non si vede.
-        const illumination = direct > 0 ? Math.round(sun.azimuth) : 315;
-        // Ombra grigio-neutra: base ambientale sempre presente perché la
-        // mappa resti leggibile, più la componente direzionale del Sole. La
-        // componente chiara evita il vecchio effetto "ritaglio scuro" sui
-        // versanti esposti e rende il volume leggibile anche sotto i raster.
         // Su fondo chiaro il rilievo si legge scurendo i versanti in ombra. Su
         // fondo scuro quelle ombre non hanno piu' contro cosa staccare e le
         // montagne diventano una macchia: va invertito, sono i versanti
-        // illuminati ad accendersi. E' anche piu' fedele alla luce reale, che
-        // gia' calcoliamo, perche' il Sole illumina invece di scurire.
+        // esposti ad accendersi.
         const onDark = !showLightBase && !showSatellite;
-        const shadowAlpha = onDark
-          ? (0.1 + 0.1 * raking * direct).toFixed(3)
-          : (0.28 + 0.24 * raking * direct).toFixed(3);
-        const highlightAlpha = onDark
-          ? (0.16 + 0.42 * direct).toFixed(3)
-          : (0.08 + 0.16 * direct).toFixed(3);
 
-        map.setPaintProperty("terrain-detail", "hillshade-illumination-direction", illumination);
+        map.setPaintProperty(
+          "terrain-detail", "hillshade-illumination-direction", RELIEF_ILLUMINATION
+        );
         map.setPaintProperty("terrain-detail", "hillshade-shadow-color",
-          (onDark ? "rgba(0,0,0," : "rgba(28,36,48,") + shadowAlpha + ")");
+          onDark ? "rgba(0,0,0,0.16)" : "rgba(28,36,48,0.4)");
         map.setPaintProperty("terrain-detail", "hillshade-highlight-color",
-          (onDark ? "rgba(196,224,255," : "rgba(255,250,238,") + highlightAlpha + ")");
+          onDark ? "rgba(196,224,255,0.44)" : "rgba(255,250,238,0.18)");
         map.setPaintProperty("terrain-detail", "hillshade-accent-color",
           onDark ? "rgba(120,150,190,0.28)" : "rgba(65,70,68,0.18)");
-        updateSkyPalette(day, elev);
+        updateSkyPalette();
       }
 
-      // Foschia atmosferica neutra: nessuna tinta artificiale, solo la
-      // luminosità che segue il Sole (chiara di giorno, ardesia di notte),
-      // come la prospettiva aerea reale verso l'orizzonte.
-      function updateSkyPalette(day, solarElevation) {
-        const mix = function (nightValue, dayValue) {
-          return Math.round(nightValue + (dayValue - nightValue) * day);
-        };
-        const twilight = clamp(1 - Math.abs((solarElevation || 0) - 1) / 10, 0, 1);
-        const r = clamp(mix(42, 174) + Math.round(24 * twilight), 0, 255);
-        const g = clamp(mix(54, 197) + Math.round(8 * twilight), 0, 255);
-        const b = clamp(mix(74, 222) - Math.round(13 * twilight), 0, 255);
-        const horizonR = clamp(mix(69, 218) + Math.round(27 * twilight), 0, 255);
-        const horizonG = clamp(mix(78, 229) + Math.round(11 * twilight), 0, 255);
-        const horizonB = clamp(mix(94, 238) - Math.round(19 * twilight), 0, 255);
+      // Cielo e foschia neutri. Prima seguivano l'altezza del Sole; ora
+      // seguono il fondo scelto, che e' l'unica cosa da cui devono davvero
+      // dipendere per restare leggibili.
+      function updateSkyPalette() {
+        const onDark = !showLightBase && !showSatellite;
+        const r = onDark ? 42 : 174;
+        const g = onDark ? 54 : 197;
+        const b = onDark ? 74 : 222;
+        const horizonR = onDark ? 69 : 218;
+        const horizonG = onDark ? 78 : 229;
+        const horizonB = onDark ? 94 : 238;
         const root = document.documentElement;
         root.style.setProperty("--sky-top", "rgba(" + r + "," + g + "," + b + ",0.6)");
         root.style.setProperty("--sky-mid", "rgba(" + horizonR + "," + horizonG + "," + horizonB + ",0.22)");
@@ -3514,9 +3461,230 @@
           map.setPaintProperty(
             "background",
             "background-color",
-            "rgb(" + mix(38, 188) + "," + mix(48, 204) + "," + mix(64, 218) + ")"
+            onDark ? "rgb(38,48,64)" : "rgb(188,204,218)"
           );
         }
+      }
+
+      // ===============================================================
+      // Nubi osservate dal satellite
+      //
+      // Sorgente: MTG-I1 / FCI, canale infrarosso a 10.5 micrometri, 1 km di
+      // risoluzione e un'immagine ogni 10 minuti (EUMETSAT, servizio pubblico
+      // EUMETView). L'infrarosso misura la temperatura di brillanza della cima
+      // della nube: le nubi sono piu' fredde dello sfondo e quindi chiare, e
+      // si vedono anche di notte -- al contrario del canale visibile, che al
+      // buio non esiste. E' la scelta giusta per una mappa che si guarda a
+      // qualsiasi ora.
+      //
+      // EUMETSAT serve l'immagine come PNG opaco in scala di grigi. Una
+      // sovrapposizione utile deve invece lasciar vedere la mappa dove il
+      // cielo e' sereno, e MapLibre non sa ricavare l'opacita' dal colore di
+      // un raster: "raster-color" e' un'estensione di Mapbox e in MapLibre 5
+      // non esiste (verificato nel bundle 5.24.0, che espone solo opacity,
+      // contrast, saturation, hue-rotate e brightness). Quindi scarico una
+      // sola immagine su tutto il dominio, la trasformo su una canvas --
+      // grigio dell'infrarosso -> opacita' -- e la pubblico come sorgente
+      // immagine, che MapLibre drappeggia anche sul terreno in vista 3D.
+      // ===============================================================
+
+      // Stessi angoli del raster del modello: cosi' la nube e il campo
+      // previsto sono inquadrati sullo stesso riquadro.
+      const CLOUD_CORNERS = [[6, 48], [20, 48], [20, 35], [6, 35]];
+      const CLOUD_WMS = "https://view.eumetsat.int/geoserver/wms";
+      const CLOUD_WMS_LAYER = "mtg_fd:ir105_hrfi";
+      // Il satellite produce un'immagine ogni 10 minuti. Senza parametro
+      // "time" il servizio restituisce sempre l'ultima disponibile (verificato:
+      // la risposta e' identica byte per byte a quella con il time esplicito
+      // dell'ultimo slot). Ma dichiara anche cache-control di una settimana,
+      // quindi senza qualcosa che cambi nell'indirizzo il browser continuerebbe
+      // a mostrare per giorni la stessa immagine: ci penso con un contatore
+      // legato al decadale.
+      const CLOUD_SLOT_MS = 10 * 60 * 1000;
+      // Il servizio applica un limite di richieste (dichiarato nelle sue
+      // risposte: 20 per finestra, oltre si viene rallentati). Una sola
+      // immagine ogni cinque minuti per utente ci sta larghissima, ed e'
+      // anche il motivo per cui scarico un'unica immagine sul dominio invece
+      // di centinaia di tessere.
+      // Soglie sul grigio dell'infrarosso, calibrate sul dominio italiano:
+      // sotto la prima e' cielo sereno o superficie, sopra la seconda e' nube
+      // spessa. Fra le due l'opacita' sale con una smoothstep, cosi' il bordo
+      // sfuma invece di tagliare netto.
+      const CLOUD_CLEAR_LEVEL = 38;
+      const CLOUD_SOLID_LEVEL = 105;
+      // Oltre questo grigio la cima e' cosi' fredda da essere sicuramente
+      // convettiva: e' l'estremo bianco della scala di tono.
+      const CLOUD_COLD_LEVEL = 150;
+
+      let cloudCanvas = null;
+      let cloudObjectUrl = "";
+      let cloudTimer = 0;
+      let cloudToken = 0;
+
+      function mercatorMetresX(longitude) {
+        return longitude * 20037508.34 / 180;
+      }
+
+      function mercatorMetresY(latitude) {
+        return Math.log(Math.tan((90 + latitude) * Math.PI / 360))
+          / (Math.PI / 180) * 20037508.34 / 180;
+      }
+
+      function satelliteCloudUrl(width, height) {
+        const west = mercatorMetresX(CLOUD_CORNERS[0][0]);
+        const east = mercatorMetresX(CLOUD_CORNERS[1][0]);
+        const south = mercatorMetresY(CLOUD_CORNERS[2][1]);
+        const north = mercatorMetresY(CLOUD_CORNERS[0][1]);
+        // Chiedo l'immagine gia' in proiezione Mercatore: gli angoli in
+        // longitudine e latitudine che passo a MapLibre corrispondono allora
+        // esattamente ai bordi del riquadro, senza deformazioni.
+        return CLOUD_WMS
+          + "?service=WMS&version=1.1.1&request=GetMap&styles="
+          + "&layers=" + encodeURIComponent(CLOUD_WMS_LAYER)
+          + "&srs=EPSG:3857&format=image/png&transparent=true"
+          + "&bbox=" + [west, south, east, north].map(function (value) {
+              return value.toFixed(1);
+            }).join(",")
+          + "&width=" + width + "&height=" + height
+          + "&slot=" + Math.floor(Date.now() / CLOUD_SLOT_MS);
+      }
+
+      function publishSatelliteClouds(image, width, height) {
+        const source = map.getSource("satellite-clouds");
+        if (!source) return;
+        if (!cloudCanvas) cloudCanvas = document.createElement("canvas");
+        cloudCanvas.width = width;
+        cloudCanvas.height = height;
+        const context = cloudCanvas.getContext("2d", { willReadFrequently: true });
+        if (!context) return;
+        context.clearRect(0, 0, width, height);
+        context.drawImage(image, 0, 0, width, height);
+
+        const frame = context.getImageData(0, 0, width, height);
+        const pixels = frame.data;
+        const span = CLOUD_SOLID_LEVEL - CLOUD_CLEAR_LEVEL;
+        const coldSpan = CLOUD_COLD_LEVEL - CLOUD_CLEAR_LEVEL;
+        for (let i = 0; i < pixels.length; i += 4) {
+          // Il prodotto e' in scala di grigi: i tre canali sono uguali, ne
+          // basta uno.
+          const grey = pixels[i];
+          let level = (grey - CLOUD_CLEAR_LEVEL) / span;
+          level = level < 0 ? 0 : (level > 1 ? 1 : level);
+          const alpha = level * level * (3 - 2 * level);
+          // Nube tiepida (bassa) grigio-azzurra, cima fredda bianca: e' la
+          // lettura classica dell'infrarosso e distingue a colpo d'occhio lo
+          // strato dal cumulonembo.
+          let cold = (grey - CLOUD_CLEAR_LEVEL) / coldSpan;
+          cold = cold < 0 ? 0 : (cold > 1 ? 1 : cold);
+          const tone = 196 + 59 * cold;
+          pixels[i] = tone;
+          pixels[i + 1] = tone + 8 > 255 ? 255 : tone + 8;
+          pixels[i + 2] = tone + 18 > 255 ? 255 : tone + 18;
+          pixels[i + 3] = Math.round(alpha * 255);
+        }
+        context.putImageData(frame, 0, 0);
+
+        const update = function (url, isObjectUrl) {
+          try {
+            source.updateImage({ url: url, coordinates: CLOUD_CORNERS });
+            markCloudFreshness(new Date());
+            if (cloudObjectUrl) {
+              const previous = cloudObjectUrl;
+              setTimeout(function () { URL.revokeObjectURL(previous); }, 1600);
+            }
+            cloudObjectUrl = isObjectUrl ? url : "";
+          } catch (error) {
+            if (isObjectUrl) URL.revokeObjectURL(url);
+            console.error("Nubi satellitari non pubblicate", error);
+          }
+        };
+
+        // Stessa scelta del raster del modello: toBlob non blocca il thread
+        // principale come farebbe la codifica base64 di qualche milione di
+        // pixel, che su telefono si vedeva.
+        if (typeof cloudCanvas.toBlob === "function"
+          && typeof URL.createObjectURL === "function") {
+          cloudCanvas.toBlob(function (blob) {
+            if (!blob) return;
+            update(URL.createObjectURL(blob), true);
+          }, "image/png");
+        } else {
+          update(cloudCanvas.toDataURL("image/png"), false);
+        }
+      }
+
+      // Il satellite guarda l'adesso, la timeline guarda la previsione: sono
+      // due orologi diversi e chi legge deve poterlo vedere. Qui scrivo
+      // l'ora dello scaricamento sotto l'interruttore. L'osservazione vera e'
+      // qualche minuto piu' vecchia -- la diffusione di EUMETSAT ha una
+      // latenza di circa venti minuti -- e non la posso leggere dal browser,
+      // perche' il servizio la dichiara in un'intestazione che le regole CORS
+      // non espongono. Quindi dico quello che so davvero, senza inventare un
+      // orario di ripresa.
+      function markCloudFreshness(when) {
+        const label = document.getElementById("satclouds-note");
+        if (!label) return;
+        const time = when.toLocaleTimeString("it-IT", {
+          hour: "2-digit", minute: "2-digit"
+        });
+        label.textContent = "MTG infrarosso 10.5 µm · ultimo passaggio alle " + time;
+      }
+
+      function loadSatelliteClouds() {
+        if (!mapLoaded || !showSatelliteClouds) return;
+        // In una scheda in secondo piano nessuno sta guardando: inutile
+        // pesare sul servizio, si riprende alla prossima occasione.
+        if (typeof document.hidden === "boolean" && document.hidden) return;
+        if (!map.getSource("satellite-clouds")) return;
+        const token = ++cloudToken;
+        // Su telefono un'immagine piu' piccola: a 1024 px il pixel vale circa
+        // 1.1 km, cioe' gia' la risoluzione vera del satellite, e la texture
+        // occupa un quarto della memoria di quella da desktop.
+        const width = window.innerWidth < 900 ? 1024 : 1536;
+        const spanX = mercatorMetresX(CLOUD_CORNERS[1][0])
+          - mercatorMetresX(CLOUD_CORNERS[0][0]);
+        const spanY = mercatorMetresY(CLOUD_CORNERS[0][1])
+          - mercatorMetresY(CLOUD_CORNERS[2][1]);
+        const height = Math.round(width * spanY / spanX);
+
+        const image = new Image();
+        // La canvas va riletta pixel per pixel: senza CORS il browser la
+        // marcherebbe come "sporca" e getImageData fallirebbe. EUMETView
+        // risponde con Access-Control-Allow-Origin: *.
+        image.crossOrigin = "anonymous";
+        image.onload = function () {
+          if (token !== cloudToken || !showSatelliteClouds) return;
+          try {
+            publishSatelliteClouds(image, width, height);
+          } catch (error) {
+            console.error("Nubi satellitari non elaborate", error);
+            toast("Immagine satellitare non elaborabile");
+          }
+        };
+        image.onerror = function () {
+          if (token !== cloudToken) return;
+          toast("Satellite EUMETSAT non raggiungibile");
+        };
+        image.src = satelliteCloudUrl(width, height);
+      }
+
+      function updateSatelliteClouds() {
+        if (!mapLoaded || !map.getLayer("satellite-clouds-layer")) return;
+        map.setLayoutProperty(
+          "satellite-clouds-layer", "visibility",
+          showSatelliteClouds ? "visible" : "none"
+        );
+        if (cloudTimer) {
+          clearInterval(cloudTimer);
+          cloudTimer = 0;
+        }
+        if (!showSatelliteClouds) return;
+        loadSatelliteClouds();
+        // Ricontrollo a meta' decadale: chiedere piu' spesso non produrrebbe
+        // un'immagine nuova, ma con questo passo non si resta indietro di un
+        // giro quando l'orologio del telefono non e' allineato al satellite.
+        cloudTimer = setInterval(loadSatelliteClouds, CLOUD_SLOT_MS / 2);
+        toast("Nubi osservate ora dal satellite · non seguono l'ora della previsione");
       }
 
       // La foschia esiste solo se c'è un orizzonte da velare: cresce con
@@ -3698,6 +3866,7 @@
           fronts: showFronts,
           terrain: showTerrain,
           satellite: showSatellite,
+          satclouds: showSatelliteClouds,
           lightbase: showLightBase,
           threed: show3D,
           graticule: showGraticule,
@@ -3882,10 +4051,14 @@
         } else if (name === "lightbase") {
           showLightBase = !showLightBase;
           updateSatelliteBase();
-          updateSolarLighting();
+          updateReliefShading();
         } else if (name === "satellite") {
           showSatellite = !showSatellite;
           updateSatelliteBase();
+          updateReliefShading();
+        } else if (name === "satclouds") {
+          showSatelliteClouds = !showSatelliteClouds;
+          updateSatelliteClouds();
         } else if (name === "threed") {
           show3D = !show3D;
           updateTerrain3D();
@@ -4200,7 +4373,7 @@
         }
         if (map.getLayer("terrain-base")) {
           // L'hillshade Esri ha una luce fissa. In 3D entrerebbe in conflitto
-          // con l'ombra solare del DEM, quindi resta solo nella vista piana.
+          // con l'ombreggiatura del DEM, quindi resta solo nella vista piana.
           map.setLayoutProperty(
             "terrain-base",
             "visibility",
@@ -4331,10 +4504,10 @@
           updateMapPresentation();
           resetParticles();
           if (showParticles) startParticles();
-          // Applico subito rilievo e luce solare, senza aspettare il prossimo
+          // Applico subito rilievo e cielo, senza aspettare il prossimo
           // render della griglia.
           renderWeather();
-          updateSolarLighting();
+          updateReliefShading();
           toast("Vista 3D attiva · ruota e inclina con due dita");
         } else {
           stopParticles();
@@ -4344,7 +4517,7 @@
               !showLightBase && !showSatellite ? "#0a1018" : "#c4cace"
             );
           }
-          updateSolarLighting();
+          updateReliefShading();
           if (map.dragRotate) map.dragRotate.disable();
           if (map.touchZoomRotate) map.touchZoomRotate.disableRotation();
           if (map.touchPitch) map.touchPitch.disable();
@@ -6564,6 +6737,28 @@
               "hillshade-shadow-color": "rgba(20,25,24,0.72)",
               "hillshade-highlight-color": "rgba(255,255,255,0)",
               "hillshade-accent-color": "rgba(47,40,31,0.3)"
+            }
+          });
+
+          // Nube osservata sopra il campo previsto: dove il cielo e' sereno
+          // l'immagine e' trasparente, quindi il colore del modello resta
+          // visibile e le due informazioni si leggono insieme. Sotto le
+          // etichette e i confini, che devono restare sempre in chiaro.
+          map.addSource("satellite-clouds", {
+            type: "image",
+            url: "data:image/gif;base64,R0lGODlhAQABAAD/ACwAAAAAAQABAAACADs=",
+            coordinates: CLOUD_CORNERS
+          });
+
+          map.addLayer({
+            id: "satellite-clouds-layer",
+            type: "raster",
+            source: "satellite-clouds",
+            layout: { visibility: "none" },
+            paint: {
+              "raster-opacity": 0.94,
+              "raster-resampling": "linear",
+              "raster-fade-duration": 0
             }
           });
 
