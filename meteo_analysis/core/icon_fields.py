@@ -41,6 +41,12 @@ FIELD_SPECS = {
     "vmax_10m": FieldSpec(-1.0, 200.0, "m s-1"),
     "omega500": FieldSpec(-500.0, 500.0, "Pa s-1"),
     "omega850": FieldSpec(-500.0, 500.0, "Pa s-1"),
+    # Flussi al suolo: ICON li pubblica positivi verso il basso, quindi di
+    # giorno sono negativi. L'intervallo copre entrambi i versi.
+    "ashfl": FieldSpec(-1_500.0, 1_500.0, "W m-2"),
+    "alhfl": FieldSpec(-2_000.0, 2_000.0, "W m-2"),
+    "fr_land": FieldSpec(-0.01, 1.01, "0-1"),
+    "hsurf": FieldSpec(-500.0, 9_000.0, "m"),
     # Specific humidity (kg/kg) and geopotential (m2/s2) carry no range
     # validation: providers publish varied units, and these optional fields
     # must never abort the whole convective/isohypse layer over a units
@@ -67,6 +73,11 @@ class IconRunFields:
         self.datasets: dict[str, xr.Dataset] = {}
         self.variables: dict[str, str] = {}
         self.hours: dict[str, set[int]] = {}
+        # Alcuni campi non dipendono dal tempo: la maschera terra-mare e
+        # l'orografia sono gli stessi a ogni scadenza e il GRIB non porta la
+        # dimensione step. Vanno riconosciuti, altrimenti risulterebbero
+        # disponibili solo all'ora zero e assenti per tutte le altre.
+        self.constant: set[str] = set()
         try:
             for name, path in paths.items():
                 dataset = xr.open_dataset(
@@ -82,6 +93,8 @@ class IconRunFields:
                 self.datasets[name] = dataset
                 self.variables[name] = variable
                 self.hours[name] = set(_step_hours(dataset))
+                if "step" not in dataset[variable].dims:
+                    self.constant.add(name)
         except Exception:
             self.close()
             raise
@@ -119,9 +132,15 @@ class IconRunFields:
 
     @property
     def available_hours(self) -> list[int]:
-        if not self.hours:
+        # I campi costanti non partecipano all'intersezione: hanno una sola
+        # "ora" fittizia e la ridurrebbero a quella.
+        varying = [
+            hours for name, hours in self.hours.items()
+            if name not in self.constant
+        ]
+        if not varying:
             return []
-        return sorted(set.intersection(*self.hours.values()))
+        return sorted(set.intersection(*varying))
 
     def field(
         self,
@@ -131,7 +150,9 @@ class IconRunFields:
         target_longitudes,
     ) -> np.ndarray | None:
         dataset = self.datasets.get(name)
-        if dataset is None or hour not in self.hours.get(name, set()):
+        if dataset is None:
+            return None
+        if name not in self.constant and hour not in self.hours.get(name, set()):
             return None
         data = dataset[self.variables[name]]
         if "step" in data.dims:

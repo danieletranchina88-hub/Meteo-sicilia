@@ -11,6 +11,7 @@ from meteo_analysis.hazards.storms import (  # noqa: E402
     AIR_DENSITY_BY_LEVEL,
     bowen_ratio,
     coarsen,
+    coast_distance_km,
     bulk_shear,
     downburst_potential,
     hail_potential,
@@ -18,8 +19,11 @@ from meteo_analysis.hazards.storms import (  # noqa: E402
     neighbourhood_probability,
     potential_updraft,
     storm_mode,
+    sea_breeze_lift,
     storm_probability,
     strongest_updraft,
+    trigger_index,
+    upslope_flow,
     summarize_storms,
     updraft_from_omega,
 )
@@ -316,6 +320,153 @@ def test_summary_reports_area_and_peak():
     assert np.isclose(summary["areaAbove20Pct"], 200.0 / 3.0, atol=0.01)
     vuoto = summarize_storms(np.full((3, 3), np.nan))
     assert vuoto["status"] == "unavailable" and vuoto["maximum"] is None
+
+
+def test_upslope_rises_on_the_windward_side():
+    """Il vento che incontra un pendio sale; sul lato sottovento scende."""
+    latitudes = np.linspace(45.0, 44.0, 21)
+    longitudes = np.linspace(10.0, 11.0, 21)
+    # Una collina a forma di cono al centro del riquadro.
+    gy, gx = np.meshgrid(np.arange(21.0), np.arange(21.0), indexing="ij")
+    height = 1_000.0 * np.exp(-(((gx - 10) ** 2 + (gy - 10) ** 2) / 24.0))
+
+    vento_da_ovest_u = np.full(height.shape, 10.0)
+    zero = np.zeros(height.shape)
+    w = upslope_flow(vento_da_ovest_u, zero, height, latitudes, longitudes)
+    # Con vento da ovest il versante occidentale (indici piu' bassi) sale.
+    assert w[10, 7] > 0.1, "il sopravvento deve salire"
+    assert w[10, 13] < -0.1, "il sottovento deve scendere"
+    # Vento nullo: nessuna risalita, per quanto ripido sia il pendio.
+    assert np.allclose(upslope_flow(zero, zero, height, latitudes, longitudes), 0.0)
+    # Pianura: nessuna risalita, per quanto forte sia il vento.
+    piatto = np.zeros(height.shape)
+    assert np.allclose(
+        upslope_flow(vento_da_ovest_u, zero, piatto, latitudes, longitudes), 0.0
+    )
+
+
+def test_upslope_scales_with_wind_and_slope():
+    latitudes = np.linspace(45.0, 44.0, 21)
+    longitudes = np.linspace(10.0, 11.0, 21)
+    gy, gx = np.meshgrid(np.arange(21.0), np.arange(21.0), indexing="ij")
+    dolce = 300.0 * np.exp(-(((gx - 10) ** 2 + (gy - 10) ** 2) / 24.0))
+    ripida = 1_200.0 * np.exp(-(((gx - 10) ** 2 + (gy - 10) ** 2) / 24.0))
+    zero = np.zeros(dolce.shape)
+    debole = np.full(dolce.shape, 3.0)
+    forte = np.full(dolce.shape, 12.0)
+    assert (
+        upslope_flow(forte, zero, ripida, latitudes, longitudes)[10, 7]
+        > upslope_flow(forte, zero, dolce, latitudes, longitudes)[10, 7]
+    )
+    assert (
+        upslope_flow(forte, zero, dolce, latitudes, longitudes)[10, 7]
+        > upslope_flow(debole, zero, dolce, latitudes, longitudes)[10, 7]
+    )
+
+
+def _riquadro_costiero(n=41):
+    """Meta' mare a ovest, meta' terra a est, costa dritta al centro."""
+    latitudes = np.linspace(40.0, 39.0, n)
+    longitudes = np.linspace(12.0, 13.0, n)
+    land = np.zeros((n, n))
+    land[:, n // 2:] = 1.0
+    return land, latitudes, longitudes
+
+
+def test_coast_distance_signs_and_growth():
+    land, latitudes, longitudes = _riquadro_costiero()
+    distance = coast_distance_km(land, latitudes, longitudes)
+    n = land.shape[0]
+    assert distance[20, n // 2] == 0.0, "la costa e' a distanza zero"
+    assert distance[20, n // 2 + 5] > 0, "l'entroterra e' positivo"
+    assert distance[20, n // 2 - 5] < 0, "il mare e' negativo"
+    # Allontanandosi dalla costa la distanza cresce, da entrambi i lati.
+    assert distance[20, n // 2 + 8] > distance[20, n // 2 + 3]
+    assert distance[20, n // 2 - 8] < distance[20, n // 2 - 3]
+
+
+def test_coast_distance_without_a_coast():
+    """Tutto mare o tutta terra: non c'e' brezza da isolare."""
+    latitudes = np.linspace(40.0, 39.0, 11)
+    longitudes = np.linspace(12.0, 13.0, 11)
+    assert np.all(np.isnan(coast_distance_km(np.ones((11, 11)), latitudes, longitudes)))
+    assert np.all(np.isnan(coast_distance_km(np.zeros((11, 11)), latitudes, longitudes)))
+
+
+def test_sea_breeze_needs_land_onshore_wind_and_convergence():
+    land, latitudes, longitudes = _riquadro_costiero()
+    n = land.shape[0]
+    convergence = np.full((n, n), 2.0e-4)
+    dal_mare = np.full((n, n), 6.0)     # vento da ovest, cioe' dal mare
+    verso_il_mare = np.full((n, n), -6.0)
+    zero = np.zeros((n, n))
+
+    breeze = sea_breeze_lift(convergence, dal_mare, zero, land, latitudes, longitudes)
+    assert breeze[20, n // 2 + 3] > 0, "terra, vento dal mare, convergenza: brezza"
+    assert breeze[20, n // 2 - 3] == 0, "sul mare non si attribuisce brezza"
+
+    # Stesso quadro ma vento verso il mare: non e' brezza.
+    contraria = sea_breeze_lift(
+        convergence, verso_il_mare, zero, land, latitudes, longitudes
+    )
+    assert contraria[20, n // 2 + 3] == 0
+
+    # Divergenza invece di convergenza: niente.
+    divergenza = sea_breeze_lift(
+        -convergence, dal_mare, zero, land, latitudes, longitudes
+    )
+    assert divergenza[20, n // 2 + 3] == 0
+
+
+def test_sea_breeze_never_lands_on_the_sea():
+    """Sui punti di mare in riva la distanza vale -0.0, e -0.0 >= 0 e' vero.
+
+    Con il confronto sul segno una fascia di celle marine risultava terra e
+    prendeva brezza: trovato sui dati veri, non sui sintetici.
+    """
+    land, latitudes, longitudes = _riquadro_costiero(41)
+    n = land.shape[0]
+    convergence = np.full((n, n), 2.0e-4)
+    dal_mare = np.full((n, n), 6.0)
+    zero = np.zeros((n, n))
+    breeze = sea_breeze_lift(convergence, dal_mare, zero, land, latitudes, longitudes)
+    sul_mare = land < 0.5
+    assert np.nanmax(breeze[sul_mare]) == 0.0, "nessuna brezza puo' stare sul mare"
+
+
+def test_sea_breeze_stops_inland():
+    land, latitudes, longitudes = _riquadro_costiero(81)
+    n = land.shape[0]
+    convergence = np.full((n, n), 2.0e-4)
+    dal_mare = np.full((n, n), 6.0)
+    zero = np.zeros((n, n))
+    breeze = sea_breeze_lift(
+        convergence, dal_mare, zero, land, latitudes, longitudes,
+        inland_reach_km=20.0,
+    )
+    vicino = breeze[40, n // 2 + 2]
+    lontano = breeze[40, n - 3]
+    assert vicino > 0
+    assert lontano == 0, "oltre la portata la brezza non arriva"
+
+
+def test_trigger_takes_the_strongest_not_the_sum():
+    """In un punto agisce un meccanismo: sommarli inventerebbe inneschi."""
+    forte = trigger_index(upslope_ms=np.array([0.6]), sea_breeze=None, convergence=None)
+    assert np.isclose(forte[0], 1.0)
+    debole = trigger_index(
+        upslope_ms=np.array([0.15]),
+        sea_breeze=np.array([0.4e-4]),
+        convergence=np.array([0.5e-4]),
+    )
+    # Tre contributi deboli non devono sommarsi a uno forte.
+    assert debole[0] < 0.35
+    # Il massimo e' quello che conta.
+    misto = trigger_index(
+        upslope_ms=np.array([0.05]), sea_breeze=np.array([2.0e-4]), convergence=None
+    )
+    assert np.isclose(misto[0], 1.0)
+    assert np.isnan(trigger_index(upslope_ms=np.array([np.nan]))[0])
 
 
 if __name__ == "__main__":

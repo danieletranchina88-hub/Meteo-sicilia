@@ -1798,6 +1798,12 @@
               <button class="layer-card" type="button" data-layer="cape" style="--swatch: linear-gradient(#f0f3f0,#f6e280,#8c163c)">
                 <span class="layer-swatch"></span><span><b>Energia convettiva</b><small>ML-CAPE</small></span>
               </button>
+              <button class="layer-card" type="button" data-layer="trigger" style="--swatch: linear-gradient(#c6ded6,#9acea8,#be303c)">
+                <span class="layer-swatch"></span><span><b>Innesco convettivo</b><small>rilievo · brezza · convergenza</small></span>
+              </button>
+              <button class="layer-card" type="button" data-layer="bowen" style="--swatch: linear-gradient(#2a6c82,#b0c888,#804a2c)">
+                <span class="layer-swatch"></span><span><b>Rapporto di Bowen</b><small>energia del suolo · secco o umido</small></span>
+              </button>
               <button class="layer-card" type="button" data-layer="visibility" style="--swatch: linear-gradient(#f7f7f7,#606f80)">
                 <span class="layer-swatch"></span><span><b>Visibilità</b><small>Nebbia e nubi basse</small></span>
               </button>
@@ -2312,7 +2318,48 @@
         { v: 2500, c: [222, 74, 52] }, { v: 4000, c: [140, 22, 60] }
       ];
 
+      // Innesco: quanto e' forte il sollevamento che puo' rompere il
+      // coperchio. Scala fredda dove non succede niente, calda dove il
+      // terreno o la brezza stanno spingendo l'aria verso l'alto.
+      const TRIGGER_STOPS = [
+        { v: 0, c: [236, 240, 240] }, { v: 15, c: [198, 222, 214] },
+        { v: 35, c: [154, 206, 168] }, { v: 55, c: [238, 214, 108] },
+        { v: 75, c: [234, 142, 62] }, { v: 100, c: [190, 48, 60] }
+      ];
+      // Bowen: da verde (suolo umido, energia in evaporazione) a bruno
+      // (suolo secco, energia in calore). Uno e' la scala dei colori della
+      // vegetazione, l'altro quella della terra battuta: si legge da sola.
+      const BOWEN_STOPS = [
+        { v: 0, c: [42, 108, 130] }, { v: 0.3, c: [92, 158, 132] },
+        { v: 0.8, c: [176, 200, 136] }, { v: 1.5, c: [214, 182, 106] },
+        { v: 3, c: [186, 126, 66] }, { v: 6, c: [128, 74, 44] }
+      ];
+
       const LAYER_INFO = {
+        trigger: {
+          label: "Innesco convettivo",
+          unit: "%",
+          stops: TRIGGER_STOPS,
+          discrete: false,
+          decimals: 0,
+          ticks: [0, 20, 40, 60, 80, 100],
+          note: "Il sollevamento che può rompere il coperchio: risalita sul rilievo, fronte di brezza o convergenza. Vale il più forte dei tre, non la somma.",
+          opacity: 0.85,
+          terrainOpacity: 0.2,
+          storm: "trigger"
+        },
+        bowen: {
+          label: "Rapporto di Bowen",
+          unit: "",
+          stops: BOWEN_STOPS,
+          discrete: false,
+          decimals: 2,
+          ticks: [0, 0.5, 1, 2, 4, 6],
+          note: "Come si divide l'energia solare al suolo: sotto 1 prevale l'evaporazione (base delle nubi bassa, temporali diffusi), sopra 1 il riscaldamento (base alta, celle isolate e raffiche).",
+          opacity: 0.82,
+          terrainOpacity: 0.24,
+          storm: "bowen"
+        },
         storm_prob: {
           label: "Probabilità di temporale",
           unit: "%",
@@ -6803,7 +6850,47 @@
         const downburst = read("downburst");
         const freezing = read("freezingLevel");
 
+        const trigger = read("trigger");
+        const upslope = read("upslope");
+        const breeze = read("seaBreeze");
+        const bowen = read("bowen");
+
+        const triggerName = (function () {
+          // Dire quale dei tre meccanismi sta spingendo e' piu' utile del
+          // numero: cambia dove guardare e a che ora aspettarselo.
+          //
+          // I due contributi vanno confrontati normalizzati sulle stesse
+          // soglie che usa l'indice: la brezza e' pubblicata moltiplicata per
+          // 1e5 per non perdere cifre, quindi il suo pieno vale 20, non
+          // 2e-4. Con la scala sbagliata la brezza vinceva sempre, e sulle
+          // Alpi compariva "brezza di mare".
+          const upslopeShare = Number.isFinite(upslope) ? upslope / 0.6 : 0;
+          const breezeShare = Number.isFinite(breeze) ? breeze / 20.0 : 0;
+          if (upslopeShare >= 0.25 && upslopeShare >= breezeShare) {
+            return "Innesco · risalita sul rilievo";
+          }
+          // La maschera terra-mare di ICON non distingue il mare dai laghi, e
+          // la brezza di lago e' un innesco vero: il nome li tiene insieme
+          // invece di dichiarare il mare dove c'e' il Garda.
+          if (breezeShare >= 0.1) return "Innesco · brezza di mare o lago";
+          return "Innesco · sollevamento";
+        })();
+
         const rows = [
+          {
+            name: "Suolo · rapporto di Bowen",
+            value: Number.isFinite(bowen)
+              ? bowen.toFixed(2) + (bowen >= 1.5 ? " · secco" : (bowen <= 0.6 ? " · umido" : ""))
+              : "--",
+            // Non e' un anello che "regge" o no: qualunque valore e' un
+            // carattere della giornata, non un ostacolo. Resta neutro.
+            state: Number.isFinite(bowen) ? "weak" : "fail"
+          },
+          {
+            name: triggerName,
+            value: Number.isFinite(trigger) ? Math.round(trigger) + " %" : "--",
+            state: stormLinkState(trigger, 20, 50)
+          },
           {
             name: "Base delle nubi",
             value: Number.isFinite(base) ? Math.round(base) + " m" : "--",
