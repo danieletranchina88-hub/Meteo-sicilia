@@ -1,3 +1,4 @@
+import math
 import requests
 import xarray as xr
 import numpy as np
@@ -16,6 +17,20 @@ from front_analysis_v12 import FrontalAnalysisV12
 # Add meteo_analysis imports
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 from meteo_analysis.core.icon_fields import IconRunFields
+from meteo_analysis.hazards.storms import (
+    bowen_ratio,
+    coarsen,
+    bulk_shear,
+    downburst_potential,
+    hail_potential,
+    lifting_condensation_level,
+    potential_updraft,
+    storm_mode,
+    storm_probability,
+    strongest_updraft,
+    summarize_storms,
+    updraft_from_omega,
+)
 from meteo_analysis.hazards.convection import (
     calculate_convection_probability,
     front_distance_km,
@@ -437,6 +452,161 @@ def prepare_icon_front_analyzer(run_dt):
         return None
 
 
+STORM_METHOD = "icon2i-lpi-neighbourhood-v1"
+# L'evento e' "temporale entro 10 km"; la lisciatura a 25 km esprime il fatto
+# che il modello sa che il temporale ci sara' ma non su quale paese.
+STORM_EVENT_RADIUS_KM = 10.0
+STORM_SMOOTHING_RADIUS_KM = 25.0
+STORM_LPI_THRESHOLD = 1.0
+# La griglia pubblicata e' dimezzata rispetto a quella del modello: a piena
+# risoluzione la sezione pesava 3,6 MB per scadenza, cioe' 260 MB per corsa.
+STORM_COARSEN = 2
+
+
+def build_storm_payload(
+    fields,
+    hour,
+    latitudes,
+    longitudes,
+    cape_ml,
+    deep_layer_shear,
+    omega_700,
+    temperature_2m_c,
+):
+    """Campi della sezione temporali per una scadenza, o None se mancano.
+
+    Vive in un file separato da quello dello step: sono una dozzina di
+    griglie e chi non apre la sezione temporali non deve scaricarle.  E' lo
+    stesso schema gia' usato per i campi in quota.
+    """
+    if fields is None:
+        return None
+    lpi = fields.field("lpi", hour, latitudes, longitudes)
+    if lpi is None:
+        return None
+
+    latitude = np.asarray(latitudes, dtype=float)
+    longitude = np.asarray(longitudes, dtype=float)
+    if latitude.size < 2 or longitude.size < 2:
+        return None
+    # Passo della griglia in chilometri: serve al vicinato, che ragiona in
+    # distanze vere e non in celle.
+    mean_latitude = float(np.nanmean(latitude))
+    cell_y_km = abs(float(latitude[1] - latitude[0])) * 111.32
+    cell_x_km = (
+        abs(float(longitude[1] - longitude[0]))
+        * 111.32
+        * math.cos(math.radians(mean_latitude))
+    )
+    cell_km = float(np.mean([cell_x_km, cell_y_km]))
+    if not np.isfinite(cell_km) or cell_km <= 0:
+        return None
+
+    probability = storm_probability(
+        lpi,
+        threshold=STORM_LPI_THRESHOLD,
+        event_radius_km=STORM_EVENT_RADIUS_KM,
+        smoothing_radius_km=STORM_SMOOTHING_RADIUS_KM,
+        cell_km=cell_km,
+    ) * 100.0
+
+    # Correnti ascensionali risolte: il nucleo di una cella non sta sempre
+    # allo stesso livello, quindi si prende il massimo sulla colonna.
+    omega_levels = {}
+    if omega_700 is not None:
+        omega_levels[700.0] = omega_700
+    for level, name in ((500.0, "omega500"), (850.0, "omega850")):
+        value = fields.field(name, hour, latitudes, longitudes)
+        if value is not None:
+            omega_levels[level] = value
+    updraft = strongest_updraft(omega_levels) if omega_levels else None
+
+    # Salita sinottica: lo stesso omega letto su un'altra scala. E' la
+    # forzante larga che consuma il coperchio su intere regioni, tre ordini di
+    # grandezza sotto il nucleo convettivo, e va mostrata separata.
+    ascent = None
+    if 700.0 in omega_levels:
+        ascent = updraft_from_omega(omega_levels[700.0], 700.0) * 100.0  # cm/s
+
+    dewpoint = fields.field("td_2m", hour, latitudes, longitudes)
+    cloud_base = None
+    if dewpoint is not None and temperature_2m_c is not None:
+        dewpoint_c = np.where(
+            np.isfinite(dewpoint) & (dewpoint > 150.0),
+            dewpoint - 273.15,
+            dewpoint,
+        )
+        cloud_base = lifting_condensation_level(temperature_2m_c, dewpoint_c)
+
+    helicity = fields.field("uh_max", hour, latitudes, longitudes)
+    cape_mu = fields.field("cape_con", hour, latitudes, longitudes)
+    graupel = fields.field("graupel", hour, latitudes, longitudes)
+    freezing_level = fields.field("hzerocl", hour, latitudes, longitudes)
+    gust = fields.field("vmax_10m", hour, latitudes, longitudes)
+
+    hail = None
+    if graupel is not None and cape_ml is not None:
+        hail = hail_potential(
+            graupel,
+            freezing_level if freezing_level is not None else np.nan,
+            cape_ml,
+            deep_layer_shear if deep_layer_shear is not None else np.nan,
+        ) * 100.0
+
+    downburst = None
+    if cape_ml is not None and (cloud_base is not None or gust is not None):
+        downburst = downburst_potential(
+            cloud_base if cloud_base is not None else np.nan,
+            gust if gust is not None else np.nan,
+            cape_ml,
+        ) * 100.0
+
+    mode = None
+    if cape_ml is not None and deep_layer_shear is not None:
+        mode = storm_mode(cape_ml, deep_layer_shear)
+
+    # Il riepilogo va calcolato a piena risoluzione, prima di ridurre la
+    # griglia: e' quello che finisce nel controllo qualita', e un massimo
+    # mediato non sarebbe piu' un massimo.
+    summary = summarize_storms(probability, updraft)
+
+    # Griglia dimezzata per il peso del file. Il modo di aggregare cambia da
+    # campo a campo: media dove il campo e' gia' liscio, massimo dove il
+    # segnale sta in pochi punti appuntiti, valore piu' vicino per i codici.
+    def reduce_field(values, how, decimals):
+        if values is None:
+            return None
+        return clean_for_json(coarsen(values, STORM_COARSEN, how), decimals)
+
+    payload = {
+        "method": STORM_METHOD,
+        "eventRadiusKm": STORM_EVENT_RADIUS_KM,
+        "smoothingRadiusKm": STORM_SMOOTHING_RADIUS_KM,
+        "lpiThreshold": STORM_LPI_THRESHOLD,
+        "cellKm": round(cell_km * STORM_COARSEN, 3),
+        "probability": reduce_field(probability, "mean", 0),
+        "lpi": reduce_field(lpi, "max", 1),
+        "updraft": reduce_field(updraft, "max", 1),
+        "ascent": reduce_field(ascent, "mean", 1),
+        "potentialUpdraft": reduce_field(
+            potential_updraft(cape_ml) if cape_ml is not None else None,
+            "mean",
+            0,
+        ),
+        "cape": reduce_field(cape_ml, "mean", 0),
+        "capeMu": reduce_field(cape_mu, "mean", 0),
+        "shear": reduce_field(deep_layer_shear, "mean", 1),
+        "helicity": reduce_field(helicity, "max", 0),
+        "cloudBase": reduce_field(cloud_base, "mean", 0),
+        "freezingLevel": reduce_field(freezing_level, "mean", 0),
+        "hail": reduce_field(hail, "max", 0),
+        "downburst": reduce_field(downburst, "max", 0),
+        "mode": reduce_field(mode, "nearest", 0),
+        "summary": summary,
+    }
+    return payload
+
+
 def prepare_icon_hazard_fields(run_dt):
     """Download real convective and 700-hPa hazard fields for the ICON run.
 
@@ -449,6 +619,9 @@ def prepare_icon_hazard_fields(run_dt):
     run_base = f"{NWP_DIRECT_BASE}/{NWP_DIRECTORY_ID}/{run_tag}"
     pressure_file_700 = f"{common}_isobaricInhPa-700.grib"
     pressure_file_500 = f"{common}_isobaricInhPa-500.grib"
+    surface_file = f"{common}_surface-0.grib"
+    height_file_10 = f"{common}_heightAboveGround-10.grib"
+    shear_layer_file = f"{common}_heightAboveGroundLayer-6000.grib"
     requests_to_make = {
         "cape_ml": (
             f"{run_base}/CAPE_ML/{common}_atmML-0.grib",
@@ -491,9 +664,76 @@ def prepare_icon_hazard_fields(run_dt):
             f"{run_base}/FI/{pressure_file_500}",
             "fi500.grib",
         ),
+        # --- SEZIONE TEMPORALI ---
+        # ICON-2I gira a 2,2 km e risolve esplicitamente le celle convettive:
+        # questi campi sono la sua diagnostica diretta, non una ricostruzione.
+        # Tutti opzionali, come i precedenti: se MeteoHub non li espone la
+        # sezione temporali resta assente e il resto del sito non se ne accorge.
+        #
+        # LPI, indice di potenziale fulminazione, calcolato dalla microfisica
+        # (graupel, acqua sopraffusa, ghiaccio) dentro le correnti ascendenti.
+        "lpi": (
+            f"{run_base}/LPI/{surface_file}",
+            "lpi.grib",
+        ),
+        # Elicita' dell'updraft: updraft che ruota, cioe' mesociclone.
+        "uh_max": (
+            f"{run_base}/UH_MAX/{common}_heightAboveSeaLayer-2000.grib",
+            "uh_max.grib",
+        ),
+        # Shear di massa 0-6 km calcolato dal modello sui livelli veri: molto
+        # meglio della differenza fra vento a 500 hPa e vento a 10 m, che
+        # approssima lo stesso strato ignorando tutto quello che c'e' in mezzo.
+        "wshear_u": (
+            f"{run_base}/WSHEAR_U/{shear_layer_file}",
+            "wshear_u.grib",
+        ),
+        "wshear_v": (
+            f"{run_base}/WSHEAR_V/{shear_layer_file}",
+            "wshear_v.grib",
+        ),
+        # CAPE della particella piu' instabile: confrontata con quella dello
+        # strato mescolato dice se l'instabilita' e' al suolo o sollevata.
+        "cape_con": (
+            f"{run_base}/CAPE_CON/{surface_file}",
+            "cape_con.grib",
+        ),
+        # Punto di rugiada a 2 m: con la temperatura da la base delle nubi.
+        "td_2m": (
+            f"{run_base}/TD_2M/{common}_heightAboveGround-2.grib",
+            "td_2m.grib",
+        ),
+        # Zero termico: quanto fonde un chicco di grandine scendendo.
+        "hzerocl": (
+            f"{run_base}/HZEROCL/{common}_isothermZero-0.grib",
+            "hzerocl.grib",
+        ),
+        # Graupel accumulato: il precursore della grandine nella microfisica.
+        "graupel": (
+            f"{run_base}/GRAU_GSP/{surface_file}",
+            "graupel.grib",
+        ),
+        # Raffica massima: il downburst.
+        "vmax_10m": (
+            f"{run_base}/VMAX_10M/{height_file_10}",
+            "vmax_10m.grib",
+        ),
+        # Omega a 500 e 850 hPa. A 700 hPa e' gia' scaricato dal ramo
+        # frontale; qui servono gli altri due perche' il nucleo di una cella
+        # non sta sempre allo stesso livello.
+        "omega500": (
+            f"{run_base}/OMEGA/{pressure_file_500}",
+            "omega500.grib",
+        ),
+        "omega850": (
+            f"{run_base}/OMEGA/{common}_isobaricInhPa-850.grib",
+            "omega850.grib",
+        ),
     }
     optional_fields = {
         "t700", "u700", "v700", "q700", "u500", "v500", "fi500",
+        "lpi", "uh_max", "wshear_u", "wshear_v", "cape_con", "td_2m",
+        "hzerocl", "graupel", "vmax_10m", "omega500", "omega850",
     }
     if os.path.exists(HAZARD_TEMP_DIR):
         shutil.rmtree(HAZARD_TEMP_DIR)
@@ -1103,6 +1343,8 @@ def process_data():
                 convergence_10m = None
                 nearest_front_km = None
                 omega_700 = None
+                deep_layer_shear = None
+                shear_source = None
                 if icon_hazard_fields is not None:
                     try:
                         cape_ml = icon_hazard_fields.field(
@@ -1129,17 +1371,32 @@ def process_data():
                         # Deep-layer (0-6 km) bulk shear: 500-hPa wind relative
                         # to the 10 m wind.  Optional - absent 500-hPa fields
                         # simply drop the shear ingredient.
-                        deep_layer_shear = None
-                        u500 = icon_hazard_fields.field(
-                            "u500", step_hours, lat, lon
+                        # ICON-2I pubblica lo shear 0-6 km gia' calcolato sui
+                        # livelli veri del modello: quando c'e' si usa quello,
+                        # perche' la differenza 500 hPa - 10 m approssima lo
+                        # stesso strato ignorando tutto quello che c'e' in
+                        # mezzo. Il vecchio calcolo resta come ripiego.
+                        wshear_u = icon_hazard_fields.field(
+                            "wshear_u", step_hours, lat, lon
                         )
-                        v500 = icon_hazard_fields.field(
-                            "v500", step_hours, lat, lon
+                        wshear_v = icon_hazard_fields.field(
+                            "wshear_v", step_hours, lat, lon
                         )
-                        if u500 is not None and v500 is not None:
-                            deep_layer_shear = np.hypot(
-                                u500 - u_val, v500 - v_val
+                        if wshear_u is not None and wshear_v is not None:
+                            deep_layer_shear = bulk_shear(wshear_u, wshear_v)
+                            shear_source = "WSHEAR 0-6 km ICON-2I"
+                        else:
+                            u500 = icon_hazard_fields.field(
+                                "u500", step_hours, lat, lon
                             )
+                            v500 = icon_hazard_fields.field(
+                                "v500", step_hours, lat, lon
+                            )
+                            if u500 is not None and v500 is not None:
+                                deep_layer_shear = np.hypot(
+                                    u500 - u_val, v500 - v_val
+                                )
+                                shear_source = "500 hPa meno 10 m (ripiego)"
                         # Mid-tropospheric moisture: 700-hPa relative humidity
                         # from ICON T and specific humidity.  Optional.
                         mid_level_rh = None
@@ -1174,8 +1431,8 @@ def process_data():
                         convection_message = (
                             "ML-CAPE/CIN ICON-2I, convergenza 10 m smussata "
                             "a 10 km, omega 700 hPa, shear di strato profondo "
-                            "(500 hPa vs 10 m), umidità a 700 hPa e distanza "
-                            "dai fronti OFA."
+                            f"({shear_source or 'assente'}), umidità a 700 hPa "
+                            "e distanza dai fronti OFA."
                         )
                     except Exception as convection_error:
                         convection_prob = None
@@ -1419,6 +1676,46 @@ def process_data():
                 out_name = f"step_{step_hours}.json.gz"
                 write_json_gzip_atomic(f"{TEMP_DIR}/{out_name}", step_data)
 
+                # Sezione temporali: una dozzina di griglie in un file a
+                # parte, scaricato dal sito solo quando l'utente apre quella
+                # sezione. Un errore qui non deve toccare il resto della
+                # scadenza, che e' gia' stata scritta.
+                storm_available = False
+                try:
+                    storm_payload = build_storm_payload(
+                        icon_hazard_fields,
+                        step_hours,
+                        lat,
+                        lon,
+                        cape_ml,
+                        deep_layer_shear,
+                        omega_700,
+                        temp_c,
+                    )
+                    if storm_payload is not None:
+                        storm_payload["runTime"] = iso_z(run_dt)
+                        storm_payload["validTime"] = iso_date
+                        # Geometria della griglia ridotta: il punto
+                        # pubblicato rappresenta un blocco, quindi il suo
+                        # centro e' spostato di mezza cella originale.
+                        storm_payload["nx"] = -(-nx // STORM_COARSEN)
+                        storm_payload["ny"] = -(-ny // STORM_COARSEN)
+                        storm_payload["lo1"] = lo1 + dx * (STORM_COARSEN - 1) / 2.0
+                        storm_payload["la1"] = la1 - dy * (STORM_COARSEN - 1) / 2.0
+                        storm_payload["dx"] = dx * STORM_COARSEN
+                        storm_payload["dy"] = dy * STORM_COARSEN
+                        write_json_gzip_atomic(
+                            f"{TEMP_DIR}/storm_{step_hours}.json.gz",
+                            storm_payload,
+                        )
+                        storm_available = True
+                except Exception as storm_error:
+                    print(
+                        f" storm-{step_hours}h:{storm_error}",
+                        end="",
+                        flush=True,
+                    )
+
                 # Campi a 850 hPa (theta-e, T, vento) per il layer di
                 # ispezione dei fronti: file separato, scaricato dal sito
                 # solo quando l'utente attiva la vista 850 hPa.
@@ -1459,7 +1756,7 @@ def process_data():
                             "foehnIndex": foehn,
                         },
                     )
-                    catalog.append({ "file": out_name, "label": f"{valid_dt.strftime('%d/%m %H:00')} UTC", "hour": step_hours, "runTime": iso_z(run_dt), "validTime": iso_date, "leadHours": step_hours })
+                    catalog.append({ "file": out_name, "label": f"{valid_dt.strftime('%d/%m %H:00')} UTC", "hour": step_hours, "runTime": iso_z(run_dt), "validTime": iso_date, "leadHours": step_hours, "storm": storm_available })
                     front_qc_hours.append({
                         "leadHours": step_hours,
                         "validTime": iso_date,
