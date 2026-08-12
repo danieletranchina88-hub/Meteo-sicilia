@@ -438,11 +438,23 @@ assert.match(html, /function stormSample\(name, gx, gy\)/,
 assert.match(html, /const sx = \(lon - stormData\.lo1\) \/ stormData\.dx;/,
   "la griglia dei temporali non viene riproiettata: e' dimezzata, non uguale");
 ["storm_prob", "updraft", "cape"].forEach((key) => {
-  assert.ok(html.includes('data-layer="' + key + '"'),
-    "manca la scheda del campo " + key);
   assert.match(html, new RegExp(key + ":\\s*\\{[\\s\\S]{0,700}?storm:"),
     "il campo " + key + " non dichiara da quale griglia viene");
 });
+
+// Nel selettore pubblico deve comparire un solo prodotto temporalesco. Le
+// variabili fisiche restano disponibili internamente alla catena diagnostica,
+// ma non devono sembrare sei algoritmi concorrenti nella mappa.
+const publicStormCards = [...html.matchAll(/data-layer="([^"]+)"/g)]
+  .map((match) => match[1])
+  .filter((key) => [
+    "convection_prob", "storm_prob", "updraft", "cape", "trigger", "bowen"
+  ].includes(key));
+assert.deepEqual(publicStormCards, ["storm_prob"],
+  "il selettore deve mostrare soltanto Algoritmo temporali");
+assert.match(html,
+  /data-layer="storm_prob"[\s\S]*?<b>Algoritmo temporali<\/b>/,
+  "il solo prodotto pubblico deve dichiararsi come algoritmo unico");
 assert.match(html, /if \(item\.storm === false\) \{/,
   "senza il controllo sul catalogo si chiederebbe un file inesistente");
 assert.match(html, /!upperActive && !stormActive && fieldGrid/,
@@ -463,7 +475,6 @@ assert.match(html, /updateStormChain\(point\.gx, point\.gy\);/,
 
 // --- Innesco dal terreno ---
 ["trigger", "bowen"].forEach((key) => {
-  assert.ok(html.includes('data-layer="' + key + '"'), "manca la scheda del campo " + key);
   assert.match(html, new RegExp(key + ":\\s*\\{[\\s\\S]{0,700}?storm:"),
     "il campo " + key + " non dichiara da quale griglia viene");
 });
