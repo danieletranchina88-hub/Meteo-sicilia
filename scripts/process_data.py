@@ -26,10 +26,10 @@ from meteo_analysis.hazards.storms import (
     bulk_shear,
     downburst_potential,
     hail_potential,
+    intelligent_storm_probability,
     lifting_condensation_level,
     potential_updraft,
     storm_mode,
-    storm_probability,
     strongest_updraft,
     summarize_storms,
     updraft_from_omega,
@@ -446,7 +446,7 @@ def prepare_icon_front_analyzer(run_dt):
         return None
 
 
-STORM_METHOD = "icon2i-lpi-neighbourhood-v1"
+STORM_METHOD = "icon2i-physical-evidence-fusion-v2"
 # L'evento e' "temporale entro 10 km"; la lisciatura a 25 km esprime il fatto
 # che il modello sa che il temporale ci sara' ma non su quale paese.
 STORM_EVENT_RADIUS_KM = 10.0
@@ -469,6 +469,10 @@ def build_storm_payload(
     u_wind_10m=None,
     v_wind_10m=None,
     convergence_10m=None,
+    cin_ml=None,
+    surface_rh=None,
+    mid_level_rh=None,
+    nearest_front_km=None,
 ):
     """Campi della sezione temporali per una scadenza, o None se mancano.
 
@@ -499,13 +503,11 @@ def build_storm_payload(
     if not np.isfinite(cell_km) or cell_km <= 0:
         return None
 
-    probability = storm_probability(
-        lpi,
-        threshold=STORM_LPI_THRESHOLD,
-        event_radius_km=STORM_EVENT_RADIUS_KM,
-        smoothing_radius_km=STORM_SMOOTHING_RADIUS_KM,
-        cell_km=cell_km,
-    ) * 100.0
+    previous_lpi = (
+        fields.field("lpi", hour - 1, latitudes, longitudes)
+        if hour > 0 else None
+    )
+    next_lpi = fields.field("lpi", hour + 1, latitudes, longitudes)
 
     # Correnti ascensionali risolte: il nucleo di una cella non sta sempre
     # allo stesso livello, quindi si prende il massimo sulla colonna.
@@ -615,10 +617,42 @@ def build_storm_payload(
             convergence=convergence_10m,
         ) * 100.0
 
+    # --- Ipotesi temporale: fusione delle prove e delle contraddizioni ---
+    # L'indice trigger e' pubblicato in percentuale, mentre la fusione lavora
+    # fra zero e uno. Ogni componente resta disponibile separatamente: la
+    # probabilita' finale non e' una scatola nera.
+    storm_evidence = intelligent_storm_probability(
+        lpi,
+        cape_ml,
+        cin_ml,
+        trigger / 100.0 if trigger is not None else None,
+        cell_km,
+        updraft_ms=updraft,
+        cape_mu=cape_mu,
+        surface_rh=surface_rh,
+        mid_level_rh=mid_level_rh,
+        cloud_base_m=cloud_base,
+        omega_700=omega_700,
+        front_distance_km=nearest_front_km,
+        shear=deep_layer_shear,
+        helicity=helicity,
+        previous_lightning_potential=previous_lpi,
+        next_lightning_potential=next_lpi,
+        lpi_threshold=STORM_LPI_THRESHOLD,
+        event_radius_km=STORM_EVENT_RADIUS_KM,
+        smoothing_radius_km=STORM_SMOOTHING_RADIUS_KM,
+    )
+    probability = storm_evidence["probability"] * 100.0
+
     # Il riepilogo va calcolato a piena risoluzione, prima di ridurre la
     # griglia: e' quello che finisce nel controllo qualita', e un massimo
     # mediato non sarebbe piu' un massimo.
-    summary = summarize_storms(probability, updraft)
+    summary = summarize_storms(
+        probability,
+        updraft,
+        storm_evidence["confidence"] * 100.0,
+        storm_evidence["contradiction"] * 100.0,
+    )
 
     # Griglia dimezzata per il peso del file. Il modo di aggregare cambia da
     # campo a campo: media dove il campo e' gia' liscio, massimo dove il
@@ -635,6 +669,33 @@ def build_storm_payload(
         "lpiThreshold": STORM_LPI_THRESHOLD,
         "cellKm": round(cell_km * STORM_COARSEN, 3),
         "probability": reduce_field(probability, "mean", 0),
+        "directEvidence": reduce_field(
+            storm_evidence["direct"] * 100.0, "mean", 0
+        ),
+        "environmentSupport": reduce_field(
+            storm_evidence["environment"] * 100.0, "mean", 0
+        ),
+        "instabilitySupport": reduce_field(
+            storm_evidence["instability"] * 100.0, "mean", 0
+        ),
+        "moistureSupport": reduce_field(
+            storm_evidence["moisture"] * 100.0, "mean", 0
+        ),
+        "liftSupport": reduce_field(
+            storm_evidence["lift"] * 100.0, "mean", 0
+        ),
+        "temporalSupport": reduce_field(
+            storm_evidence["temporal"] * 100.0, "mean", 0
+        ),
+        "organisationSupport": reduce_field(
+            storm_evidence["organisation"] * 100.0, "mean", 0
+        ),
+        "contradiction": reduce_field(
+            storm_evidence["contradiction"] * 100.0, "mean", 0
+        ),
+        "confidence": reduce_field(
+            storm_evidence["confidence"] * 100.0, "mean", 0
+        ),
         "lpi": reduce_field(lpi, "max", 1),
         "updraft": reduce_field(updraft, "max", 1),
         "ascent": reduce_field(ascent, "mean", 1),
@@ -1424,6 +1485,7 @@ def process_data():
                 nearest_front_km = None
                 omega_700 = None
                 deep_layer_shear = None
+                mid_level_rh = None
                 shear_source = None
                 if icon_hazard_fields is not None:
                     try:
@@ -1774,6 +1836,10 @@ def process_data():
                         u_val,
                         v_val,
                         convergence_10m,
+                        cin_ml,
+                        rh_val,
+                        mid_level_rh,
+                        nearest_front_km,
                     )
                     if storm_payload is not None:
                         storm_payload["runTime"] = iso_z(run_dt)

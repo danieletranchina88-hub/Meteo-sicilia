@@ -1790,7 +1790,7 @@
                 <span class="layer-swatch"></span><span><b>Rischio Temporali</b><small>Probabilità innesco</small></span>
               </button>
               <button class="layer-card" type="button" data-layer="storm_prob" style="--swatch: linear-gradient(#bad8e8,#f6e280,#b02852)">
-                <span class="layer-swatch"></span><span><b>Probabilità temporali</b><small>LPI ICON-2I · entro 10 km</small></span>
+                <span class="layer-swatch"></span><span><b>Probabilità temporali</b><small>fusione fisica · entro 10 km</small></span>
               </button>
               <button class="layer-card" type="button" data-layer="updraft" style="--swatch: linear-gradient(#4682be,#eef0ee,#ce2c3e)">
                 <span class="layer-swatch"></span><span><b>Correnti ascensionali</b><small>velocità verticale risolta</small></span>
@@ -2367,7 +2367,7 @@
           discrete: false,
           decimals: 0,
           ticks: [0, 20, 40, 60, 80, 100],
-          note: "LPI di ICON-2I: probabilità che un temporale si trovi entro 10 km, sfumata su 25 km perché il modello sa che ci sarà, non su quale paese.",
+          note: "Ipotesi temporale entro 10 km: LPI e correnti risolte, verificati con CAPE/CIN, umidità, innesco, fronti e coerenza nell’ora precedente e successiva. È una diagnostica deterministica, non una probabilità ensemble calibrata.",
           opacity: 0.86,
           terrainOpacity: 0.22,
           storm: "probability"
@@ -6849,6 +6849,11 @@
         const hail = read("hail");
         const downburst = read("downburst");
         const freezing = read("freezingLevel");
+        const directEvidence = read("directEvidence");
+        const environmentSupport = read("environmentSupport");
+        const temporalSupport = read("temporalSupport");
+        const confidence = read("confidence");
+        const contradiction = read("contradiction");
 
         const trigger = read("trigger");
         const upslope = read("upslope");
@@ -6924,6 +6929,24 @@
             state: stormLinkState(updraft, 1, 5)
           },
           {
+            name: "Supporto fisico complessivo",
+            value: Number.isFinite(environmentSupport)
+              ? Math.round(environmentSupport) + " %" : "--",
+            state: stormLinkState(environmentSupport, 20, 50)
+          },
+          {
+            name: "Segnale diretto · LPI e corrente",
+            value: Number.isFinite(directEvidence)
+              ? Math.round(directEvidence) + " %" : "--",
+            state: stormLinkState(directEvidence, 10, 40)
+          },
+          {
+            name: "Coerenza temporale · ±1 ora",
+            value: Number.isFinite(temporalSupport)
+              ? Math.round(temporalSupport) + " %" : "--",
+            state: stormLinkState(temporalSupport, 10, 35)
+          },
+          {
             // L'ultimo anello deve parlare la stessa lingua della
             // probabilita' che sta sopra, altrimenti la scheda si contraddice:
             // il punto esatto puo' avere LPI zero mentre a otto chilometri il
@@ -6935,6 +6958,15 @@
                   ? " · " + lpi.toFixed(1) + " J/kg qui" : "")
               : "--",
             state: stormLinkState(probability, 10, 40)
+          },
+          {
+            name: "Confidenza della diagnosi",
+            value: Number.isFinite(confidence)
+              ? Math.round(confidence) + " %"
+                + (Number.isFinite(contradiction) && contradiction >= 15
+                  ? " · contraddizioni " + Math.round(contradiction) + " %" : "")
+              : "--",
+            state: stormLinkState(confidence, 45, 70)
           }
         ];
         if (Number.isFinite(hail) && hail > 0) {
@@ -6982,6 +7014,8 @@
         if (Number.isFinite(probability) && probability >= 5) {
           verdict.textContent = "Probabilità che un temporale sia entro 10 km: "
             + Math.round(probability) + "%"
+            + (Number.isFinite(confidence)
+              ? " · confidenza " + Math.round(confidence) + "%" : "")
             + (Number.isFinite(updraft) && updraft >= 3
               ? " · qui il modello mette una corrente da " + updraft.toFixed(0) + " m/s"
               : "");
@@ -6998,12 +7032,18 @@
         const caveat = document.getElementById("storm-caveat");
         const insideCore = Number.isFinite(updraft) && updraft >= 5
           && Number.isFinite(cape) && cape < 500;
-        caveat.hidden = !insideCore;
+        const lowConfidence = Number.isFinite(probability) && probability >= 25
+          && Number.isFinite(confidence) && confidence < 45;
+        caveat.hidden = !(insideCore || lowConfidence);
         if (insideCore) {
           caveat.textContent = "Attenzione: qui la corrente è già forte e la "
             + "CAPE risulta bassa perché il temporale l'ha consumata e la sua "
             + "aria fredda ha stabilizzato il suolo. L'energia va letta davanti "
             + "alla cella, non dentro.";
+        } else if (lowConfidence) {
+          caveat.textContent = "Stima a confidenza ridotta: alcuni gruppi di "
+            + "evidenza sono mancanti o in contraddizione. Guarda i singoli "
+            + "anelli prima di usare il valore percentuale.";
         }
         container.hidden = false;
       }

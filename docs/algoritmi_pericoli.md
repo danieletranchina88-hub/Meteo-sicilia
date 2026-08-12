@@ -43,6 +43,55 @@ supera il 15% del dominio oppure se un valore fisso all'80% ricopre oltre il
 5%. Il test `test_convection.py` contiene una regressione specifica contro il
 precedente campo nazionale fisso all'80%.
 
+## Probabilità di temporale entro 10 km
+
+Metodo corrente: `icon2i-physical-evidence-fusion-v2`.
+
+L'evento dichiarato è «un temporale entro 10 km dal punto». Il valore di base
+deriva dall'LPI nativo di ICON-2I con un vicinato circolare e uno smoothing di
+25 km: questa scala rappresenta l'incertezza di posizione di una cella in un
+modello convection-permitting, non trasforma la previsione deterministica in
+un ensemble.
+
+Come per i fronti, l'algoritmo formula un'ipotesi e cerca prove indipendenti,
+coerenza e spiegazioni concorrenti. Le famiglie di evidenza sono:
+
+- **segnale diretto:** LPI e corrente ascensionale convettiva, massimo fra
+  omega a 850, 700 e 500 hPa;
+- **ambiente:** ML-CAPE, MU-CAPE, CIN, umidità superficiale e a 700 hPa,
+  altezza della base delle nubi;
+- **innesco:** convergenza, brezza di mare o lago, risalita orografica, omega
+  a 700 hPa e vicinanza a un fronte fisicamente diagnosticato;
+- **corroborazione:** presenza dell'LPI nell'ora precedente o successiva,
+  shear 0–6 km ed elicità dell'updraft.
+
+I meccanismi alternativi di sollevamento usano il più forte, non la somma: una
+brezza debole non diventa intensa solo perché cade vicino a un pendio o a un
+fronte. Gli ingredienti necessari interagiscono invece in modo moltiplicativo,
+così CAPE elevata senza umidità o innesco non genera da sola un'alta
+probabilità; lo stesso vale per shear ed elicità.
+
+L'algoritmo prova anche l'ipotesi opposta. Un LPI isolato, non persistente,
+senza updraft e in ambiente ostile riceve una penalità di contraddizione. Una
+cella confermata contemporaneamente da LPI e updraft non viene invece scartata
+per CAPE locale bassa: nel nucleo maturo la CAPE può essere già stata consumata
+e la cold pool può avere stabilizzato il suolo.
+
+L'ambiente favorevole, in assenza di una cella esplicitamente risolta, è
+limitato alla fascia di possibilità d'innesco e non supera il 42%. La fascia
+alta cresce soltanto con supporto indipendente. Insieme alla probabilità sono
+pubblicati `directEvidence`, `environmentSupport`, `instabilitySupport`,
+`moistureSupport`, `liftSupport`, `temporalSupport`,
+`organisationSupport`, `contradiction` e `confidence`: il valore finale resta
+quindi spiegabile e controllabile punto per punto.
+
+Questa è una probabilità diagnostica deterministica fisicamente vincolata, non
+una probabilità statisticamente calibrata. La calibrazione assoluta richiede
+un archivio di previsioni storiche e fulminazioni osservate, separato per
+stagione, area geografica e lead time; fino ad allora il metodo dichiara
+esplicitamente la propria confidenza e non attribuisce ai numeri un'affidabilità
+che i dati disponibili non possono dimostrare.
+
 ## Bollettino automatico
 
 Metodo corrente: `icon2i-conditional-nlg-v2`.

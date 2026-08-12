@@ -15,6 +15,7 @@ from meteo_analysis.hazards.storms import (  # noqa: E402
     bulk_shear,
     downburst_potential,
     hail_potential,
+    intelligent_storm_probability,
     lifting_condensation_level,
     neighbourhood_probability,
     potential_updraft,
@@ -313,10 +314,15 @@ def test_coarsen_nearest_for_categories():
 def test_summary_reports_area_and_peak():
     probability = np.array([[0.0, 25.0], [60.0, np.nan]])
     updraft = np.array([[0.0, 3.0], [18.0, np.nan]])
-    summary = summarize_storms(probability, updraft)
+    confidence = np.array([[90.0, 70.0], [30.0, np.nan]])
+    contradiction = np.array([[0.0, 10.0], [40.0, np.nan]])
+    summary = summarize_storms(probability, updraft, confidence, contradiction)
     assert summary["status"] == "available"
     assert summary["maximum"] == 60.0
     assert summary["maxUpdraft"] == 18.0
+    assert summary["meanConfidence"] == 63.3
+    assert np.isclose(summary["areaHighProbabilityLowConfidencePct"], 100.0 / 3.0, atol=0.01)
+    assert summary["meanContradiction"] == 16.7
     assert np.isclose(summary["areaAbove20Pct"], 200.0 / 3.0, atol=0.01)
     vuoto = summarize_storms(np.full((3, 3), np.nan))
     assert vuoto["status"] == "unavailable" and vuoto["maximum"] is None
@@ -467,6 +473,142 @@ def test_trigger_takes_the_strongest_not_the_sum():
     )
     assert np.isclose(misto[0], 1.0)
     assert np.isnan(trigger_index(upslope_ms=np.array([np.nan]))[0])
+
+
+def _intelligent_case(
+    *,
+    lpi_active=False,
+    updraft_active=False,
+    temporal_active=False,
+    favourable=True,
+    shear=18.0,
+):
+    """Caso sintetico centrato, con gruppi di evidenza controllabili."""
+    n = 61
+    centre = n // 2
+    shape = (n, n)
+    lpi = np.zeros(shape)
+    updraft = np.zeros(shape)
+    previous = np.zeros(shape)
+    next_lpi = np.zeros(shape)
+    if lpi_active:
+        lpi[centre - 1:centre + 2, centre - 1:centre + 2] = 4.0
+    if updraft_active:
+        updraft[centre - 1:centre + 2, centre - 1:centre + 2] = 7.0
+    if temporal_active:
+        previous[centre - 2:centre + 1, centre - 1:centre + 2] = 4.0
+        next_lpi[centre:centre + 3, centre - 1:centre + 2] = 4.0
+
+    if favourable:
+        cape = np.full(shape, 1_600.0)
+        cape_mu = np.full(shape, 1_900.0)
+        cin = np.full(shape, -20.0)
+        trigger = np.full(shape, 0.9)
+        surface_rh = np.full(shape, 78.0)
+        middle_rh = np.full(shape, 68.0)
+        cloud_base = np.full(shape, 900.0)
+        omega = np.full(shape, -0.25)
+        front_distance = np.full(shape, 25.0)
+    else:
+        cape = np.zeros(shape)
+        cape_mu = np.zeros(shape)
+        cin = np.full(shape, -350.0)
+        trigger = np.zeros(shape)
+        surface_rh = np.full(shape, 25.0)
+        middle_rh = np.full(shape, 12.0)
+        cloud_base = np.full(shape, 4_000.0)
+        omega = np.full(shape, 0.08)
+        front_distance = np.full(shape, 500.0)
+
+    result = intelligent_storm_probability(
+        lpi,
+        cape,
+        cin,
+        trigger,
+        2.0,
+        updraft_ms=updraft,
+        cape_mu=cape_mu,
+        surface_rh=surface_rh,
+        mid_level_rh=middle_rh,
+        cloud_base_m=cloud_base,
+        omega_700=omega,
+        front_distance_km=front_distance,
+        shear=np.full(shape, shear),
+        helicity=np.full(shape, 80.0 if shear > 5.0 else 0.0),
+        previous_lightning_potential=previous if temporal_active else None,
+        next_lightning_potential=next_lpi if temporal_active else None,
+        event_radius_km=10.0,
+        smoothing_radius_km=20.0,
+    )
+    return result, centre
+
+
+def test_intelligent_probability_needs_more_than_cape_or_shear():
+    """L'ambiente favorevole segnala possibilita', ma non inventa una cella."""
+    favourable, centre = _intelligent_case(favourable=True, shear=25.0)
+    value = favourable["probability"][centre, centre]
+    assert 0.20 < value < 0.50
+
+    hostile, centre = _intelligent_case(favourable=False, shear=35.0)
+    assert hostile["probability"][centre, centre] < 0.03
+
+
+def test_intelligent_probability_rewards_independent_corroboration():
+    """LPI, updraft, ambiente e persistenza devono rafforzarsi a vicenda."""
+    corroborated, centre = _intelligent_case(
+        lpi_active=True,
+        updraft_active=True,
+        temporal_active=True,
+        favourable=True,
+    )
+    contradicted, _ = _intelligent_case(
+        lpi_active=True,
+        updraft_active=False,
+        temporal_active=False,
+        favourable=False,
+    )
+    strong = corroborated["probability"][centre, centre]
+    weak = contradicted["probability"][centre, centre]
+    assert strong > weak + 0.25
+    assert corroborated["confidence"][centre, centre] > contradicted["confidence"][centre, centre]
+    assert corroborated["contradiction"][centre, centre] < contradicted["contradiction"][centre, centre]
+
+
+def test_mature_resolved_core_is_not_rejected_for_consumed_cape():
+    """LPI + updraft restano validi dentro la cold pool a CAPE locale bassa."""
+    mature, centre = _intelligent_case(
+        lpi_active=True,
+        updraft_active=True,
+        temporal_active=True,
+        favourable=False,
+    )
+    spurious, _ = _intelligent_case(
+        lpi_active=True,
+        updraft_active=False,
+        temporal_active=False,
+        favourable=False,
+    )
+    assert mature["probability"][centre, centre] > spurious["probability"][centre, centre]
+    assert mature["probability"][centre, centre] > 0.20
+
+
+def test_intelligent_probability_components_are_bounded_and_explainable():
+    result, _ = _intelligent_case(
+        lpi_active=True,
+        updraft_active=True,
+        temporal_active=True,
+        favourable=True,
+    )
+    expected = {
+        "probability", "direct", "environment", "instability", "moisture",
+        "lift", "temporal", "organisation", "contradiction", "confidence",
+    }
+    assert set(result) == expected
+    for name, field in result.items():
+        finite = field[np.isfinite(field)]
+        assert finite.size, name
+        assert np.min(finite) >= 0.0, name
+        assert np.max(finite) <= 1.0, name
 
 
 if __name__ == "__main__":

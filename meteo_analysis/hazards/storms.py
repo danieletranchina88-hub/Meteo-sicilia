@@ -207,6 +207,356 @@ def storm_probability(
     return neighbourhood_probability(affected, 0.5, smoothing_radius_km, cell_km)
 
 
+def _normalise_cin(cin) -> np.ndarray:
+    """CIN nella convenzione firmata negativa, preservando i dati mancanti."""
+    values = _array(cin)
+    valid = np.isfinite(values) & (values > -900.0)
+    return np.where(valid, -np.abs(values), np.nan)
+
+
+def _ramp(values, lower: float, upper: float) -> np.ndarray:
+    """Rampa continua 0-1; le soglie non diventano cancelli binari."""
+    array = _array(values)
+    if upper <= lower:
+        raise ValueError("il limite superiore deve essere maggiore dell'inferiore")
+    return np.where(
+        np.isfinite(array),
+        np.clip((array - float(lower)) / (float(upper) - float(lower)), 0.0, 1.0),
+        np.nan,
+    )
+
+
+def _available_mean(parts: list[tuple[np.ndarray | None, float]], shape) -> np.ndarray:
+    """Media pesata dei soli indizi disponibili, NaN se non ce n'e' nessuno."""
+    numerator = np.zeros(shape, dtype=float)
+    denominator = np.zeros(shape, dtype=float)
+    for values, weight in parts:
+        if values is None or weight <= 0.0:
+            continue
+        array = np.broadcast_to(_array(values), shape)
+        valid = np.isfinite(array)
+        numerator += np.where(valid, array * float(weight), 0.0)
+        denominator += valid.astype(float) * float(weight)
+    return np.divide(
+        numerator,
+        denominator,
+        out=np.full(shape, np.nan, dtype=float),
+        where=denominator > 0.0,
+    )
+
+
+def _available_max(parts: list[np.ndarray | None], shape) -> np.ndarray:
+    """Massimo fra meccanismi alternativi senza trasformare NaN in zero."""
+    available = []
+    for values in parts:
+        if values is not None:
+            available.append(np.broadcast_to(_array(values), shape))
+    if not available:
+        return np.full(shape, np.nan, dtype=float)
+    stack = np.stack(available, axis=0)
+    missing = np.all(~np.isfinite(stack), axis=0)
+    maximum = np.max(np.where(np.isfinite(stack), stack, -np.inf), axis=0)
+    return np.where(missing, np.nan, maximum)
+
+
+def intelligent_storm_probability(
+    lightning_potential,
+    cape_ml,
+    cin,
+    trigger,
+    cell_km: float,
+    *,
+    updraft_ms=None,
+    cape_mu=None,
+    surface_rh=None,
+    mid_level_rh=None,
+    cloud_base_m=None,
+    omega_700=None,
+    front_distance_km=None,
+    shear=None,
+    helicity=None,
+    previous_lightning_potential=None,
+    next_lightning_potential=None,
+    lpi_threshold: float = 1.0,
+    event_radius_km: float = 10.0,
+    smoothing_radius_km: float = 25.0,
+) -> dict[str, np.ndarray]:
+    """Fonde prove fisiche indipendenti per l'ipotesi "temporale entro 10 km".
+
+    La probabilita' di vicinato dell'LPI resta l'osservazione modellistica
+    primaria, ma non decide piu' da sola. L'algoritmo cerca:
+
+    * un segnale diretto: LPI e corrente ascensionale convettiva risolta;
+    * un ambiente capace di sostenerlo: CAPE, CIN e umidita' della colonna;
+    * un meccanismo capace di innescarlo: terreno/brezza/convergenza, salita
+      sinottica o fronte;
+    * corroborazione indipendente: persistenza a +/-1 ora e organizzazione.
+
+    Gli indizi alternativi usano il massimo (un fronte non si somma a una
+    brezza), mentre gli ingredienti necessari si moltiplicano. Un nucleo gia'
+    risolto da LPI e updraft puo' sopravvivere a CAPE locale bassa: dentro un
+    temporale maturo l'energia e' gia' stata consumata. Al contrario, CAPE o
+    shear da soli non possono produrre un'alta probabilita'.
+
+    Il risultato e' una diagnostica deterministica fisicamente vincolata, non
+    una probabilita' calibrata contro una rete di fulminazioni. Oltre alla
+    stima restituisce tutti i gruppi di evidenza per rendere la decisione
+    verificabile sulla mappa e nei controlli qualita'.
+    """
+    lpi = _array(lightning_potential)
+    if lpi.ndim != 2:
+        raise ValueError("LPI deve essere una griglia 2D")
+    shape = lpi.shape
+
+    lpi_probability = storm_probability(
+        lpi,
+        threshold=lpi_threshold,
+        event_radius_km=event_radius_km,
+        smoothing_radius_km=smoothing_radius_km,
+        cell_km=cell_km,
+    )
+
+    updraft_probability = None
+    if updraft_ms is not None:
+        updraft = np.broadcast_to(_array(updraft_ms), shape)
+        updraft_probability = storm_probability(
+            updraft,
+            threshold=1.0,
+            event_radius_km=event_radius_km,
+            smoothing_radius_km=smoothing_radius_km,
+            cell_km=cell_km,
+        )
+
+    # LPI e updraft sono due osservazioni modellistiche diverse dello stesso
+    # processo. Il noisy-OR evita la somma lineare e limita il contributo
+    # dell'updraft: salita forte senza elettrificazione puo' essere solo nube.
+    direct = np.clip(lpi_probability, 0.0, 1.0)
+    if updraft_probability is not None:
+        direct = 1.0 - (1.0 - direct) * (
+            1.0 - 0.72 * np.nan_to_num(updraft_probability, nan=0.0)
+        )
+
+    cape_ml_array = (
+        np.broadcast_to(_array(cape_ml), shape)
+        if cape_ml is not None else np.full(shape, np.nan)
+    )
+    cape_mu_array = (
+        np.broadcast_to(_array(cape_mu), shape)
+        if cape_mu is not None else np.full(shape, np.nan)
+    )
+    # La particella piu' instabile permette di riconoscere la convezione
+    # elevata. Il fattore 0,9 impedisce a un singolo massimo molto sottile di
+    # dominare completamente lo strato mescolato.
+    cape_candidates = np.stack((cape_ml_array, 0.9 * cape_mu_array), axis=0)
+    cape_missing = np.all(~np.isfinite(cape_candidates), axis=0)
+    effective_cape = np.max(
+        np.where(np.isfinite(cape_candidates), cape_candidates, -np.inf), axis=0
+    )
+    effective_cape = np.where(cape_missing, np.nan, effective_cape)
+    cape_score = _ramp(effective_cape, 100.0, 1_600.0)
+
+    inhibition = (
+        _normalise_cin(np.broadcast_to(_array(cin), shape))
+        if cin is not None else np.full(shape, np.nan)
+    )
+    cin_score = _ramp(inhibition, -250.0, -25.0)
+    # Se MU-CAPE supera nettamente ML-CAPE, la particella utile puo' partire
+    # sopra il coperchio superficiale. Non si ignora il CIN: se ne riduce solo
+    # la capacita' di veto nella quota in cui non descrive piu' la particella.
+    elevated = _ramp(cape_mu_array - cape_ml_array, 250.0, 1_000.0)
+    effective_cin_score = np.where(
+        np.isfinite(cin_score),
+        np.maximum(cin_score, 0.45 * np.nan_to_num(elevated, nan=0.0)),
+        np.where(np.isfinite(elevated), 0.45 * elevated, np.nan),
+    )
+    instability = np.where(
+        np.isfinite(cape_score) & np.isfinite(effective_cin_score),
+        cape_score * effective_cin_score,
+        np.nan,
+    )
+
+    surface_moisture = (
+        _ramp(np.broadcast_to(_array(surface_rh), shape), 40.0, 80.0)
+        if surface_rh is not None else None
+    )
+    middle_moisture = (
+        _ramp(np.broadcast_to(_array(mid_level_rh), shape), 25.0, 70.0)
+        if mid_level_rh is not None else None
+    )
+    cloud_moisture = None
+    if cloud_base_m is not None:
+        base = np.broadcast_to(_array(cloud_base_m), shape)
+        cloud_moisture = 1.0 - _ramp(base, 800.0, 3_500.0)
+    moisture = _available_mean(
+        [
+            (surface_moisture, 0.25),
+            (middle_moisture, 0.55),
+            (cloud_moisture, 0.20),
+        ],
+        shape,
+    )
+
+    trigger_score = (
+        np.clip(np.broadcast_to(_array(trigger), shape), 0.0, 1.0)
+        if trigger is not None else None
+    )
+    ascent_score = None
+    if omega_700 is not None:
+        omega = np.broadcast_to(_array(omega_700), shape)
+        ascent_score = _ramp(-omega, 0.02, 0.30) * 0.85
+    front_score = None
+    if front_distance_km is not None:
+        distance = np.broadcast_to(_array(front_distance_km), shape)
+        front_score = np.where(
+            np.isfinite(distance),
+            0.70 * np.exp(-np.maximum(distance, 0.0) / 70.0),
+            np.nan,
+        )
+    lift = _available_max([trigger_score, ascent_score, front_score], shape)
+
+    shear_score = (
+        _ramp(np.broadcast_to(_array(shear), shape), 8.0, 25.0)
+        if shear is not None else None
+    )
+    helicity_score = (
+        _ramp(np.abs(np.broadcast_to(_array(helicity), shape)), 25.0, 150.0)
+        if helicity is not None else None
+    )
+    organisation = _available_mean(
+        [(shear_score, 0.65), (helicity_score, 0.35)], shape
+    )
+
+    temporal_parts = []
+    for neighbouring_lpi in (
+        previous_lightning_potential,
+        next_lightning_potential,
+    ):
+        if neighbouring_lpi is None:
+            continue
+        temporal_parts.append(
+            storm_probability(
+                neighbouring_lpi,
+                threshold=lpi_threshold,
+                event_radius_km=event_radius_km,
+                smoothing_radius_km=smoothing_radius_km,
+                cell_km=cell_km,
+            )
+        )
+    temporal = _available_max(temporal_parts, shape)
+
+    # Gli ingredienti necessari interagiscono, non si accumulano. Umidita' e
+    # lift mancanti sono neutrali ma riducono la confidenza separatamente.
+    moisture_for_environment = np.where(np.isfinite(moisture), moisture, 0.55)
+    lift_for_environment = np.where(np.isfinite(lift), lift, 0.20)
+    organisation_for_environment = np.where(
+        np.isfinite(organisation), organisation, 0.0
+    )
+    environment = (
+        np.nan_to_num(instability, nan=0.0)
+        * (0.50 + 0.50 * moisture_for_environment)
+        * (0.12 + 0.88 * lift_for_environment)
+        * (0.90 + 0.10 * organisation_for_environment)
+    )
+    environment = np.clip(environment, 0.0, 1.0)
+
+    # Corroborazione: ogni voce e' una prova indipendente, non un doppio
+    # conteggio dello stesso indice. La base 0,68 preserva un LPI esplicito
+    # anche se il temporale maturo ha gia' consumato la CAPE locale.
+    corroboration = _available_mean(
+        [
+            (environment, 0.35),
+            (updraft_probability, 0.30),
+            (temporal, 0.20),
+            (lift, 0.15),
+        ],
+        shape,
+    )
+    corroboration = np.nan_to_num(corroboration, nan=0.0)
+    direct_component = direct * (0.68 + 0.32 * corroboration)
+
+    # Senza un temporale esplicitamente risolto, l'ambiente puo' esprimere
+    # soltanto possibilita' d'innesco: non supera da solo il 42%.
+    environment_component = 0.42 * environment
+    probability = 1.0 - (1.0 - direct_component) * (1.0 - environment_component)
+    probability += (
+        (1.0 - probability)
+        * 0.06
+        * organisation_for_environment
+        * np.maximum(direct, environment)
+    )
+
+    # Spiegazioni concorrenti per un falso segnale: LPI isolato nel tempo,
+    # nessuna corrente risolta e ambiente ostile. La penalita' e' continua e
+    # non spegne un nucleo che abbia almeno una corroborazione forte.
+    no_core = (
+        1.0 - np.nan_to_num(updraft_probability, nan=0.0)
+        if updraft_probability is not None else np.full(shape, 0.5)
+    )
+    no_time = (
+        1.0 - np.nan_to_num(temporal, nan=0.0)
+        if temporal_parts else np.full(shape, 0.5)
+    )
+    hostile_environment = 1.0 - environment
+    contradiction = np.clip(
+        direct * (0.40 * no_core + 0.25 * no_time + 0.35 * hostile_environment),
+        0.0,
+        1.0,
+    )
+    probability *= 1.0 - 0.22 * contradiction
+
+    # La fascia alta richiede supporto indipendente, ma senza un cancello
+    # tutto-o-niente: il tetto cresce continuamente con la prova migliore.
+    independent_support = _available_max(
+        [environment, updraft_probability, temporal], shape
+    )
+    independent_support = np.nan_to_num(independent_support, nan=0.0)
+    probability = np.minimum(probability, 0.70 + 0.25 * independent_support)
+
+    direct_valid = np.isfinite(lpi_probability)
+    thermodynamic_valid = np.isfinite(instability)
+    moisture_valid = np.isfinite(moisture)
+    lift_valid = np.isfinite(lift)
+    temporal_valid = np.isfinite(temporal)
+    organisation_valid = np.isfinite(organisation)
+    core_valid = (
+        np.isfinite(updraft_probability)
+        if updraft_probability is not None else np.zeros(shape, dtype=bool)
+    )
+    coverage = (
+        0.24 * direct_valid
+        + 0.22 * thermodynamic_valid
+        + 0.14 * moisture_valid
+        + 0.16 * lift_valid
+        + 0.10 * temporal_valid
+        + 0.06 * organisation_valid
+        + 0.08 * core_valid
+    )
+    agreement = np.maximum(
+        1.0 - np.abs(direct - environment),
+        np.maximum(
+            np.nan_to_num(temporal, nan=0.0),
+            np.nan_to_num(updraft_probability, nan=0.0)
+            if updraft_probability is not None else 0.0,
+        ),
+    )
+    confidence = np.clip(0.58 * coverage + 0.42 * agreement - 0.18 * contradiction, 0.0, 1.0)
+
+    valid = direct_valid | thermodynamic_valid
+    probability = np.where(valid, np.clip(probability, 0.0, 0.95), np.nan)
+    return {
+        "probability": probability,
+        "direct": np.where(valid, np.clip(direct, 0.0, 1.0), np.nan),
+        "environment": np.where(valid, environment, np.nan),
+        "instability": np.where(valid, instability, np.nan),
+        "moisture": np.where(valid, moisture, np.nan),
+        "lift": np.where(valid, lift, np.nan),
+        "temporal": np.where(valid, temporal, np.nan),
+        "organisation": np.where(valid, organisation, np.nan),
+        "contradiction": np.where(valid, contradiction, np.nan),
+        "confidence": np.where(valid, confidence, np.nan),
+    }
+
+
 def _disc_kernel(radius_cells: int) -> np.ndarray:
     """Maschera circolare: il vicinato e' un cerchio, non un quadrato.
 
@@ -610,7 +960,12 @@ def coarsen(values, factor: int = 2, how: str = "mean") -> np.ndarray:
     raise ValueError(f"modo di aggregazione sconosciuto: {how}")
 
 
-def summarize_storms(probability_percent, updraft_ms=None) -> dict:
+def summarize_storms(
+    probability_percent,
+    updraft_ms=None,
+    confidence_percent=None,
+    contradiction_percent=None,
+) -> dict:
     """Statistiche robuste per il controllo qualita' e i prodotti testuali."""
     values = _array(probability_percent)
     finite = values[np.isfinite(values)]
@@ -621,6 +976,9 @@ def summarize_storms(probability_percent, updraft_ms=None) -> dict:
             "areaAbove20Pct": None,
             "areaAbove50Pct": None,
             "maxUpdraft": None,
+            "meanConfidence": None,
+            "areaHighProbabilityLowConfidencePct": None,
+            "meanContradiction": None,
         }
     summary = {
         "status": "available",
@@ -628,10 +986,38 @@ def summarize_storms(probability_percent, updraft_ms=None) -> dict:
         "areaAbove20Pct": round(float(np.mean(finite >= 20.0) * 100.0), 3),
         "areaAbove50Pct": round(float(np.mean(finite >= 50.0) * 100.0), 3),
         "maxUpdraft": None,
+        "meanConfidence": None,
+        "areaHighProbabilityLowConfidencePct": None,
+        "meanContradiction": None,
     }
     if updraft_ms is not None:
         updraft = _array(updraft_ms)
         finite_updraft = updraft[np.isfinite(updraft)]
         if finite_updraft.size:
             summary["maxUpdraft"] = round(float(np.max(finite_updraft)), 1)
+    if confidence_percent is not None:
+        confidence = _array(confidence_percent)
+        confidence, aligned_probability = np.broadcast_arrays(confidence, values)
+        valid_confidence = np.isfinite(confidence) & np.isfinite(aligned_probability)
+        if valid_confidence.any():
+            summary["meanConfidence"] = round(
+                float(np.mean(confidence[valid_confidence])), 1
+            )
+            summary["areaHighProbabilityLowConfidencePct"] = round(
+                float(
+                    np.mean(
+                        (aligned_probability[valid_confidence] >= 50.0)
+                        & (confidence[valid_confidence] < 45.0)
+                    )
+                    * 100.0
+                ),
+                3,
+            )
+    if contradiction_percent is not None:
+        contradiction = _array(contradiction_percent)
+        finite_contradiction = contradiction[np.isfinite(contradiction)]
+        if finite_contradiction.size:
+            summary["meanContradiction"] = round(
+                float(np.mean(finite_contradiction)), 1
+            )
     return summary
