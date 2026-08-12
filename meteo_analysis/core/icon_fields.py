@@ -25,6 +25,22 @@ FIELD_SPECS = {
     "v700": FieldSpec(-150.0, 150.0, "m s-1"),
     "u500": FieldSpec(-200.0, 200.0, "m s-1"),
     "v500": FieldSpec(-200.0, 200.0, "m s-1"),
+    # --- campi della sezione temporali ---
+    # MeteoHub li pubblica senza nome ne' unita' nel GRIB, quindi qui si puo'
+    # controllare solo l'ordine di grandezza. Sono intervalli larghi: servono a
+    # riconoscere un campo palesemente sbagliato (unita' diverse, sentinelle),
+    # non a stringere sulla fisica.
+    "lpi": FieldSpec(-1.0, 5_000.0, "J kg-1"),
+    "uh_max": FieldSpec(-5_000.0, 5_000.0, "m2 s-2"),
+    "wshear_u": FieldSpec(-200.0, 200.0, "m s-1"),
+    "wshear_v": FieldSpec(-200.0, 200.0, "m s-1"),
+    "cape_con": FieldSpec(-1.0, 12_000.0, "J kg-1"),
+    "td_2m": FieldSpec(150.0, 340.0, "K"),
+    "hzerocl": FieldSpec(-500.0, 20_000.0, "m"),
+    "graupel": FieldSpec(-1.0, 2_000.0, "kg m-2"),
+    "vmax_10m": FieldSpec(-1.0, 200.0, "m s-1"),
+    "omega500": FieldSpec(-500.0, 500.0, "Pa s-1"),
+    "omega850": FieldSpec(-500.0, 500.0, "Pa s-1"),
     # Specific humidity (kg/kg) and geopotential (m2/s2) carry no range
     # validation: providers publish varied units, and these optional fields
     # must never abort the whole convective/isohypse layer over a units
