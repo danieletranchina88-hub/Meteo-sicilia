@@ -833,6 +833,91 @@
         transition: opacity 0.2s ease, transform 0.2s ease;
       }
 
+      /* La catena convettiva: sette anelli in fila, ognuno o regge o non
+         regge. La striscia colorata a sinistra dice lo stato senza dover
+         leggere, perche' il punto della catena e' vedere dove si spezza. */
+      #storm-chain {
+        margin-top: 12px;
+        padding-top: 11px;
+        border-top: 1px solid rgba(193, 222, 239, 0.16);
+      }
+
+      .storm-head {
+        display: flex;
+        align-items: baseline;
+        justify-content: space-between;
+        gap: 10px;
+      }
+
+      #storm-mode {
+        color: #ffd98a;
+        font-size: 11px;
+        font-weight: 900;
+        letter-spacing: 0.02em;
+        text-align: right;
+      }
+
+      #storm-verdict {
+        margin: 5px 0 9px;
+        color: #dcebf5;
+        font-size: 11.5px;
+        line-height: 1.42;
+      }
+
+      #storm-links {
+        display: flex;
+        flex-direction: column;
+        gap: 3px;
+      }
+
+      .storm-link {
+        display: grid;
+        grid-template-columns: 3px 1fr auto;
+        align-items: center;
+        gap: 9px;
+        padding: 4px 0 4px 0;
+      }
+
+      .storm-link .bar {
+        align-self: stretch;
+        border-radius: 2px;
+        background: rgba(150, 170, 185, 0.35);
+      }
+
+      .storm-link.pass .bar { background: #47d28b; }
+      .storm-link.weak .bar { background: #e8b64a; }
+      .storm-link.fail .bar { background: rgba(150, 170, 185, 0.3); }
+
+      .storm-link .name {
+        min-width: 0;
+        color: #cfe0ec;
+        font-size: 11px;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+      }
+
+      .storm-link .value {
+        color: #fff;
+        font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+        font-size: 11px;
+        font-variant-numeric: tabular-nums;
+        white-space: nowrap;
+      }
+
+      .storm-link.fail .name,
+      .storm-link.fail .value { color: #8ea3b1; }
+
+      .storm-caveat {
+        margin: 9px 0 0;
+        padding: 7px 9px;
+        border-radius: 8px;
+        background: rgba(232, 182, 74, 0.12);
+        color: #f0d093;
+        font-size: 10.5px;
+        line-height: 1.4;
+      }
+
       #bulletin-scrim {
         position: fixed;
         z-index: 70;
@@ -1704,6 +1789,15 @@
               <button class="layer-card" type="button" data-layer="convection_prob" style="--swatch: linear-gradient(#f0e68c,#d73027)">
                 <span class="layer-swatch"></span><span><b>Rischio Temporali</b><small>Probabilità innesco</small></span>
               </button>
+              <button class="layer-card" type="button" data-layer="storm_prob" style="--swatch: linear-gradient(#bad8e8,#f6e280,#b02852)">
+                <span class="layer-swatch"></span><span><b>Probabilità temporali</b><small>LPI ICON-2I · entro 10 km</small></span>
+              </button>
+              <button class="layer-card" type="button" data-layer="updraft" style="--swatch: linear-gradient(#4682be,#eef0ee,#ce2c3e)">
+                <span class="layer-swatch"></span><span><b>Correnti ascensionali</b><small>velocità verticale risolta</small></span>
+              </button>
+              <button class="layer-card" type="button" data-layer="cape" style="--swatch: linear-gradient(#f0f3f0,#f6e280,#8c163c)">
+                <span class="layer-swatch"></span><span><b>Energia convettiva</b><small>ML-CAPE</small></span>
+              </button>
               <button class="layer-card" type="button" data-layer="visibility" style="--swatch: linear-gradient(#f7f7f7,#606f80)">
                 <span class="layer-swatch"></span><span><b>Visibilità</b><small>Nebbia e nubi basse</small></span>
               </button>
@@ -1904,6 +1998,15 @@
         <div class="point-detail"><b>Gelicidio</b><span id="detail-freezing">--</span></div>
         <div class="point-detail"><b>Foehn</b><span id="detail-foehn">--</span></div>
         <div class="point-detail"><b>Altitudine</b><span id="detail-elevation">--</span></div>
+      </div>
+      <div id="storm-chain" hidden>
+        <div class="storm-head">
+          <span class="micro-label">Catena convettiva</span>
+          <span id="storm-mode">--</span>
+        </div>
+        <p id="storm-verdict">--</p>
+        <div id="storm-links"></div>
+        <p id="storm-caveat" class="storm-caveat" hidden></p>
       </div>
     </section>
 
@@ -2183,7 +2286,69 @@
         { v: 2, c: [215, 48, 39], a: 0.8 }
       ];
 
+      // Probabilita' di temporale: la scala parte dal grigio del "niente" e
+      // sale al viola della certezza passando per il giallo, cosi' la soglia
+      // fra "puo' capitare" e "capitera'" si vede senza leggere i numeri.
+      const STORM_STOPS = [
+        { v: 0, c: [232, 238, 243] }, { v: 10, c: [186, 216, 232] },
+        { v: 25, c: [246, 226, 128] }, { v: 45, c: [244, 168, 60] },
+        { v: 65, c: [228, 92, 52] }, { v: 85, c: [176, 40, 82] },
+        { v: 100, c: [104, 24, 104] }
+      ];
+      // Correnti ascensionali: la discesa e' azzurra, la salita passa dal
+      // verde al rosso. Lo zero resta neutro perche' su quasi tutto il
+      // dominio l'aria non fa niente.
+      const UPDRAFT_STOPS = [
+        { v: -5, c: [70, 130, 190] }, { v: -1, c: [176, 206, 226] },
+        { v: 0, c: [238, 240, 238] }, { v: 1, c: [188, 224, 168] },
+        { v: 3, c: [246, 224, 106] }, { v: 8, c: [238, 138, 52] },
+        { v: 15, c: [206, 44, 62] }, { v: 30, c: [116, 20, 84] }
+      ];
+      // Energia: la scala classica dei diagrammi termodinamici, dove l'area
+      // positiva e' rossa.
+      const CAPE_STOPS = [
+        { v: 0, c: [240, 243, 240] }, { v: 300, c: [204, 224, 200] },
+        { v: 800, c: [246, 226, 128] }, { v: 1500, c: [242, 158, 62] },
+        { v: 2500, c: [222, 74, 52] }, { v: 4000, c: [140, 22, 60] }
+      ];
+
       const LAYER_INFO = {
+        storm_prob: {
+          label: "Probabilità di temporale",
+          unit: "%",
+          stops: STORM_STOPS,
+          discrete: false,
+          decimals: 0,
+          ticks: [0, 20, 40, 60, 80, 100],
+          note: "LPI di ICON-2I: probabilità che un temporale si trovi entro 10 km, sfumata su 25 km perché il modello sa che ci sarà, non su quale paese.",
+          opacity: 0.86,
+          terrainOpacity: 0.22,
+          storm: "probability"
+        },
+        updraft: {
+          label: "Correnti ascensionali",
+          unit: "m/s",
+          stops: UPDRAFT_STOPS,
+          discrete: false,
+          decimals: 1,
+          ticks: [-5, 0, 3, 8, 15, 30],
+          note: "Velocità verticale risolta dal modello, massimo fra 850, 700 e 500 hPa. Sono i nuclei convettivi veri: la salita sinottica sta tre ordini di grandezza sotto.",
+          opacity: 0.9,
+          terrainOpacity: 0.24,
+          storm: "updraft"
+        },
+        cape: {
+          label: "Energia convettiva",
+          unit: "J/kg",
+          stops: CAPE_STOPS,
+          discrete: false,
+          decimals: 0,
+          ticks: [0, 500, 1000, 2000, 3000, 4000],
+          note: "ML-CAPE: il lavoro che la spinta di galleggiamento può fare su una particella. Quanta ce n'è, non se si accenderà.",
+          opacity: 0.88,
+          terrainOpacity: 0.26,
+          storm: "cape"
+        },
         temp: {
           label: "Temperatura a 2 m",
           unit: "°C",
@@ -2482,6 +2647,11 @@
       let activeLayer = "temp";
       let selectedLevel = "surface";
       let upperData = null;
+      // I campi temporaleschi stanno in un file a parte, su griglia dimezzata:
+      // sono dodici griglie e chi non apre questa sezione non le scarica.
+      let stormData = null;
+      let stormIndex = -1;
+      let stormPromise = null;
       let upperIndex = -1;
       let upperPromise = null;
       let loadingToken = 0;
@@ -2765,6 +2935,13 @@
 
       function fieldValue(key, gx, gy) {
         if (!currentData) return NaN;
+
+        const stormName = stormFieldName(key);
+        if (stormName) {
+          // Il modo del temporale e' un codice, non un valore continuo:
+          // interpolarlo darebbe categorie che non esistono.
+          return stormSample(stormName, gx, gy);
+        }
 
         if (usesUpperData(key)) {
           if (!upperData || upperIndex !== currentIndex) return NaN;
@@ -3060,6 +3237,15 @@
 
       function hasLayerData(key) {
         if (usesUpperData(key)) return activeModel === "icon2i";
+        // I campi temporaleschi non stanno nel file del passo ma nel proprio,
+        // quindi cercarli in currentData li dichiarava sempre assenti. La
+        // disponibilita' la dice il catalogo, che sa se quel file e' stato
+        // scritto per quella scadenza.
+        if (usesStormData(key)) {
+          if (activeModel !== "icon2i") return false;
+          const item = catalog[currentIndex];
+          return !(item && item.storm === false);
+        }
         if (!currentData) return true;
         if (key === "feels") return Boolean(currentData.feels_like);
         if (key === "wind") return Boolean(currentData.wind_u && currentData.wind_v);
@@ -3079,6 +3265,10 @@
         if (key === "convection_prob") {
           return meta.convectionMessage ||
             "Probabilità temporali non disponibile per questa scadenza";
+        }
+        if (usesStormData(key)) {
+          return "Diagnostica dei temporali non disponibile per questa "
+            + "scadenza: manca LPI nel run ICON-2I";
         }
         return "Campo non disponibile per questo passo";
       }
@@ -3132,6 +3322,66 @@
                 ? "Umidità relativa ricavata da temperatura e umidità specifica ICON‑2I al livello selezionato."
                 : info.note
         };
+      }
+
+      // Un campo appartiene alla sezione temporali se la sua voce dichiara
+      // da quale griglia del file storm viene.
+      function stormFieldName(key) {
+        const info = LAYER_INFO[key];
+        return info && info.storm ? info.storm : null;
+      }
+
+      function usesStormData(key) {
+        return Boolean(stormFieldName(key));
+      }
+
+      function requestStormData() {
+        if (stormPromise) return;
+        const targetIndex = currentIndex;
+        const item = catalog[targetIndex];
+        if (!item) return;
+        // Il catalogo dice se per quella scadenza il file esiste: senza
+        // questo controllo si chiederebbe un file assente a ogni passo.
+        if (item.storm === false) {
+          toast("Diagnostica temporali non disponibile per questa scadenza");
+          setLayer("temp");
+          return;
+        }
+        const hour = item.hour !== undefined ? item.hour : item.leadHours;
+        stormPromise = fetchJsonResource(
+          MODEL_INFO[activeModel].directory + "/storm_" + hour + ".json.gz"
+        )
+          .then(function (data) {
+            stormData = data;
+            stormIndex = targetIndex;
+          })
+          .catch(function () {
+            toast("Diagnostica temporali non disponibile per questo run");
+            if (usesStormData(activeLayer)) setLayer("temp");
+          })
+          .finally(function () {
+            stormPromise = null;
+            if (usesStormData(activeLayer)) {
+              updateLegend();
+              renderWeather();
+            }
+            refreshSelectedPoint();
+          });
+      }
+
+      // Il file dei temporali ha una griglia sua, dimezzata rispetto a quella
+      // del passo: le coordinate vanno riproiettate, non riusate.
+      function stormSample(name, gx, gy) {
+        if (!stormData || stormIndex !== currentIndex || !currentData) return NaN;
+        const values = stormData[name];
+        if (!values) return NaN;
+        const meta = currentData.meta;
+        const lon = meta.lo1 + gx * meta.dx;
+        const lat = meta.la1 - gy * meta.dy;
+        const sx = (lon - stormData.lo1) / stormData.dx;
+        const sy = (stormData.la1 - lat) / stormData.dy;
+        const sampler = useNearestCell ? sampleNearest : sampleBilinear;
+        return sampler(values, sx, sy, stormData.nx, stormData.ny);
       }
 
       function requestUpperData() {
@@ -3361,6 +3611,8 @@
         currentIndex = 0;
         stepCache.clear();
         upperData = null;
+        stormData = null;
+        stormIndex = -1;
         upperIndex = -1;
         if (usesUpperData(activeLayer) && nextModel !== "icon2i") {
           activeLayer = "temp";
@@ -4474,9 +4726,16 @@
           requestUpperData();
           return;
         }
+        const stormActive = usesStormData(activeLayer);
+        if (stormActive && (stormIndex !== currentIndex || !stormData)) {
+          requestStormData();
+          return;
+        }
         // I campi a 850 hPa vivono su una griglia propria (dominio piu'
         // ampio, passo ~19 km): il raster usa la geometria del campo attivo.
-        const fieldMeta = upperActive ? upperLevelData(activeLayer) : meta;
+        const fieldMeta = upperActive
+          ? upperLevelData(activeLayer)
+          : (stormActive ? stormData : meta);
         if (!fieldMeta) return;
         const dataWest = fieldMeta.lo1 - fieldMeta.dx / 2;
         const dataEast = fieldMeta.lo1 + (fieldMeta.nx - 1) * fieldMeta.dx + fieldMeta.dx / 2;
@@ -4585,10 +4844,16 @@
         const fieldKey = activeLayer === "feels" ? "feels_like" : activeLayer;
         let fieldGrid = isWindField
           ? null
-          : getGrid(upperActive ? upperFieldArray(activeLayer) : currentData[fieldKey]);
+          : getGrid(
+              upperActive
+                ? upperFieldArray(activeLayer)
+                : (stormActive
+                    ? stormData[stormFieldName(activeLayer)]
+                    : currentData[fieldKey])
+            );
         // Observed analysis: fuse the surface field with live METAR (Cressman).
         if (
-          showFusion && !isWindField && !upperActive && fieldGrid
+          showFusion && !isWindField && !upperActive && !stormActive && fieldGrid
           && fusionSupported(activeLayer)
         ) {
           fieldGrid = buildFusedGrid(activeLayer, fieldGrid, fieldMeta);
@@ -6489,6 +6754,173 @@
         updateBulletinUi();
       }
 
+      const STORM_MODE_LABELS = [
+        "nessuna convezione profonda",
+        "cella singola",
+        "multicella organizzata",
+        "supercella possibile"
+      ];
+
+      // Ogni anello della catena: come si legge il numero e quando regge.
+      // "pass" vuol dire che l'anello non ostacola, "weak" che e' al limite,
+      // "fail" che li' la catena si spezza. Il colore non e' un giudizio sul
+      // pericolo: dice solo se quel pezzo della fisica c'e'.
+      function stormLinkState(value, weakAt, passAt, inverted) {
+        if (!Number.isFinite(value)) return "fail";
+        if (inverted) {
+          if (value <= passAt) return "pass";
+          if (value <= weakAt) return "weak";
+          return "fail";
+        }
+        if (value >= passAt) return "pass";
+        if (value >= weakAt) return "weak";
+        return "fail";
+      }
+
+      function updateStormChain(gx, gy) {
+        const container = document.getElementById("storm-chain");
+        if (!container) return;
+        if (!stormData || stormIndex !== currentIndex) {
+          container.hidden = true;
+          // La scheda si apre anche su un campo non temporalesco: il file va
+          // chiesto comunque, altrimenti la catena non comparirebbe mai
+          // senza prima accendere uno di quei campi.
+          const item = catalog[currentIndex];
+          if (item && item.storm !== false) requestStormData();
+          return;
+        }
+
+        const read = function (name) { return stormSample(name, gx, gy); };
+        const cape = read("cape");
+        const shear = read("shear");
+        const base = read("cloudBase");
+        const updraft = read("updraft");
+        const potential = read("potentialUpdraft");
+        const helicity = read("helicity");
+        const probability = read("probability");
+        const lpi = read("lpi");
+        const hail = read("hail");
+        const downburst = read("downburst");
+        const freezing = read("freezingLevel");
+
+        const rows = [
+          {
+            name: "Base delle nubi",
+            value: Number.isFinite(base) ? Math.round(base) + " m" : "--",
+            // Una base bassa fa temporali efficienti a piovere; una molto alta
+            // lascia evaporare la pioggia e prepara le raffiche.
+            state: stormLinkState(base, 3200, 2500, true)
+          },
+          {
+            name: "Energia · CAPE",
+            value: Number.isFinite(cape) ? Math.round(cape) + " J/kg" : "--",
+            state: stormLinkState(cape, 300, 800)
+          },
+          {
+            name: "Velocità possibile",
+            value: Number.isFinite(potential) ? potential.toFixed(0) + " m/s" : "--",
+            state: stormLinkState(potential, 12, 22)
+          },
+          {
+            name: "Shear 0-6 km",
+            value: Number.isFinite(shear) ? shear.toFixed(1) + " m/s" : "--",
+            state: stormLinkState(shear, 10, 20)
+          },
+          {
+            name: "Rotazione · elicità",
+            value: Number.isFinite(helicity) ? Math.round(helicity) + " m²/s²" : "--",
+            state: stormLinkState(helicity, 25, 100)
+          },
+          {
+            name: "Corrente risolta",
+            value: Number.isFinite(updraft) ? updraft.toFixed(1) + " m/s" : "--",
+            state: stormLinkState(updraft, 1, 5)
+          },
+          {
+            // L'ultimo anello deve parlare la stessa lingua della
+            // probabilita' che sta sopra, altrimenti la scheda si contraddice:
+            // il punto esatto puo' avere LPI zero mentre a otto chilometri il
+            // temporale c'e' eccome, ed e' quello che conta per chi legge.
+            name: "Fulminazione · entro 10 km",
+            value: Number.isFinite(probability)
+              ? Math.round(probability) + " %"
+                + (Number.isFinite(lpi) && lpi >= 0.05
+                  ? " · " + lpi.toFixed(1) + " J/kg qui" : "")
+              : "--",
+            state: stormLinkState(probability, 10, 40)
+          }
+        ];
+        if (Number.isFinite(hail) && hail > 0) {
+          rows.push({
+            name: "Grandine · zero a " + (Number.isFinite(freezing)
+              ? Math.round(freezing) + " m" : "quota ignota"),
+            value: Math.round(hail) + " %",
+            state: stormLinkState(hail, 15, 40)
+          });
+        }
+        if (Number.isFinite(downburst) && downburst > 0) {
+          rows.push({
+            name: "Raffica discendente",
+            value: Math.round(downburst) + " %",
+            state: stormLinkState(downburst, 20, 50)
+          });
+        }
+
+        const links = document.getElementById("storm-links");
+        links.textContent = "";
+        rows.forEach(function (row) {
+          const line = document.createElement("div");
+          line.className = "storm-link " + row.state;
+          const bar = document.createElement("span");
+          bar.className = "bar";
+          const name = document.createElement("span");
+          name.className = "name";
+          name.textContent = row.name;
+          const value = document.createElement("span");
+          value.className = "value";
+          value.textContent = row.value;
+          line.appendChild(bar);
+          line.appendChild(name);
+          line.appendChild(value);
+          links.appendChild(line);
+        });
+
+        const modeCode = read("mode");
+        const modeLabel = document.getElementById("storm-mode");
+        modeLabel.textContent = Number.isFinite(modeCode)
+          ? STORM_MODE_LABELS[Math.round(modeCode)] || "--"
+          : "--";
+
+        const verdict = document.getElementById("storm-verdict");
+        if (Number.isFinite(probability) && probability >= 5) {
+          verdict.textContent = "Probabilità che un temporale sia entro 10 km: "
+            + Math.round(probability) + "%"
+            + (Number.isFinite(updraft) && updraft >= 3
+              ? " · qui il modello mette una corrente da " + updraft.toFixed(0) + " m/s"
+              : "");
+        } else if (Number.isFinite(cape) && cape >= 300) {
+          verdict.textContent = "Energia c'è, ma il modello non accende niente "
+            + "qui: manca l'innesco, oppure il coperchio tiene.";
+        } else {
+          verdict.textContent = "Nessuna convezione profonda prevista in questo punto.";
+        }
+
+        // La trappola misurata sul run reale: dentro un nucleo maturo la CAPE
+        // e' gia' stata consumata e l'aria fredda al suolo ha stabilizzato lo
+        // strato limite. Leggerla li' e dire "poca energia" sarebbe falso.
+        const caveat = document.getElementById("storm-caveat");
+        const insideCore = Number.isFinite(updraft) && updraft >= 5
+          && Number.isFinite(cape) && cape < 500;
+        caveat.hidden = !insideCore;
+        if (insideCore) {
+          caveat.textContent = "Attenzione: qui la corrente è già forte e la "
+            + "CAPE risulta bassa perché il temporale l'ha consumata e la sua "
+            + "aria fredda ha stabilizzato il suolo. L'energia va letta davanti "
+            + "alla cella, non dentro.";
+        }
+        container.hidden = false;
+      }
+
       function refreshSelectedPoint() {
         if (!selectedPoint || !currentData) return;
         const point = pointFromCoordinates(selectedPoint.lng, selectedPoint.lat);
@@ -6527,6 +6959,7 @@
         );
         ui.detailWetbulb.textContent = formatValue(fieldValue("wetbulb", point.gx, point.gy), 1, "°C");
         ui.detailElevation.textContent = terrainElevationText(selectedPoint);
+        updateStormChain(point.gx, point.gy);
 
         ui.readout.classList.add("visible");
         document.body.classList.add("readout-open");

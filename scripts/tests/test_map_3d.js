@@ -428,4 +428,37 @@ assert.match(
 assert.match(html, /if \(target\.distance > 90 \* 60 \* 1000\)/,
   "un modello che non copre l'ora del satellite passerebbe per una coincidenza");
 
+// --- Sezione temporali ---
+// I campi stanno in un file proprio, su griglia dimezzata: cercarli in
+// currentData li dichiarava sempre assenti e l'interruttore non rispondeva.
+assert.match(html, /if \(usesStormData\(key\)\) \{[\s\S]{0,300}?const item = catalog\[currentIndex\];/,
+  "la disponibilita' dei campi temporaleschi non viene dal catalogo");
+assert.match(html, /function stormSample\(name, gx, gy\)/,
+  "manca il campionamento sulla griglia dei temporali");
+assert.match(html, /const sx = \(lon - stormData\.lo1\) \/ stormData\.dx;/,
+  "la griglia dei temporali non viene riproiettata: e' dimezzata, non uguale");
+["storm_prob", "updraft", "cape"].forEach((key) => {
+  assert.ok(html.includes('data-layer="' + key + '"'),
+    "manca la scheda del campo " + key);
+  assert.match(html, new RegExp(key + ":\\s*\\{[\\s\\S]{0,700}?storm:"),
+    "il campo " + key + " non dichiara da quale griglia viene");
+});
+assert.match(html, /if \(item\.storm === false\) \{/,
+  "senza il controllo sul catalogo si chiederebbe un file inesistente");
+assert.match(html, /!upperActive && !stormActive && fieldGrid/,
+  "la fusione con le stazioni si applicherebbe anche ai campi temporaleschi");
+
+// La catena: sette anelli piu' i due rischi, e l'ultimo deve parlare la
+// stessa lingua della probabilita' che sta sopra.
+assert.match(html, /function updateStormChain\(gx, gy\)/, "manca la catena convettiva");
+assert.match(html, /name: "Fulminazione · entro 10 km"/,
+  "l'ultimo anello contraddirebbe la probabilita': LPI e' puntuale, lei no");
+assert.match(html, /state: stormLinkState\(probability, 10, 40\)/,
+  "l'ultimo anello non usa la probabilita' di vicinato");
+// La trappola misurata: dentro un nucleo maturo la CAPE e' gia' consumata.
+assert.match(html, /const insideCore = Number\.isFinite\(updraft\) && updraft >= 5\s*\n\s*&& Number\.isFinite\(cape\) && cape < 500;/,
+  "manca l'avviso sulla CAPE letta dentro una cella gia' matura");
+assert.match(html, /updateStormChain\(point\.gx, point\.gy\);/,
+  "la catena non viene aggiornata con il punto selezionato");
+
 console.log("3D map regression checks: OK");
