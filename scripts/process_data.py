@@ -20,6 +20,9 @@ from meteo_analysis.core.icon_fields import IconRunFields
 from meteo_analysis.hazards.storms import (
     bowen_ratio,
     coarsen,
+    sea_breeze_lift,
+    trigger_index,
+    upslope_flow,
     bulk_shear,
     downburst_potential,
     hail_potential,
@@ -463,6 +466,9 @@ def build_storm_payload(
     deep_layer_shear,
     omega_700,
     temperature_2m_c,
+    u_wind_10m=None,
+    v_wind_10m=None,
+    convergence_10m=None,
 ):
     """Campi della sezione temporali per una scadenza, o None se mancano.
 
@@ -556,6 +562,59 @@ def build_storm_payload(
     if cape_ml is not None and deep_layer_shear is not None:
         mode = storm_mode(cape_ml, deep_layer_shear)
 
+    # --- Innesco: cosa puo' rompere il coperchio in questo punto ---
+    # Il rapporto di Bowen non e' un innesco, e' il carattere della giornata:
+    # dice se l'energia del Sole finisce a scaldare l'aria o a evaporare
+    # acqua, e quindi se avremo celle isolate e violente o temporali diffusi.
+    sensible = fields.field("ashfl", hour, latitudes, longitudes)
+    latent = fields.field("alhfl", hour, latitudes, longitudes)
+    bowen = (
+        bowen_ratio(sensible, latent)
+        if sensible is not None and latent is not None else None
+    )
+
+    orography = fields.field("hsurf", hour, latitudes, longitudes)
+    land_fraction = fields.field("fr_land", hour, latitudes, longitudes)
+    upslope = None
+    if (
+        orography is not None
+        and u_wind_10m is not None
+        and v_wind_10m is not None
+    ):
+        try:
+            upslope = upslope_flow(
+                u_wind_10m, v_wind_10m, orography, latitudes, longitudes
+            )
+        except ValueError:
+            upslope = None
+
+    breeze = None
+    if (
+        land_fraction is not None
+        and convergence_10m is not None
+        and u_wind_10m is not None
+        and v_wind_10m is not None
+    ):
+        try:
+            breeze = sea_breeze_lift(
+                convergence_10m,
+                u_wind_10m,
+                v_wind_10m,
+                land_fraction,
+                latitudes,
+                longitudes,
+            )
+        except ValueError:
+            breeze = None
+
+    trigger = None
+    if upslope is not None or breeze is not None or convergence_10m is not None:
+        trigger = trigger_index(
+            upslope_ms=upslope,
+            sea_breeze=breeze,
+            convergence=convergence_10m,
+        ) * 100.0
+
     # Il riepilogo va calcolato a piena risoluzione, prima di ridurre la
     # griglia: e' quello che finisce nel controllo qualita', e un massimo
     # mediato non sarebbe piu' un massimo.
@@ -593,6 +652,12 @@ def build_storm_payload(
         "hail": reduce_field(hail, "max", 0),
         "downburst": reduce_field(downburst, "max", 0),
         "mode": reduce_field(mode, "nearest", 0),
+        "trigger": reduce_field(trigger, "max", 0),
+        "bowen": reduce_field(bowen, "mean", 2),
+        "upslope": reduce_field(upslope, "max", 2),
+        "seaBreeze": (
+            reduce_field(breeze * 1.0e5, "max", 1) if breeze is not None else None
+        ),
         "summary": summary,
     }
     return payload
@@ -720,11 +785,35 @@ def prepare_icon_hazard_fields(run_dt):
             f"{run_base}/OMEGA/{common}_isobaricInhPa-850.grib",
             "omega850.grib",
         ),
+        # --- INNESCO DAL TERRENO ---
+        # Flussi di calore al suolo: il loro rapporto e' il numero di Bowen,
+        # cioe' come si divide l'energia solare fra scaldare l'aria e
+        # evaporare acqua. E' l'effetto atmosferico dell'umidita' del suolo, e
+        # costa cinque volte meno che scaricare l'umidita' del suolo stessa.
+        "ashfl": (
+            f"{run_base}/ASHFL_S/{surface_file}",
+            "ashfl.grib",
+        ),
+        "alhfl": (
+            f"{run_base}/ALHFL_S/{surface_file}",
+            "alhfl.grib",
+        ),
+        # Costanti nel tempo: maschera terra-mare per la brezza, orografia
+        # per la risalita forzata dal rilievo.
+        "fr_land": (
+            f"{run_base}/FR_LAND/{surface_file}",
+            "fr_land.grib",
+        ),
+        "hsurf": (
+            f"{run_base}/HSURF/{surface_file}",
+            "hsurf_storm.grib",
+        ),
     }
     optional_fields = {
         "t700", "u700", "v700", "q700", "u500", "v500", "fi500",
         "lpi", "uh_max", "wshear_u", "wshear_v", "cape_con", "td_2m",
         "hzerocl", "graupel", "vmax_10m", "omega500", "omega850",
+        "ashfl", "alhfl", "fr_land", "hsurf",
     }
     if os.path.exists(HAZARD_TEMP_DIR):
         shutil.rmtree(HAZARD_TEMP_DIR)
@@ -1682,6 +1771,9 @@ def process_data():
                         deep_layer_shear,
                         omega_700,
                         temp_c,
+                        u_val,
+                        v_val,
+                        convergence_10m,
                     )
                     if storm_payload is not None:
                         storm_payload["runTime"] = iso_z(run_dt)

@@ -363,6 +363,203 @@ def bowen_ratio(sensible_heat_flux, latent_heat_flux) -> np.ndarray:
     return np.where(valid, np.clip(ratio, 0.0, 20.0), np.nan)
 
 
+def upslope_flow(u_wind, v_wind, orography, latitudes, longitudes) -> np.ndarray:
+    """Velocita' di risalita forzata dal rilievo (m/s), positiva in salita.
+
+    Il vento che incontra un pendio non puo' attraversarlo: sale.  La
+    componente verticale e' la proiezione del vento orizzontale sul gradiente
+    del terreno, ``w = V . grad(h)``.
+
+    E' l'innesco dominante delle giornate estive senza fronti, ed e' il motivo
+    per cui alle 13-14 i cumuli si accendono prima sull'Appennino e sulle Alpi
+    e solo dopo scendono in pianura: bastano pochi decimi di metro al secondo
+    per far superare a una particella il livello di libera convezione, se la
+    CAPE c'e' gia'.
+    """
+    u = _array(u_wind)
+    v = _array(v_wind)
+    height = _array(orography)
+    latitude = _array(latitudes).squeeze()
+    longitude = _array(longitudes).squeeze()
+    if height.ndim != 2:
+        raise ValueError("l'orografia deve essere una griglia 2D")
+    if latitude.ndim != 1 or longitude.ndim != 1:
+        raise ValueError("coordinate 1D attese")
+    if height.shape != (latitude.size, longitude.size):
+        raise ValueError("orografia e coordinate non compatibili")
+
+    # Metri veri sulla griglia: il passo in longitudine si accorcia salendo
+    # di latitudine, e ignorarlo darebbe pendenze sbagliate del 25% sulle Alpi.
+    metres_per_degree = 111_320.0
+    x_metres = (
+        np.deg2rad(longitude - longitude[0])[None, :]
+        * 6_371_000.0
+        * np.cos(np.deg2rad(latitude))[:, None]
+    )
+    y_metres = np.deg2rad(latitude - latitude[0]) * 6_371_000.0
+    del metres_per_degree
+
+    dh_dj = np.gradient(height, axis=1)
+    dx_dj = np.gradient(x_metres, axis=1)
+    dh_dx = np.divide(
+        dh_dj, dx_dj, out=np.full_like(dh_dj, np.nan), where=np.abs(dx_dj) > 1.0
+    )
+    dh_dy = np.gradient(height, y_metres, axis=0)
+
+    u, v = np.broadcast_arrays(u, v)
+    valid = np.isfinite(u) & np.isfinite(v) & np.isfinite(dh_dx) & np.isfinite(dh_dy)
+    with np.errstate(invalid="ignore"):
+        vertical = u * dh_dx + v * dh_dy
+    return np.where(valid, vertical, np.nan)
+
+
+def coast_distance_km(land_fraction, latitudes, longitudes, limit_km: float = 120.0):
+    """Distanza dalla costa (km), positiva sulla terra e negativa sul mare.
+
+    Serve a isolare la brezza: la sua linea di convergenza vive in una fascia
+    costiera, mentre una convergenza sinottica puo' stare ovunque.  Il segno
+    distingue i due lati senza dover portare in giro una seconda maschera.
+
+    Il calcolo e' una dilatazione progressiva della costa, fermata a
+    ``limit_km``: oltre quella distanza il valore esatto non serve a nessuno e
+    continuare costerebbe soltanto.
+    """
+    land = _array(land_fraction)
+    latitude = _array(latitudes).squeeze()
+    longitude = _array(longitudes).squeeze()
+    if land.ndim != 2 or land.shape != (latitude.size, longitude.size):
+        raise ValueError("maschera terra-mare non compatibile con le coordinate")
+
+    is_land = land >= 0.5
+    if is_land.all() or not is_land.any():
+        # Nessuna costa nel riquadro: non c'e' brezza da isolare.
+        return np.full(land.shape, np.nan)
+
+    mean_latitude = float(np.nanmean(latitude))
+    cell_y_km = abs(float(latitude[1] - latitude[0])) * 111.32 if latitude.size > 1 else 1.0
+    cell_x_km = (
+        abs(float(longitude[1] - longitude[0]))
+        * 111.32
+        * np.cos(np.deg2rad(mean_latitude))
+        if longitude.size > 1 else 1.0
+    )
+    cell_km = float(np.mean([cell_x_km, cell_y_km]))
+    steps = max(1, int(round(limit_km / max(cell_km, 0.1))))
+
+    distance = np.full(land.shape, np.inf)
+    # La costa e' il confine: punti che hanno un vicino dell'altro tipo.
+    neighbour_land = np.zeros(land.shape, dtype=bool)
+    neighbour_sea = np.zeros(land.shape, dtype=bool)
+    for shift, axis in ((1, 0), (-1, 0), (1, 1), (-1, 1)):
+        rolled = np.roll(is_land, shift, axis=axis)
+        neighbour_land |= rolled
+        neighbour_sea |= ~rolled
+    coast = (is_land & neighbour_sea) | (~is_land & neighbour_land)
+    distance[coast] = 0.0
+
+    frontier = coast.copy()
+    for step in range(1, steps + 1):
+        grown = np.zeros(land.shape, dtype=bool)
+        for shift, axis in ((1, 0), (-1, 0), (1, 1), (-1, 1)):
+            grown |= np.roll(frontier, shift, axis=axis)
+        grown &= ~np.isfinite(distance)
+        if not grown.any():
+            break
+        distance[grown] = step * cell_km
+        frontier = grown
+    distance[~np.isfinite(distance)] = steps * cell_km
+    return np.where(is_land, distance, -distance)
+
+
+def sea_breeze_lift(
+    convergence,
+    u_wind,
+    v_wind,
+    land_fraction,
+    latitudes,
+    longitudes,
+    inland_reach_km: float = 60.0,
+) -> np.ndarray:
+    """Parte della convergenza attribuibile alla brezza di mare (s-1).
+
+    Tre condizioni insieme, e servono tutte e tre.  Il punto deve stare sulla
+    terra entro la portata della brezza; il vento deve venire dal mare, non
+    andarci; e la convergenza deve esserci davvero.  Con una sola delle tre
+    si scambierebbe per brezza una qualunque linea di convergenza costiera,
+    per esempio quella di un fronte che attraversa la costa.
+
+    In Sicilia e lungo l'Adriatico e' l'innesco dominante delle giornate
+    estive: il fronte di brezza avanza per decine di chilometri e la sua linea
+    di convergenza e' netta.
+    """
+    values = _array(convergence)
+    distance = coast_distance_km(land_fraction, latitudes, longitudes)
+    if not np.isfinite(distance).any():
+        return np.full(values.shape, np.nan)
+
+    # Verso il mare: gradiente della distanza con segno, che sulla terra punta
+    # verso l'interno. Il vento e' "dal mare" se ha componente concorde.
+    latitude = _array(latitudes).squeeze()
+    longitude = _array(longitudes).squeeze()
+    y_metres = np.deg2rad(latitude - latitude[0]) * 6_371_000.0
+    x_metres = (
+        np.deg2rad(longitude - longitude[0])[None, :]
+        * 6_371_000.0
+        * np.cos(np.deg2rad(latitude))[:, None]
+    )
+    dd_dj = np.gradient(distance, axis=1)
+    dx_dj = np.gradient(x_metres, axis=1)
+    inland_x = np.divide(
+        dd_dj, dx_dj, out=np.full_like(dd_dj, np.nan), where=np.abs(dx_dj) > 1.0
+    )
+    inland_y = np.gradient(distance, y_metres, axis=0)
+
+    u = _array(u_wind)
+    v = _array(v_wind)
+    u, v = np.broadcast_arrays(u, v)
+    with np.errstate(invalid="ignore"):
+        onshore = u * inland_x + v * inland_y
+
+    # La terra si riconosce dalla maschera, non dal segno della distanza: sui
+    # punti di mare esattamente sulla linea di costa la distanza vale -0.0, e
+    # in virgola mobile -0.0 >= 0 e' vero. Con quel confronto una fascia di
+    # celle marine risultava terra e prendeva brezza.
+    on_land = _array(land_fraction) >= 0.5
+    within_reach = on_land & (np.abs(distance) <= float(inland_reach_km))
+    from_sea = np.isfinite(onshore) & (onshore > 0.0)
+    valid = np.isfinite(values)
+    breeze = np.where(
+        valid & within_reach & from_sea, np.maximum(values, 0.0), 0.0
+    )
+    return np.where(valid, breeze, np.nan)
+
+
+def trigger_index(upslope_ms=None, sea_breeze=None, convergence=None) -> np.ndarray:
+    """Indice 0-1 di quanto forte e' il sollevamento che puo' rompere il CIN.
+
+    I tre meccanismi non si sommano: in un punto ne agisce uno, e conta il
+    piu' forte.  Sommandoli, una convergenza debole diffusa su una collina
+    diventerebbe un innesco inesistente.
+    """
+    parts = []
+    if upslope_ms is not None:
+        values = _array(upslope_ms)
+        parts.append(np.clip(values / 0.6, 0.0, 1.0))
+    if sea_breeze is not None:
+        values = _array(sea_breeze)
+        parts.append(np.clip(values / 2.0e-4, 0.0, 1.0))
+    if convergence is not None:
+        values = _array(convergence)
+        parts.append(np.clip(values / 3.0e-4, 0.0, 1.0))
+    if not parts:
+        return np.array([], dtype=float)
+    stack = np.stack(np.broadcast_arrays(*parts), axis=0)
+    missing = np.all(~np.isfinite(stack), axis=0)
+    with np.errstate(invalid="ignore"):
+        strongest = np.max(np.where(np.isfinite(stack), stack, -np.inf), axis=0)
+    return np.where(missing, np.nan, np.clip(strongest, 0.0, 1.0))
+
+
 def coarsen(values, factor: int = 2, how: str = "mean") -> np.ndarray:
     """Riduce la griglia aggregando blocchi ``factor x factor``.
 

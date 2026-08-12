@@ -461,4 +461,21 @@ assert.match(html, /const insideCore = Number\.isFinite\(updraft\) && updraft >=
 assert.match(html, /updateStormChain\(point\.gx, point\.gy\);/,
   "la catena non viene aggiornata con il punto selezionato");
 
+// --- Innesco dal terreno ---
+["trigger", "bowen"].forEach((key) => {
+  assert.ok(html.includes('data-layer="' + key + '"'), "manca la scheda del campo " + key);
+  assert.match(html, new RegExp(key + ":\\s*\\{[\\s\\S]{0,700}?storm:"),
+    "il campo " + key + " non dichiara da quale griglia viene");
+});
+// La brezza e' pubblicata moltiplicata per 1e5: confrontarla con la soglia
+// non scalata la faceva vincere sempre, e sulle Alpi usciva "brezza di mare".
+assert.match(html, /const breezeShare = Number\.isFinite\(breeze\) \? breeze \/ 20\.0 : 0;/,
+  "la brezza va normalizzata sulla scala con cui e' pubblicata");
+assert.match(html, /upslopeShare >= 0\.25 && upslopeShare >= breezeShare/,
+  "i due meccanismi non vengono confrontati sulla stessa scala");
+assert.match(html, /"Innesco · brezza di mare o lago"/,
+  "la maschera ICON non distingue mare e laghi: il nome non deve deciderlo");
+assert.match(html, /name: "Suolo · rapporto di Bowen"/,
+  "manca l'anello del suolo nella catena");
+
 console.log("3D map regression checks: OK");
