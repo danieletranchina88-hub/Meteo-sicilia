@@ -9,6 +9,8 @@ const path = require("node:path");
 
 const root = path.resolve(__dirname, "../..");
 const html = fs.readFileSync(path.join(root, "index.html"), "utf8");
+const radarHtml = fs.readFileSync(path.join(root, "radar.html"), "utf8");
+const meteogramHtml = fs.readFileSync(path.join(root, "meteograms.html"), "utf8");
 
 const inlineScripts = [...html.matchAll(/<script(?:\s[^>]*)?>([\s\S]*?)<\/script>/gi)]
   .map((match) => match[1])
@@ -17,6 +19,36 @@ assert.ok(inlineScripts.length > 0, "script applicativo assente");
 inlineScripts.forEach((source) => {
   assert.doesNotThrow(() => new Function(source), "JavaScript inline non valido");
 });
+
+const radarScripts = [...radarHtml.matchAll(/<script(?:\s[^>]*)?>([\s\S]*?)<\/script>/gi)]
+  .map((match) => match[1]).filter((source) => source.trim());
+radarScripts.forEach((source) => {
+  assert.doesNotThrow(() => new Function(source), "JavaScript radar non valido");
+});
+assert.match(radarHtml, /const RADAR_MAX_NATIVE_ZOOM = 7;/,
+  "la pagina radar non dichiara il limite ufficiale RainViewer");
+assert.match(radarHtml, /maxzoom: RADAR_MAX_NATIVE_ZOOM,/,
+  "la pagina radar continua a chiedere tessere con zoom non supportato");
+assert.match(radarHtml, /maxZoom: 16,/,
+  "il limite delle tessere e' stato confuso con quello della mappa");
+assert.match(radarHtml, /id: "satellite-clouds-layer"[\s\S]{0,260}?source: "satellite-clouds"/,
+  "la pagina radar non fonde la copertura nuvolosa satellitare");
+assert.match(radarHtml, /loadClouds\(frame, false\);/,
+  "satellite e radar non cambiano insieme durante l'animazione");
+
+const meteogramScripts = [...meteogramHtml.matchAll(/<script(?:\s[^>]*)?>([\s\S]*?)<\/script>/gi)]
+  .map((match) => match[1]).filter((source) => source.trim());
+meteogramScripts.forEach((source) => {
+  assert.doesNotThrow(() => new Function(source), "JavaScript meteogrammi non valido");
+});
+assert.match(meteogramHtml, /function interpolateTileValue\(values, nx, rows, columns\)/,
+  "il meteogramma usa ancora il solo punto di griglia piu' vicino");
+assert.match(meteogramHtml, /id="weather-strip"/,
+  "manca la sintesi visuale ogni tre ore");
+assert.match(meteogramHtml, /label:"Confidenza", values:s\.stormConfidence/,
+  "la probabilita' temporalesca e' mostrata senza confidenza");
+assert.match(meteogramHtml, /label:"Raffica", values:s\.gust10/,
+  "il meteogramma del vento ignora le raffiche");
 
 assert.match(html, /maplibre-gl@5\.24\.0/, "MapLibre v5 stabile non caricata");
 assert.doesNotMatch(html, /map\.transform\b/, "uso di API MapLibre interna e fragile");
@@ -369,18 +401,14 @@ assert.match(
   /id: "satellite-clouds-layer"[\s\S]{0,400}?layout: \{ visibility: "none" \}/,
   "le nubi satellitari non sono spente all'avvio"
 );
-assert.match(html, /data-toggle="satclouds"/, "interruttore delle nubi assente");
-// Il satellite e' un'osservazione come il radar e sta accanto a lui: in fondo
-// alla sezione della presentazione grafica nessuno lo trovava.
-assert.match(
-  html,
-  /data-toggle="radar"[\s\S]{0,260}?data-toggle="satclouds"/,
-  "l'interruttore delle nubi non e' accanto al radar"
-);
-assert.match(html, /satclouds: showSatelliteClouds,/,
-  "lo stato dell'interruttore nubi non e' riportato nell'interfaccia");
-assert.match(html, /} else if \(name === "satclouds"\) \{\s*\n\s*showSatelliteClouds = !showSatelliteClouds;/,
-  "l'interruttore delle nubi non e' collegato");
+// Radar e satellite sono un solo prodotto osservativo: separarli costringeva
+// l'utente a comporre manualmente una lettura che deve essere sincronizzata.
+assert.match(html, /data-toggle="observations"[\s\S]{0,220}?<b>Radar \+ satellite<\/b>/,
+  "manca il controllo osservativo combinato");
+assert.match(html, /observations: showRadar && showSatelliteClouds,/,
+  "lo stato combinato non e' riportato nell'interfaccia");
+assert.match(html, /} else if \(name === "observations"\) \{[\s\S]{0,500}?showRadar = next;\s*\n\s*showSatelliteClouds = next;/,
+  "il controllo combinato non accende insieme radar e satellite");
 assert.match(
   html,
   /cloudTimer = setInterval\(function \(\) \{ loadSatelliteClouds\(false\); \},\s*\n\s*CLOUD_SLOT_MS \/ 2\);/,
@@ -400,8 +428,12 @@ assert.ok(weatherAt > 0 && cloudsAt > weatherAt && regionsAt > cloudsAt,
 // domani sotto le nubi di adesso.
 assert.match(html, /function syncTimelineToSatellite\(slot\)/,
   "manca l'ancoraggio della timeline al satellite");
-assert.match(html, /markCloudFreshness\(slot\);\s*\n\s*syncTimelineToSatellite\(slot\);/,
-  "la timeline non segue il satellite quando arriva un passaggio nuovo");
+assert.match(html, /markCloudFreshness\(slot\);\s*\n\s*syncRadarToSatellite\(slot\);\s*\n\s*syncTimelineToSatellite\(slot\);/,
+  "radar e timeline non seguono il passaggio satellitare");
+assert.match(html, /function radarFrameNearestTo\(when\)/,
+  "manca la scelta del radar temporalmente piu' vicino al satellite");
+assert.match(html, /maxzoom: 7,/,
+  "RainViewer riceverebbe ancora richieste oltre lo zoom nativo supportato");
 assert.match(html, /function nearestStepTo\(when\)/,
   "manca la ricerca della scadenza piu' vicina all'immagine");
 assert.match(html, /if \(target\.index !== currentIndex\) loadStep\(target\.index\);/,
@@ -455,6 +487,16 @@ assert.deepEqual(publicStormCards, ["storm_prob"],
 assert.match(html,
   /data-layer="storm_prob"[\s\S]*?<b>Algoritmo temporali<\/b>/,
   "il solo prodotto pubblico deve dichiararsi come algoritmo unico");
+// "Solo carta" e "Schermo intero" sono due azioni diverse: la prima spegne
+// davvero i dati, la seconda nasconde soltanto l'interfaccia.
+assert.match(html, /data-layer="none"[\s\S]{0,220}?<b>Solo carta<\/b>/,
+  "manca il comando per una carta senza dati sovrapposti");
+assert.match(html, /function clearMeteorologicalLayers\(\)[\s\S]{0,900}?"weather-layer", "visibility", "none"/,
+  "Solo carta non spegne il raster meteorologico");
+assert.match(html, /document\.body\.classList\.toggle\("map-only-layer", nextLayer === "none"\)/,
+  "lo stato Solo carta non e' persistito nell'interfaccia");
+assert.match(html, />Schermo intero<\/span>/,
+  "il vecchio pulsante che nasconde solo la UI resta chiamato Solo mappa");
 assert.match(html, /if \(item\.storm === false\) \{/,
   "senza il controllo sul catalogo si chiederebbe un file inesistente");
 assert.match(html, /!upperActive && !stormActive && fieldGrid/,

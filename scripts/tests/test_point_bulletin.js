@@ -23,6 +23,9 @@ const stormSeries = {
   windU10: hours.map(() => 5),
   windV10: hours.map(() => -3),
   convectionProbability: hours.map((_, index) => index >= 18 && index <= 21 ? 82 : 12),
+  stormConfidence: hours.map((_, index) => index >= 18 && index <= 21 ? 88 : 72),
+  stormContradiction: hours.map((_, index) => index >= 18 && index <= 21 ? 8 : 16),
+  windGust10: hours.map(() => 11),
   capeMl: hours.map((_, index) => index >= 18 && index <= 21 ? 1450 : 150),
   cinMl: hours.map((_, index) => index >= 18 && index <= 21 ? -30 : -120),
   visibility: hours.map(() => 10000),
@@ -39,8 +42,10 @@ assert.equal(storm.completeness, 100);
 assert.ok(storm.paragraphs.some(text => text.includes("Evoluzione giorno per giorno")));
 assert.ok(storm.paragraphs.some(text => text.includes("15.0 mm")));
 assert.ok(storm.paragraphs.some(text => text.includes("82%")));
+assert.ok(storm.paragraphs.some(text => text.includes("confidenza diagnostica")));
 assert.ok(storm.paragraphs.some(text => text.includes("1450 J/kg")));
 assert.ok(storm.paragraphs.some(text => text.includes("struttura frontale")));
+assert.ok(storm.sections.some(section => section.title === "Temporali"));
 
 const drySeries = {
   times: hours,

@@ -597,6 +597,21 @@
         color: rgba(255, 255, 255, 0.78);
       }
 
+      .layer-card.map-only {
+        grid-column: 1 / -1;
+        min-height: 50px;
+        border-color: rgba(150, 190, 213, 0.2);
+        background: linear-gradient(135deg, rgba(15, 31, 44, 0.92), rgba(28, 53, 68, 0.82));
+      }
+
+      .layer-card.map-only .layer-swatch {
+        background: linear-gradient(180deg, #6d8796 0 33%, #263f4e 33% 66%, #0d202d 66%);
+      }
+
+      body.map-only-layer #legend-card {
+        display: none !important;
+      }
+
       .level-picker {
         display: flex;
         align-items: center;
@@ -1017,6 +1032,16 @@
       #nlg-bulletin-content p:first-child {
         color: #f5fbff;
         font-weight: 760;
+      }
+
+      #nlg-bulletin-content p strong {
+        display: block;
+        margin-bottom: 2px;
+        color: #75e1eb;
+        font-size: 9px;
+        font-weight: 900;
+        letter-spacing: 0.06em;
+        text-transform: uppercase;
       }
 
       .bulletin-disclaimer {
@@ -1659,14 +1684,14 @@
           </svg>
           <span>Bollettino</span>
         </button>
-        <button id="clean-button" class="header-button" type="button" aria-pressed="false" aria-label="Attiva solo mappa">
+        <button id="clean-button" class="header-button" type="button" aria-pressed="false" aria-label="Attiva schermo intero">
           <svg class="icon" viewBox="0 0 24 24">
             <path d="M4 7V4h3"></path>
             <path d="M20 7V4h-3"></path>
             <path d="M4 17v3h3"></path>
             <path d="M20 17v3h-3"></path>
           </svg>
-          <span>Solo mappa</span>
+          <span>Schermo intero</span>
         </button>
         <button id="drawer-button" class="header-button primary" type="button" aria-expanded="false" aria-controls="drawer">
           <svg class="icon" viewBox="0 0 24 24">
@@ -1753,6 +1778,9 @@
               <span>tocca per cambiare</span>
             </div>
             <div class="layer-grid">
+              <button class="layer-card map-only" type="button" data-layer="none" aria-pressed="false">
+                <span class="layer-swatch"></span><span><b>Solo carta</b><small>nessun campo o analisi sovrapposta</small></span>
+              </button>
               <button class="layer-card active" type="button" data-layer="temp" style="--swatch: linear-gradient(#ffcc3e,#ec3c68)">
                 <span class="layer-swatch"></span><span><b>Temperatura</b><small>a 2 metri</small></span>
               </button>
@@ -1842,11 +1870,8 @@
               <button class="toggle-row" type="button" data-toggle="isohypses" aria-pressed="false">
                 <span><b>Isoipse 500 hPa</b><small>geopotenziale · passo 4 dam</small></span><span class="switch"></span>
               </button>
-              <button class="toggle-row" type="button" data-toggle="radar" aria-pressed="false">
-                <span><b>Radar precipitazioni</b><small>osservato in tempo reale · RainViewer</small></span><span class="switch"></span>
-              </button>
-              <button class="toggle-row" type="button" data-toggle="satclouds" aria-pressed="false">
-                <span><b>Nubi da satellite</b><small id="satclouds-note">MTG infrarosso 10.5 µm · 1 km · in tempo reale</small></span><span class="switch"></span>
+              <button class="toggle-row" type="button" data-toggle="observations" aria-pressed="false">
+                <span><b>Radar + satellite</b><small id="satclouds-note">precipitazioni RainViewer e nubi MTG sincronizzate</small></span><span class="switch"></span>
               </button>
               <div id="satclouds-picker" class="level-picker" style="display: none">
                 <label for="satclouds-select">Satellite · formato
@@ -2774,6 +2799,37 @@
         return selected;
       }
 
+      function bracketArrayIndices(values, target) {
+        const numericTarget = Number(target);
+        for (let index = 0; index < (values || []).length - 1; index += 1) {
+          const first = Number(values[index]);
+          const second = Number(values[index + 1]);
+          if (numericTarget >= Math.min(first, second) && numericTarget <= Math.max(first, second)) {
+            const fraction = first === second ? 0 : (numericTarget - first) / (second - first);
+            return { first: index, second: index + 1, fraction: clamp(fraction, 0, 1) };
+          }
+        }
+        const nearest = nearestArrayIndex(values, numericTarget);
+        return { first: nearest, second: nearest, fraction: 0 };
+      }
+
+      function bilinearTileValue(values, nx, rows, columns) {
+        const corners = [
+          { value: values[rows.first * nx + columns.first], weight: (1 - rows.fraction) * (1 - columns.fraction) },
+          { value: values[rows.first * nx + columns.second], weight: (1 - rows.fraction) * columns.fraction },
+          { value: values[rows.second * nx + columns.first], weight: rows.fraction * (1 - columns.fraction) },
+          { value: values[rows.second * nx + columns.second], weight: rows.fraction * columns.fraction }
+        ];
+        let total = 0;
+        let weight = 0;
+        corners.forEach(function (corner) {
+          if (corner.value === null || corner.value === undefined || !Number.isFinite(Number(corner.value))) return;
+          total += Number(corner.value) * corner.weight;
+          weight += corner.weight;
+        });
+        return weight > 0 ? total / weight : null;
+      }
+
       async function loadPointBulletinSeries(point) {
         if (!pointBulletinManifestPromise) {
           pointBulletinManifestPromise = fetchJsonResource(
@@ -2804,19 +2860,18 @@
           pointBulletinTileCache.set(tileMeta.file, tilePromise);
         }
         const tile = await tilePromise;
-        const row = nearestArrayIndex(tile.grid.latitudes, point.lat);
-        const column = nearestArrayIndex(tile.grid.longitudes, point.lng);
-        const pointIndex = row * tile.grid.longitudes.length + column;
+        const rows = bracketArrayIndices(tile.grid.latitudes, point.lat);
+        const columns = bracketArrayIndices(tile.grid.longitudes, point.lng);
+        const nx = tile.grid.longitudes.length;
         const series = {
           times: tile.times,
-          sampleLatitude: Number(tile.grid.latitudes[row]),
-          sampleLongitude: Number(tile.grid.longitudes[column])
+          sampleLatitude: Number(point.lat),
+          sampleLongitude: Number(point.lng),
+          samplingMethod: "bilinear-4-points"
         };
         Object.entries(tile.fields || {}).forEach(function (entry) {
           series[entry[0]] = entry[1].values.map(function (values) {
-            const value = values[pointIndex];
-            return value === null || value === undefined || !Number.isFinite(Number(value))
-              ? null : Number(value);
+            return bilinearTileValue(values, nx, rows, columns);
           });
         });
         return series;
@@ -3268,6 +3323,7 @@
       }
 
       function hasLayerData(key) {
+        if (key === "none") return true;
         if (usesUpperData(key)) return activeModel === "icon2i";
         // I campi temporaleschi non stanno nel file del passo ma nel proprio,
         // quindi cercarli in currentData li dichiarava sempre assenti. La
@@ -3934,6 +3990,24 @@
         };
       }
 
+      function radarFrameNearestTo(when) {
+        if (!radarFrames.length) return null;
+        return radarFrames.reduce(function (best, frame) {
+          return Math.abs(frame.time * 1000 - when) < Math.abs(best.time * 1000 - when)
+            ? frame : best;
+        }, radarFrames[0]);
+      }
+
+      function syncRadarToSatellite(slot) {
+        const frame = radarFrameNearestTo(slot && slot.value ? slot.value : Date.now());
+        const source = map && map.getSource ? map.getSource("radar") : null;
+        if (!frame || !source || typeof source.setTiles !== "function") return frame;
+        source.setTiles([
+          radarHost + frame.path + "/256/{z}/{x}/{y}/4/1_1.png"
+        ]);
+        return frame;
+      }
+
       // Il riquadro da chiedere: quello che si sta guardando, allargato di
       // "pad" perche' una panoramica breve non costringa subito a ricaricare,
       // e comunque mai fuori dal dominio. Con pad = 0 restituisce il riquadro
@@ -4020,7 +4094,7 @@
         const label = document.getElementById("satclouds-note");
         if (!label) return;
         const product = CLOUD_PRODUCTS[cloudProduct];
-        label.textContent = product.name + " · immagine delle "
+        label.textContent = "Radar + " + product.name + " · immagine delle "
           + formatClockTime(slot.date);
       }
 
@@ -4104,6 +4178,7 @@
             cloudLoadedMetres = size.metres;
             cloudLoadedSlot = slot.value;
             markCloudFreshness(slot);
+            syncRadarToSatellite(slot);
             syncTimelineToSatellite(slot);
             if (cloudObjectUrl) {
               const previous = cloudObjectUrl;
@@ -4326,15 +4401,19 @@
           ui.bulletinValidity.textContent = "Validità " + details.validity;
           ui.bulletinStatus.textContent =
             "Affidabilità " + details.confidence + " · completezza " +
-            details.completeness + "% · griglia " +
-            series.sampleLatitude.toFixed(2) + "°N " +
-            series.sampleLongitude.toFixed(2) + "°E";
+            details.completeness + "% · interpolazione bilineare archivio 0,20°";
           ui.bulletinDisclaimer.textContent = details.disclaimer;
           ui.bulletinContent.replaceChildren();
-          details.paragraphs.forEach(function (text, index) {
+          const sections = details.sections || details.paragraphs.map(function (text) {
+            return { title: "Analisi", text: text };
+          });
+          sections.forEach(function (section, index) {
             const paragraph = document.createElement("p");
             if (index === 0) paragraph.id = "nlg-bulletin-text";
-            paragraph.textContent = text;
+            const title = document.createElement("strong");
+            title.textContent = section.title;
+            paragraph.appendChild(title);
+            paragraph.appendChild(document.createTextNode(section.text));
             ui.bulletinContent.appendChild(paragraph);
           });
         } catch (error) {
@@ -4404,6 +4483,10 @@
       }
 
       function updateLegend() {
+        if (activeLayer === "none") {
+          ui.sampleValue.textContent = "Solo carta · nessun campo meteorologico attivo";
+          return;
+        }
         const info = activeLayerInfo(activeLayer);
         const minimum = info.stops[0].v;
         const maximum = info.stops[info.stops.length - 1].v;
@@ -4445,12 +4528,11 @@
           isobars: showIsobars,
           isotherms: showIsotherms,
           isohypses: showIsohypses,
-          radar: showRadar,
+          observations: showRadar && showSatelliteClouds,
           fusion: showFusion,
           fronts: showFronts,
           terrain: showTerrain,
           satellite: showSatellite,
-          satclouds: showSatelliteClouds,
           lightbase: showLightBase,
           threed: show3D,
           graticule: showGraticule,
@@ -4481,14 +4563,57 @@
         }
       }
 
+      function clearMeteorologicalLayers() {
+        showParticles = false;
+        showVectors = false;
+        showIsobars = false;
+        showIsotherms = false;
+        showIsohypses = false;
+        showRadar = false;
+        showFusion = false;
+        showFronts = false;
+        showSatelliteClouds = false;
+        showTerrain = false;
+        showGraticule = false;
+        stopParticles();
+        vectorContext.clearRect(0, 0, window.innerWidth, window.innerHeight);
+        if (map && map.getLayer("weather-layer")) {
+          map.setLayoutProperty("weather-layer", "visibility", "none");
+        }
+        if (map && map.getLayer("radar-layer")) {
+          map.setLayoutProperty("radar-layer", "visibility", "none");
+        }
+        updateSatelliteClouds();
+        updateStationMarkers();
+        updateIsobars();
+        updateMapPresentation();
+        requestVectorRender();
+        closeReadout();
+      }
+
       function setLayer(nextLayer) {
-        if (!LAYER_INFO[nextLayer]) return;
+        if (nextLayer !== "none" && !LAYER_INFO[nextLayer]) return;
         if (currentData && !hasLayerData(nextLayer)) {
           toast(unavailableLayerMessage(nextLayer));
           return;
         }
 
         activeLayer = nextLayer;
+        document.body.classList.toggle("map-only-layer", nextLayer === "none");
+
+        if (nextLayer === "none") {
+          clearMeteorologicalLayers();
+          updateLayerUi();
+          updateLegend();
+          refreshSelectedPoint();
+          toast("Solo carta: tutti i campi e le analisi sono spenti");
+          closeDrawerOnMobile();
+          return;
+        }
+
+        if (map && map.getLayer("weather-layer")) {
+          map.setLayoutProperty("weather-layer", "visibility", "visible");
+        }
 
         if (nextLayer === "wind") {
           if (!showParticles && !prefersReducedMotion) showParticles = true;
@@ -4551,25 +4676,28 @@
           if (showIsohypses) {
             toast("Isoipse di geopotenziale a 500 hPa · passo 4 dam");
           }
-        } else if (name === "radar") {
+        } else if (name === "observations") {
           if (!map || !map.getLayer("radar-layer")) {
             toast("Radar in tempo reale non disponibile al momento");
             return;
           }
-          showRadar = !showRadar;
+          const next = !(showRadar && showSatelliteClouds);
+          showRadar = next;
+          showSatelliteClouds = next;
           map.setLayoutProperty(
             "radar-layer", "visibility", showRadar ? "visible" : "none"
           );
+          updateSatelliteClouds();
           if (showRadar) {
-            const latest = radarFrames.length
-              ? radarFrames[radarFrames.length - 1] : null;
+            const slot = cloudSlot();
+            const latest = syncRadarToSatellite(slot);
             const when = latest
               ? new Date(latest.time * 1000).toLocaleTimeString(
                   "it-IT", { hour: "2-digit", minute: "2-digit" }
                 )
               : "";
             toast(
-              "Radar precipitazioni in tempo reale · RainViewer"
+              "Osservazione combinata · radar RainViewer + nubi MTG"
               + (when ? " · agg. " + when : "")
             );
           }
@@ -4640,9 +4768,6 @@
           showSatellite = !showSatellite;
           updateSatelliteBase();
           updateReliefShading();
-        } else if (name === "satclouds") {
-          showSatelliteClouds = !showSatelliteClouds;
-          updateSatelliteClouds();
         } else if (name === "threed") {
           show3D = !show3D;
           updateTerrain3D();
@@ -4750,6 +4875,13 @@
 
       function renderWeather() {
         if (!mapLoaded || !currentData || !map.getSource("weather")) return;
+
+        if (activeLayer === "none") {
+          if (map.getLayer("weather-layer")) {
+            map.setLayoutProperty("weather-layer", "visibility", "none");
+          }
+          return;
+        }
 
         const meta = currentData.meta;
         const info = activeLayerInfo(activeLayer);
@@ -6769,6 +6901,10 @@
       }
 
       function showPoint(lng, lat, title) {
+        if (activeLayer === "none") {
+          toast("Solo carta attivo: seleziona un campo per leggere il punto");
+          return;
+        }
         const point = pointFromCoordinates(lng, lat);
         if (!point) {
           toast("Punto fuori dal dominio disponibile del modello");
@@ -7170,8 +7306,8 @@
       function toggleCleanMode() {
         const active = document.body.classList.toggle("clean-mode");
         ui.cleanButton.setAttribute("aria-pressed", active ? "true" : "false");
-        ui.cleanButton.setAttribute("aria-label", active ? "Mostra interfaccia" : "Attiva solo mappa");
-        ui.cleanButton.querySelector("span").textContent = active ? "Mostra UI" : "Solo mappa";
+        ui.cleanButton.setAttribute("aria-label", active ? "Mostra interfaccia" : "Attiva schermo intero");
+        ui.cleanButton.querySelector("span").textContent = active ? "Mostra UI" : "Schermo intero";
         if (active) setBulletin(false);
         closeDrawerOnMobile();
       }
@@ -7218,6 +7354,10 @@
             type: "raster",
             tiles: [radarHost + latest.path + "/256/{z}/{x}/{y}/4/1_1.png"],
             tileSize: 256,
+            // RainViewer pubblica tessere native soltanto fino a z=7.
+            // MapLibre oltre quel livello ingrandisce la z=7, senza chiedere
+            // URL non supportati e senza limitare lo zoom della carta.
+            maxzoom: 7,
             // Confine the radar tiles to the ICON-2I domain: [W, S, E, N].
             bounds: [3.0, 33.7, 22.0, 48.9],
             attribution: "Radar © RainViewer"

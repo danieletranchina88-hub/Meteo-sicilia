@@ -6,6 +6,7 @@ import json
 import os
 import sys
 import tempfile
+from pathlib import Path
 
 import numpy as np
 
@@ -33,7 +34,10 @@ for hour in (0, 1, 2):
             "rainStep": np.full_like(yy, hour * 0.25),
             "windU10": np.full_like(yy, 3.0),
             "windV10": np.full_like(yy, 4.0),
+            "windGust10": np.full_like(yy, 8.0),
             "convectionProbability": np.full_like(yy, 20.0 + hour),
+            "stormConfidence": np.full_like(yy, 75.0),
+            "stormContradiction": np.full_like(yy, 12.0),
         },
     )
 
@@ -54,7 +58,26 @@ with tempfile.TemporaryDirectory() as temporary:
         assert all(len(values) == point_count for values in field["values"])
     assert tile["fields"]["rainStep"]["values"][2][0] == 0.5
     assert tile["fields"]["windU10"]["unit"] == "m/s"
+    assert tile["fields"]["stormConfidence"]["unit"] == "%"
+    assert tile["fields"]["convectionProbability"]["label"] == "Algoritmo temporali"
+    tile_meta = manifest["tiles"][0]
+    assert (
+        min(tile["grid"]["latitudes"]) < tile_meta["south"]
+        or max(tile["grid"]["latitudes"]) > tile_meta["north"]
+        or min(tile["grid"]["longitudes"]) < tile_meta["west"]
+        or max(tile["grid"]["longitudes"]) > tile_meta["east"]
+    ), "i tile non si sovrappongono: l'interpolazione fallisce ai bordi"
     assert "temperature850" not in manifest["fields"]
     assert "temperature925" not in manifest["fields"]
 
 print("Meteogram archive tests passed")
+
+# Bollettino, file del passo e meteogrammi devono ricevere la probabilità
+# nativa dello stesso algoritmo pubblicato sulla mappa, non il vecchio indice.
+pipeline_source = (Path(__file__).resolve().parents[1] / "process_data.py").read_text(
+    encoding="utf-8"
+)
+assert "calculate_convection_probability(" not in pipeline_source
+assert "include_native=True" in pipeline_source
+assert '"convectionProbability": convection_prob' in pipeline_source
+assert '"stormConfidence": storm_native.get("confidence")' in pipeline_source

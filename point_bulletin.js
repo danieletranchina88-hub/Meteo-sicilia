@@ -9,7 +9,8 @@
     "temperature2m", "feelsLike", "rainStep", "pressureMsl",
     "relativeHumidity2m", "cloudCover", "windU10", "windV10",
     "convectionProbability", "capeMl", "cinMl", "visibility",
-    "fogProbability", "freezingRainRisk", "foehnIndex", "frontDistanceKm"
+    "stormConfidence", "fogProbability", "freezingRainRisk", "foehnIndex",
+    "frontDistanceKm"
   ];
 
   function finite(value) {
@@ -127,6 +128,27 @@
     return best;
   }
 
+  function episodes(input, predicate) {
+    const result = [];
+    let current = null;
+    (input || []).forEach((value, index) => {
+      const active = finite(value) && predicate(Number(value));
+      if (active) {
+        if (!current) current = { start: index, end: index, total: 0, peak: null };
+        current.end = index;
+        current.total += Number(value);
+        if (!current.peak || Number(value) > current.peak.value) {
+          current.peak = { value: Number(value), index: index };
+        }
+      } else if (current) {
+        result.push(current);
+        current = null;
+      }
+    });
+    if (current) result.push(current);
+    return result;
+  }
+
   function windowExtreme(input, center, radius, mode) {
     if (!Number.isInteger(center) || center < 0) return null;
     let selected = null;
@@ -194,6 +216,9 @@
 
   function buildHeadline(data) {
     if (data.convectionMax && data.convectionMax.value >= 70) {
+      if (data.stormConfidenceAtPeak !== null && data.stormConfidenceAtPeak < 45) {
+        return "Il modello propone una finestra temporalesca importante, ma con conferme fisiche incomplete: è un segnale da verificare nei prossimi aggiornamenti.";
+      }
       return "Fase potenzialmente temporalesca, con una finestra di innesco marcata nel corso delle prossime 72 ore.";
     }
     if (data.rainTotal >= 20) {
@@ -218,8 +243,8 @@
     if (!capeMax || !finite(capeMax.value)) return null;
     var cape = capeMax.value;
     var cin = cinNear && finite(cinNear.value) ? cinNear.value : 0;
-    if (cape >= 2500) return { level: "estrema", desc: "energia convettiva disponibile molto elevata (ML-CAPE > 2500 J/kg), compatibile con supercelle e grandine di grandi dimensioni" };
-    if (cape >= 1500) return { level: "forte", desc: "energia convettiva significativa (ML-CAPE " + number(cape, 0) + " J/kg), sufficiente a sostenere celle temporalesche organizzate" };
+    if (cape >= 2500) return { level: "estrema", desc: "energia convettiva disponibile molto elevata (ML-CAPE > 2500 J/kg), capace di sostenere convezione intensa se innesco e organizzazione sono presenti" };
+    if (cape >= 1500) return { level: "forte", desc: "energia convettiva significativa (ML-CAPE " + number(cape, 0) + " J/kg), sufficiente a sostenere celle intense quando gli altri ingredienti coincidono" };
     if (cape >= 800) return { level: "moderata", desc: "instabilità latente moderata (ML-CAPE " + number(cape, 0) + " J/kg), che in presenza di forzanti dinamiche può produrre temporali localmente intensi" };
     if (cape >= 300) return { level: "debole", desc: "modesta energia convettiva (ML-CAPE " + number(cape, 0) + " J/kg), con innesco probabile solo in presenza di convergenza marcata al suolo" };
     return { level: "trascurabile", desc: "energia convettiva trascurabile (ML-CAPE < 300 J/kg), situazione non favorevole a temporali" };
@@ -248,7 +273,7 @@
     if (data.convectionMax && finite(data.convectionMax.value) && data.convectionMax.value >= 40) {
       var prob = data.convectionMax.value;
       if (prob >= 70) {
-        lines.push("La combinazione di CAPE, CIN ridotto, convergenza al suolo e prossimità frontale configura uno scenario ad alto rischio temporalesco: probabilità composita al " + number(prob, 0) + "%.");
+        lines.push("La diagnostica integrata, che verifica anche LPI, updraft, umidità, innesco e persistenza temporale, raggiunge il " + number(prob, 0) + "%.");
       } else {
         lines.push("L'algoritmo composito stima una probabilità temporalesca del " + number(prob, 0) + "%, indicativa di un rischio reale ma non generalizzato.");
       }
@@ -291,7 +316,7 @@
     var lines = [];
 
     if (dist <= 30) {
-      lines.push("La struttura frontale transita in prossimità diretta del punto (distanza minima ~" + number(dist, 0) + " km). Attendersi un cambio di massa d'aria con rotazione del vento, variazione termica e possibili precipitazioni organizzate nella finestra di transito.");
+      lines.push("La struttura frontale è prevista in prossimità diretta del punto (distanza minima ~" + number(dist, 0) + " km). Il passaggio può accompagnarsi a rotazione del vento, variazione termica e precipitazioni organizzate.");
     } else if (dist <= 80) {
       lines.push("Una struttura frontale si porta a circa " + number(dist, 0) + " km dal punto: il suo influsso è probabile, con nubi in aumento e possibili fenomeni associati al passaggio.");
     } else {
@@ -320,6 +345,11 @@
     const freezing = values(series, "freezingRainRisk");
     const foehn = values(series, "foehnIndex");
     const frontDistance = values(series, "frontDistanceKm");
+    const stormConfidence = values(series, "stormConfidence");
+    const stormContradiction = values(series, "stormContradiction");
+    const gust = values(series, "windGust10").map(value =>
+      finite(value) ? Number(value) * 3.6 : null
+    );
 
     const data = {
       temperatureMin: extreme(temperature, "min"),
@@ -329,10 +359,14 @@
       rainMax: extreme(rain, "max"),
       rainStart: firstIndex(rain, value => value >= 0.1),
       rainEnd: lastIndex(rain, value => value >= 0.1),
+      rainEpisodes: episodes(rain, value => value >= 0.1),
       wetHours: validValues(rain).filter(value => value >= 0.1).length,
       convectionMax: extreme(convection, "max"),
+      stormEpisodes: episodes(convection, value => value >= 40),
+      stormHighDuration: consecutiveMaximum(convection, value => value >= 70),
       capeMax: extreme(cape, "max"),
       windMax: extreme(wind, "max"),
+      gustMax: extreme(gust, "max"),
       pressureMin: extreme(pressure, "min"),
       fogMax: extreme(fog, "max"),
       visibilityMin: extreme(visibility, "min"),
@@ -346,14 +380,27 @@
       ? windowExtreme(cape, data.convectionMax.index, 3, "max") : null;
     data.cinNearConvection = data.convectionMax
       ? windowExtreme(cin, data.convectionMax.index, 3, "max") : null;
+    data.stormConfidenceAtPeak = data.convectionMax && finite(
+      stormConfidence[data.convectionMax.index]
+    ) ? Number(stormConfidence[data.convectionMax.index]) : null;
+    data.stormContradictionAtPeak = data.convectionMax && finite(
+      stormContradiction[data.convectionMax.index]
+    ) ? Number(stormContradiction[data.convectionMax.index]) : null;
 
     const paragraphs = [];
-    paragraphs.push(buildHeadline(data));
+    const sections = [];
+    function addSection(title, text) {
+      if (!text) return;
+      sections.push({ title: title, text: text });
+      paragraphs.push(title + " — " + text);
+    }
+    const headline = buildHeadline(data);
+    addSection("Sintesi", headline);
     const evolution = dailyEvolution(series, {
       temperature, rain, convection, wind, cloud
     });
     if (evolution.length) {
-      paragraphs.push("Evoluzione giorno per giorno — " + evolution.join(" "));
+      addSection("Evoluzione giorno per giorno", evolution.join(" "));
     }
 
     if (data.rainTotal >= 0.1 && data.rainStart >= 0) {
@@ -367,9 +414,15 @@
         rainText += `, con gli ultimi segnali entro ${timeAt(series, data.rainEnd)}`;
       }
       rainText += ".";
-      paragraphs.push(rainText);
+      const mainEpisode = data.rainEpisodes.reduce((best, episode) =>
+        !best || episode.total > best.total ? episode : best, null
+      );
+      if (mainEpisode && data.rainEpisodes.length > 1) {
+        rainText += ` I periodi piovosi distinti sono ${data.rainEpisodes.length}; il principale va da ${timeAt(series, mainEpisode.start)} a ${timeAt(series, mainEpisode.end)}.`;
+      }
+      addSection("Precipitazioni", rainText);
     } else {
-      paragraphs.push("Non emergono accumuli di pioggia significativi nel punto considerato; eventuali fenomeni molto locali possono comunque sfuggire alla griglia del modello.");
+      addSection("Precipitazioni", "Non emergono accumuli di pioggia significativi nel punto considerato; eventuali fenomeni molto locali possono comunque sfuggire alla griglia del modello.");
     }
 
     if (data.convectionMax) {
@@ -384,29 +437,39 @@
           }
           convectionText += ".";
         }
+        if (data.stormConfidenceAtPeak !== null) {
+          convectionText += ` La confidenza diagnostica in quell’ora è del ${number(data.stormConfidenceAtPeak, 0)}%`;
+          if (data.stormContradictionAtPeak !== null && data.stormContradictionAtPeak >= 30) {
+            convectionText += `, con contraddizioni interne al ${number(data.stormContradictionAtPeak, 0)}%`;
+          }
+          convectionText += ".";
+        }
+        if (data.stormHighDuration >= 2) {
+          convectionText += ` La soglia del 70% persiste per ${data.stormHighDuration} ore consecutive.`;
+        }
         convectionText +=
           " Il segnale indica un innesco credibile, ma non garantisce che una cella colpisca esattamente il punto.";
-        paragraphs.push(convectionText);
+        addSection("Temporali", convectionText);
       } else if (data.convectionMax.value >= 40) {
-        paragraphs.push(
+        addSection("Temporali",
           `È presente una finestra di instabilità moderata attorno a ${timeAt(series, data.convectionMax.index)}, con probabilità temporalesca massima del ${number(data.convectionMax.value, 0)}%. ` +
           "Il rischio riguarda soprattutto rovesci o temporali locali, non fenomeni necessariamente diffusi."
         );
       } else {
-        paragraphs.push(
+        addSection("Temporali",
           `Il segnale temporalesco rimane basso: il massimo puntuale è del ${number(data.convectionMax.value, 0)}%, previsto attorno a ${timeAt(series, data.convectionMax.index)}.`
         );
       }
     }
 
     const thermoAnalysis = buildThermodynamicAnalysis(data);
-    if (thermoAnalysis) paragraphs.push(thermoAnalysis);
+    if (thermoAnalysis) addSection("Profilo convettivo", thermoAnalysis.replace(/^Analisi termodinamica:\s*/, ""));
 
     const pressureAnalysis = buildPressureAnalysis(data, pressure);
-    if (pressureAnalysis) paragraphs.push(pressureAnalysis);
+    if (pressureAnalysis) addSection("Pressione", pressureAnalysis.replace(/^Campo barico:\s*/, ""));
 
     const frontAnalysis = buildFrontAnalysis(data, series);
-    if (frontAnalysis) paragraphs.push(frontAnalysis);
+    if (frontAnalysis) addSection("Fronti", frontAnalysis);
 
     if (data.temperatureMin && data.temperatureMax) {
       let temperatureText =
@@ -418,7 +481,7 @@
       if (data.humidityMean !== null) {
         temperatureText += ` L’umidità media si manterrà intorno al ${number(data.humidityMean, 0)}%.`;
       }
-      paragraphs.push(temperatureText);
+      addSection("Temperature", temperatureText);
     }
 
     if (data.windMax) {
@@ -439,7 +502,10 @@
       if (data.pressureMin) {
         windText += ` Il minimo barico puntuale è di ${number(data.pressureMin.value, 0)} hPa verso ${timeAt(series, data.pressureMin.index)}.`;
       }
-      paragraphs.push(windText);
+      if (data.gustMax && data.gustMax.value > data.windMax.value + 8) {
+        windText += ` Le raffiche possono raggiungere circa ${number(data.gustMax.value, 0)} km/h verso ${timeAt(series, data.gustMax.index)}.`;
+      }
+      addSection("Vento", windText);
     }
 
     const visibilityRisk = data.visibilityMin && data.visibilityMin.value < 5000;
@@ -452,7 +518,7 @@
       if (data.fogMax && data.fogMax.value >= 35) {
         text += `. La probabilità diagnostica di nebbia raggiunge il ${number(data.fogMax.value, 0)}%`;
       }
-      paragraphs.push(text + ".");
+      addSection("Visibilità", text + ".");
     }
 
     const hazards = [];
@@ -463,7 +529,7 @@
       hazards.push("segnale di foehn");
     }
     if (hazards.length) {
-      paragraphs.push("Tra i rischi diagnostici compare " + hazards.join(" e ") + "; il segnale va verificato con gli aggiornamenti successivi.");
+      addSection("Altri rischi", "Compare " + hazards.join(" e ") + "; il segnale va verificato con gli aggiornamenti successivi.");
     }
 
     const available = REQUIRED_FIELDS.filter(name =>
@@ -472,11 +538,12 @@
     const completeness = available.length / REQUIRED_FIELDS.length;
     return {
       schemaVersion: 1,
-      method: "icon2i-point-timeseries-nlg-v1",
+      method: "icon2i-point-timeseries-nlg-v2",
       title: "Bollettino per " + location,
       validity: rangeLabel(series),
-      headline: paragraphs[0],
+      headline: headline,
       paragraphs,
+      sections,
       confidence: completeness >= 0.9 ? "alta" : completeness >= 0.65 ? "media" : "limitata",
       completeness: Math.round(completeness * 100),
       availableFields: available,

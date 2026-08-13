@@ -5,7 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
     <meta name="theme-color" content="#071b2b" />
     <meta name="color-scheme" content="light" />
-    <title>Radar precipitazioni · Meteo Sicilia</title>
+    <title>Radar + satellite · Meteo Sicilia</title>
     <link rel="stylesheet" href="https://unpkg.com/maplibre-gl@3.6.2/dist/maplibre-gl.css" />
     <script src="https://unpkg.com/maplibre-gl@3.6.2/dist/maplibre-gl.js"></script>
     <style>
@@ -63,8 +63,12 @@
       .note {
         position: fixed; z-index: 10; left: 14px;
         bottom: calc(72px + env(safe-area-inset-bottom, 0px));
+        max-width: min(620px, calc(100vw - 28px));
+        padding: 7px 9px; border-radius: 6px;
+        background: rgba(7, 27, 43, 0.78);
         font-size: 9px; color: #a9c7d8; text-shadow: 0 1px 3px rgba(0,0,0,.5);
       }
+      .note b { color: #e8f8ff; }
       .status {
         position: fixed; z-index: 10; top: 50%; left: 50%; transform: translate(-50%,-50%);
         padding: 12px 18px; border-radius: 8px; background: rgba(7,27,43,.9);
@@ -74,7 +78,7 @@
     </style>
   </head>
   <body>
-    <div id="map" aria-label="Radar precipitazioni"></div>
+    <div id="map" aria-label="Radar precipitazioni e copertura nuvolosa satellitare"></div>
 
     <header class="bar">
       <div class="brand">
@@ -82,8 +86,8 @@
           <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="#fff" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M4 14a8 8 0 0 1 16 0"></path><path d="M8 14a4 4 0 0 1 8 0"></path><path d="M12 14v6"></path><path d="M9 21l3-2 3 2"></path></svg>
         </div>
         <div>
-          <div class="eyebrow">Osservato · tempo reale</div>
-          <h1>Radar precipitazioni</h1>
+          <div class="eyebrow">Osservazioni sincronizzate · tempo reale</div>
+          <h1>Radar + satellite</h1>
         </div>
       </div>
       <a class="back" href="index.html">
@@ -92,7 +96,7 @@
       </a>
     </header>
 
-    <div class="note">Radar © RainViewer · confinato al dominio ICON-2I (3–22°E, 33.7–48.9°N)</div>
+    <div class="note"><b>Fusione osservativa</b> · precipitazioni RainViewer sopra le nubi MTG/FCI EUMETSAT · <span id="satellite-time">satellite in caricamento</span></div>
 
     <div class="panel">
       <button id="play" class="play" type="button" aria-label="Avvia/ferma animazione">
@@ -111,12 +115,21 @@
       const DOMAIN = [3.0, 33.7, 22.0, 48.9]; // [W, S, E, N]
       const RADAR_COLOR = 4;   // schema colore RainViewer
       const RADAR_OPTS = "1_1"; // smooth + neve
+      const RADAR_MAX_NATIVE_ZOOM = 7;
+      const CLOUD_WMS = "https://view.eumetsat.int/geoserver/wms";
+      const CLOUD_LAYER = "mtg_fd:ir105_hrfi";
+      const CLOUD_SLOT_MS = 10 * 60 * 1000;
       let map;
       let frames = [];         // [{time, path}]
       let host = "";
       let index = 0;
       let playing = true;
       let timer = null;
+      let cloudCanvas = null;
+      let cloudObjectUrl = "";
+      let cloudToken = 0;
+      let cloudReloadTimer = 0;
+      let cloudSignature = "";
 
       function clamp(v, a, b) { return Math.max(a, Math.min(b, v)); }
 
@@ -129,6 +142,153 @@
 
       function tileUrl(frame) {
         return host + frame.path + "/256/{z}/{x}/{y}/" + RADAR_COLOR + "/" + RADAR_OPTS + ".png";
+      }
+
+      function mercatorX(longitude) { return longitude * 20037508.34 / 180; }
+      function mercatorY(latitude) {
+        return Math.log(Math.tan((90 + latitude) * Math.PI / 360))
+          / (Math.PI / 180) * 20037508.34 / 180;
+      }
+
+      function satelliteSlot(frame) {
+        const sourceTime = frame && frame.time ? frame.time * 1000 : Date.now() - 22 * 60 * 1000;
+        const value = Math.floor(sourceTime / CLOUD_SLOT_MS) * CLOUD_SLOT_MS;
+        return {
+          value: value,
+          date: new Date(value),
+          iso: new Date(value).toISOString().replace(/\.\d{3}Z$/, ".000Z")
+        };
+      }
+
+      function cloudBox(padding) {
+        const bounds = map && map.getBounds ? map.getBounds() : null;
+        if (!bounds) return { west: DOMAIN[0], south: DOMAIN[1], east: DOMAIN[2], north: DOMAIN[3] };
+        const spanX = bounds.getEast() - bounds.getWest();
+        const spanY = bounds.getNorth() - bounds.getSouth();
+        let box = {
+          west: Math.max(DOMAIN[0], bounds.getWest() - spanX * padding),
+          south: Math.max(DOMAIN[1], bounds.getSouth() - spanY * padding),
+          east: Math.min(DOMAIN[2], bounds.getEast() + spanX * padding),
+          north: Math.min(DOMAIN[3], bounds.getNorth() + spanY * padding)
+        };
+        if (!(box.east > box.west) || !(box.north > box.south)) {
+          box = { west: DOMAIN[0], south: DOMAIN[1], east: DOMAIN[2], north: DOMAIN[3] };
+        }
+        return box;
+      }
+
+      function cloudSize(box) {
+        const spanX = mercatorX(box.east) - mercatorX(box.west);
+        const spanY = mercatorY(box.north) - mercatorY(box.south);
+        const nativeWidth = Math.ceil(spanX / 1000);
+        const limit = window.innerWidth < 900 ? 1100 : 1700;
+        let width = Math.max(420, Math.min(nativeWidth, limit));
+        let height = Math.max(320, Math.round(width * spanY / Math.max(spanX, 1)));
+        if (height > limit) {
+          width = Math.max(320, Math.round(width * limit / height));
+          height = limit;
+        }
+        return { width: width, height: height };
+      }
+
+      function cloudUrl(box, size, slot) {
+        return CLOUD_WMS
+          + "?service=WMS&version=1.1.1&request=GetMap&styles="
+          + "&layers=" + encodeURIComponent(CLOUD_LAYER)
+          + "&srs=EPSG:3857&format=image/png&transparent=true"
+          + "&bbox=" + [
+              mercatorX(box.west), mercatorY(box.south),
+              mercatorX(box.east), mercatorY(box.north)
+            ].map(function (value) { return value.toFixed(1); }).join(",")
+          + "&width=" + size.width + "&height=" + size.height
+          + "&time=" + slot.iso;
+      }
+
+      function publishClouds(image, box, size, slot, token) {
+        if (token !== cloudToken || !map || !map.getSource("satellite-clouds")) return;
+        if (!cloudCanvas) cloudCanvas = document.createElement("canvas");
+        cloudCanvas.width = size.width;
+        cloudCanvas.height = size.height;
+        const context = cloudCanvas.getContext("2d", { willReadFrequently: true });
+        context.clearRect(0, 0, size.width, size.height);
+        context.drawImage(image, 0, 0, size.width, size.height);
+        const frame = context.getImageData(0, 0, size.width, size.height);
+        const pixels = frame.data;
+        for (let offset = 0; offset < pixels.length; offset += 4) {
+          const luminance = 0.299 * pixels[offset] + 0.587 * pixels[offset + 1] + 0.114 * pixels[offset + 2];
+          let level = clamp((luminance - 38) / (105 - 38), 0, 1);
+          let alpha = level * level * (3 - 2 * level);
+          const cold = clamp((luminance - 38) / (150 - 38), 0, 1);
+          const tone = Math.round(185 + 70 * cold);
+          pixels[offset] = tone;
+          pixels[offset + 1] = Math.min(255, tone + 9);
+          pixels[offset + 2] = 255;
+          pixels[offset + 3] = Math.round(alpha * 205);
+        }
+        context.putImageData(frame, 0, 0);
+        const coordinates = [
+          [box.west, box.north], [box.east, box.north],
+          [box.east, box.south], [box.west, box.south]
+        ];
+        const update = function (url, objectUrl) {
+          if (token !== cloudToken) {
+            if (objectUrl) URL.revokeObjectURL(url);
+            return;
+          }
+          map.getSource("satellite-clouds").updateImage({ url: url, coordinates: coordinates });
+          map.setLayoutProperty("satellite-clouds-layer", "visibility", "visible");
+          if (cloudObjectUrl) {
+            const previous = cloudObjectUrl;
+            // Lascia a MapLibre il tempo di acquisire la nuova immagine prima
+            // di liberare il blob precedente, evitando lampi trasparenti.
+            setTimeout(function () { URL.revokeObjectURL(previous); }, 1600);
+          }
+          cloudObjectUrl = objectUrl ? url : "";
+          document.getElementById("satellite-time").textContent =
+            "nubi delle " + slot.date.toLocaleTimeString("it-IT", { hour:"2-digit", minute:"2-digit" });
+        };
+        if (typeof cloudCanvas.toBlob === "function" && typeof URL.createObjectURL === "function") {
+          cloudCanvas.toBlob(function (blob) {
+            if (blob) update(URL.createObjectURL(blob), true);
+          }, "image/png");
+        } else {
+          update(cloudCanvas.toDataURL("image/png"), false);
+        }
+      }
+
+      function loadClouds(frame, force) {
+        if (!map || !map.getSource("satellite-clouds") || document.hidden) return;
+        const slot = satelliteSlot(frame);
+        const box = cloudBox(0.18);
+        const size = cloudSize(box);
+        const signature = [slot.value, box.west.toFixed(2), box.south.toFixed(2), box.east.toFixed(2), box.north.toFixed(2), size.width].join("|");
+        if (!force && signature === cloudSignature) return;
+        cloudSignature = signature;
+        const token = ++cloudToken;
+        const image = new Image();
+        image.crossOrigin = "anonymous";
+        image.onload = function () {
+          try { publishClouds(image, box, size, slot, token); }
+          catch (error) {
+            if (token === cloudToken) cloudSignature = "";
+            document.getElementById("satellite-time").textContent = "satellite non elaborabile";
+          }
+        };
+        image.onerror = function () {
+          if (token === cloudToken) {
+            cloudSignature = "";
+            document.getElementById("satellite-time").textContent = "satellite non disponibile per questo frame";
+          }
+        };
+        image.src = cloudUrl(box, size, slot);
+      }
+
+      function scheduleCloudReload() {
+        if (cloudReloadTimer) clearTimeout(cloudReloadTimer);
+        cloudReloadTimer = setTimeout(function () {
+          cloudReloadTimer = 0;
+          loadClouds(frames[index], true);
+        }, 500);
       }
 
       function showStatus(text) {
@@ -153,6 +313,7 @@
         slider.value = String(index);
         const when = new Date(frame.time * 1000).toLocaleTimeString("it-IT", { hour: "2-digit", minute: "2-digit" });
         document.getElementById("frame-time").textContent = when;
+        loadClouds(frame, false);
       }
 
       function addRadar(frame) {
@@ -160,6 +321,9 @@
           type: "raster",
           tiles: [tileUrl(frame)],
           tileSize: 256,
+          // RainViewer serve z=0..7. Oltre, MapLibre effettua overzoom della
+          // z=7: la carta continua a ingrandirsi senza URL «zoom unsupported».
+          maxzoom: RADAR_MAX_NATIVE_ZOOM,
           bounds: DOMAIN,
           attribution: "Radar © RainViewer"
         });
@@ -174,9 +338,10 @@
       function step() {
         if (!playing) return;
         setFrame(index + 1);
-        // Pausa piu' lunga sull'ultimo frame (piu' recente).
+        // Il satellite richiede qualche istante in piu' del singolo tile radar:
+        // una cadenza leggibile mantiene davvero fusi i due fotogrammi.
         const last = index === frames.length - 1;
-        timer = setTimeout(step, last ? 1400 : 480);
+        timer = setTimeout(step, last ? 1800 : 850);
       }
 
       function setPlaying(next) {
@@ -194,8 +359,9 @@
             .then(function (r) { return r.json(); });
           host = data.host || "";
           const past = (data.radar && data.radar.past) ? data.radar.past : [];
-          const nowcast = (data.radar && data.radar.nowcast) ? data.radar.nowcast : [];
-          frames = past.concat(nowcast);
+          // La vista è osservativa: non mescola i frame previsti «nowcast»
+          // con la copertura nuvolosa realmente misurata dal satellite.
+          frames = past;
           if (!host || !frames.length) { showStatus("Radar non disponibile al momento."); return; }
           addRadar(frames[frames.length - 1]);
           const slider = document.getElementById("frame-slider");
@@ -216,7 +382,7 @@
           center: [12.7, 41.9],
           zoom: initialZoom(),
           minZoom: 3.2,
-          maxZoom: 11,
+          maxZoom: 16,
           dragRotate: false,
           pitchWithRotate: false,
           attributionControl: true,
@@ -242,6 +408,18 @@
         });
         map.addControl(new maplibregl.NavigationControl({ visualizePitch: false }), "bottom-right");
         map.on("load", function () {
+          map.addSource("satellite-clouds", {
+            type: "image",
+            url: "data:image/gif;base64,R0lGODlhAQABAAD/ACwAAAAAAQABAAACADs=",
+            coordinates: [[DOMAIN[0], DOMAIN[3]], [DOMAIN[2], DOMAIN[3]], [DOMAIN[2], DOMAIN[1]], [DOMAIN[0], DOMAIN[1]]]
+          });
+          map.addLayer({
+            id: "satellite-clouds-layer",
+            type: "raster",
+            source: "satellite-clouds",
+            layout: { visibility: "none" },
+            paint: { "raster-opacity": 0.76, "raster-fade-duration": 0 }
+          });
           // Contorno del dominio ICON-2I.
           map.addSource("domain", {
             type: "geojson",
@@ -262,6 +440,7 @@
           });
           loadFrames();
         });
+        map.on("moveend", scheduleCloudReload);
       }
 
       document.getElementById("play").addEventListener("click", function () { setPlaying(!playing); });

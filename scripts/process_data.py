@@ -35,7 +35,6 @@ from meteo_analysis.hazards.storms import (
     updraft_from_omega,
 )
 from meteo_analysis.hazards.convection import (
-    calculate_convection_probability,
     front_distance_km,
     horizontal_convergence,
     normalize_cin,
@@ -91,7 +90,7 @@ LON_MIN, LON_MAX = 3.0, 22.0
 # ============================================================
 MAX_PIXELS = 600_000
 FEELS_LIKE_METHOD = "heat-index-wind-chill-v1"
-CONVECTION_METHOD = "icon2i-mlcape-cin-convergence-front-v3"
+CONVECTION_METHOD = "icon2i-physical-evidence-fusion-v2"
 MAX_CONVECTIVE_HIGH_AREA_PCT = 15.0
 MAX_FIXED_80_AREA_PCT = 5.0
 
@@ -473,6 +472,7 @@ def build_storm_payload(
     surface_rh=None,
     mid_level_rh=None,
     nearest_front_km=None,
+    include_native=False,
 ):
     """Campi della sezione temporali per una scadenza, o None se mancano.
 
@@ -721,6 +721,17 @@ def build_storm_payload(
         ),
         "summary": summary,
     }
+    if include_native:
+        # Questi campi restano in memoria soltanto durante la pipeline. Servono
+        # a bollettino e meteogrammi sulla griglia nativa e vengono rimossi
+        # prima di serializzare il file pubblico dei temporali.
+        payload["_native"] = {
+            "probability": probability,
+            "confidence": storm_evidence["confidence"] * 100.0,
+            "contradiction": storm_evidence["contradiction"] * 100.0,
+            "direct": storm_evidence["direct"] * 100.0,
+            "environment": storm_evidence["environment"] * 100.0,
+        }
     return payload
 
 
@@ -1486,6 +1497,7 @@ def process_data():
                 omega_700 = None
                 deep_layer_shear = None
                 mid_level_rh = None
+                wind_gust_10m = None
                 shear_source = None
                 if icon_hazard_fields is not None:
                     try:
@@ -1554,27 +1566,12 @@ def process_data():
                                     t700_field, q700_field, 700.0
                                 )
                             )
-                        convection_prob = np.asarray(
-                            calculate_convection_probability(
-                                cape_ml,
-                                cin_ml,
-                                convergence_10m,
-                                nearest_front_km,
-                                omega_700=omega_700,
-                                surface_rh=rh_val,
-                                deep_layer_shear=deep_layer_shear,
-                                mid_level_rh=mid_level_rh,
-                            ),
-                            dtype=float,
-                        ) * 100.0
-                        convection_summary = summarize_convection(
-                            convection_prob, mask=np.isfinite(temp_c)
+                        wind_gust_10m = icon_hazard_fields.field(
+                            "vmax_10m", step_hours, lat, lon
                         )
                         convection_message = (
-                            "ML-CAPE/CIN ICON-2I, convergenza 10 m smussata "
-                            "a 10 km, omega 700 hPa, shear di strato profondo "
-                            f"({shear_source or 'assente'}), umidità a 700 hPa "
-                            "e distanza dai fronti OFA."
+                            "Ingredienti fisici ICON-2I acquisiti; la probabilità "
+                            "finale viene calcolata dall'algoritmo temporali unico."
                         )
                     except Exception as convection_error:
                         convection_prob = None
@@ -1700,6 +1697,60 @@ def process_data():
                         f"{type(foehn_error).__name__}:{foehn_error}"
                     )
 
+                # Un solo algoritmo temporalesco alimenta mappa, bollettino e
+                # meteogrammi. Il payload pubblico resta ridotto; qui si conserva
+                # temporaneamente la probabilità nativa per le analisi puntuali.
+                storm_payload = None
+                storm_native = {}
+                storm_available = False
+                try:
+                    storm_payload = build_storm_payload(
+                        icon_hazard_fields,
+                        step_hours,
+                        lat,
+                        lon,
+                        cape_ml,
+                        deep_layer_shear,
+                        omega_700,
+                        temp_c,
+                        u_val,
+                        v_val,
+                        convergence_10m,
+                        cin_ml,
+                        rh_val,
+                        mid_level_rh,
+                        nearest_front_km,
+                        include_native=True,
+                    )
+                    if storm_payload is not None:
+                        storm_native = storm_payload.pop("_native", {})
+                        native_probability = storm_native.get("probability")
+                        if native_probability is not None:
+                            convection_prob = np.asarray(
+                                native_probability, dtype=float
+                            )
+                            convection_summary = summarize_convection(
+                                convection_prob, mask=np.isfinite(temp_c)
+                            )
+                            convection_message = (
+                                "Algoritmo temporali unico: LPI e updraft fusi con "
+                                "CAPE/CIN, umidità, innesco, fronti, shear e "
+                                "coerenza temporale."
+                            )
+                except Exception as storm_error:
+                    storm_payload = None
+                    storm_native = {}
+                    convection_prob = None
+                    convection_message = (
+                        "Algoritmo temporali non disponibile: "
+                        f"{type(storm_error).__name__}:{storm_error}"
+                    )
+                    print(
+                        f" storm-{step_hours}h:{storm_error}",
+                        end="",
+                        flush=True,
+                    )
+
                 previous = bulletin_history.get(step_hours - 3, {})
                 bulletin_inputs = build_bulletin_inputs(
                     valid_time=iso_date,
@@ -1818,30 +1869,10 @@ def process_data():
                 out_name = f"step_{step_hours}.json.gz"
                 write_json_gzip_atomic(f"{TEMP_DIR}/{out_name}", step_data)
 
-                # Sezione temporali: una dozzina di griglie in un file a
-                # parte, scaricato dal sito solo quando l'utente apre quella
-                # sezione. Un errore qui non deve toccare il resto della
-                # scadenza, che e' gia' stata scritta.
-                storm_available = False
-                try:
-                    storm_payload = build_storm_payload(
-                        icon_hazard_fields,
-                        step_hours,
-                        lat,
-                        lon,
-                        cape_ml,
-                        deep_layer_shear,
-                        omega_700,
-                        temp_c,
-                        u_val,
-                        v_val,
-                        convergence_10m,
-                        cin_ml,
-                        rh_val,
-                        mid_level_rh,
-                        nearest_front_km,
-                    )
-                    if storm_payload is not None:
+                # Sezione temporali: il payload è già stato calcolato prima del
+                # bollettino, affinché ogni prodotto usi lo stesso algoritmo.
+                if storm_payload is not None:
+                    try:
                         storm_payload["runTime"] = iso_z(run_dt)
                         storm_payload["validTime"] = iso_date
                         # Geometria della griglia ridotta: il punto
@@ -1858,12 +1889,12 @@ def process_data():
                             storm_payload,
                         )
                         storm_available = True
-                except Exception as storm_error:
-                    print(
-                        f" storm-{step_hours}h:{storm_error}",
-                        end="",
-                        flush=True,
-                    )
+                    except Exception as storm_write_error:
+                        print(
+                            f" storm-write-{step_hours}h:{storm_write_error}",
+                            end="",
+                            flush=True,
+                        )
 
                 # Campi a 850 hPa (theta-e, T, vento) per il layer di
                 # ispezione dei fronti: file separato, scaricato dal sito
@@ -1894,7 +1925,10 @@ def process_data():
                             "cloudCover": cloud,
                             "windU10": u_val,
                             "windV10": v_val,
+                            "windGust10": wind_gust_10m,
                             "convectionProbability": convection_prob,
+                            "stormConfidence": storm_native.get("confidence"),
+                            "stormContradiction": storm_native.get("contradiction"),
                             "capeMl": cape_ml,
                             "cinMl": normalize_cin(cin_ml) if cin_ml is not None else None,
                             "omega700": omega_700,
