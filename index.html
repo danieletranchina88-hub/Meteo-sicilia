@@ -1870,21 +1870,38 @@
               <button class="toggle-row" type="button" data-toggle="isohypses" aria-pressed="false">
                 <span><b>Isoipse 500 hPa</b><small>geopotenziale · passo 4 dam</small></span><span class="switch"></span>
               </button>
-              <button class="toggle-row" type="button" data-toggle="observations" aria-pressed="false">
-                <span><b>Radar + satellite</b><small id="satclouds-note">precipitazioni RainViewer e nubi MTG sincronizzate</small></span><span class="switch"></span>
+              <button class="toggle-row" type="button" data-toggle="satclouds" aria-pressed="false">
+                <span><b>Satellite MTG</b><small id="satclouds-note">immagini reali e diagnostiche EUMETSAT</small></span><span class="switch"></span>
               </button>
               <div id="satclouds-picker" class="level-picker" style="display: none">
-                <label for="satclouds-select">Satellite · formato
-                  <small>canale e risoluzione dello strumento</small>
+                <label for="satclouds-select">Prodotto satellitare
+                  <small>canali FCI e diagnostiche nel catalogo EUMETView</small>
                 </label>
                 <select id="satclouds-select" aria-label="Formato dell'immagine satellitare">
-                  <option value="ir105" selected>Infrarosso 10.5 µm · 1 km · giorno e notte</option>
-                  <option value="vis06">Visibile 0.6 µm · 500 m · solo di giorno</option>
-                  <option value="truecolour">Colori reali · 500 m · solo di giorno</option>
-                  <option value="geocolour">GeoColour · colori di giorno, infrarosso di notte</option>
-                  <option value="cloudtype">Tipo di nube · spessore, quota e fase</option>
+                  <optgroup label="Immagini ad alta risoluzione">
+                    <option value="geocolour" selected>GeoColour · reale di giorno, IR di notte</option>
+                    <option value="truecolour">Colori reali · solo di giorno</option>
+                    <option value="vis06">Visibile 0.6 µm · 500 m · solo di giorno</option>
+                    <option value="ir105">Infrarosso 10.5 µm · 1 km · giorno e notte</option>
+                  </optgroup>
+                  <optgroup label="Nubi e atmosfera">
+                    <option value="cloudphase">Fase delle nubi · acqua e ghiaccio · giorno</option>
+                    <option value="cloudtype">Tipo di nube · spessore e quota · giorno</option>
+                    <option value="fog">Nebbia e nubi basse · notte</option>
+                    <option value="dust">Polvere e cirri · giorno e notte</option>
+                    <option value="snow">Neve al suolo e nubi · giorno</option>
+                  </optgroup>
+                  <optgroup label="Fenomeni osservati">
+                    <option value="lightning">Fulmini LI · accumulo ogni 5 minuti</option>
+                    <option value="satprecip">Precipitazione da satellite e microonde</option>
+                    <option value="firetemp">Temperatura degli incendi</option>
+                    <option value="frp">Potenza radiativa degli incendi</option>
+                  </optgroup>
                 </select>
               </div>
+              <button class="toggle-row" type="button" data-toggle="radar" aria-pressed="false">
+                <span><b>Radar precipitazioni</b><small>RainViewer HD · indipendente dal satellite</small></span><span class="switch"></span>
+              </button>
               <button class="toggle-row" type="button" data-toggle="fusion" aria-pressed="false">
                 <span><b>Analisi osservata</b><small>ICON-2I fuso con stazioni METAR · T, P, UR</small></span><span class="switch"></span>
               </button>
@@ -1949,8 +1966,8 @@
               <button class="toggle-row" type="button" data-toggle="lightbase" aria-pressed="false">
                 <span><b>Fondo chiaro</b><small>alternativa alla carta scura predefinita</small></span><span class="switch"></span>
               </button>
-              <button class="toggle-row" type="button" data-toggle="satellite" aria-pressed="false">
-                <span><b>Terreno reale</b><small>ortofoto satellitare al posto della carta</small></span><span class="switch"></span>
+              <button class="toggle-row" type="button" data-toggle="satellite" aria-pressed="true">
+                <span><b>Fondo satellitare reale</b><small>immagini aeree e satellitari ad alta risoluzione</small></span><span class="switch"></span>
               </button>
               <button class="toggle-row" type="button" data-toggle="threed" aria-pressed="false">
                 <span><b>Vista 3D</b><small>terreno in rilievo, mappa inclinabile</small></span><span class="switch"></span>
@@ -2730,7 +2747,9 @@
       let showFronts = false;
       let showTerrain = false;
       let show3D = false;
-      let showSatellite = false;
+      // La base predefinita e' ora quella fotorealistica richiesta: la carta
+      // chiara e quella scura restano alternative selezionabili.
+      let showSatellite = true;
       let showSatelliteClouds = false;
       let showLightBase = false;
       let showGraticule = false;
@@ -3905,13 +3924,10 @@
       // "grey"  -> prodotto in scala di grigi: la nube e' chiara, l'alfa
       //            segue la luminanza e il colore va dal grigio-azzurro
       //            (nube tiepida) al bianco (cima fredda).
-      // "rgb"   -> prodotto a colori sopra la superficie: la nube e' chiara
-      //            *e poco satura*, mentre mare e terra hanno un colore
-      //            deciso. Servono entrambe le condizioni, altrimenti la
-      //            sabbia e i campi finirebbero fra le nubi. Il colore
-      //            originale viene mantenuto.
-      // "black" -> prodotto a colori su fondo nero (le RGB diagnostiche):
-      //            basta la luminanza, e il colore e' l'informazione.
+      // "scene"      -> immagine completa osservata: superficie e atmosfera
+      //                 restano come nel prodotto ufficiale.
+      // "diagnostic" -> RGB scientifica gia' calibrata da EUMETSAT: nessuna
+      //                 modifica ai colori, per non alterarne la legenda.
       const CLOUD_PRODUCTS = {
         ir105: {
           layer: "mtg_fd:ir105_hrfi",
@@ -3919,6 +3935,7 @@
           detail: "1 km · giorno e notte",
           metres: 1000,
           mode: "grey",
+          opacity: 0.94,
           clear: 38, solid: 105, cold: 150
         },
         vis06: {
@@ -3927,37 +3944,109 @@
           detail: "500 m · massimo dettaglio · solo di giorno",
           metres: 500,
           mode: "grey",
+          opacity: 0.94,
           dayOnly: true,
           clear: 95, solid: 175, cold: 235
         },
         truecolour: {
           layer: "mtg_fd:rgb_truecolour",
           name: "Colori reali",
-          detail: "500 m · come si vedrebbe da lassu' · solo di giorno",
-          metres: 500,
-          mode: "rgb",
+          detail: "colori naturali osservati · solo di giorno",
+          metres: 1000,
+          mode: "scene",
+          opacity: 0.96,
           dayOnly: true,
-          clear: 95, solid: 165, colourSat: 0.34, cloudSat: 0.14
         },
         geocolour: {
           layer: "mtg_fd:rgb_geocolour",
           name: "GeoColour",
           detail: "colori reali di giorno, infrarosso di notte",
+          metres: 1000,
+          mode: "scene",
+          opacity: 0.96
+        },
+        cloudphase: {
+          layer: "mtg_fd:rgb_cloudphase",
+          name: "Fase delle nubi",
+          detail: "acqua, ghiaccio e dimensione delle particelle · giorno",
           metres: 500,
-          mode: "rgb",
-          clear: 95, solid: 165, colourSat: 0.34, cloudSat: 0.14
+          mode: "diagnostic",
+          opacity: 0.94,
+          dayOnly: true,
+          latencyMinutes: 30
         },
         cloudtype: {
           layer: "mtg_fd:rgb_cloudtype",
           name: "Tipo di nube",
           detail: "spessore, quota e fase in una sola immagine",
           metres: 1000,
-          mode: "black",
-          clear: 26, solid: 70
+          mode: "diagnostic",
+          opacity: 0.94,
+          dayOnly: true
+        },
+        fog: {
+          layer: "mtg_fd:rgb_fog",
+          name: "Nebbia e nubi basse",
+          detail: "microfisica notturna e strati bassi",
+          metres: 1000,
+          mode: "diagnostic",
+          opacity: 0.94
+        },
+        dust: {
+          layer: "mtg_fd:rgb_dust",
+          name: "Polvere e cirri",
+          detail: "polvere, cirri sottili e pennacchi vulcanici",
+          metres: 2000,
+          mode: "diagnostic",
+          opacity: 0.94,
+          latencyMinutes: 30
+        },
+        snow: {
+          layer: "mtg_fd:rgb_snow",
+          name: "Neve",
+          detail: "separazione tra neve al suolo e copertura nuvolosa",
+          metres: 1000,
+          mode: "diagnostic",
+          opacity: 0.94,
+          dayOnly: true
+        },
+        lightning: {
+          layer: "mtg_fd:li_afa",
+          name: "Fulmini LI",
+          detail: "area dei lampi accumulata su 5 minuti",
+          metres: 4500,
+          mode: "diagnostic",
+          opacity: 0.9,
+          slotMs: 5 * 60 * 1000,
+          latencyMinutes: 8
+        },
+        satprecip: {
+          layer: "mtg_fd:h40b",
+          name: "Precipitazione satellitare",
+          detail: "FCI fuso con microonde dei satelliti polari",
+          metres: 3000,
+          mode: "diagnostic",
+          opacity: 0.88
+        },
+        firetemp: {
+          layer: "mtg_fd:rgb_firetemperature",
+          name: "Temperatura degli incendi",
+          detail: "RGB termico per punti caldi e incendi",
+          metres: 1000,
+          mode: "diagnostic",
+          opacity: 0.94
+        },
+        frp: {
+          layer: "mtg_fd:frp",
+          name: "Potenza radiativa degli incendi",
+          detail: "energia emessa dai focolai rilevati",
+          metres: 1000,
+          mode: "diagnostic",
+          opacity: 0.9
         }
       };
 
-      let cloudProduct = "ir105";
+      let cloudProduct = "geocolour";
       let cloudCanvas = null;
       let cloudObjectUrl = "";
       let cloudTimer = 0;
@@ -3980,9 +4069,13 @@
 
       // Istante da chiedere al servizio, arrotondato al decadale del
       // satellite. Restituisce anche la data, per poterla mostrare.
-      function cloudSlot() {
-        const slot = Math.floor((Date.now() - CLOUD_LATENCY_MS) / CLOUD_SLOT_MS)
-          * CLOUD_SLOT_MS;
+      function cloudSlot(product) {
+        const selected = product || CLOUD_PRODUCTS[cloudProduct] || CLOUD_PRODUCTS.geocolour;
+        const slotMs = selected.slotMs || CLOUD_SLOT_MS;
+        const latency = selected.latencyMinutes
+          ? selected.latencyMinutes * 60 * 1000
+          : CLOUD_LATENCY_MS;
+        const slot = Math.floor((Date.now() - latency) / slotMs) * slotMs;
         return {
           value: slot,
           date: new Date(slot),
@@ -4003,7 +4096,7 @@
         const source = map && map.getSource ? map.getSource("radar") : null;
         if (!frame || !source || typeof source.setTiles !== "function") return frame;
         source.setTiles([
-          radarHost + frame.path + "/256/{z}/{x}/{y}/4/1_1.png"
+          radarHost + frame.path + "/512/{z}/{x}/{y}/4/1_1.png"
         ]);
         return frame;
       }
@@ -4047,14 +4140,21 @@
       function cloudRequestSize(box, product) {
         const spanX = mercatorMetresX(box.east) - mercatorMetresX(box.west);
         const spanY = mercatorMetresY(box.north) - mercatorMetresY(box.south);
-        const maxWidth = window.innerWidth < 900 ? 1280 : 2048;
+        const aspect = spanY / Math.max(spanX, 1);
+        const mobile = window.innerWidth < 900;
+        const memory = Number(navigator.deviceMemory) || 4;
+        const maxPixels = mobile
+          ? (memory >= 8 ? 7200000 : memory >= 4 ? 5200000 : 3200000)
+          : (memory >= 8 ? 14000000 : 10000000);
+        const maxSide = mobile ? (memory >= 4 ? 2560 : 2048) : 4096;
         const native = Math.ceil(spanX / product.metres);
-        const width = Math.max(384, Math.min(native, maxWidth));
-        const height = Math.max(384, Math.round(width * spanY / spanX));
+        const pixelLimitedWidth = Math.floor(Math.sqrt(maxPixels / Math.max(aspect, 0.01)));
+        const width = Math.max(512, Math.min(native, maxSide, pixelLimitedWidth));
+        const height = Math.max(384, Math.round(width * aspect));
         return { width: width, height: height, metres: spanX / width };
       }
 
-      function cloudUrl(box, size, product, slot) {
+      function cloudUrl(box, size, product, slot, latestAvailable) {
         return CLOUD_WMS
           + "?service=WMS&version=1.1.1&request=GetMap&styles="
           + "&layers=" + encodeURIComponent(product.layer)
@@ -4064,7 +4164,7 @@
               mercatorMetresX(box.east), mercatorMetresY(box.north)
             ].map(function (value) { return value.toFixed(1); }).join(",")
           + "&width=" + size.width + "&height=" + size.height
-          + "&time=" + slot.iso;
+          + (latestAvailable ? "" : "&time=" + slot.iso);
       }
 
       // Vale la pena rifare la richiesta? Solo se il riquadro esce da quello
@@ -4094,8 +4194,9 @@
         const label = document.getElementById("satclouds-note");
         if (!label) return;
         const product = CLOUD_PRODUCTS[cloudProduct];
-        label.textContent = "Radar + " + product.name + " · immagine delle "
-          + formatClockTime(slot.date);
+        label.textContent = product.name + (slot.latest
+          ? " · ultimo aggiornamento disponibile"
+          : " · immagine delle " + formatClockTime(slot.date));
       }
 
       // Da immagine opaca a sovrapposizione: il calcolo dell'alfa dipende dal
@@ -4103,70 +4204,6 @@
       function publishSatelliteClouds(image, box, size, product, slot) {
         const source = map.getSource("satellite-clouds");
         if (!source) return;
-        if (!cloudCanvas) cloudCanvas = document.createElement("canvas");
-        cloudCanvas.width = size.width;
-        cloudCanvas.height = size.height;
-        const context = cloudCanvas.getContext("2d", { willReadFrequently: true });
-        if (!context) return;
-        context.clearRect(0, 0, size.width, size.height);
-        context.drawImage(image, 0, 0, size.width, size.height);
-
-        const frame = context.getImageData(0, 0, size.width, size.height);
-        const pixels = frame.data;
-        const span = product.solid - product.clear;
-        const coldSpan = (product.cold || product.solid) - product.clear;
-        const satSpan = (product.colourSat || 1) - (product.cloudSat || 0);
-        for (let i = 0; i < pixels.length; i += 4) {
-          const red = pixels[i], green = pixels[i + 1], blue = pixels[i + 2];
-          const luminance = 0.299 * red + 0.587 * green + 0.114 * blue;
-          let level = (luminance - product.clear) / span;
-          level = level < 0 ? 0 : (level > 1 ? 1 : level);
-          // Smoothstep: il bordo della nube sfuma invece di tagliare netto,
-          // come si vede davvero al limite di una formazione.
-          let alpha = level * level * (3 - 2 * level);
-
-          if (product.mode === "rgb") {
-            // La nube e' bianca: poco satura. Mare e terra hanno un colore
-            // deciso e vanno tolti anche quando sono chiari.
-            const high = red > green ? (red > blue ? red : blue) : (green > blue ? green : blue);
-            const low = red < green ? (red < blue ? red : blue) : (green < blue ? green : blue);
-            const saturation = high > 0 ? (high - low) / high : 0;
-            let colourLevel = (product.colourSat - saturation) / satSpan;
-            colourLevel = colourLevel < 0 ? 0 : (colourLevel > 1 ? 1 : colourLevel);
-            alpha *= colourLevel * colourLevel * (3 - 2 * colourLevel);
-          }
-
-          if (product.mode === "grey") {
-            // Nube tiepida (bassa) grigio-azzurra, cima fredda bianca: e' la
-            // lettura classica dei canali in scala di grigi, e distingue a
-            // colpo d'occhio lo strato dal cumulonembo.
-            let cold = (luminance - product.clear) / coldSpan;
-            cold = cold < 0 ? 0 : (cold > 1 ? 1 : cold);
-            const tone = 196 + 59 * cold;
-            pixels[i] = tone;
-            pixels[i + 1] = tone + 8 > 255 ? 255 : tone + 8;
-            pixels[i + 2] = tone + 18 > 255 ? 255 : tone + 18;
-          }
-          // Negli altri modi il colore originale e' informazione e resta
-          // com'e': cambia solo la trasparenza.
-          pixels[i + 3] = Math.round(alpha * 255);
-        }
-        context.putImageData(frame, 0, 0);
-
-        // Di notte il visibile non riceve luce: l'immagine e' nera e il
-        // livello resterebbe vuoto senza spiegazione. Meglio dirlo e
-        // indicare i canali che di notte funzionano.
-        if (product.dayOnly) {
-          let lit = 0;
-          for (let i = 3; i < pixels.length; i += 4) {
-            if (pixels[i] > 10) lit++;
-          }
-          if (lit < pixels.length / 4 * 0.002) {
-            toast("Su questa zona e' notte: il visibile non vede nulla, usa"
-              + " infrarosso o GeoColour");
-          }
-        }
-
         const corners = [
           [box.west, box.north], [box.east, box.north],
           [box.east, box.south], [box.west, box.south]
@@ -4174,11 +4211,14 @@
         const update = function (url, isObjectUrl) {
           try {
             source.updateImage({ url: url, coordinates: corners });
+            map.setPaintProperty(
+              "satellite-clouds-layer", "raster-opacity", product.opacity || 0.94
+            );
             cloudLoadedBox = box;
             cloudLoadedMetres = size.metres;
             cloudLoadedSlot = slot.value;
             markCloudFreshness(slot);
-            syncRadarToSatellite(slot);
+            if (showRadar) syncRadarToSatellite(slot);
             syncTimelineToSatellite(slot);
             if (cloudObjectUrl) {
               const previous = cloudObjectUrl;
@@ -4190,6 +4230,67 @@
             console.error("Nubi satellitari non pubblicate", error);
           }
         };
+
+        // Le RGB ufficiali sono gia' immagini pronte: pubblicare direttamente
+        // l'URL conserva ogni pixel e lascia lavorare la cache HTTP del WMS.
+        // Solo i canali singoli richiedono la maschera alfa sulla canvas.
+        if (product.mode !== "grey") {
+          update(image.src, false);
+          return;
+        }
+        if (!cloudCanvas) cloudCanvas = document.createElement("canvas");
+        cloudCanvas.width = size.width;
+        cloudCanvas.height = size.height;
+        const context = cloudCanvas.getContext("2d", { willReadFrequently: true });
+        if (!context) return;
+        context.imageSmoothingEnabled = true;
+        context.imageSmoothingQuality = "high";
+        context.clearRect(0, 0, size.width, size.height);
+        context.drawImage(image, 0, 0, size.width, size.height);
+
+        // I canali singoli IR/VIS vengono trasformati in una maschera di
+        // nube trasparente. Le RGB ufficiali, invece, sono prodotti
+        // diagnostici gia' calibrati: conservarne integralmente i colori e'
+        // parte dell'informazione scientifica.
+        let pixels = null;
+        if (product.mode === "grey") {
+          const frame = context.getImageData(0, 0, size.width, size.height);
+          pixels = frame.data;
+          const span = product.solid - product.clear;
+          const coldSpan = (product.cold || product.solid) - product.clear;
+          for (let i = 0; i < pixels.length; i += 4) {
+            const red = pixels[i], green = pixels[i + 1], blue = pixels[i + 2];
+            const luminance = 0.299 * red + 0.587 * green + 0.114 * blue;
+            let level = (luminance - product.clear) / span;
+            level = level < 0 ? 0 : (level > 1 ? 1 : level);
+            const alpha = level * level * (3 - 2 * level);
+            // Nube tiepida (bassa) grigio-azzurra, cima fredda bianca: e' la
+            // lettura classica dei canali in scala di grigi, e distingue a
+            // colpo d'occhio lo strato dal cumulonembo.
+            let cold = (luminance - product.clear) / coldSpan;
+            cold = cold < 0 ? 0 : (cold > 1 ? 1 : cold);
+            const tone = 196 + 59 * cold;
+            pixels[i] = tone;
+            pixels[i + 1] = tone + 8 > 255 ? 255 : tone + 8;
+            pixels[i + 2] = tone + 18 > 255 ? 255 : tone + 18;
+            pixels[i + 3] = Math.round(alpha * 255);
+          }
+          context.putImageData(frame, 0, 0);
+        }
+
+        // Di notte il visibile non riceve luce: l'immagine e' nera e il
+        // livello resterebbe vuoto senza spiegazione. Meglio dirlo e
+        // indicare i canali che di notte funzionano.
+        if (product.dayOnly && pixels) {
+          let lit = 0;
+          for (let i = 3; i < pixels.length; i += 4) {
+            if (pixels[i] > 10) lit++;
+          }
+          if (lit < pixels.length / 4 * 0.002) {
+            toast("Su questa zona e' notte: il visibile non vede nulla, usa"
+              + " infrarosso o GeoColour");
+          }
+        }
 
         // Stessa scelta del raster del modello: toBlob non blocca il thread
         // principale come farebbe la codifica base64 di qualche milione di
@@ -4275,8 +4376,8 @@
         // pesare sul servizio, si riprende alla prossima occasione.
         if (typeof document.hidden === "boolean" && document.hidden) return;
 
-        const product = CLOUD_PRODUCTS[cloudProduct] || CLOUD_PRODUCTS.ir105;
-        const slot = cloudSlot();
+        const product = CLOUD_PRODUCTS[cloudProduct] || CLOUD_PRODUCTS.geocolour;
+        const slot = cloudSlot(product);
         const box = cloudRequestBox(0.22);
         const size = cloudRequestSize(box, product);
         if (!force && !cloudNeedsReload(cloudRequestBox(0), size, slot)) return;
@@ -4298,6 +4399,14 @@
         };
         image.onerror = function () {
           if (token !== cloudToken) return;
+          if (!slot.latest) {
+            // Alcune RGB possono arrivare un ciclo dopo il canale IR. Se lo
+            // slot stimato non esiste, EUMETView sceglie qui l'ultimo frame
+            // realmente pubblicato invece di lasciare il livello vuoto.
+            slot.latest = true;
+            image.src = cloudUrl(box, size, product, slot, true);
+            return;
+          }
           toast("Satellite EUMETSAT non raggiungibile");
         };
         image.src = cloudUrl(box, size, product, slot);
@@ -4325,7 +4434,8 @@
         if (picker) picker.style.display = showSatelliteClouds ? "" : "none";
         // Spegnendo il livello la timeline torna libera subito, senza
         // aspettare che arrivi o fallisca un'immagine.
-        updateSatelliteLockUi(showSatelliteClouds ? cloudSlot() : null);
+        const product = CLOUD_PRODUCTS[cloudProduct] || CLOUD_PRODUCTS.geocolour;
+        updateSatelliteLockUi(showSatelliteClouds ? cloudSlot(product) : null);
         if (cloudTimer) {
           clearInterval(cloudTimer);
           cloudTimer = 0;
@@ -4337,12 +4447,12 @@
           cloudLoadedBox = null;
         }
         loadSatelliteClouds(true);
-        // Ogni cinque minuti controllo se il satellite ha prodotto un
-        // passaggio nuovo: la richiesta parte solo se lo slot e' cambiato.
+        // Controllo a meta' della cadenza del prodotto (5 o 10 minuti): la
+        // richiesta parte solo se lo slot e' davvero cambiato.
         cloudTimer = setInterval(function () { loadSatelliteClouds(false); },
-          CLOUD_SLOT_MS / 2);
-        const product = CLOUD_PRODUCTS[cloudProduct] || CLOUD_PRODUCTS.ir105;
-        toast("Satellite MTG · " + product.name
+          (product.slotMs || CLOUD_SLOT_MS) / 2);
+        const selectedProduct = CLOUD_PRODUCTS[cloudProduct] || CLOUD_PRODUCTS.geocolour;
+        toast("Satellite MTG · " + selectedProduct.name
           + " · la timeline resta ancorata all'ora dell'immagine");
       }
 
@@ -4528,7 +4638,8 @@
           isobars: showIsobars,
           isotherms: showIsotherms,
           isohypses: showIsohypses,
-          observations: showRadar && showSatelliteClouds,
+          radar: showRadar,
+          satclouds: showSatelliteClouds,
           fusion: showFusion,
           fronts: showFronts,
           terrain: showTerrain,
@@ -4676,20 +4787,20 @@
           if (showIsohypses) {
             toast("Isoipse di geopotenziale a 500 hPa · passo 4 dam");
           }
-        } else if (name === "observations") {
+        } else if (name === "radar") {
           if (!map || !map.getLayer("radar-layer")) {
             toast("Radar in tempo reale non disponibile al momento");
             return;
           }
-          const next = !(showRadar && showSatelliteClouds);
-          showRadar = next;
-          showSatelliteClouds = next;
+          showRadar = !showRadar;
           map.setLayoutProperty(
             "radar-layer", "visibility", showRadar ? "visible" : "none"
           );
-          updateSatelliteClouds();
           if (showRadar) {
-            const slot = cloudSlot();
+            const product = CLOUD_PRODUCTS[cloudProduct] || CLOUD_PRODUCTS.geocolour;
+            const slot = showSatelliteClouds
+              ? cloudSlot(product)
+              : { value: Date.now(), date: new Date() };
             const latest = syncRadarToSatellite(slot);
             const when = latest
               ? new Date(latest.time * 1000).toLocaleTimeString(
@@ -4697,10 +4808,15 @@
                 )
               : "";
             toast(
-              "Osservazione combinata · radar RainViewer + nubi MTG"
+              "Radar RainViewer HD attivo"
               + (when ? " · agg. " + when : "")
             );
+          } else {
+            toast("Radar spento · il satellite resta visibile");
           }
+        } else if (name === "satclouds") {
+          showSatelliteClouds = !showSatelliteClouds;
+          updateSatelliteClouds();
         } else if (name === "fusion") {
           if (!showFusion && !fusionSupported(activeLayer)) {
             toast(
@@ -4762,10 +4878,12 @@
           renderWeather();
         } else if (name === "lightbase") {
           showLightBase = !showLightBase;
+          if (showLightBase) showSatellite = false;
           updateSatelliteBase();
           updateReliefShading();
         } else if (name === "satellite") {
           showSatellite = !showSatellite;
+          if (showSatellite) showLightBase = false;
           updateSatelliteBase();
           updateReliefShading();
         } else if (name === "threed") {
@@ -7352,8 +7470,10 @@
           const latest = radarFrames[radarFrames.length - 1];
           map.addSource("radar", {
             type: "raster",
-            tiles: [radarHost + latest.path + "/256/{z}/{x}/{y}/4/1_1.png"],
-            tileSize: 256,
+            tiles: [radarHost + latest.path + "/512/{z}/{x}/{y}/4/1_1.png"],
+            // RainViewer offre tile 512 px: a parita' di copertura contengono
+            // quattro volte i pixel delle 256 e sono la qualita' massima API.
+            tileSize: 512,
             // RainViewer pubblica tessere native soltanto fino a z=7.
             // MapLibre oltre quel livello ingrandisce la z=7, senza chiedere
             // URL non supportati e senza limitare lo zoom della carta.
@@ -7649,21 +7769,21 @@
                 }
               },
               {
-                // Fondo scuro predefinito: fa emergere frecce, campi e linee
-                // sinottiche. Il fondo chiaro resta disponibile dal pannello.
+                // Fondo scuro alternativo: fa emergere frecce, campi e linee
+                // sinottiche quando non si desidera la base fotorealistica.
                 id: "basemap-dark-layer",
                 type: "raster",
                 source: "basemapDark",
+                layout: { visibility: "none" },
                 paint: { "raster-opacity": 0.9, "raster-fade-duration": 0 }
               },
               {
-                // Base fotorealistica, spenta di default: il grigio resta
-                // preferibile per leggere i campi meteo. Accesa, il rilievo 3D
-                // diventa un paesaggio vero invece di una carta in rilievo.
+                // Base fotorealistica predefinita: e' il terreno reale visto
+                // dall'alto. Carta chiara e scura restano alternative.
                 id: "satellite-layer",
                 type: "raster",
                 source: "satellite",
-                layout: { visibility: "none" },
+                layout: { visibility: "visible" },
                 paint: { "raster-opacity": 1, "raster-fade-duration": 0 }
               },
               {

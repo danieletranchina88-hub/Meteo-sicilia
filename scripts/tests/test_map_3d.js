@@ -35,6 +35,16 @@ assert.match(radarHtml, /id: "satellite-clouds-layer"[\s\S]{0,260}?source: "sate
   "la pagina radar non fonde la copertura nuvolosa satellitare");
 assert.match(radarHtml, /loadClouds\(frame, false\);/,
   "satellite e radar non cambiano insieme durante l'animazione");
+assert.match(radarHtml, /\/512\/\{z\}\/\{x\}\/\{y\}/,
+  "la pagina radar non usa i tile RainViewer 512 px");
+assert.match(radarHtml, /tileSize: 512,/,
+  "MapLibre non conosce la dimensione HD dei tile radar");
+assert.match(radarHtml, /id="radar-toggle"[\s\S]{0,180}?Radar: ON/,
+  "manca il pulsante indipendente per spegnere il radar");
+assert.match(radarHtml, /id="product-select"/,
+  "manca il selettore dei prodotti satellitari nella pagina radar");
+assert.match(radarHtml, /World_Imagery\/MapServer\/tile/,
+  "la pagina osservativa non usa una base fotografica reale");
 
 const meteogramScripts = [...meteogramHtml.matchAll(/<script(?:\s[^>]*)?>([\s\S]*?)<\/script>/gi)]
   .map((match) => match[1]).filter((source) => source.trim());
@@ -351,9 +361,15 @@ assert.match(html, /layer: "mtg_fd:rgb_truecolour"/, "colori reali assenti");
 assert.match(html, /layer: "mtg_fd:rgb_geocolour"/, "GeoColour assente");
 assert.match(html, /layer: "mtg_fd:rgb_cloudtype"/, "tipo di nube assente");
 assert.match(html, /id="satclouds-select"/, "manca il selettore del formato");
-["ir105", "vis06", "truecolour", "geocolour", "cloudtype"].forEach((key) => {
+[
+  "ir105", "vis06", "truecolour", "geocolour", "cloudphase",
+  "cloudtype", "fog", "dust", "snow", "lightning", "satprecip",
+  "firetemp", "frp"
+].forEach((key) => {
   assert.ok(html.includes('value="' + key + '"'),
     "il formato " + key + " non e' selezionabile dall'interfaccia");
+  assert.ok(radarHtml.includes('value="' + key + '"'),
+    "il formato " + key + " manca nella pagina radar");
 });
 
 // L'istante va fissato: senza, il servizio compone il mosaico con passaggi
@@ -367,6 +383,10 @@ assert.match(html, /const CLOUD_LATENCY_MS = 22 \* 60 \* 1000;/,
 // segue la vista.
 assert.match(html, /const native = Math\.ceil\(spanX \/ product\.metres\);/,
   "la richiesta non e' legata al pixel nativo dello strumento");
+assert.match(html, /const maxSide = mobile \? \(memory >= 4 \? 2560 : 2048\) : 4096;/,
+  "la qualita' satellitare non sale fino a 4096 px sui dispositivi adatti");
+assert.match(html, /context\.imageSmoothingQuality = "high";/,
+  "la ricampionatura delle immagini satellitari non e' in alta qualita'");
 assert.match(html, /function cloudRequestBox\(pad\)/, "il riquadro non segue la vista");
 // Il margine serve a non ricaricare a ogni panoramica: quindi il confronto
 // deve usare il riquadro visibile, non quello gia' allargato.
@@ -382,16 +402,18 @@ assert.match(
 assert.match(html, /return cloudLoadedMetres > size\.metres \* 1\.35;/,
   "la soglia di ricarica non lascia raggiungere il pixel nativo");
 
-// Il discriminante di nube sui prodotti a colori: chiara E poco satura,
-// altrimenti sabbia e campi finirebbero fra le nubi.
-assert.match(html, /const saturation = high > 0 \? \(high - low\) \/ high : 0;/,
-  "sui prodotti a colori manca il criterio di saturazione");
+// Le RGB ufficiali sono già diagnostiche calibrate: modificarne i colori
+// distruggerebbe la legenda. Solo i canali singoli diventano maschere.
+assert.match(html, /if \(product\.mode === "grey"\) \{/,
+  "i canali IR e VIS non vengono trattati come maschere di nube");
+assert.match(html, /mode: "diagnostic"/,
+  "le RGB scientifiche non sono conservate come prodotti diagnostici");
 // Di notte il visibile e' cieco: va detto invece di mostrare un livello vuoto.
-assert.match(html, /if \(product\.dayOnly\) \{[\s\S]{0,420}?e' notte: il visibile non vede nulla/,
+assert.match(html, /if \(product\.dayOnly && pixels\) \{[\s\S]{0,420}?e' notte: il visibile non vede nulla/,
   "di notte il visibile resta vuoto senza spiegazione");
 assert.match(html, /image\.crossOrigin = "anonymous";/,
   "senza CORS la canvas resta sporca e getImageData fallisce");
-assert.match(html, /let alpha = level \* level \* \(3 - 2 \* level\);/,
+assert.match(html, /const alpha = level \* level \* \(3 - 2 \* level\);/,
   "manca la rampa di opacita' che rende trasparente il cielo sereno");
 assert.match(html, /pixels\[i \+ 3\] = Math\.round\(alpha \* 255\);/,
   "l'opacita' calcolata non finisce nel canale alfa");
@@ -401,17 +423,20 @@ assert.match(
   /id: "satellite-clouds-layer"[\s\S]{0,400}?layout: \{ visibility: "none" \}/,
   "le nubi satellitari non sono spente all'avvio"
 );
-// Radar e satellite sono un solo prodotto osservativo: separarli costringeva
-// l'utente a comporre manualmente una lettura che deve essere sincronizzata.
-assert.match(html, /data-toggle="observations"[\s\S]{0,220}?<b>Radar \+ satellite<\/b>/,
-  "manca il controllo osservativo combinato");
-assert.match(html, /observations: showRadar && showSatelliteClouds,/,
-  "lo stato combinato non e' riportato nell'interfaccia");
-assert.match(html, /} else if \(name === "observations"\) \{[\s\S]{0,500}?showRadar = next;\s*\n\s*showSatelliteClouds = next;/,
-  "il controllo combinato non accende insieme radar e satellite");
+// Radar e satellite restano sincronizzati quando sono entrambi accesi, ma
+// ciascuno ha il proprio comando: il radar può essere rimosso senza perdere
+// l'immagine satellitare.
+assert.match(html, /data-toggle="satclouds"[\s\S]{0,220}?<b>Satellite MTG<\/b>/,
+  "manca il controllo satellitare indipendente");
+assert.match(html, /data-toggle="radar"[\s\S]{0,220}?<b>Radar precipitazioni<\/b>/,
+  "manca il controllo radar indipendente");
+assert.match(html, /radar: showRadar,[\s\S]{0,120}?satclouds: showSatelliteClouds,/,
+  "gli stati indipendenti non sono riportati nell'interfaccia");
+assert.match(html, /} else if \(name === "satclouds"\) \{\s*\n\s*showSatelliteClouds = !showSatelliteClouds;/,
+  "il satellite non si accende senza il radar");
 assert.match(
   html,
-  /cloudTimer = setInterval\(function \(\) \{ loadSatelliteClouds\(false\); \},\s*\n\s*CLOUD_SLOT_MS \/ 2\);/,
+  /cloudTimer = setInterval\(function \(\) \{ loadSatelliteClouds\(false\); \},\s*\n\s*\(product\.slotMs \|\| CLOUD_SLOT_MS\) \/ 2\);/,
   "le nubi non si aggiornano da sole: non sarebbero in tempo reale"
 );
 assert.match(html, /if \(typeof document\.hidden === "boolean" && document\.hidden\) return;/,
@@ -428,10 +453,14 @@ assert.ok(weatherAt > 0 && cloudsAt > weatherAt && regionsAt > cloudsAt,
 // domani sotto le nubi di adesso.
 assert.match(html, /function syncTimelineToSatellite\(slot\)/,
   "manca l'ancoraggio della timeline al satellite");
-assert.match(html, /markCloudFreshness\(slot\);\s*\n\s*syncRadarToSatellite\(slot\);\s*\n\s*syncTimelineToSatellite\(slot\);/,
+assert.match(html, /markCloudFreshness\(slot\);\s*\n\s*if \(showRadar\) syncRadarToSatellite\(slot\);\s*\n\s*syncTimelineToSatellite\(slot\);/,
   "radar e timeline non seguono il passaggio satellitare");
 assert.match(html, /function radarFrameNearestTo\(when\)/,
   "manca la scelta del radar temporalmente piu' vicino al satellite");
+assert.match(html, /latest\.path \+ "\/512\/\{z\}\/\{x\}\/\{y\}/,
+  "la mappa principale non usa i tile radar RainViewer da 512 px");
+assert.match(html, /source: "satellite",\s*\n\s*layout: \{ visibility: "visible" \}/,
+  "il fondo fotografico satellitare non e' quello predefinito");
 assert.match(html, /maxzoom: 7,/,
   "RainViewer riceverebbe ancora richieste oltre lo zoom nativo supportato");
 assert.match(html, /function nearestStepTo\(when\)/,
