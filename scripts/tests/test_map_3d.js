@@ -25,6 +25,12 @@ const radarScripts = [...radarHtml.matchAll(/<script(?:\s[^>]*)?>([\s\S]*?)<\/sc
 radarScripts.forEach((source) => {
   assert.doesNotThrow(() => new Function(source), "JavaScript radar non valido");
 });
+assert.match(radarHtml, /const MODEL_BOUNDS = \[\[DOMAIN\[0\], DOMAIN\[1\]\], \[DOMAIN\[2\], DOMAIN\[3\]\]\];/,
+  "la pagina radar non usa il dominio ICON-2I come confine della mappa");
+assert.match(radarHtml, /minZoom: startView\.zoom,\s*\n\s*maxBounds: MODEL_BOUNDS,/,
+  "la pagina radar permette di uscire o rimpicciolire oltre il dominio");
+assert.match(radarHtml, /map\.setMinZoom\(view\.zoom\);/,
+  "il limite minimo radar non viene ricalcolato dopo il ridimensionamento");
 assert.match(radarHtml, /const RADAR_MAX_NATIVE_ZOOM = 7;/,
   "la pagina radar non dichiara il limite ufficiale RainViewer");
 assert.match(radarHtml, /maxzoom: RADAR_MAX_NATIVE_ZOOM,/,
@@ -53,6 +59,17 @@ meteogramScripts.forEach((source) => {
 });
 assert.match(meteogramHtml, /function interpolateTileValue\(values, nx, rows, columns\)/,
   "il meteogramma usa ancora il solo punto di griglia piu' vicino");
+
+// La mappa parte sull'intero dominio nativo ICON-2I e quello stesso zoom
+// diventa il pavimento: si puo' entrare nel dettaglio, mai tornare al mondo.
+assert.match(html, /const MODEL_DOMAIN = \{ west: 3\.0, south: 33\.7, east: 22\.0, north: 48\.9 \};/,
+  "i confini della mappa non coincidono con il dominio ICON-2I");
+assert.match(html, /const zoomX = Math\.log2\(width \/ \(512 \* longitudeFraction\)\);[\s\S]{0,520}?zoom: Math\.min\(zoomX, zoomY\)/,
+  "lo zoom iniziale non adatta tutto il dominio allo schermo");
+assert.match(html, /minZoom: startView\.zoom,\s*\n\s*maxBounds: MODEL_BOUNDS,/,
+  "zoom-out o trascinamento possono ancora uscire dal dominio del modello");
+assert.match(html, /map\.resize\(\);\s*\n\s*lockMapToModelDomain\(false\);/,
+  "ruotando il telefono il limite del dominio non viene ricalcolato");
 assert.match(meteogramHtml, /id="weather-strip"/,
   "manca la sintesi visuale ogni tre ore");
 assert.match(meteogramHtml, /label:"Confidenza", values:s\.stormConfidence/,

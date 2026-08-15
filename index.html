@@ -7656,34 +7656,63 @@
         });
       }
 
-      function initialItalyView() {
-        // Frame Italy so it always fills the viewport vertically (Sicily → Alps),
-        // regardless of screen aspect. Fitting a wide Mediterranean box used to
-        // zoom out on portrait phones, leaving Italy tiny above a strip of sea.
+      const MODEL_DOMAIN = { west: 3.0, south: 33.7, east: 22.0, north: 48.9 };
+      const MODEL_BOUNDS = [
+        [MODEL_DOMAIN.west, MODEL_DOMAIN.south],
+        [MODEL_DOMAIN.east, MODEL_DOMAIN.north]
+      ];
+
+      function modelDomainView() {
+        // Calcolo equivalente a fitBounds, ma disponibile gia' prima di creare
+        // la mappa: il suo zoom diventa anche il limite minimo. In questo modo
+        // non si puo' mai rimpicciolire il dominio ICON-2I fino a vedere il
+        // resto del mondo, qualunque sia il formato dello schermo.
         const el = document.getElementById("map");
+        const width = (el && el.clientWidth) || window.innerWidth || 1280;
         const height = (el && el.clientHeight) || window.innerHeight || 720;
-        const latSouth = 36.2;
-        const latNorth = 46.9;
         const mercatorY = function (lat) {
           const phi = (lat * Math.PI) / 180;
           return Math.log(Math.tan(Math.PI / 4 + phi / 2));
         };
-        const latFraction =
-          (mercatorY(latNorth) - mercatorY(latSouth)) / (2 * Math.PI);
-        const worldSize = height / latFraction;
-        let zoom = Math.log2(worldSize / 512);
-        zoom = clamp(zoom, 3.6, 6.0);
-        return { center: [12.7, 41.9], zoom: zoom };
+        const southY = mercatorY(MODEL_DOMAIN.south);
+        const northY = mercatorY(MODEL_DOMAIN.north);
+        const longitudeFraction =
+          (MODEL_DOMAIN.east - MODEL_DOMAIN.west) / 360;
+        const latitudeFraction = (northY - southY) / (2 * Math.PI);
+        const zoomX = Math.log2(width / (512 * longitudeFraction));
+        const zoomY = Math.log2(height / (512 * latitudeFraction));
+        const centreMercatorY = (southY + northY) / 2;
+        const centreLatitude = Math.atan(Math.sinh(centreMercatorY)) * 180 / Math.PI;
+        return {
+          center: [
+            (MODEL_DOMAIN.west + MODEL_DOMAIN.east) / 2,
+            centreLatitude
+          ],
+          zoom: Math.min(zoomX, zoomY)
+        };
+      }
+
+      function lockMapToModelDomain(resetView) {
+        if (!map) return;
+        const view = modelDomainView();
+        map.setMaxBounds(MODEL_BOUNDS);
+        map.setMinZoom(view.zoom);
+        if (resetView) {
+          map.jumpTo({ center: view.center, zoom: view.zoom, bearing: 0, pitch: 0 });
+        } else if (map.getZoom() < view.zoom) {
+          map.setZoom(view.zoom);
+        }
       }
 
       function setupMap() {
-        const startView = initialItalyView();
+        const startView = modelDomainView();
         map = new maplibregl.Map({
           container: "map",
           center: startView.center,
           zoom: startView.zoom,
           maxZoom: 12.5,
-          minZoom: 3.2,
+          minZoom: startView.zoom,
+          maxBounds: MODEL_BOUNDS,
           dragPan: true,
           scrollZoom: true,
           doubleClickZoom: true,
@@ -8263,7 +8292,10 @@
       window.addEventListener("resize", function () {
         resizeCanvases();
         setTimeout(function () {
-          if (map) map.resize();
+          if (map) {
+            map.resize();
+            lockMapToModelDomain(false);
+          }
           renderWeather();
           requestVectorRender();
         }, 80);

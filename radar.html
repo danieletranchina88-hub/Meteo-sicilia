@@ -172,6 +172,7 @@
       const RADAR_COLOR = 4;   // schema colore RainViewer
       const RADAR_OPTS = "1_1"; // smooth + neve
       const RADAR_MAX_NATIVE_ZOOM = 7;
+      const MODEL_BOUNDS = [[DOMAIN[0], DOMAIN[1]], [DOMAIN[2], DOMAIN[3]]];
       const CLOUD_WMS = "https://view.eumetsat.int/geoserver/wms";
       const CLOUD_SLOT_MS = 10 * 60 * 1000;
       const CLOUD_PRODUCTS = {
@@ -206,11 +207,34 @@
 
       function clamp(v, a, b) { return Math.max(a, Math.min(b, v)); }
 
-      function initialZoom() {
-        const height = document.getElementById("map").clientHeight || window.innerHeight || 720;
-        const mercY = function (lat) { return Math.log(Math.tan(Math.PI / 4 + (lat * Math.PI / 180) / 2)); };
-        const frac = (mercY(46.9) - mercY(36.2)) / (2 * Math.PI);
-        return clamp(Math.log2((height / frac) / 512), 3.6, 6.0);
+      function modelDomainView() {
+        const element = document.getElementById("map");
+        const width = element.clientWidth || window.innerWidth || 1280;
+        const height = element.clientHeight || window.innerHeight || 720;
+        const mercatorFitY = function (latitude) {
+          const phi = latitude * Math.PI / 180;
+          return Math.log(Math.tan(Math.PI / 4 + phi / 2));
+        };
+        const southY = mercatorFitY(DOMAIN[1]);
+        const northY = mercatorFitY(DOMAIN[3]);
+        const longitudeFraction = (DOMAIN[2] - DOMAIN[0]) / 360;
+        const latitudeFraction = (northY - southY) / (2 * Math.PI);
+        const centreLatitude = Math.atan(Math.sinh((southY + northY) / 2)) * 180 / Math.PI;
+        return {
+          center: [(DOMAIN[0] + DOMAIN[2]) / 2, centreLatitude],
+          zoom: Math.min(
+            Math.log2(width / (512 * longitudeFraction)),
+            Math.log2(height / (512 * latitudeFraction))
+          )
+        };
+      }
+
+      function lockMapToModelDomain() {
+        if (!map) return;
+        const view = modelDomainView();
+        map.setMaxBounds(MODEL_BOUNDS);
+        map.setMinZoom(view.zoom);
+        if (map.getZoom() < view.zoom) map.setZoom(view.zoom);
       }
 
       function tileUrl(frame) {
@@ -535,11 +559,13 @@
       }
 
       function setupMap() {
+        const startView = modelDomainView();
         map = new maplibregl.Map({
           container: "map",
-          center: [12.7, 41.9],
-          zoom: initialZoom(),
-          minZoom: 3.2,
+          center: startView.center,
+          zoom: startView.zoom,
+          minZoom: startView.zoom,
+          maxBounds: MODEL_BOUNDS,
           maxZoom: 16,
           dragRotate: false,
           pitchWithRotate: false,
@@ -630,7 +656,10 @@
         setFrame(Number(event.target.value));
       });
       window.addEventListener("resize", function () {
-        if (map) map.resize();
+        if (map) {
+          map.resize();
+          lockMapToModelDomain();
+        }
         scheduleCloudReload();
       });
 
