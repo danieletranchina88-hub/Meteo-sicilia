@@ -31,6 +31,10 @@ assert.match(radarHtml, /minZoom: startView\.zoom,\s*\n\s*maxBounds: MODEL_BOUND
   "la pagina radar permette di uscire o rimpicciolire oltre il dominio");
 assert.match(radarHtml, /map\.setMinZoom\(view\.zoom\);/,
   "il limite minimo radar non viene ricalcolato dopo il ridimensionamento");
+assert.match(radarHtml, /const CLOUD_MAX_SIDE = 4096;/,
+  "la pagina radar non richiede il massimo dettaglio satellitare WMS");
+assert.match(radarHtml, /const sideLimitedWidth = Math\.floor\(CLOUD_MAX_SIDE \/ Math\.max\(aspect, 1\)\);/,
+  "la pagina radar puo' superare il limite WMS sul lato verticale");
 assert.match(radarHtml, /const RADAR_MAX_NATIVE_ZOOM = 7;/,
   "la pagina radar non dichiara il limite ufficiale RainViewer");
 assert.match(radarHtml, /maxzoom: RADAR_MAX_NATIVE_ZOOM,/,
@@ -64,6 +68,8 @@ assert.match(meteogramHtml, /function interpolateTileValue\(values, nx, rows, co
 // diventa il pavimento: si puo' entrare nel dettaglio, mai tornare al mondo.
 assert.match(html, /const MODEL_DOMAIN = \{ west: 3\.0, south: 33\.7, east: 22\.0, north: 48\.9 \};/,
   "i confini della mappa non coincidono con il dominio ICON-2I");
+assert.match(html, /const CLOUD_DOMAIN = MODEL_DOMAIN;/,
+  "il satellite non copre esattamente la stessa area del modello");
 assert.match(html, /const zoomX = Math\.log2\(width \/ \(512 \* longitudeFraction\)\);[\s\S]{0,520}?zoom: Math\.min\(zoomX, zoomY\)/,
   "lo zoom iniziale non adatta tutto il dominio allo schermo");
 assert.match(html, /minZoom: startView\.zoom,\s*\n\s*maxBounds: MODEL_BOUNDS,/,
@@ -400,8 +406,12 @@ assert.match(html, /const CLOUD_LATENCY_MS = 22 \* 60 \* 1000;/,
 // segue la vista.
 assert.match(html, /const native = Math\.ceil\(spanX \/ product\.metres\);/,
   "la richiesta non e' legata al pixel nativo dello strumento");
-assert.match(html, /const maxSide = mobile \? \(memory >= 4 \? 2560 : 2048\) : 4096;/,
-  "la qualita' satellitare non sale fino a 4096 px sui dispositivi adatti");
+assert.match(html, /const CLOUD_MAX_SIDE = 4096;/,
+  "la qualita' satellitare non sale fino a 4096 px per lato");
+assert.match(html, /memory >= 8\s*\n\s*\? CLOUD_MAX_SIDE \* CLOUD_MAX_SIDE/,
+  "i dispositivi potenti non ricevono la risoluzione satellitare massima");
+assert.match(html, /const sideLimitedWidth = Math\.floor\(CLOUD_MAX_SIDE \/ Math\.max\(aspect, 1\)\);/,
+  "il lato verticale del WMS puo' superare i 4096 px");
 assert.match(html, /context\.imageSmoothingQuality = "high";/,
   "la ricampionatura delle immagini satellitari non e' in alta qualita'");
 assert.match(html, /function cloudRequestBox\(pad\)/, "il riquadro non segue la vista");

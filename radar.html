@@ -175,6 +175,7 @@
       const MODEL_BOUNDS = [[DOMAIN[0], DOMAIN[1]], [DOMAIN[2], DOMAIN[3]]];
       const CLOUD_WMS = "https://view.eumetsat.int/geoserver/wms";
       const CLOUD_SLOT_MS = 10 * 60 * 1000;
+      const CLOUD_MAX_SIDE = 4096;
       const CLOUD_PRODUCTS = {
         geocolour: { layer:"mtg_fd:rgb_geocolour", name:"GeoColour", detail:"reale di giorno · infrarosso di notte", metres:1000, mode:"scene", opacity:.96 },
         truecolour: { layer:"mtg_fd:rgb_truecolour", name:"Colori reali", detail:"osservazione naturale · solo di giorno", metres:1000, mode:"scene", opacity:.96, dayOnly:true },
@@ -281,16 +282,19 @@
         const spanX = mercatorX(box.east) - mercatorX(box.west);
         const spanY = mercatorY(box.north) - mercatorY(box.south);
         const aspect = spanY / Math.max(spanX, 1);
-        const mobile = window.innerWidth < 900;
         const memory = Number(navigator.deviceMemory) || 4;
-        const maxPixels = mobile
-          ? (memory >= 8 ? 7200000 : memory >= 4 ? 5200000 : 3200000)
-          : (memory >= 8 ? 14000000 : 10000000);
-        const maxSide = mobile ? (memory >= 4 ? 2560 : 2048) : 4096;
+        const maxPixels = memory >= 8
+          ? CLOUD_MAX_SIDE * CLOUD_MAX_SIDE
+          : (memory >= 4 ? 11000000 : 7000000);
         const nativeWidth = Math.ceil(spanX / product.metres);
         const pixelLimitedWidth = Math.floor(Math.sqrt(maxPixels / Math.max(aspect, .01)));
-        const width = Math.max(512, Math.min(nativeWidth, maxSide, pixelLimitedWidth));
-        const height = Math.max(384, Math.round(width * aspect));
+        const sideLimitedWidth = Math.floor(CLOUD_MAX_SIDE / Math.max(aspect, 1));
+        const width = Math.max(512, Math.min(
+          nativeWidth, CLOUD_MAX_SIDE, sideLimitedWidth, pixelLimitedWidth
+        ));
+        const height = Math.max(384, Math.min(
+          CLOUD_MAX_SIDE, Math.round(width * aspect)
+        ));
         return { width: width, height: height, metres: spanX / width };
       }
 

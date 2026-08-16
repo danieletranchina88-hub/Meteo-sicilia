@@ -1875,7 +1875,7 @@
               </button>
               <div id="satclouds-picker" class="level-picker" style="display: none">
                 <label for="satclouds-select">Prodotto satellitare
-                  <small>canali FCI e diagnostiche nel catalogo EUMETView</small>
+                  <small>dominio ICON-2I completo · canali FCI fino a 500 m</small>
                 </label>
                 <select id="satclouds-select" aria-label="Formato dell'immagine satellitare">
                   <optgroup label="Immagini ad alta risoluzione">
@@ -3910,10 +3910,18 @@
       // ===============================================================
 
       const CLOUD_WMS = "https://view.eumetsat.int/geoserver/wms";
-      // Il dominio oltre il quale non ha senso spingersi: e' quello del
-      // modello, ed e' anche il riquadro usato a scala sinottica.
-      const CLOUD_DOMAIN = { west: 6, south: 35, east: 20, north: 48 };
+      // Un solo dominio per dati, satellite e vincoli della mappa. Il vecchio
+      // ritaglio 6-20 E / 35-48 N lasciava scoperte le fasce esterne di
+      // ICON-2I; ora il WMS coincide esattamente con le 761 x 761 celle del
+      // modello pubblicate dalla pipeline.
+      const MODEL_DOMAIN = { west: 3.0, south: 33.7, east: 22.0, north: 48.9 };
+      const MODEL_BOUNDS = [
+        [MODEL_DOMAIN.west, MODEL_DOMAIN.south],
+        [MODEL_DOMAIN.east, MODEL_DOMAIN.north]
+      ];
+      const CLOUD_DOMAIN = MODEL_DOMAIN;
       const CLOUD_SLOT_MS = 10 * 60 * 1000;
+      const CLOUD_MAX_SIDE = 4096;
       // Latenza di diffusione misurata sul servizio: alle 13:43 UTC l'ultima
       // immagine disponibile era quella delle 13:20.
       const CLOUD_LATENCY_MS = 22 * 60 * 1000;
@@ -4141,16 +4149,23 @@
         const spanX = mercatorMetresX(box.east) - mercatorMetresX(box.west);
         const spanY = mercatorMetresY(box.north) - mercatorMetresY(box.south);
         const aspect = spanY / Math.max(spanX, 1);
-        const mobile = window.innerWidth < 900;
         const memory = Number(navigator.deviceMemory) || 4;
-        const maxPixels = mobile
-          ? (memory >= 8 ? 7200000 : memory >= 4 ? 5200000 : 3200000)
-          : (memory >= 8 ? 14000000 : 10000000);
-        const maxSide = mobile ? (memory >= 4 ? 2560 : 2048) : 4096;
+        // 4096 x 4096 e' il massimo raster utile per una singola richiesta.
+        // Sui dispositivi da almeno 8 GB si raggiunge l'intero dettaglio del
+        // VIS 0.6 (500 m) anche sul dominio completo; sui dispositivi meno
+        // dotati si riduce solo il budget totale, evitando crash della canvas.
+        const maxPixels = memory >= 8
+          ? CLOUD_MAX_SIDE * CLOUD_MAX_SIDE
+          : (memory >= 4 ? 11000000 : 7000000);
         const native = Math.ceil(spanX / product.metres);
         const pixelLimitedWidth = Math.floor(Math.sqrt(maxPixels / Math.max(aspect, 0.01)));
-        const width = Math.max(512, Math.min(native, maxSide, pixelLimitedWidth));
-        const height = Math.max(384, Math.round(width * aspect));
+        const sideLimitedWidth = Math.floor(CLOUD_MAX_SIDE / Math.max(aspect, 1));
+        const width = Math.max(512, Math.min(
+          native, CLOUD_MAX_SIDE, sideLimitedWidth, pixelLimitedWidth
+        ));
+        const height = Math.max(384, Math.min(
+          CLOUD_MAX_SIDE, Math.round(width * aspect)
+        ));
         return { width: width, height: height, metres: spanX / width };
       }
 
@@ -7655,12 +7670,6 @@
           if (map.getLayer(id)) map.setLayoutProperty(id, "visibility", visibility);
         });
       }
-
-      const MODEL_DOMAIN = { west: 3.0, south: 33.7, east: 22.0, north: 48.9 };
-      const MODEL_BOUNDS = [
-        [MODEL_DOMAIN.west, MODEL_DOMAIN.south],
-        [MODEL_DOMAIN.east, MODEL_DOMAIN.north]
-      ];
 
       function modelDomainView() {
         // Calcolo equivalente a fitBounds, ma disponibile gia' prima di creare
