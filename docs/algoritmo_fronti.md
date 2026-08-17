@@ -90,7 +90,11 @@ metrica dell'idea direzionale di Hewson, dichiaratamente non una riproduzione
 letterale dei suoi assi medi a cinque punti. Il localizzatore isotropo resta
 il riferimento; la distanza simmetrica fra le due geometrie produce
 `positionUncertaintyKm` e il loro accordo è una conferma indipendente. Anche
-la linea direzionale deve superare identici corridoi, filtri e gate.
+la linea direzionale deve superare identici corridoi e filtri. Non fonda però
+una seconda traccia autonoma: può seguire l'altro bordo della stessa fascia
+frontale finita e, se pubblicata separatamente, produrrebbe due fronti per una
+sola discontinuità fisica. Conferma quindi le geometrie `theta_w`/`theta`
+principali e ne quantifica l'incertezza di posizione.
 
 Il Thermal Front Parameter conserva il segno standard:
 
@@ -368,6 +372,18 @@ linea-linea, orientamento e lato caldo compatibili. Il buco di un'ora così
 ricucito è poi colmato dall'interpolazione descritta sopra, e la linea è
 disegnata come un unico fronte continuo. Una perdita di segnale più lunga
 resta invece una nuova identità.
+
+**Risoluzione topologica dei tronchi comuni.** Il raffinamento finale aggancia
+ogni traccia alla cresta continua del supporto fisico. Due identità temporali
+possono quindi convergere sulla stessa cresta per un lungo tratto e poi
+separarsi in rami: disegnarle entrambe in quel tratto crea la sovrapposizione
+grafica e attribuisce due identità allo stesso fronte. Dopo il raffinamento,
+un corridoio condiviso entro 25 km per almeno 140 km viene assegnato una sola
+volta alla traccia con qualità oraria, rilevamento e tipo più solidi. Della
+traccia più debole sopravvive il ramo indipendente più lungo, purché misuri
+almeno 100 km; le frazioni dei tipi locali vengono rimappate sulla nuova
+geometria. Un incrocio puntuale o una normale giunzione freddo/caldo non
+raggiunge la lunghezza minima e rimane quindi intatto.
 
 ## 5b. Qualità oraria e qualità di traccia (v15)
 

@@ -3,6 +3,8 @@
 import os
 import sys
 
+import numpy as np
+
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 import front_analysis_v12 as v12
 
@@ -114,6 +116,46 @@ if not (interpolated["detectionQuality"] is None
         and interpolated["qualityScore"] < neighbour_mean
         and interpolated["qualityScore"] < interpolated["trackQualityScore"]):
     print("FAIL: un'ora interpolata deve avere detectionQuality nulla e penalita'")
+    ok = False
+
+# --- shared-ridge topology: one trunk, independent branch retained ----------
+owner = np.array([[7.0, 44.0], [17.0, 44.0]])
+branching = np.array([
+    [4.0, 42.0], [8.0, 44.0], [15.0, 44.0], [20.0, 46.0]
+])
+topology, changed = v12.deconflict_shared_front_trunks([
+    (owner, {"trackId": 1, "qualityScore": 0.80, "typeConfidence": 0.8}),
+    (branching, {
+        "trackId": 2, "qualityScore": 0.60, "typeConfidence": 0.7,
+        "segmentTypes": [
+            {"start": 0.0, "end": 0.55, "type": "cold"},
+            {"start": 0.55, "end": 1.0, "type": "stationary"},
+        ],
+    }),
+])
+print("topologia condivisa:", changed, "feature:", len(topology))
+branch = next(item for item in topology if item[1].get("trackId") == 2)
+branch_support = v12.fd.line_support_fraction(branch[0], [owner], 25.0)
+if not (
+    changed == 1
+    and len(topology) == 2
+    and branch[1].get("topologyDeconflicted") is True
+    and branch[1].get("suppressedOverlapWithTrackIds") == [1]
+    and branch_support < 0.25
+    and branch[1]["segmentTypes"][0]["start"] == 0.0
+    and branch[1]["segmentTypes"][-1]["end"] == 1.0
+):
+    print("FAIL: il tronco comune non e' stato assegnato a una sola traccia")
+    ok = False
+
+# A front crossing another at one point is a real junction, not a duplicate.
+crossing = np.array([[12.0, 40.0], [12.0, 48.0]])
+crossed, crossing_changes = v12.deconflict_shared_front_trunks([
+    (owner, {"trackId": 1, "qualityScore": 0.80}),
+    (crossing, {"trackId": 3, "qualityScore": 0.70}),
+])
+if crossing_changes != 0 or len(crossed) != 2:
+    print("FAIL: una giunzione puntuale e' stata confusa con un tronco duplicato")
     ok = False
 
 print("ESITO:", "SUPERATO" if ok else "DA RIVEDERE")

@@ -131,6 +131,17 @@ MIN_PUBLISH_QUALITY = 0.61
 MAX_PUBLISH_UNCERTAINTY = 0.39
 MAX_FRONTS_PER_HOUR = 4
 
+# Two independently tracked lines may converge onto the same physical ridge
+# during the final support-field refinement.  A synoptic boundary cannot have
+# two different identities inside the same ~25 km frontal core for hundreds
+# of kilometres: keep the stronger track on that shared trunk and retain only
+# a genuine non-overlapping branch of the weaker one.  The minimum run keeps
+# ordinary cold/warm junctions and point crossings untouched.
+SHARED_TRUNK_RADIUS_KM = 25.0
+SHARED_TRUNK_MIN_KM = 140.0
+SHARED_TRUNK_SAMPLE_KM = 12.0
+MIN_BRANCH_LENGTH_KM = 100.0
+
 # Fase C/E: la geometria pubblicata segue la cresta di any_front_support
 # (least-cost path in front_ridge), non piu' il solo contorno TFL. Attivato
 # dopo il benchmark Fase E (supporto medio 0.43->0.50, tortuosita' non
@@ -161,6 +172,157 @@ def _json_mapping(values: dict, digits: int | None = None) -> dict:
         key: _json_number(value, digits)
         for key, value in values.items()
     }
+
+
+def _point_distances_to_line_km(
+    points: np.ndarray, line: np.ndarray
+) -> np.ndarray:
+    """Metric point-to-polyline distances for two lon/lat geometries."""
+    points = np.asarray(points, dtype=float)
+    line = np.asarray(line, dtype=float)
+    mean_lat = np.deg2rad(float(np.mean(np.r_[points[:, 1], line[:, 1]])))
+    scale_lon = fl.EARTH_KM_PER_DEG * np.cos(mean_lat)
+    points_km = np.column_stack((
+        points[:, 0] * scale_lon,
+        points[:, 1] * fl.EARTH_KM_PER_DEG,
+    ))
+    line_km = np.column_stack((
+        line[:, 0] * scale_lon,
+        line[:, 1] * fl.EARTH_KM_PER_DEG,
+    ))
+    return fd._points_to_segments_km(points_km, line_km)
+
+
+def _true_runs(mask: np.ndarray) -> list[tuple[int, int]]:
+    """Inclusive index ranges for contiguous true values."""
+    runs = []
+    start = None
+    for index, value in enumerate(np.asarray(mask, dtype=bool)):
+        if value and start is None:
+            start = index
+        elif not value and start is not None:
+            runs.append((start, index - 1))
+            start = None
+    if start is not None:
+        runs.append((start, len(mask) - 1))
+    return runs
+
+
+def _remap_segment_types(
+    properties: dict, start_fraction: float, end_fraction: float
+) -> None:
+    """Remap along-line type fractions after publishing only one branch."""
+    segments = properties.get("segmentTypes")
+    if not isinstance(segments, list) or not segments:
+        return
+    width = end_fraction - start_fraction
+    if width <= 1.0e-6:
+        properties.pop("segmentTypes", None)
+        return
+    remapped = []
+    for segment in segments:
+        try:
+            first = max(start_fraction, float(segment.get("start", 0.0)))
+            last = min(end_fraction, float(segment.get("end", 1.0)))
+        except (TypeError, ValueError):
+            continue
+        if last <= first:
+            continue
+        updated = dict(segment)
+        updated["start"] = round((first - start_fraction) / width, 3)
+        updated["end"] = round((last - start_fraction) / width, 3)
+        remapped.append(updated)
+    if remapped:
+        # Avoid rounding gaps at the new geometry endpoints.
+        remapped[0]["start"] = 0.0
+        remapped[-1]["end"] = 1.0
+        properties["segmentTypes"] = remapped
+    else:
+        properties.pop("segmentTypes", None)
+
+
+def _entry_strength(entry: tuple[np.ndarray, dict]) -> tuple[float, ...]:
+    """Deterministic ownership order for a shared geometric trunk."""
+    coordinates, properties = entry
+    return (
+        float(properties.get("qualityScore") or 0.0),
+        float(properties.get("detectionQuality") or 0.0),
+        float(properties.get("typeConfidence") or 0.0),
+        float(properties.get("trackQualityScore") or 0.0),
+        _line_length_km(np.asarray(coordinates, dtype=float)),
+    )
+
+
+def deconflict_shared_front_trunks(
+    entries: list[tuple[np.ndarray, dict]],
+    *,
+    radius_km: float = SHARED_TRUNK_RADIUS_KM,
+    minimum_shared_km: float = SHARED_TRUNK_MIN_KM,
+    minimum_branch_km: float = MIN_BRANCH_LENGTH_KM,
+) -> tuple[list[tuple[np.ndarray, dict]], int]:
+    """Publish a shared front ridge once while preserving its strongest branch.
+
+    The operation happens after geometric ridge refinement, where two valid
+    temporal tracks can otherwise snap onto exactly the same crest.  Only a
+    long, near-coincident run is removed; a local crossing or a triple-point
+    junction remains intact.  When the weaker line enters and exits the
+    shared trunk, only its longest independent branch is retained, preventing
+    a single track from being published as disconnected pieces.
+    """
+    ordered = sorted(entries, key=_entry_strength, reverse=True)
+    published: list[tuple[np.ndarray, dict]] = []
+    changed = 0
+    for original_coordinates, original_properties in ordered:
+        coordinates = np.asarray(original_coordinates, dtype=float)
+        if len(coordinates) < 2 or not published:
+            published.append((coordinates, original_properties))
+            continue
+
+        dense = fd._resample_km(coordinates, SHARED_TRUNK_SAMPLE_KM)
+        remove = np.zeros(len(dense), dtype=bool)
+        owner_ids: set[int] = set()
+        for owner_coordinates, owner_properties in published:
+            distances = _point_distances_to_line_km(dense, owner_coordinates)
+            close = distances <= radius_km
+            for first, last in _true_runs(close):
+                if _line_length_km(dense[first:last + 1]) < minimum_shared_km:
+                    continue
+                remove[first:last + 1] = True
+                owner_id = owner_properties.get("trackId")
+                if isinstance(owner_id, (int, np.integer)):
+                    owner_ids.add(int(owner_id))
+
+        if not np.any(remove):
+            published.append((coordinates, original_properties))
+            continue
+
+        # The boundary sample at the edge of the owner is also the physical
+        # junction of the surviving branch; retain that single point so the
+        # map has no artificial gap, without redrawing the common trunk.
+        fragments = []
+        for first, last in _true_runs(~remove):
+            junction_first = max(0, first - 1) if first > 0 else first
+            junction_last = min(len(dense) - 1, last + 1) if last + 1 < len(dense) else last
+            fragment = dense[junction_first:junction_last + 1]
+            length = _line_length_km(fragment)
+            fragments.append((length, junction_first, junction_last, fragment))
+        fragments.sort(key=lambda item: item[0], reverse=True)
+        if not fragments or fragments[0][0] < minimum_branch_km:
+            changed += 1
+            continue
+
+        _, first, last, fragment = fragments[0]
+        properties = dict(original_properties)
+        properties["topologyDeconflicted"] = True
+        properties["sharedGeometryRemoved"] = True
+        properties["suppressedOverlapWithTrackIds"] = sorted(owner_ids)
+        properties["originalExtentKm"] = round(_line_length_km(dense), 1)
+        properties["publishedBranchKm"] = round(_line_length_km(fragment), 1)
+        denominator = max(len(dense) - 1, 1)
+        _remap_segment_types(properties, first / denominator, last / denominator)
+        published.append((fragment, properties))
+        changed += 1
+    return published, changed
 
 
 class IconSynopticFrontAnalyzer(SynopticFrontAnalyzer):
@@ -534,9 +696,11 @@ class IconSynopticFrontAnalyzer(SynopticFrontAnalyzer):
             boundary_margin_km=70.0,
             **(self._threshold_climatology or {}),
         )
-        # Independent directional ridge geometry. It passes the same
-        # two-scale corridor and all downstream gates as the default
-        # Laplacian locator; it is not allowed to bypass them.
+        # Independent directional ridge geometry.  It confirms position and
+        # method agreement, but it is deliberately NOT an autonomous seed:
+        # both Hewson and Laplacian geometry can follow opposite edges of the
+        # same finite-width frontal zone and would otherwise create two track
+        # identities for one physical boundary.
         directional_candidates = fd.detect_fronts_two_scale(
             theta_w,
             self.longitudes,
@@ -589,9 +753,14 @@ class IconSynopticFrontAnalyzer(SynopticFrontAnalyzer):
         dry_lines = [np.asarray(c["coordinates"], dtype=float) for c in dry_candidates]
         combined = []
         for source_name, source_items, other_lines, alternate_lines in (
-            ("thetaW-laplacian", wet_candidates, dry_lines, directional_lines),
-            ("thetaW-directional", directional_candidates, dry_lines, wet_lines),
-            ("dryTheta-laplacian", dry_candidates, wet_lines, wet_lines + directional_lines),
+            (
+                "thetaW-laplacian", wet_candidates, dry_lines,
+                dry_lines + directional_lines,
+            ),
+            (
+                "dryTheta-laplacian", dry_candidates, wet_lines,
+                wet_lines + directional_lines,
+            ),
         ):
             for item in source_items:
                 candidate = dict(item)
@@ -605,6 +774,22 @@ class IconSynopticFrontAnalyzer(SynopticFrontAnalyzer):
                     ) if other_lines else 0.0,
                     2,
                 )
+                directional_matching = [
+                    line for line in directional_lines
+                    if min(
+                        fd.line_support_fraction(
+                            np.asarray(candidate["coordinates"], dtype=float),
+                            [line], 100.0,
+                        ),
+                        fd.line_support_fraction(
+                            line,
+                            [np.asarray(candidate["coordinates"], dtype=float)],
+                            100.0,
+                        ),
+                    ) >= 0.45
+                ]
+                if directional_matching:
+                    candidate["locatorSources"].append("thetaW-directional")
                 matching = [
                     line for line in alternate_lines
                     if min(
@@ -1319,6 +1504,12 @@ class IconSynopticFrontAnalyzer(SynopticFrontAnalyzer):
                     hour, np.asarray(coordinates, dtype=float)
                 )
                 by_hour.setdefault(hour, []).append((geometry, hour_properties))
+
+        deconflicted = 0
+        for hour, entries in by_hour.items():
+            by_hour[hour], changed = deconflict_shared_front_trunks(entries)
+            deconflicted += changed
+        self.analysis_summary["deconflictedSharedTrunks"] = deconflicted
         self._occlusion_hours = self._apply_occlusions(by_hour)
         self._by_hour = by_hour
 
