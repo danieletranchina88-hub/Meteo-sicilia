@@ -1,4 +1,4 @@
-# Analisi oggettiva dei fronti ICON-2I (v14)
+# Analisi oggettiva dei fronti ICON-2I (v16-consensus)
 
 ## Scopo e limite fondamentale
 
@@ -12,7 +12,7 @@ Meteorologico. `qualityScore` e `uncertaintyIndex` descrivono la coerenza
 interna delle prove in un singolo run deterministico: non sono probabilità
 calibrate e non misurano l'errore previsionale assoluto.
 
-Il metodo operativo è `icon2i-ofa-physics-guided-v14`.
+Il metodo operativo è `icon2i-ofa-physics-guided-v16-consensus`.
 
 ## Dati usati
 
@@ -21,6 +21,10 @@ Per ogni run 00/12 UTC e per tutte le 73 scadenze orarie:
 - T, QV, U e V a 850 hPa: campi obbligatori e geometria primaria;
 - PMSL: firma di saccatura e tendenza barica, opzionale;
 - T, QV, U e V a 925 hPa: coerenza verticale e vento più vicino al suolo,
+  opzionali;
+- T, QV, U e V a 700 hPa: struttura verticale, inclinazione e vento in quota,
+  opzionali;
+- U e V a 10 m su ore consecutive: controllo temporale del salto di vento,
   opzionali;
 - OMEGA a 700 hPa: attività/ascesa frontale, opzionale;
 - HSURF: controllo orografico.
@@ -79,6 +83,14 @@ Sansom e Catto (2024):
 4. estrazione delle sole isolinee `TFL = 0`;
 5. mascheramento della linea con TFP e intensità della zona baroclina
    adiacente (ABZ).
+
+In parallelo viene eseguito un secondo localizzatore: la derivata seconda di
+`|grad(theta_w)|` lungo la normale termica locale. È una realizzazione
+metrica dell'idea direzionale di Hewson, dichiaratamente non una riproduzione
+letterale dei suoi assi medi a cinque punti. Il localizzatore isotropo resta
+il riferimento; la distanza simmetrica fra le due geometrie produce
+`positionUncertaintyKm` e il loro accordo è una conferma indipendente. Anche
+la linea direzionale deve superare identici corridoi, filtri e gate.
 
 Il Thermal Front Parameter conserva il segno standard:
 
@@ -160,6 +172,17 @@ Sulla linea si calcolano inoltre:
 - velocità frontale OFA;
 - profondità della saccatura PMSL a ±100 km e tendenza isallobarica;
 - supporto 925 hPa e omega 700 hPa, quando disponibili.
+- contrasto e profilo trasversale a 700 hPa, coerenza 925–850–700 e
+  inclinazione della superficie frontale;
+- indice Parfitt-F a 925 hPa (fallback 850 hPa), con soglia di riferimento
+  `F = 1`;
+- variazione del vento a 10 m normalizzata a sei ore, incluso il classico
+  passaggio da vento da SW a vento da NW descritto dal metodo WND.
+
+Parfitt-F e WND sono campionati **solo lungo linee già termiche**: non
+generano geometrie e non sono porte d'esistenza. Sono conferme limitate,
+particolarmente utili quando i localizzatori geometrici concordano ma una
+singola diagnostica è marginale.
 
 I requisiti duri impongono un vero contrasto secco e di densità, persistenza
 del contrasto alle tre distanze, allineamento termico plausibile e geometria
@@ -170,7 +193,7 @@ L'algoritmo ragiona come un meteorologo, non come una catena di soglie:
 **individua un possibile fronte** (TFL/TFP/ABZ), **raccoglie tutte le prove
 disponibili** (contrasto di θw, temperatura secca, densità virtuale, gradiente
 secco, corridoio sinottico, lunghezza, geometria, vento, convergenza,
-vorticità, frontogenesi, saccatura, 925 hPa, omega 700 hPa), **osserva
+vorticità, frontogenesi, saccatura, 925/700 hPa, Parfitt-F, WND), **osserva
 l'evoluzione nel tempo** (durata, copertura, coerenza del moto), **confronta le
 spiegazioni alternative** e **sceglie l'ipotesi che spiega meglio l'intero
 quadro**, rendendo trasparente il motivo.
@@ -213,7 +236,7 @@ tipo freddo/caldo, non per nascondere un confine di masse d'aria reale.
 Le statistiche sono calcolate anche come frazioni della linea: un ottimo
 segnale su pochi punti non può nascondere una maggioranza incoerente.
 
-Soltanto dopo queste porte il punteggio di evidenza ordina le linee ammesse:
+Soltanto dopo queste porte il punteggio fisico di base ordina le linee ammesse:
 
 - 38% termodinamica;
 - 24% dinamica;
@@ -221,6 +244,10 @@ Soltanto dopo queste porte il punteggio di evidenza ordina le linee ammesse:
 - 10% coerenza verticale;
 - 4% attività a 700 hPa;
 - 14% struttura.
+
+Il consenso multi-metodo può aggiungere al massimo **0,04**. Non sottrae
+evidenza e non compensa un gate fallito: serve a distinguere una linea
+confermata da più metodi da una linea sostenuta da una sola geometria.
 
 È un indice trasparente e diagnostico, non machine learning addestrato su
 etichette e non una probabilità.
@@ -392,7 +419,30 @@ superficie interseca il terreno, già mascherate — sono **neutri**, mai prova
 contraria: una grave incoerenza riduce l'evidenza ma non cancella da sola un
 fronte ben sostenuto a 850 hPa.
 
+Dalla v16 lo stesso profilo è calcolato anche a 700 hPa. Le coerenze
+925–850 e 850–700 vengono combinate in `verticalCoherence3Level`; la
+differenza fra gli offset 700 e 925 hPa misura `frontalTiltKm`. L'inclinazione
+è diagnostica, non un veto, perché orografia, occlusioni e deformazione
+verticale possono produrre strutture reali non ideali.
+
 ## 6. Significato dell'incertezza
+
+Il GeoJSON separa quattro giudizi che non vanno confusi:
+
+- `existenceConfidence`: robustezza diagnostica dell'esistenza nell'ora;
+- `typeConfidence`: certezza della classificazione freddo/caldo/stazionario;
+- `positionUncertaintyKm`: disaccordo metrico fra localizzatori indipendenti;
+- `methodAgreement`: quanti controlli indipendenti concordano e quanti erano
+  disponibili.
+
+Restano euristiche esplicitamente marcate
+`heuristic-not-calibrated-probability`; `confidence` e `qualityScore` sono
+mantenuti per compatibilità con l'interfaccia esistente.
+
+Precipitazione e radar restano fuori dai gate. Lo script
+`front_impact_validation.py` misura offline tasso di precipitazione vicino e
+lontano dalle linee già rilevate: valida l'impatto meteorologico, ma non può
+creare né cancellare un fronte secco.
 
 L'indice aumenta con prove fisiche deboli, scarsa continuità, moto instabile,
 geometria dubbia o classificazione discordante. Il sito pubblica soltanto la
@@ -439,7 +489,7 @@ diagnostica già affidabile:
 
 - `thermal`, `abz`, `tfp` (nucleo termodinamico); `dry_thermal`, `moisture`;
 - `dynamic` (convergenza, vorticità, frontogenesi); `pressure` (saccatura);
-- `vertical` (925 hPa); `synoptic` (gradiente alla scala 100 km).
+- `vertical` (925/700 hPa); `synoptic` (gradiente alla scala 100 km).
 
 Con penalità esplicite: `terrain`, `edge` (bordo dominio), `missing_data`
 (NaN gestiti esplicitamente, mai azzerati in silenzio), `moisture_boundary`
@@ -506,6 +556,10 @@ La workflow blocca la pubblicazione se falliscono i test sintetici:
 
 - segno TFP e posizione sul bordo caldo;
 - invarianza a orientamento della griglia e risoluzione;
+- accordo e casi nulli del localizzatore direzionale;
+- Parfitt-F nullo in traslazione uniforme e positivo con vorticità ciclonica;
+- WND positivo nel passaggio SW→NW e nullo con vento invariato;
+- distanza metrica fra localizzatori e coerenza verticale 925–850–700;
 - rimozione di patch locali e anomalie chiuse;
 - traslazione rigida senza falsa frontogenesi;
 - convergenza con frontogenesi positiva;
@@ -514,7 +568,7 @@ La workflow blocca la pubblicazione se falliscono i test sintetici:
 - rifiuto di gradiente termico con vento divergente/contrario;
 - promontorio barico che indebolisce una linea ma non cancella un fronte
   termicamente coerente già tracciato;
-- tracciamento, classificazione e separazione delle identità.
+- tracciamento, classificazione e separazione delle identità;
 - consenso obbligatorio fra moto geometrico, fase termica e vento;
 - continuità di una traccia lunga a prevalenza "continuazione" e persistenza
   visibile di un fronte quasi stazionario passato ogni porta fisica;
@@ -546,3 +600,15 @@ La workflow blocca la pubblicazione se falliscono i test sintetici:
   [International Journal of Climatology](https://rmets.onlinelibrary.wiley.com/doi/10.1002/joc.7208)
 - Davies-Jones, 2008, temperatura potenziale di bulbo umido:
   [Monthly Weather Review](https://journals.ametsoc.org/view/journals/mwre/136/7/2007mwr2224_1.xml)
+- Parfitt, Czaja e Kwon, 2017, indice dinamico-termico F:
+  [Journal of Climate](https://doi.org/10.1175/JCLI-D-16-0904.1)
+- Schemm, Rudeva e Simmonds, 2015, rilevamento e WND temporale:
+  [Journal of Climate](https://doi.org/10.1175/JCLI-D-14-00718.1)
+- Niebler et al., 2022, classificazione multivariata e valutazione a oggetti:
+  [Weather and Climate Dynamics](https://doi.org/10.5194/wcd-3-113-2022)
+- Berry, Reeder e Jakob, 2011, climatologia globale dei fronti:
+  [Geophysical Research Letters](https://doi.org/10.1029/2010GL046451)
+- Biard e Kunkel, 2019, rilevamento supervisionato a campo continuo:
+  [Advances in Statistical Climatology, Meteorology and Oceanography](https://doi.org/10.5194/ascmo-5-147-2019)
+- Dagon et al., 2022, fronti ML e associazione con precipitazioni estreme:
+  [JGR Atmospheres](https://doi.org/10.1029/2022JD037038)

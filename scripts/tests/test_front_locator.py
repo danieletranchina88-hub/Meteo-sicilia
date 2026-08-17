@@ -10,6 +10,8 @@ Eight mandatory checks before touching real data:
  7 latitude-axis inversion    -> geometrically identical result
  8 two resolutions            -> similar position after physical smoothing
 Plus the critical standard TFP sign test (warm edge negative).
+The directional Hewson-style normal-curvature locator is checked against the
+default isotropic locator without changing the operational null cases.
 """
 
 import os
@@ -130,6 +132,30 @@ lat_lo = float(np.mean(c_lo[0]["coordinates"][:, 1])) if c_lo else np.nan
 print(f"   lat media 0.15deg={lat_hi:.3f} 0.30deg={lat_lo:.3f} (diff attesa piccola)")
 if not (c_hi and c_lo and abs(lat_hi - lat_lo) < 0.4):
     print("  FAIL: posizione troppo diversa fra risoluzioni"); ok = False
+
+# --- 9 independent directional locator ------------------------------------
+print("\n9) localizzatore direzionale parallelo:")
+c_directional = fl.locate_fronts(
+    theta_w_straight(), LON, LAT, locator_method=fl.LOCATOR_HEWSON
+)
+lat_directional = (
+    float(np.mean(c_directional[0]["coordinates"][:, 1]))
+    if c_directional else np.nan
+)
+print(f"   lat Laplaciano={lat_hi:.3f} direzionale={lat_directional:.3f}")
+if not (
+    c_directional
+    and c_directional[0]["locatorMethod"] == fl.LOCATOR_HEWSON
+    and abs(lat_hi - lat_directional) < 0.5
+):
+    print("  FAIL: localizzatore direzionale non coerente sul fronte ideale")
+    ok = False
+if fl.locate_fronts(
+    300.0 - 0.3 * (LATG - 34.0), LON, LAT,
+    locator_method=fl.LOCATOR_HEWSON,
+):
+    print("  FAIL: il direzionale crea fronti da un gradiente uniforme")
+    ok = False
 
 print("\nESITO:", "SUPERATO" if ok else "DA RIVEDERE")
 raise SystemExit(0 if ok else 1)

@@ -103,6 +103,7 @@ def physical_support_field(
     terrain: np.ndarray | None = None,
     pressure_hpa: np.ndarray | None = None,
     theta_w_925: np.ndarray | None = None,
+    theta_w_700: np.ndarray | None = None,
     synoptic_sigma_km: float = 100.0,
     refine_sigma_km: float = 45.0,
     derivative_sigma_km: float = 15.0,
@@ -151,12 +152,20 @@ def physical_support_field(
     synoptic_grad_100 = _grad_mag_100(theta_w, metrics, synoptic_sigma_km)
     synoptic = smoothstep_field(synoptic_grad_100, cfg["synoptic_grad_weak"], cfg["synoptic_grad_full"])
 
-    # --- vertical coherence (optional 925 hPa) ---------------------------
-    if theta_w_925 is not None:
-        lower_grad_100 = _grad_mag_100(np.asarray(theta_w_925, float), metrics, refine_sigma_km)
-        vertical = smoothstep_field(lower_grad_100, cfg["vertical_grad_weak"], cfg["vertical_grad_full"])
-    else:
-        vertical = np.full_like(theta_w, 0.5)
+    # --- vertical coherence (optional 925/700 hPa) -----------------------
+    vertical_levels = []
+    for level_field in (theta_w_925, theta_w_700):
+        if level_field is not None:
+            level_grad_100 = _grad_mag_100(
+                np.asarray(level_field, float), metrics, refine_sigma_km
+            )
+            vertical_levels.append(smoothstep_field(
+                level_grad_100, cfg["vertical_grad_weak"], cfg["vertical_grad_full"]
+            ))
+    vertical = (
+        np.mean(vertical_levels, axis=0)
+        if vertical_levels else np.full_like(theta_w, 0.5)
+    )
 
     # --- pressure trough (optional PMSL): laplacian>0 is a relative trough
     if pressure_hpa is not None:

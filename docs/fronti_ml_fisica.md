@@ -62,6 +62,13 @@ situazione può finire in train e test. `scale_pos_weight` gestisce la rarità
 dei fronti; early stopping usa la precision-recall AUC. Una regressione
 logistica di Platt calibra le probabilità dopo il riequilibrio.
 
+La distanza geodetica dalla linea manuale viene conservata per ogni cella.
+Le celle vicine al bordo artificiale dei 40 km ricevono un peso ridotto
+(minimo 0,35), mentre nucleo frontale e fondo lontano mantengono peso pieno:
+un errore di pochi chilometri dell'analista non viene trattato come una
+contraddizione netta. L'accettazione fuori campione controlla anche recall
+entro 20 km e falsi positivi oltre 80 km, oltre alle metriche di cella.
+
 L'artefatto corrente è un modello iniziale addestrato su 89 analisi
 sinottiche distribuite tra 2015 e 2019 (circa 658 mila celle). Le metriche
 fuori campione sono registrate, senza arrotondamenti, in

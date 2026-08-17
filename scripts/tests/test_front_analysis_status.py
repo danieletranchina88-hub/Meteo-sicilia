@@ -77,7 +77,10 @@ fake_track = {
         5: {"gateStatus": "strong", "diagnosis": "synoptic-front",
             "diagnostics": {"deltaThetaW": 3.4}},
         6: {"gateStatus": "continuation", "diagnosis": "synoptic-front",
-            "diagnostics": {"deltaThetaW": 1.1}},
+            "diagnostics": {
+                "deltaThetaW": 1.1, "positionUncertaintyKm": 28.0,
+                "methodAgreementCount": 2, "methodAvailability": 3,
+            }},
         8: {"gateStatus": "strong", "diagnosis": "synoptic-front",
             "diagnostics": {"deltaThetaW": 3.2}},
     },
@@ -92,7 +95,13 @@ if not (observed["qualityScore"] == 0.44
         and observed["detectionQuality"] == 0.40
         and observed["uncertaintyIndex"] == 0.60
         and observed["diagnostics"].get("deltaThetaW") == 1.1
-        and observed["trackDiagnostics"].get("deltaThetaW") == 3.0):
+        and observed["trackDiagnostics"].get("deltaThetaW") == 3.0
+        and observed["existenceConfidence"] == 0.44
+        and observed["typeConfidence"] == 0.5
+        and observed["positionUncertaintyKm"] == 28.0
+        and observed["methodAgreement"] == {"count": 2.0, "available": 3.0}
+        and observed["confidenceSemantics"]
+        == "heuristic-not-calibrated-probability"):
     print("FAIL: l'ora osservata deve esporre la vista oraria + quella di traccia")
     ok = False
 

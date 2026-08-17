@@ -213,5 +213,22 @@ if breeze_verdict == "synoptic-front":
     print("  FAIL: una linea corta e locale non deve vincere come fronte sinottico")
     ok = False
 
+# 11) Multi-method consensus is bounded and cannot rescue failed hard gates.
+agreed_weak = dict(weak, consensusSupport=1.0)
+agreed_score = fp.candidate_evidence(agreed_weak)
+agreed_gate = fp.candidate_gate_report(agreed_weak, agreed_score)
+print(
+    "11) bonus consenso=%.3f, gate=%s"
+    % (agreed_score["consensusEvidenceBonus"], agreed_gate["gateStatus"])
+)
+if not (
+    agreed_score["consensusEvidenceBonus"] <= 0.04
+    and agreed_score["candidateEvidence"]
+    <= weak_score["candidateEvidence"] + 0.04 + 1.0e-9
+    and not agreed_gate["continuationPass"]
+):
+    print("  FAIL: il consenso ha scavalcato un gate o supera il limite")
+    ok = False
+
 print("\nESITO:", "SUPERATO" if ok else "DA RIVEDERE")
 raise SystemExit(0 if ok else 1)

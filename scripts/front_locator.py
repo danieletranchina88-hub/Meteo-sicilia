@@ -29,7 +29,7 @@ import numpy as np
 
 EARTH_KM_PER_DEG = 111.32
 LOCATOR_LAPLACIAN = "laplacian_gradient"   # default (Sansom-Catto)
-LOCATOR_HEWSON = "hewson_directional"      # reserved for future comparison
+LOCATOR_HEWSON = "hewson_directional"
 
 
 # --------------------------------------------------------------------------
@@ -138,6 +138,35 @@ def laplacian(field: np.ndarray, metrics: dict) -> np.ndarray:
     return east_x + north_y
 
 
+def directional_curvature(
+    gradient_magnitude: np.ndarray,
+    theta_gradient_east: np.ndarray,
+    theta_gradient_north: np.ndarray,
+    metrics: dict,
+) -> np.ndarray:
+    """Second derivative of ``|grad(theta)|`` along the thermal normal.
+
+    This is a metric, local-normal implementation of the directional ridge
+    idea in Hewson (1998): unlike the isotropic Laplacian it does not mix the
+    along-front curvature into the locator.  It intentionally does not claim
+    to reproduce Hewson's implementation-specific five-point mean axes.
+    """
+    gm_e, gm_n = gradient(gradient_magnitude, metrics)
+    gm_ee, gm_en = gradient(gm_e, metrics)
+    gm_ne, gm_nn = gradient(gm_n, metrics)
+    mixed = 0.5 * (gm_en + gm_ne)
+    safe = np.maximum(
+        np.hypot(theta_gradient_east, theta_gradient_north), 1.0e-12
+    )
+    normal_e = theta_gradient_east / safe
+    normal_n = theta_gradient_north / safe
+    return (
+        normal_e * normal_e * gm_ee
+        + 2.0 * normal_e * normal_n * mixed
+        + normal_n * normal_n * gm_nn
+    )
+
+
 # --------------------------------------------------------------------------
 # Bilinear sampling on the grid (NaN outside)
 # --------------------------------------------------------------------------
@@ -218,10 +247,10 @@ def locate_fronts(
     classification).  With ``return_fields`` also returns the diagnostic
     fields for inspection/plotting.
     """
-    if locator_method != LOCATOR_LAPLACIAN:
-        raise NotImplementedError(
-            f"locator '{locator_method}' non ancora implementato "
-            f"(default: {LOCATOR_LAPLACIAN})"
+    if locator_method not in {LOCATOR_LAPLACIAN, LOCATOR_HEWSON}:
+        raise ValueError(
+            f"locator '{locator_method}' sconosciuto; "
+            f"validi: {LOCATOR_LAPLACIAN}, {LOCATOR_HEWSON}"
         )
     lon = np.asarray(longitudes, dtype=float)
     lat = np.asarray(latitudes, dtype=float)
@@ -247,8 +276,13 @@ def locate_fronts(
     grad_mag = np.hypot(grad_e, grad_n)
     grad_mag = smooth_km(grad_mag, derivative_sigma_km, metrics)
 
-    # 3) TFL = laplacian(|grad theta_w|), zero contour locates the ridge
-    tfl = laplacian(grad_mag, metrics)
+    # 3) TFL zero contour locates the ridge.  The default Sansom-Catto
+    #    locator is isotropic; the parallel Hewson-style locator follows only
+    #    the local thermal normal and is therefore less sensitive to bends.
+    if locator_method == LOCATOR_HEWSON:
+        tfl = directional_curvature(grad_mag, grad_e, grad_n, metrics)
+    else:
+        tfl = laplacian(grad_mag, metrics)
 
     # 4) Standard thermal front parameter (Hewson eq. 9).  It is NEGATIVE
     #    on the warm side of the baroclinic zone.
@@ -387,5 +421,6 @@ def locate_fronts(
             "abz_gradient": abz_gradient,
             "effective_tfp_threshold": effective_tfp,
             "effective_gradient_threshold": effective_gradient,
+            "locator_method": locator_method,
         }
     return candidates

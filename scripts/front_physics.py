@@ -154,11 +154,18 @@ def candidate_evidence(metrics: dict) -> dict:
         )
     else:
         vertical = 0.45
+    upper_contrast = _finite(metrics.get("deltaThetaW700"))
+    if np.isfinite(upper_contrast):
+        vertical = 0.85 * vertical + 0.15 * smoothstep(
+            upper_contrast, 0.4, 2.8
+        )
     # Cross-section 925/850 coherence (front_sections): prudent weight until
     # calibrated on an independent archive; missing stays strictly neutral.
-    coherence = _finite(metrics.get("verticalCoherence"))
+    coherence = _finite(metrics.get("verticalCoherence3Level"))
+    if not np.isfinite(coherence):
+        coherence = _finite(metrics.get("verticalCoherence"))
     if np.isfinite(coherence):
-        vertical = 0.80 * vertical + 0.20 * float(np.clip(coherence, 0.0, 1.0))
+        vertical = 0.78 * vertical + 0.22 * float(np.clip(coherence, 0.0, 1.0))
 
     omega = _finite(metrics.get("omega700PaS"))
     activity = smoothstep(-omega, -0.03, 0.20) if np.isfinite(omega) else 0.50
@@ -172,7 +179,7 @@ def candidate_evidence(metrics: dict) -> dict:
         [synoptic, length, shape, terrain], weights=[1.4, 0.8, 0.8, 0.6]
     ))
 
-    evidence = float(np.clip(
+    base_evidence = float(np.clip(
         0.38 * thermal
         + 0.24 * dynamic
         + 0.10 * pressure
@@ -182,6 +189,15 @@ def candidate_evidence(metrics: dict) -> dict:
         0.0,
         1.0,
     ))
+    # Multi-method agreement is confirmation, not a substitute for any
+    # non-compensating gate. Missing evidence is neutral and disagreement
+    # never erases a physically sound front. The maximum bonus is 0.04.
+    consensus = _finite(metrics.get("consensusSupport"))
+    consensus_bonus = (
+        0.08 * max(0.0, min(consensus, 1.0) - 0.50)
+        if np.isfinite(consensus) else 0.0
+    )
+    evidence = float(np.clip(base_evidence + consensus_bonus, 0.0, 1.0))
     components = {
         "thermal": round(thermal, 3),
         "dynamic": round(dynamic, 3),
@@ -189,9 +205,13 @@ def candidate_evidence(metrics: dict) -> dict:
         "vertical": round(float(vertical), 3),
         "activity": round(float(activity), 3),
         "structural": round(structural, 3),
+        "consensus": round(float(consensus), 3) if np.isfinite(consensus) else 0.5,
     }
     return {
         "candidateEvidence": round(evidence, 3),
+        "physicalCandidateEvidence": round(evidence, 3),
+        "preConsensusEvidence": round(base_evidence, 3),
+        "consensusEvidenceBonus": round(consensus_bonus, 3),
         "evidenceComponents": components,
     }
 

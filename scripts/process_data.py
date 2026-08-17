@@ -283,8 +283,9 @@ def prepare_icon_front_analyzer(run_dt):
 
     T/QV/U/V at 850 hPa are mandatory because they define the objective
     frontal geometry. T/QV and U/V at 925 hPa test whether both the air-mass
-    boundary and the cross-front flow survive closer to the surface; omega
-    at 700 hPa is a secondary ascent diagnostic.
+    boundary and the cross-front flow survive closer to the surface. T/QV/U/V
+    at 700 hPa measure vertical coherence and tilt; omega is a secondary
+    ascent diagnostic. Consecutive 10 m winds supply a temporal WND check.
     """
     run_tag = run_dt.strftime("%Y%m%d%H")
     common = f"ICON_2I_SURFACE_PRESSURE_LEVELS_{run_tag}"
@@ -308,6 +309,8 @@ def prepare_icon_front_analyzer(run_dt):
         "omega_700": (f"{run_base}/OMEGA/{pressure_file_700}", "omega700.grib"),
         "temperature_700": (f"{run_base}/T/{pressure_file_700}", "t700_ml.grib"),
         "humidity_700": (f"{run_base}/QV/{pressure_file_700}", "q700_ml.grib"),
+        "u_wind_700": (f"{run_base}/U/{pressure_file_700}", "u700.grib"),
+        "v_wind_700": (f"{run_base}/V/{pressure_file_700}", "v700.grib"),
         "u_wind_500": (f"{run_base}/U/{pressure_file_500}", "u500_ml.grib"),
         "v_wind_500": (f"{run_base}/V/{pressure_file_500}", "v500_ml.grib"),
         "geopotential_500": (f"{run_base}/FI/{pressure_file_500}", "fi500_ml.grib"),
@@ -321,7 +324,8 @@ def prepare_icon_front_analyzer(run_dt):
     optional_fields = {
         "pressure", "temperature_925", "humidity_925",
         "u_wind_925", "v_wind_925", "omega_700",
-        "temperature_700", "humidity_700", "u_wind_500", "v_wind_500",
+        "temperature_700", "humidity_700", "u_wind_700", "v_wind_700",
+        "u_wind_500", "v_wind_500",
         "geopotential_500", "u_wind_10", "v_wind_10",
     }
 
@@ -410,6 +414,12 @@ def prepare_icon_front_analyzer(run_dt):
             lower_humidity_path=paths.get("humidity_925"),
             lower_u_wind_path=paths.get("u_wind_925"),
             lower_v_wind_path=paths.get("v_wind_925"),
+            upper_temperature_path=paths.get("temperature_700"),
+            upper_humidity_path=paths.get("humidity_700"),
+            upper_u_wind_path=paths.get("u_wind_700"),
+            upper_v_wind_path=paths.get("v_wind_700"),
+            surface_u_wind_path=paths.get("u_wind_10"),
+            surface_v_wind_path=paths.get("v_wind_10"),
             omega_700_path=paths.get("omega_700"),
             downsample=4,
             bounds=(3.0, 22.0, 33.7, 48.9),

@@ -88,5 +88,24 @@ empty = fs.profile_diagnostics(np.empty((0, 7)))
 if empty["profileValidFraction"] != 0.0:
     print("  FAIL: linea vuota non gestita"); ok = False
 
+# 5) complete 925-850-700 structure ----------------------------------------
+theta_700 = front_field(41.75, width_deg=0.75, amplitude_k=5.5)
+diag_700 = fs.profile_diagnostics(
+    fs.cross_profiles(theta_700, LON, LAT, line, warm_normal)
+)
+multi = fs.multilevel_vertical_coherence(diag_925, diag_850, diag_700)
+missing_upper = fs.multilevel_vertical_coherence(diag_925, diag_850, None)
+print("5) struttura verticale 925-850-700:", multi)
+if (
+    multi["verticalCoherence3Level"] is None
+    or multi["verticalCoherence3Level"] < 0.55
+    or multi["frontalTiltKm"] is None
+):
+    print("  FAIL: struttura coerente a tre livelli non riconosciuta")
+    ok = False
+if missing_upper["verticalCoherence3Level"] != coh_good:
+    print("  FAIL: 700 mancante non resta neutrale")
+    ok = False
+
 print("\nESITO:", "SUPERATO" if ok else "DA RIVEDERE")
 raise SystemExit(0 if ok else 1)
