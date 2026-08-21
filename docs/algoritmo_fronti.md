@@ -221,19 +221,6 @@ esattamente quanto è migliorata la misura, annullandola in silenzio.
 Vengono inoltre respinte anomalie quasi chiuse, hairpin molto sinuosi,
 duplicati paralleli e linee prevalentemente sopra terreno elevato.
 
-### Interruzioni brevi non spezzano la linea
-
-Una zona frontale si indebolisce localmente — attraversando una catena
-montuosa, una linea di costa, il bordo della maschera 925 hPa — senza
-cessare di esistere. Tagliare il contorno a ogni avvallamento non produce
-due fronti: produce due frammenti di un fronte, e il danno arriva al
-tracciamento. Misurato sul run reale, lo stesso confine veniva pubblicato
-come la sua metà settentrionale alle 02 UTC e come quella meridionale alle
-03 UTC, a 307 km di distanza: la traccia si spezzava e **quattordici ore di
-un vero fronte freddo da 1000 km restavano non pubblicate**, ora di analisi
-compresa. Le interruzioni più corte di 90 km lungo il contorno vengono
-quindi ricucite; una lacuna vera fra due confini distinti li separa ancora.
-
 ## 4. Controlli fisici indipendenti
 
 Ogni linea viene orientata in modo univoco con l'aria calda a sinistra. Le
@@ -751,8 +738,6 @@ La workflow blocca la pubblicazione se falliscono i test sintetici:
   sui quattro bordi del dominio;
 - la ZBA supera il gradiente sulla linea, non supera il massimo reale del
   campo e raggiunge la zona;
-- un'interruzione breve del mascheramento viene ricucita, una lacuna vera no,
-  e una coda al bordo del contorno non viene scambiata per un'interruzione;
 - la calibrazione adattiva non supera il limite di irrigidimento;
 - il verdetto non oscilla lungo il contrasto di densità e il margine di
   protezione è continuo (il salto si riduce infittendo il campionamento,

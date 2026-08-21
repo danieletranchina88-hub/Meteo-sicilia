@@ -210,28 +210,8 @@ else:
         print(f"  FAIL: la ZBA ({abz:.2f}) non raggiunge la zona ({peak:.2f})")
         ok = False
 
-# --- 12 short mask interruptions must not split one front ------------------
-# A frontal zone that weakens over a limited stretch is one front, not two.
-print("\n12) interruzione breve ricucita, lacuna vera no:")
-coords = np.column_stack((np.linspace(5.0, 15.0, 60), np.full(60, 42.0)))
-keep = np.ones(60, dtype=bool)
-keep[28:31] = False           # ~50 km di interruzione
-bridged = fl._bridge_short_gaps(coords, keep, 90.0)
-if not bridged[28:31].all():
-    print("  FAIL: interruzione breve non ricucita"); ok = False
-keep_wide = np.ones(60, dtype=bool)
-keep_wide[20:40] = False      # ~340 km: due strutture distinte
-bridged_wide = fl._bridge_short_gaps(coords, keep_wide, 90.0)
-if bridged_wide[20:40].any():
-    print("  FAIL: lacuna vera ricucita per errore"); ok = False
-edge = np.ones(60, dtype=bool)
-edge[:5] = False              # il fronte sfuma al bordo: non e' un'interruzione
-if fl._bridge_short_gaps(coords, edge, 90.0)[:5].any():
-    print("  FAIL: coda al bordo trattata come interruzione interna"); ok = False
-print("   breve ricucita, larga separata, coda al bordo intatta")
-
-# --- 13 the in-line quantile may not run away from the published threshold --
-print("\n13) calibrazione adattiva limitata:")
+# --- 12 the in-line quantile may not run away from the published threshold --
+print("\n12) calibrazione adattiva limitata:")
 noisy_field = theta_w_straight() + 0.9 * np.random.default_rng(7).standard_normal(LONG.shape)
 _, dn = fl.locate_fronts(noisy_field, LON, LAT, tfp_threshold=-2.5e-5,
                          tfp_full_strength=-9.0e-5, abz_gradient_threshold=0.90,

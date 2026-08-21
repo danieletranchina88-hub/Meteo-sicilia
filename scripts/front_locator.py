@@ -317,48 +317,6 @@ def _line_length_km(coordinates: np.ndarray) -> float:
     return float(np.sum(np.hypot(dx, dy)))
 
 
-def _bridge_short_gaps(
-    coordinates: np.ndarray, keep: np.ndarray, bridge_km: float
-) -> np.ndarray:
-    """Re-accept sub-threshold stretches shorter than ``bridge_km``.
-
-    A frontal zone weakens locally -- crossing a mountain range, a coastline,
-    the edge of the 925 hPa mask -- without ceasing to exist.  Cutting the
-    contour at every such dip does not produce two fronts, it produces two
-    fragments of one front, and the damage lands on the tracker: measured on
-    a real ICON-2I run the same boundary was published as its northern half
-    at 02 UTC and its southern half at 03 UTC, 307 km apart, so the track
-    broke and fourteen hours of a genuine 1000-km cold front went unpublished.
-
-    Only interruptions shorter than ``bridge_km`` are bridged, so a real gap
-    between two distinct boundaries still separates them.
-    """
-    keep = np.asarray(keep, dtype=bool).copy()
-    if bridge_km <= 0.0 or keep.size < 3 or not keep.any():
-        return keep
-    segment_km = np.zeros(len(coordinates))
-    if len(coordinates) > 1:
-        lat_mid = np.deg2rad(0.5 * (coordinates[:-1, 1] + coordinates[1:, 1]))
-        segment_km[1:] = np.hypot(
-            np.diff(coordinates[:, 0]) * EARTH_KM_PER_DEG * np.cos(lat_mid),
-            np.diff(coordinates[:, 1]) * EARTH_KM_PER_DEG,
-        )
-    index = 0
-    while index < len(keep):
-        if keep[index]:
-            index += 1
-            continue
-        start = index
-        while index < len(keep) and not keep[index]:
-            index += 1
-        # Interior gaps only: a weak run reaching either end of the contour
-        # is the front fading out, not an interruption to bridge.
-        if start > 0 and index < len(keep):
-            if float(np.sum(segment_km[start:index])) <= float(bridge_km):
-                keep[start:index] = True
-    return keep
-
-
 def _split_where(coordinates: np.ndarray, keep: np.ndarray, min_points: int = 4) -> list:
     pieces, start = [], None
     keep = np.asarray(keep, dtype=bool)
@@ -389,7 +347,6 @@ def locate_fronts(
     abz_gradient_full_strength: float = 1.20,
     min_length_km: float = 250.0,
     boundary_margin_km: float = 60.0,
-    gap_bridge_km: float = 90.0,
     adaptive_thresholds: bool = True,
     locator_method: str = LOCATOR_LAPLACIAN,
     return_fields: bool = False,
@@ -562,7 +519,6 @@ def locate_fronts(
             & (line_tfp < effective_tfp)
             & (abz_grad > effective_gradient)
         )
-        keep = _bridge_short_gaps(coordinates, keep, gap_bridge_km)
         for piece in _split_where(coordinates, keep):
             if _line_length_km(piece) < min_length_km:
                 continue
