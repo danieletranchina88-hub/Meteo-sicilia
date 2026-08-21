@@ -131,5 +131,66 @@ print(f"   lat media 0.15deg={lat_hi:.3f} 0.30deg={lat_lo:.3f} (diff attesa picc
 if not (c_hi and c_lo and abs(lat_hi - lat_lo) < 0.4):
     print("  FAIL: posizione troppo diversa fra risoluzioni"); ok = False
 
+# --- 9 the ABZ measures the zone, not the line -----------------------------
+# On the warm edge the gradient has not yet peaked, so a correct ABZ must be
+# strictly larger than |grad theta_w| on the line, and must land on the true
+# maximum of the gradient across the zone.
+print("\n9) zona baroclina adiacente misurata dove sta:")
+field = theta_w_straight()
+cands, diag = fl.locate_fronts(field, LON, LAT, return_fields=True)
+if not cands:
+    print("  FAIL: nessun candidato per la prova ZBA"); ok = False
+else:
+    line = cands[0]["coordinates"]
+    on_line = fl._sample(diag["grad_mag_100"], line, LON, LAT,
+                         fl.grid_metrics(LON, LAT)["dlon"],
+                         fl.grid_metrics(LON, LAT)["dlat"])
+    abz = cands[0]["medianAbzGradient"]
+    peak = float(np.nanmax(diag["grad_mag_100"]))
+    print(f"   |grad| sulla linea={np.nanmedian(on_line):.2f} "
+          f"ZBA={abz:.2f} massimo del campo={peak:.2f} K/100km")
+    if not abz > np.nanmedian(on_line) * 1.05:
+        print("  FAIL: la ZBA non supera il gradiente sulla linea"); ok = False
+    if not abz <= peak * 1.02:
+        print("  FAIL: la ZBA supera il massimo reale del campo"); ok = False
+    # The walk is bounded by the analysis scale, so a zone wider than that
+    # scale is sampled on its flank rather than exactly on its crest.
+    if not abz >= 0.75 * peak:
+        print(f"  FAIL: la ZBA ({abz:.2f}) non raggiunge la zona ({peak:.2f})")
+        ok = False
+
+# --- 10 short mask interruptions must not split one front ------------------
+# A frontal zone that weakens over a limited stretch is one front, not two.
+print("\n10) interruzione breve ricucita, lacuna vera no:")
+coords = np.column_stack((np.linspace(5.0, 15.0, 60), np.full(60, 42.0)))
+keep = np.ones(60, dtype=bool)
+keep[28:31] = False           # ~50 km di interruzione
+bridged = fl._bridge_short_gaps(coords, keep, 90.0)
+if not bridged[28:31].all():
+    print("  FAIL: interruzione breve non ricucita"); ok = False
+keep_wide = np.ones(60, dtype=bool)
+keep_wide[20:40] = False      # ~340 km: due strutture distinte
+bridged_wide = fl._bridge_short_gaps(coords, keep_wide, 90.0)
+if bridged_wide[20:40].any():
+    print("  FAIL: lacuna vera ricucita per errore"); ok = False
+edge = np.ones(60, dtype=bool)
+edge[:5] = False              # il fronte sfuma al bordo: non e' un'interruzione
+if fl._bridge_short_gaps(coords, edge, 90.0)[:5].any():
+    print("  FAIL: coda al bordo trattata come interruzione interna"); ok = False
+print("   breve ricucita, larga separata, coda al bordo intatta")
+
+# --- 11 the in-line quantile may not run away from the published threshold --
+print("\n11) calibrazione adattiva limitata:")
+noisy_field = theta_w_straight() + 0.9 * np.random.default_rng(7).standard_normal(LONG.shape)
+_, dn = fl.locate_fronts(noisy_field, LON, LAT, tfp_threshold=-2.5e-5,
+                         tfp_full_strength=-9.0e-5, abz_gradient_threshold=0.90,
+                         abz_gradient_full_strength=1.70, return_fields=True)
+limit = -2.5e-5 * fl.ADAPTIVE_TIGHTENING_LIMIT
+print(f"   TFP efficace={dn['effective_tfp_threshold']:.3e} (limite {limit:.3e})")
+if dn["effective_tfp_threshold"] < limit - 1e-12:
+    print("  FAIL: il quantile ha superato il limite di irrigidimento"); ok = False
+if dn["effective_gradient_threshold"] > 0.90 * fl.ADAPTIVE_TIGHTENING_LIMIT + 1e-9:
+    print("  FAIL: la soglia di gradiente ha superato il limite"); ok = False
+
 print("\nESITO:", "SUPERATO" if ok else "DA RIVEDERE")
 raise SystemExit(0 if ok else 1)

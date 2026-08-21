@@ -6364,59 +6364,73 @@
         }
       }
 
-      function drawFrontTriangle(x, y, angle, color, alpha) {
+      // Front cartography scales with the map, the way a hand-drawn chart
+      // does: on a continental view the boundary must read as one clean
+      // synoptic line, and zoomed in it must not degenerate into a chain of
+      // oversized triangles. One factor drives symbol size, line weight and
+      // symbol spacing together, so their proportions never drift.
+      function frontDrawScale() {
+        const zoom = map && map.getZoom ? map.getZoom() : 5;
+        return clamp(0.78 + (zoom - 4) * 0.085, 0.78, 1.35);
+      }
+
+      function drawFrontTriangle(x, y, angle, color, alpha, scale) {
+        const s = scale || 1;
         vectorContext.save();
         vectorContext.translate(x, y);
         vectorContext.rotate(angle);
         vectorContext.globalAlpha = alpha;
         vectorContext.beginPath();
-        vectorContext.moveTo(-6.2, 0);
-        vectorContext.lineTo(6.2, 0);
-        vectorContext.lineTo(0, -10.5);
+        vectorContext.moveTo(-6.2 * s, 0);
+        vectorContext.lineTo(6.2 * s, 0);
+        vectorContext.lineTo(0, -10.5 * s);
         vectorContext.closePath();
         vectorContext.fillStyle = color;
         vectorContext.fill();
         vectorContext.strokeStyle = "rgba(255,255,255,0.94)";
-        vectorContext.lineWidth = 1.25;
+        vectorContext.lineWidth = 1.25 * s;
         vectorContext.stroke();
         vectorContext.restore();
       }
 
-      function drawFrontSemicircle(x, y, angle, color, alpha) {
+      function drawFrontSemicircle(x, y, angle, color, alpha, scale) {
+        const s = scale || 1;
         vectorContext.save();
         vectorContext.translate(x, y);
         vectorContext.rotate(angle);
         vectorContext.globalAlpha = alpha;
         vectorContext.beginPath();
-        vectorContext.arc(0, 0, 7, 0, Math.PI, false);
+        vectorContext.arc(0, 0, 7 * s, 0, Math.PI, false);
         vectorContext.strokeStyle = "rgba(255,255,255,0.94)";
-        vectorContext.lineWidth = 5.6;
+        vectorContext.lineWidth = 5.6 * s;
         vectorContext.stroke();
         vectorContext.strokeStyle = color;
-        vectorContext.lineWidth = 3.3;
+        vectorContext.lineWidth = 3.3 * s;
         vectorContext.stroke();
         vectorContext.restore();
       }
 
       // Occluded front: triangle and semicircle on the SAME side (the
       // triangle bulges toward -y, so this semicircle bulges the same way).
-      function drawOccludedSemicircle(x, y, angle, color, alpha) {
+      function drawOccludedSemicircle(x, y, angle, color, alpha, scale) {
+        const s = scale || 1;
         vectorContext.save();
         vectorContext.translate(x, y);
         vectorContext.rotate(angle);
         vectorContext.globalAlpha = alpha;
         vectorContext.beginPath();
-        vectorContext.arc(0, 0, 7, Math.PI, 2 * Math.PI, false);
+        vectorContext.arc(0, 0, 7 * s, Math.PI, 2 * Math.PI, false);
         vectorContext.strokeStyle = "rgba(255,255,255,0.94)";
-        vectorContext.lineWidth = 5.6;
+        vectorContext.lineWidth = 5.6 * s;
         vectorContext.stroke();
         vectorContext.strokeStyle = color;
-        vectorContext.lineWidth = 3.3;
+        vectorContext.lineWidth = 3.3 * s;
         vectorContext.stroke();
         vectorContext.restore();
       }
 
-      function strokeFrontLine(points, frontType, alpha) {
+      function strokeFrontLine(points, frontType, alpha, scale) {
+        const s = scale || 1;
         vectorContext.beginPath();
         points.forEach(function (point, index) {
           if (index === 0) vectorContext.moveTo(point.x, point.y);
@@ -6424,14 +6438,14 @@
         });
         vectorContext.globalAlpha = alpha;
         vectorContext.strokeStyle = "rgba(255,255,255,0.94)";
-        vectorContext.lineWidth = 5.4;
+        vectorContext.lineWidth = 5.4 * s;
         vectorContext.stroke();
 
         if (frontType === "uncertain") {
           vectorContext.save();
-          vectorContext.setLineDash([8, 7]);
+          vectorContext.setLineDash([8 * s, 7 * s]);
           vectorContext.strokeStyle = "#30343b";
-          vectorContext.lineWidth = 2.7;
+          vectorContext.lineWidth = 2.7 * s;
           vectorContext.stroke();
           vectorContext.restore();
           vectorContext.globalAlpha = 1;
@@ -6440,7 +6454,7 @@
 
         if (frontType === "occluded") {
           vectorContext.strokeStyle = "#8b3fd0";
-          vectorContext.lineWidth = 2.9;
+          vectorContext.lineWidth = 2.9 * s;
           vectorContext.stroke();
           vectorContext.globalAlpha = 1;
           return;
@@ -6448,14 +6462,14 @@
 
         if (frontType !== "stationary") {
           vectorContext.strokeStyle = frontType === "cold" ? "#0875df" : "#e32638";
-          vectorContext.lineWidth = 2.9;
+          vectorContext.lineWidth = 2.9 * s;
           vectorContext.stroke();
           vectorContext.globalAlpha = 1;
           return;
         }
 
         let travelled = 0;
-        const bandLength = 28;
+        const bandLength = 28 * s;
         for (let index = 1; index < points.length; index += 1) {
           const start = points[index - 1];
           const end = points[index];
@@ -6474,7 +6488,7 @@
             vectorContext.moveTo(start.x + dx * from, start.y + dy * from);
             vectorContext.lineTo(start.x + dx * to, start.y + dy * to);
             vectorContext.strokeStyle = band % 2 === 0 ? "#0875df" : "#e32638";
-            vectorContext.lineWidth = 2.9;
+            vectorContext.lineWidth = 2.9 * s;
             vectorContext.stroke();
             position += piece;
             travelled += piece;
@@ -6518,25 +6532,37 @@
       }
 
       // Draw one line (or one segment) with the symbols of a given front type.
-      function drawFrontStyled(points, frontType, alpha) {
+      // Symbol side follows the WMO convention and is guaranteed upstream:
+      // the analyzer orients every published line with the warm air on the
+      // left, so the local -y of a symbol is the warm side and +y the cold
+      // one. Cold pips therefore point into the warm air (the direction a
+      // cold front advances), warm bumps into the cold air, an occluded
+      // front carries both on the same side, and a stationary front carries
+      // them on opposite sides -- exactly as they are drawn by hand.
+      function drawFrontStyled(points, frontType, alpha, scale) {
         if (points.length < 2) return;
-        strokeFrontLine(points, frontType, alpha);
-        walkFront(points, window.innerWidth < 900 ? 48 : 54, 25, function (x, y, angle, index) {
+        const s = scale || frontDrawScale();
+        strokeFrontLine(points, frontType, alpha, s);
+        // Spacing scales with the symbols so the rhythm of the line stays
+        // constant: symbols that grow without their spacing growing end up
+        // overlapping into a solid band.
+        const spacing = (window.innerWidth < 900 ? 48 : 54) * s;
+        walkFront(points, spacing, 25 * s, function (x, y, angle, index) {
           if (x < -18 || x > window.innerWidth + 18 || y < 70 || y > window.innerHeight + 18) return;
           if (frontType === "cold") {
-            drawFrontTriangle(x, y, angle, "#0875df", alpha);
+            drawFrontTriangle(x, y, angle, "#0875df", alpha, s);
           } else if (frontType === "warm") {
-            drawFrontSemicircle(x, y, angle, "#e32638", alpha);
+            drawFrontSemicircle(x, y, angle, "#e32638", alpha, s);
           } else if (frontType === "occluded") {
             if (index % 2 === 0) {
-              drawFrontTriangle(x, y, angle, "#8b3fd0", alpha);
+              drawFrontTriangle(x, y, angle, "#8b3fd0", alpha, s);
             } else {
-              drawOccludedSemicircle(x, y, angle, "#8b3fd0", alpha);
+              drawOccludedSemicircle(x, y, angle, "#8b3fd0", alpha, s);
             }
           } else if (frontType === "stationary" && index % 2 === 0) {
-            drawFrontTriangle(x, y, angle, "#0875df", alpha);
+            drawFrontTriangle(x, y, angle, "#0875df", alpha, s);
           } else if (frontType === "stationary") {
-            drawFrontSemicircle(x, y, angle, "#e32638", alpha);
+            drawFrontSemicircle(x, y, angle, "#e32638", alpha, s);
           }
         });
       }
@@ -6555,6 +6581,7 @@
         vectorContext.save();
         vectorContext.lineCap = "round";
         vectorContext.lineJoin = "round";
+        const drawScale = frontDrawScale();
 
         features.forEach(function (feature) {
           const coordinates = feature.geometry && feature.geometry.coordinates;
@@ -6591,10 +6618,10 @@
               if (!(t1 > t0)) return;
               const segType = ["cold", "warm", "stationary", "occluded"].includes(seg.type)
                 ? seg.type : frontType;
-              drawFrontStyled(frontSlice(points, t0, t1), segType, alpha);
+              drawFrontStyled(frontSlice(points, t0, t1), segType, alpha, drawScale);
             });
           } else {
-            drawFrontStyled(points, frontType, alpha);
+            drawFrontStyled(points, frontType, alpha, drawScale);
           }
         });
 

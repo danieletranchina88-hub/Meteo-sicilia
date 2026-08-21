@@ -129,6 +129,14 @@ MIN_PUBLISH_QUALITY = 0.61
 MAX_PUBLISH_UNCERTAINTY = 0.39
 MAX_FRONTS_PER_HOUR = 4
 
+# Two published lines this close over this much of their length are the same
+# boundary drawn twice, not two fronts. Deliberately looser than the 55 km /
+# 0.68 used to de-duplicate candidates: by publication time the two copies
+# have been snapped to the support crest independently and drift further
+# apart than the raw candidates did.
+DUPLICATE_RADIUS_KM = 60.0
+DUPLICATE_OVERLAP = 0.60
+
 # Fase C/E: la geometria pubblicata segue la cresta di any_front_support
 # (least-cost path in front_ridge), non piu' il solo contorno TFL. Attivato
 # dopo il benchmark Fase E (supporto medio 0.43->0.50, tortuosita' non
@@ -1078,9 +1086,77 @@ class IconSynopticFrontAnalyzer(SynopticFrontAnalyzer):
                 geometry = self._refine_geometry(
                     hour, np.asarray(coordinates, dtype=float)
                 )
+                geometry = self._orient_published_line(
+                    hour, geometry, hour_properties
+                )
                 by_hour.setdefault(hour, []).append((geometry, hour_properties))
         self._occlusion_hours = self._apply_occlusions(by_hour)
         self._by_hour = by_hour
+
+    def _orient_published_line(
+        self, hour: int, geometry: np.ndarray, properties: dict
+    ) -> np.ndarray:
+        """Guarantee warm-air-on-the-left on the geometry actually published.
+
+        The whole symbol convention hangs on this. The renderer places a cold
+        front's pips on the left of the direction of travel and a warm
+        front's bumps on the right, so if the warm air is on the wrong side
+        the front is drawn as if it advanced backwards.
+
+        ``_orient_warm_left`` establishes the convention on the *candidate*,
+        but the published line is not the candidate: it is snapped onto the
+        support crest and can be sliced by the occlusion step, and the stored
+        warm normal is not recomputed. Measured over one ICON-2I run, 2 of 80
+        published lines came out with the warm air on the right -- both
+        boundaries whose two sides differ by only a few tenths of a kelvin,
+        where the inherited orientation is least reliable.
+
+        So the side is re-measured against the theta_w field itself, on the
+        final geometry. Reversing the point order moves the symbols across
+        the line; any per-segment character is mirrored with it so a segment
+        keeps the stretch of line it describes.
+        """
+        line = np.asarray(geometry, dtype=float)
+        if line.ndim != 2 or len(line) < 3:
+            return line
+        try:
+            metrics = fl.grid_metrics(self.longitudes, self.latitudes)
+            theta_w = fl.smooth_km(self._theta_w(hour), REFINE_SIGMA_KM, metrics)
+        except Exception:
+            return line
+
+        latitude = line[:, 1]
+        lon_scale = 111.32 * np.maximum(np.cos(np.deg2rad(latitude)), 0.25)
+        projected = np.column_stack((line[:, 0] * lon_scale, latitude * 111.32))
+        tangent = np.gradient(projected, axis=0)
+        tangent /= np.maximum(np.hypot(tangent[:, 0], tangent[:, 1])[:, None], 1.0e-9)
+        left = np.column_stack((-tangent[:, 1], tangent[:, 0]))
+
+        offset = 60.0
+        step = np.column_stack((
+            left[:, 0] * offset / lon_scale, left[:, 1] * offset / 111.32
+        ))
+        left_theta = self._sample(theta_w, line + step)
+        right_theta = self._sample(theta_w, line - step)
+        usable = np.isfinite(left_theta) & np.isfinite(right_theta)
+        if int(np.count_nonzero(usable)) < 3:
+            return line
+        contrast = _finite_median((left_theta - right_theta)[usable])
+        if not np.isfinite(contrast) or contrast >= 0.0:
+            return line
+
+        segments = properties.get("segmentTypes")
+        if segments:
+            properties["segmentTypes"] = [
+                {
+                    **segment,
+                    "start": 1.0 - float(segment.get("end", 1.0)),
+                    "end": 1.0 - float(segment.get("start", 0.0)),
+                }
+                for segment in reversed(segments)
+            ]
+        properties["warmSideReoriented"] = True
+        return line[::-1].copy()
 
     def _apply_occlusions(self, by_hour: dict) -> int:
         """Relabel the wrapped cold-front branch of an occluding wave.
@@ -1379,10 +1455,31 @@ class IconSynopticFrontAnalyzer(SynopticFrontAnalyzer):
         entries = list(self._by_hour.get(hour, []))
         entries.sort(key=lambda item: item[1]["qualityScore"], reverse=True)
         features = []
+        # One boundary, one line. Candidates are de-duplicated within an hour,
+        # but the published output is per TRACK, and two tracks can each hand
+        # in a line for the same hour with nothing comparing them. Measured on
+        # a real run, two "cold" features at +52 h overlapped over 72% of their
+        # length within 60 km, and 64% at +18 h: the map showed one front drawn
+        # twice, and because the two copies were slightly differently oriented
+        # their pips fell on visually opposite sides, which reads as an error
+        # even though each line was individually correct. No forecaster draws
+        # that. The weaker copy is dropped; entries are already sorted by
+        # quality, so what survives is the better-supported line.
+        published_lines: list[np.ndarray] = []
         for coordinates, properties in entries[:MAX_FRONTS_PER_HOUR]:
             simplified = _rdp(coordinates, 0.025)
             if len(simplified) < 2 or _line_length_km(simplified) < 100.0:
                 continue
+            duplicate = any(
+                min(
+                    fd.line_support_fraction(simplified, [kept], DUPLICATE_RADIUS_KM),
+                    fd.line_support_fraction(kept, [simplified], DUPLICATE_RADIUS_KM),
+                ) >= DUPLICATE_OVERLAP
+                for kept in published_lines
+            )
+            if duplicate:
+                continue
+            published_lines.append(np.asarray(simplified, dtype=float))
             features.append({
                 "type": "Feature",
                 "geometry": {

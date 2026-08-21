@@ -252,7 +252,19 @@ def differential_diagnosis(metrics: dict) -> dict:
     trough = _neutral(metrics.get("pressureTroughHpa"), -0.15, 1.8, 0.45)
 
     dynamic = 0.48 * wind + 0.30 * convergence + 0.12 * vorticity + 0.10 * frontogenesis
-    thermal_core = min(theta_w, dry, density)  # AND-like: all three present
+    # All three contrasts must be present -- theta_w, dry temperature and
+    # density -- but the AND is soft.  A hard ``min`` lets the single weakest
+    # ingredient annihilate the score, and the weakest is almost always the
+    # density contrast: over one ICON-2I run a 900-km boundary with a clean
+    # 2 K theta_w contrast and a clean dry contrast scored 0.14 because
+    # delta theta_v was 0.5 K, and the same boundary flipped between
+    # "synoptic front" and "mesoscale boundary" from one hour to the next.
+    # The geometric mean still collapses to zero when an ingredient is truly
+    # absent -- which is what makes a front a front -- but it degrades
+    # smoothly when one is merely modest, which is the common case in a
+    # summer air mass.
+    thermal_core = float(np.cbrt(max(theta_w, 0.0) * max(dry, 0.0)
+                                 * max(density, 0.0)))
 
     # --- temporal evolution: a front persists and moves coherently, a
     # mesoscale/outflow boundary is transient and erratic (documento sez. 12).
@@ -314,11 +326,22 @@ def differential_diagnosis(metrics: dict) -> dict:
     # candidate is not a synoptic front even if structure/vertical scores are
     # high; otherwise a located, plausible candidate keeps the front reading
     # unless a rival CLEARLY dominates.
-    thermal_present = thermal_core >= 0.20
-    if best != "synoptic-front" and (
-        (top >= sf + 0.12 and sf < 0.55)
-        or (not thermal_present and top >= sf)
-    ):
+    # The margin is graded, not switched.  It used to vanish the instant
+    # ``thermal_core`` fell below a hard 0.20, so at that value a difference
+    # of a thousandth between two hypotheses decided the verdict -- and a
+    # boundary sitting on the step was read as a front at 03 UTC, as a
+    # mesoscale line at 04 UTC and as a front again at 05 UTC.  Nothing in
+    # the atmosphere had changed.  Now the protection fades as the air-mass
+    # contrast fades: no contrast, no protection (a dryline still loses);
+    # solid contrast, full protection.
+    thermal_weight = smoothstep(thermal_core, 0.05, 0.35)
+    required_margin = 0.12 * thermal_weight
+    # A front reading is shielded from being overturned only when it is both
+    # well supported AND backed by a real air-mass contrast.  Structure and
+    # persistence alone must never keep the label: that is how a dryline or
+    # a lee convergence line gets promoted to a front.
+    protected = sf >= 0.55 and thermal_weight >= 0.35
+    if best != "synoptic-front" and top >= sf + required_margin and not protected:
         verdict = best
     else:
         verdict = "synoptic-front"

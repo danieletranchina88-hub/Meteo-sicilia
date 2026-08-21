@@ -213,5 +213,81 @@ if breeze_verdict == "synoptic-front":
     print("  FAIL: una linea corta e locale non deve vincere come fronte sinottico")
     ok = False
 
+# 11) The verdict must not flip on a hair. A long, well-structured boundary
+# whose density contrast is merely modest -- the normal summer case -- stays
+# a front, and stays one under a small perturbation of any single input.
+print("\n11) stabilita' del verdetto (niente fronte che lampeggia):")
+# Diagnostics copied verbatim from a real ICON-2I candidate (run
+# 2026-08-21 00 UTC, +2 h): the 660-km cold front over the Gulf of Lion
+# whose reading used to alternate between "front" and "mesoscale boundary"
+# from one hour to the next.
+marginal = {
+    "medianAbzGradient": 2.5633, "deltaThetaW": 1.848, "deltaThetaE": 6.6998,
+    "deltaTemperature": 1.7337, "deltaThetaV": 2.0297,
+    "dryThermalGradient": 1.77, "thermalAlignment": 0.9698,
+    "windShiftMs": 1.7947, "convergenceMs": 0.5944,
+    "windShiftAngleDeg": 35.3304, "convergenceFraction": 0.8972,
+    "vorticity1e5": -2.5913, "frontogenesis": 0.0837,
+    "pressureTroughHpa": -0.1579, "lowerLevelSupport": 0.125,
+    "deltaThetaW925": -0.9521, "omega700PaS": -0.0313,
+    "terrainFraction": 0.3832, "synopticSupport": 0.91,
+    "lengthKm": 656.7594, "sinuosity": 1.11,
+}
+base_verdict = fp.differential_diagnosis(marginal)["verdict"]
+print(f"    caso marginale realistico: {base_verdict}")
+if base_verdict != "synoptic-front":
+    print("  FAIL: un confine da 660 km con i tre contrasti presenti "
+          "deve restare un fronte")
+    ok = False
+# The air-mass contrast used to enter the decision through a hard step: on
+# one side of it the front reading was protected by a fixed margin, on the
+# other side the protection was zero, so an imperceptible change of a single
+# contrast decided the verdict. Sweeping the density contrast must now cross
+# the decision at most once -- monotonically -- instead of oscillating.
+verdicts = []
+for delta_theta_v in np.linspace(0.0, 2.4, 49):
+    swept = dict(marginal, deltaThetaV=float(delta_theta_v))
+    verdicts.append(fp.differential_diagnosis(swept)["verdict"] == "synoptic-front")
+changes = sum(a != b for a, b in zip(verdicts[:-1], verdicts[1:]))
+print(f"    spazzando Δθv da 0 a 2,4 K il verdetto cambia {changes} volta/e")
+if changes > 1:
+    print("  FAIL: il verdetto oscilla lungo il contrasto di densita' "
+          "(gradino nella decisione)")
+    ok = False
+if verdicts[0] or not verdicts[-1]:
+    print("  FAIL: la spazzata deve andare da non-fronte a fronte")
+    ok = False
+# The margin protecting the front reading must be continuous, not switched.
+# A discontinuity keeps the same height however finely it is sampled; a
+# continuous function's largest step shrinks with the sampling interval.
+def margin_curve(count):
+    values = []
+    for v in np.linspace(0.0, 2.4, count):
+        core = float(np.cbrt(
+            fp.smoothstep(marginal["deltaThetaW"], 1.0, 4.5)
+            * fp.smoothstep(marginal["deltaTemperature"], 0.5, 3.0)
+            * fp.smoothstep(v, 0.2, 2.2)
+        ))
+        values.append(fp.smoothstep(core, 0.05, 0.35))
+    return max(abs(b - a) for a, b in zip(values[:-1], values[1:]))
+
+coarse, fine = margin_curve(49), margin_curve(1921)
+print(f"    salto massimo del margine: {coarse:.3f} a passo grosso, "
+      f"{fine:.3f} a passo 40x piu' fine")
+if fine > 0.35 * coarse:
+    print("  FAIL: il margine di protezione ha ancora un gradino "
+          "(il salto non si riduce infittendo il campionamento)")
+    ok = False
+
+# The soft AND must still collapse when an ingredient is genuinely absent:
+# no density contrast at all is not a front, however good the structure.
+no_density = dict(marginal, deltaThetaV=0.0, deltaTemperature=0.0,
+                  dryThermalGradient=0.1)
+if fp.differential_diagnosis(no_density)["verdict"] == "synoptic-front":
+    print("  FAIL: senza contrasto di massa d'aria non puo' essere un fronte")
+    ok = False
+print("    senza contrasto di densita' e temperatura secca: "
+      f"{fp.differential_diagnosis(no_density)['verdict']}")
+
 print("\nESITO:", "SUPERATO" if ok else "DA RIVEDERE")
 raise SystemExit(0 if ok else 1)

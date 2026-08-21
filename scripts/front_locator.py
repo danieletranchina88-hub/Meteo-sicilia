@@ -12,8 +12,12 @@ This module produces only thermodynamic *candidates* with diagnostics.
 It does NOT classify cold/warm/stationary, does not assign a final
 confidence, and does not track in time - those belong to later modules.
 
-The TFP keeps the conventional sign used by Hewson (1998): it is negative
-on the warm-air edge of a frontal zone.  Distances, derivatives and
+The TFP is written in the Sansom & Catto (2024) form,
+``grad|grad theta_w| . grad theta_w / |grad theta_w| < K1`` with ``K1 <= 0``,
+so it is negative on the warm-air edge of a frontal zone.  Hewson (1998)
+writes the same quantity with a leading minus and therefore quotes it
+positive there; the located line is identical, only the sign of the printed
+number differs.  Distances, derivatives and
 thresholds are expressed in physical units, so changing ICON's grid spacing
 does not silently retune the detector.
 
@@ -30,6 +34,11 @@ import numpy as np
 EARTH_KM_PER_DEG = 111.32
 LOCATOR_LAPLACIAN = "laplacian_gradient"   # default (Sansom-Catto)
 LOCATOR_HEWSON = "hewson_directional"      # reserved for future comparison
+
+# How far the in-line quantile calibration may tighten a configured
+# threshold.  See the adaptive block in ``locate_fronts`` for why an
+# unbounded quantile is not the climatological calibration it imitates.
+ADAPTIVE_TIGHTENING_LIMIT = 1.5
 
 
 # --------------------------------------------------------------------------
@@ -162,6 +171,73 @@ def _sample(field, coordinates, longitudes, latitudes, dlon, dlat):
     return np.where(inside, value, np.nan)
 
 
+def adjacent_baroclinic_zone(
+    grad_mag: np.ndarray,
+    grad_east: np.ndarray,
+    grad_north: np.ndarray,
+    longitudes: np.ndarray,
+    latitudes: np.ndarray,
+    search_km: float,
+    samples: int = 6,
+) -> np.ndarray:
+    """Gradient of the baroclinic zone *adjacent* to the front, in K/100 km.
+
+    Hewson (1998) does not test the gradient on the front line: he tests the
+    baroclinic zone behind it.  The distinction is not academic.  The TFL
+    puts the line on the warm EDGE of the zone, where by construction the
+    gradient has not yet reached its maximum -- comparing that value against
+    a threshold calibrated for the zone systematically under-states the
+    baroclinicity and throws away real fronts.
+
+    Hewson estimates the zone with a first-order extrapolation over ``m``
+    grid lengths.  That works when the grid length *is* the resolution of
+    the analysed field.  Here the field has already been smoothed to 45 or
+    100 km, so the raw 8-km ICON spacing is the wrong yardstick: measured on
+    a real run the extrapolation moved the sample 6 km and recovered 0.02 of
+    the 0.9 K/100 km threshold, i.e. nothing.
+
+    So the zone is sampled where it actually is.  Walking from the line
+    toward the cold air (against grad theta_w) the gradient rises to the
+    centre of the zone and falls again; the maximum over a bounded walk is
+    the adjacent baroclinic zone, by definition.  ``search_km`` is the
+    analysis scale: for a gradient bump of width sigma the TFL sits one
+    sigma from the peak, and on the real run the maximum was found at 40-50
+    km with a 47-km analysis scale -- the theory and the model agree.
+
+    The walk is bounded so a second, unrelated front further downstream can
+    never be borrowed as this front's baroclinic zone.
+    """
+    magnitude = np.asarray(grad_mag, dtype=float)
+    lon = np.asarray(longitudes, dtype=float)
+    lat = np.asarray(latitudes, dtype=float)
+    metrics = grid_metrics(lon, lat)
+    dlon, dlat = metrics["dlon"], metrics["dlat"]
+
+    # Unit vector toward the cold air: down the theta_w gradient.
+    safe = np.maximum(np.hypot(grad_east, grad_north), 1.0e-12)
+    cold_east = -np.asarray(grad_east, dtype=float) / safe
+    cold_north = -np.asarray(grad_north, dtype=float) / safe
+
+    lon_grid, lat_grid = np.meshgrid(lon, lat)
+    lon_scale = EARTH_KM_PER_DEG * np.maximum(np.cos(np.deg2rad(lat_grid)), 0.25)
+
+    best = magnitude.copy()
+    steps = max(1, int(samples))
+    flat = np.column_stack((lon_grid.ravel(), lat_grid.ravel()))
+    for step in range(1, steps + 1):
+        distance = float(search_km) * step / steps
+        points = np.column_stack((
+            flat[:, 0] + (cold_east * distance / lon_scale).ravel(),
+            flat[:, 1] + (cold_north * distance / EARTH_KM_PER_DEG).ravel(),
+        ))
+        sampled = _sample(magnitude, points, lon, lat, dlon, dlat)
+        sampled = sampled.reshape(magnitude.shape)
+        best = np.where(
+            np.isfinite(sampled) & (sampled > best), sampled, best
+        )
+    return np.where(np.isfinite(magnitude), best, np.nan) * 100.0
+
+
 def _line_length_km(coordinates: np.ndarray) -> float:
     if len(coordinates) < 2:
         return 0.0
@@ -171,6 +247,48 @@ def _line_length_km(coordinates: np.ndarray) -> float:
     dx = (lon2 - lon1) * EARTH_KM_PER_DEG * np.cos(mean_lat)
     dy = (lat2 - lat1) * EARTH_KM_PER_DEG
     return float(np.sum(np.hypot(dx, dy)))
+
+
+def _bridge_short_gaps(
+    coordinates: np.ndarray, keep: np.ndarray, bridge_km: float
+) -> np.ndarray:
+    """Re-accept sub-threshold stretches shorter than ``bridge_km``.
+
+    A frontal zone weakens locally -- crossing a mountain range, a coastline,
+    the edge of the 925 hPa mask -- without ceasing to exist.  Cutting the
+    contour at every such dip does not produce two fronts, it produces two
+    fragments of one front, and the damage lands on the tracker: measured on
+    a real ICON-2I run the same boundary was published as its northern half
+    at 02 UTC and its southern half at 03 UTC, 307 km apart, so the track
+    broke and fourteen hours of a genuine 1000-km cold front went unpublished.
+
+    Only interruptions shorter than ``bridge_km`` are bridged, so a real gap
+    between two distinct boundaries still separates them.
+    """
+    keep = np.asarray(keep, dtype=bool).copy()
+    if bridge_km <= 0.0 or keep.size < 3 or not keep.any():
+        return keep
+    segment_km = np.zeros(len(coordinates))
+    if len(coordinates) > 1:
+        lat_mid = np.deg2rad(0.5 * (coordinates[:-1, 1] + coordinates[1:, 1]))
+        segment_km[1:] = np.hypot(
+            np.diff(coordinates[:, 0]) * EARTH_KM_PER_DEG * np.cos(lat_mid),
+            np.diff(coordinates[:, 1]) * EARTH_KM_PER_DEG,
+        )
+    index = 0
+    while index < len(keep):
+        if keep[index]:
+            index += 1
+            continue
+        start = index
+        while index < len(keep) and not keep[index]:
+            index += 1
+        # Interior gaps only: a weak run reaching either end of the contour
+        # is the front fading out, not an interruption to bridge.
+        if start > 0 and index < len(keep):
+            if float(np.sum(segment_km[start:index])) <= float(bridge_km):
+                keep[start:index] = True
+    return keep
 
 
 def _split_where(coordinates: np.ndarray, keep: np.ndarray, min_points: int = 4) -> list:
@@ -203,6 +321,7 @@ def locate_fronts(
     abz_gradient_full_strength: float = 1.20,
     min_length_km: float = 250.0,
     boundary_margin_km: float = 60.0,
+    gap_bridge_km: float = 90.0,
     adaptive_thresholds: bool = True,
     locator_method: str = LOCATOR_LAPLACIAN,
     return_fields: bool = False,
@@ -210,10 +329,11 @@ def locate_fronts(
     """Locate synoptic front candidates on theta_w (single time step).
 
     theta_w in K. ``tfp_threshold`` is in K/km^2 (negative on the warm
-    edge); ``abz_gradient_threshold`` is in K/100 km.  The optional adaptive
-    step can only make the published literature floors stricter, never
-    looser, using the 25th TFP and 50th gradient quantiles of the current
-    synoptic domain.
+    edge); ``abz_gradient_threshold`` is in K/100 km.  Both defaults are the
+    Sansom & Catto (2024) climatological values, converted: their
+    K1 = -1.6e-11 K m^-2 is -1.6e-5 K/km^2 and their K2 = 7.5e-6 K m^-1 is
+    0.75 K/100 km.  The optional adaptive step can only make those floors
+    stricter, never looser, and by a bounded amount.
     Returns a list of candidate dicts (geometry + diagnostics, no
     classification).  With ``return_fields`` also returns the diagnostic
     fields for inspection/plotting.
@@ -259,15 +379,26 @@ def locate_fronts(
     # gradient magnitude expressed in K/100 km for thresholds/diagnostics
     grad_mag_100 = grad_mag * 100.0
 
-    # Hewson's ABZ estimate is local: |grad theta_w| plus 1/sqrt(2) of a
-    # grid length times |grad |grad theta_w||.  The previous implementation
-    # sampled 120 km away, which could cross the whole frontal zone and was
-    # not the published method.
+    # Adjacent baroclinic zone.  The analysis scale, not the grid spacing,
+    # sets how far the zone sits behind the warm edge: the field carries no
+    # structure finer than the smoothing already applied to it.
+    abz_search_km = float(np.hypot(max(synoptic_sigma_km, 0.0),
+                                   max(derivative_sigma_km, 0.0)))
+    if abz_search_km <= 0.0:
+        abz_search_km = float(np.sqrt(
+            float(np.median(metrics["dx_km_col"])) * metrics["dy_km"]
+        ))
+    abz_gradient = adjacent_baroclinic_zone(
+        grad_mag, grad_e, grad_n, lon, lat, abz_search_km
+    )
+    # Hewson's local extrapolation stays as a floor: where the walk finds
+    # nothing better (a zone narrower than the analysis scale) the published
+    # first-order estimate is still the best available answer.
     local_grid_km = np.sqrt(metrics["dx_km_col"] * metrics["dy_km"])
-    abz_step_km = local_grid_km / np.sqrt(2.0)
-    abz_gradient = (
-        grad_mag + abz_step_km * np.hypot(gm_e, gm_n)
+    hewson_abz = (
+        grad_mag + (local_grid_km / np.sqrt(2.0)) * np.hypot(gm_e, gm_n)
     ) * 100.0
+    abz_gradient = np.fmax(abz_gradient, hewson_abz)
 
     valid_calibration = (
         np.isfinite(tfp) & np.isfinite(abz_gradient)
@@ -277,13 +408,40 @@ def locate_fronts(
     effective_gradient = float(abz_gradient_threshold)
     if adaptive_thresholds and np.count_nonzero(valid_calibration) >= 100:
         q_tfp = float(np.nanquantile(tfp[valid_calibration], 0.25))
-        q_grad = float(np.nanquantile(abz_gradient[valid_calibration], 0.50))
-        # Clamp to the fuzzy interval: adaptive calibration removes excess
-        # high-resolution structure without making calm runs manufacture a
-        # front from a vanishing gradient.
-        effective_tfp = max(float(tfp_full_strength), min(effective_tfp, q_tfp))
+        # The 50th-percentile calibration is read off the plain gradient
+        # magnitude, not off the ABZ.  The ABZ is the gradient maximised
+        # along a walk, so its distribution is shifted upward by
+        # construction: calibrating the ABZ threshold on the ABZ itself
+        # would raise the bar exactly as much as the measurement improved
+        # and quietly cancel it.  Sansom & Catto's K2 is a quantile of the
+        # gradient magnitude, which is what this uses.
+        q_grad = float(np.nanquantile(grad_mag_100[valid_calibration], 0.50))
+        # Sansom & Catto (2024) read the 25th TFP and 50th gradient quantile
+        # off a CLIMATOLOGY, so the threshold is a fixed property of the
+        # dataset.  Here the only distribution available in-line is the one
+        # of the hour being analysed, and that is a different animal: it
+        # moves with the weather.  Measured over one ICON-2I run the raw
+        # quantile ran the refined detector at -6.6e-5 to -8.4e-5 K/km2 --
+        # four to five times stricter than the published K1 = -1.6e-5 --
+        # and swung 27% between consecutive hours.  A threshold that moves
+        # hour by hour makes the same boundary pass at 03 UTC and fail at
+        # 04 UTC, which is how a front ends up blinking on the map.
+        #
+        # The quantile is kept, because suppressing excess small-scale
+        # structure is a real service, but it may tighten the configured
+        # value by at most ``ADAPTIVE_TIGHTENING_LIMIT``.  In practice the
+        # quantile saturates at the bound, so the operating point becomes
+        # constant across the run: the jitter disappears with it.  The
+        # validated monthly climatology, when present, is the proper answer
+        # and enters through the configured thresholds themselves.
+        tfp_bound = float(tfp_threshold) * ADAPTIVE_TIGHTENING_LIMIT
+        effective_tfp = max(
+            float(tfp_full_strength), tfp_bound, min(effective_tfp, q_tfp)
+        )
+        gradient_bound = float(abz_gradient_threshold) * ADAPTIVE_TIGHTENING_LIMIT
         effective_gradient = min(
             float(abz_gradient_full_strength),
+            gradient_bound,
             max(effective_gradient, q_grad),
         )
 
@@ -331,6 +489,7 @@ def locate_fronts(
             & (line_tfp < effective_tfp)
             & (abz_grad > effective_gradient)
         )
+        keep = _bridge_short_gaps(coordinates, keep, gap_bridge_km)
         for piece in _split_where(coordinates, keep):
             if _line_length_km(piece) < min_length_km:
                 continue

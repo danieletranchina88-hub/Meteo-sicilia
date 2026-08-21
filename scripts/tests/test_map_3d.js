@@ -478,4 +478,41 @@ assert.match(html, /"Innesco · brezza di mare o lago"/,
 assert.match(html, /name: "Suolo · rapporto di Bowen"/,
   "manca l'anello del suolo nella catena");
 
+// --- Simbologia frontale WMO ---
+// Il lato dei simboli non e' decorativo: dice da che parte si muove il
+// fronte. L'analyzer orienta ogni linea pubblicata con l'aria calda a
+// sinistra, quindi nel sistema locale del simbolo -y e' il lato caldo e +y
+// il freddo. Da li' discende tutto il resto, e un'inversione accidentale
+// scambierebbe un fronte freddo con uno caldo senza rompere nulla.
+const triangle = html.match(/function drawFrontTriangle\([\s\S]*?\n {6}\}/);
+assert.ok(triangle, "simbolo del fronte freddo assente");
+assert.match(triangle[0], /lineTo\(0, -10\.5 \* s\)/,
+  "il triangolo non punta piu' verso il lato caldo (-y)");
+const warmArc = html.match(/function drawFrontSemicircle\([\s\S]*?\n {6}\}/);
+assert.ok(warmArc, "simbolo del fronte caldo assente");
+assert.match(warmArc[0], /arc\(0, 0, 7 \* s, 0, Math\.PI, false\)/,
+  "il semicerchio caldo non sporge piu' verso il lato freddo (+y)");
+const occludedArc = html.match(/function drawOccludedSemicircle\([\s\S]*?\n {6}\}/);
+assert.ok(occludedArc, "simbolo del fronte occluso assente");
+assert.match(occludedArc[0], /arc\(0, 0, 7 \* s, Math\.PI, 2 \* Math\.PI, false\)/,
+  "sul fronte occluso i due simboli devono stare dalla stessa parte");
+const styled = html.match(/function drawFrontStyled\([\s\S]*?\n {6}\}\n/);
+assert.ok(styled, "disegno del fronte assente");
+// Stazionario: triangolo e semicerchio su lati OPPOSTI, quindi deve usare
+// il semicerchio caldo e non quello dell'occluso.
+assert.match(styled[0], /frontType === "stationary" && index % 2 === 0[\s\S]{0,220}?drawFrontSemicircle/,
+  "il fronte stazionario non alterna i due simboli su lati opposti");
+assert.match(styled[0], /drawOccludedSemicircle\(x, y, angle, "#8b3fd0"/,
+  "il fronte occluso non usa il semicerchio dallo stesso lato del triangolo");
+
+// La scala cartografica lega dimensione dei simboli, spessore della linea e
+// passo fra i simboli: se crescessero separatamente i simboli si
+// sovrapporrebbero in una fascia continua.
+assert.match(html, /function frontDrawScale\(\)/,
+  "manca la scala cartografica dei fronti");
+assert.match(styled[0], /const spacing = \(window\.innerWidth < 900 \? 48 : 54\) \* s;/,
+  "il passo fra i simboli non segue la loro dimensione");
+assert.match(styled[0], /strokeFrontLine\(points, frontType, alpha, s\)/,
+  "lo spessore della linea non segue la scala");
+
 console.log("3D map regression checks: OK");

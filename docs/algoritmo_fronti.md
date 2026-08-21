@@ -80,19 +80,57 @@ Sansom e Catto (2024):
 5. mascheramento della linea con TFP e intensità della zona baroclina
    adiacente (ABZ).
 
-Il Thermal Front Parameter conserva il segno standard:
+Il Thermal Front Parameter è scritto nella forma di Sansom e Catto:
 
 ```text
-TFP = grad(|grad(theta_w)|) · grad(theta_w) / |grad(theta_w)|
+TFP = grad(|grad(theta_w)|) · grad(theta_w) / |grad(theta_w)| < K1,  K1 <= 0
 ```
 
-Sul bordo caldo della zona baroclina è negativo. L'ABZ è la stima locale
-pubblicata, non un campione arbitrario preso lontano dalla linea:
+Sul bordo caldo della zona baroclina è negativo. Hewson scrive la stessa
+quantità con un meno davanti e la cita quindi positiva sul bordo caldo: la
+linea individuata è identica, cambia solo il segno del numero stampato.
 
-```text
-ABZ = |grad(theta_w)|
-      + grid_length / sqrt(2) * |grad(|grad(theta_w)|)|
-```
+Le soglie di riferimento sono quelle pubblicate, convertite nelle unità qui
+usate: `K1 = −1,6e-11 K m⁻²` diventa **−1,6e-5 K/km²** e
+`K2 = 7,5e-6 K m⁻¹` diventa **0,75 K/100 km**.
+
+### La zona baroclina adiacente si misura dov'è
+
+L'ABZ non è il gradiente *sulla* linea. Il TFL mette la linea sul bordo
+**caldo** della zona, dove per costruzione il gradiente non ha ancora
+raggiunto il massimo: confrontare quel valore con una soglia calibrata sulla
+zona sottostima la baroclinicità e scarta fronti veri.
+
+Hewson stima la zona con un'estrapolazione al primo ordine su `m` passi di
+griglia. Funziona quando il passo di griglia *è* la risoluzione del campo
+analizzato. Qui il campo è già lisciato a 45 o 100 km, quindi il passo ICON
+di 8 km è il metro sbagliato: misurato sul run reale quell'estrapolazione
+spostava il campione di 6 km e recuperava 0,02 degli 0,9 K/100 km di soglia,
+cioè nulla.
+
+La zona viene quindi campionata dove si trova davvero: camminando dalla
+linea verso l'aria fredda (contro `grad(theta_w)`) il gradiente sale fino al
+centro della zona e ridiscende, e il massimo su un cammino limitato è la
+zona baroclina adiacente, per definizione. La lunghezza del cammino è la
+scala di analisi `sqrt(sigma_campo² + sigma_derivata²)`: per un dosso di
+gradiente di larghezza sigma il TFL sta a un sigma dal picco, e sul run
+reale il massimo è stato trovato a 40–50 km con scala di analisi 47 km —
+teoria e modello concordano. Il cammino è limitato perché un secondo fronte
+più a valle non possa essere preso in prestito come zona di questo.
+
+La stima locale di Hewson resta come pavimento, per le zone più strette
+della scala di analisi.
+
+Effetto misurato su fronti reali del run ICON-2I del 21 agosto 2026 00 UTC:
+
+| | prima | dopo | massimo vero entro 150 km |
+|---|---:|---:|---:|
+| +18h | 1,81 | **2,45** | 2,60 |
+| +24h | 1,60 | **2,06** | 2,12 |
+| +48h | 2,37 | **3,29** | 3,29 |
+| +52h | 1,99 | **3,03** | 3,22 |
+
+(K/100 km. La ZBA sottostimava del 30–45%; ora coincide con il massimo vero.)
 
 Le derivate rispettano le distanze reali della griglia lon/lat; cambiare
 risoluzione non cambia implicitamente le unità delle soglie.
@@ -133,9 +171,41 @@ luglio (bassa baroclinicità) la soglia di gradiente scende, recuperando i
 fronti estivi deboli, mentre il TFP a piena forza è più severo.
 
 I quantili del **singolo** run possono poi rendere le soglie ancora più
-severe, mai più permissive. Vengono inoltre respinte anomalie quasi chiuse,
-hairpin molto sinuosi, duplicati paralleli e linee prevalentemente sopra
-terreno elevato.
+severe, mai più permissive — ma **entro un limite**. Sansom e Catto leggono i
+quantili da una climatologia, quindi la soglia è una proprietà fissa del
+dataset. In linea l'unica distribuzione disponibile è quella dell'ora in
+esame, che è un'altra cosa: si muove con il tempo che fa. Misurato su un run
+ICON-2I il quantile grezzo faceva girare il rilevatore raffinato a
+−6,6e-5…−8,4e-5 K/km² — **quattro o cinque volte più severo del K1
+pubblicato** — con oscillazioni del 27% fra ore consecutive. Una soglia che
+si muove ora per ora fa passare lo stesso confine alle 03 UTC e lo respinge
+alle 04 UTC: è così che un fronte finisce per lampeggiare sulla mappa.
+
+Il quantile resta, perché sopprimere struttura di piccola scala è un
+servizio reale, ma può irrigidire il valore configurato al massimo di un
+fattore `ADAPTIVE_TIGHTENING_LIMIT = 1,5`. In pratica satura sul limite,
+quindi il punto di lavoro diventa costante lungo tutta la corsa e il
+tremolio sparisce con lui. Il quantile del gradiente si legge inoltre sul
+`|∇θw|` semplice e non sull'ABZ: l'ABZ è il gradiente massimizzato lungo un
+cammino, quindi la sua distribuzione è spostata verso l'alto per
+costruzione, e calibrare la soglia ABZ sull'ABZ stesso alzerebbe l'asticella
+esattamente quanto è migliorata la misura, annullandola in silenzio.
+
+Vengono inoltre respinte anomalie quasi chiuse, hairpin molto sinuosi,
+duplicati paralleli e linee prevalentemente sopra terreno elevato.
+
+### Interruzioni brevi non spezzano la linea
+
+Una zona frontale si indebolisce localmente — attraversando una catena
+montuosa, una linea di costa, il bordo della maschera 925 hPa — senza
+cessare di esistere. Tagliare il contorno a ogni avvallamento non produce
+due fronti: produce due frammenti di un fronte, e il danno arriva al
+tracciamento. Misurato sul run reale, lo stesso confine veniva pubblicato
+come la sua metà settentrionale alle 02 UTC e come quella meridionale alle
+03 UTC, a 307 km di distanza: la traccia si spezzava e **quattordici ore di
+un vero fronte freddo da 1000 km restavano non pubblicate**, ora di analisi
+compresa. Le interruzioni più corte di 90 km lungo il contorno vengono
+quindi ricucite; una lacuna vera fra due confini distinti li separa ancora.
 
 ## 4. Controlli fisici indipendenti
 
@@ -191,6 +261,24 @@ appena più alto. Se però manca del tutto il contrasto termico di massa d'aria
 (solo umidità), l'ipotesi di dryline vince e la linea non entra nel
 tracciamento. Ogni fronte pubblicato espone `reasoning` (verdetto, margine,
 ipotesi alternativa e motivi) e `explanation`.
+
+**Il margine di protezione è graduato, non commutato.** Prima svaniva di
+colpo appena il contrasto di massa d'aria scendeva sotto una soglia netta:
+a quel valore una differenza di un millesimo fra due ipotesi decideva il
+verdetto, e un confine appoggiato sul gradino veniva letto come fronte alle
+03 UTC, come linea mesoscalare alle 04 e di nuovo come fronte alle 05, senza
+che nulla fosse cambiato nell'atmosfera. Ora la protezione svanisce insieme
+al contrasto: nessun contrasto, nessuna protezione (la dryline perde
+comunque); contrasto solido, protezione piena.
+
+**Il contrasto di massa d'aria è un AND morbido.** Servono tutti e tre —
+θw, temperatura secca e densità — ma un `min` secco lascia che il singolo
+ingrediente più debole annulli il punteggio, e il più debole è quasi sempre
+la densità. Sul run reale un confine da 900 km con un contrasto di θw di 2 K
+e un contrasto secco pulito segnava 0,14 solo perché Δθv valeva 0,5 K. La
+media geometrica va ancora a zero quando un ingrediente manca davvero — è
+ciò che rende un fronte un fronte — ma degrada dolcemente quando uno è
+soltanto modesto, che è il caso normale in una massa d'aria estiva.
 
 Solo l'ipotesi sinottica può entrare nel tracciamento.
 
@@ -478,6 +566,52 @@ supporto medio lungo la linea 0.43 → 0.50, frazione su supporto forte 0.50 →
 criterio e migliora nettamente il supporto fisico; l'interruttore resta
 reversibile (`False` torna ai contorni).
 
+**Limite noto.** Il raffinamento sposta la linea rispetto al contorno TFL:
+misurato su un run reale la mediana è −4 km ma la dispersione è ampia, da
+−43 a +62 km, con tendenza verso l'aria fredda nel 61% dei casi. Il campo di
+supporto è dominato da termini che culminano al *centro* della zona
+baroclina (`thermal`, `abz`, `dry_thermal`, `synoptic` pesano insieme 4,6 su
+7,9), mentre solo il TFP culmina sul bordo caldo dove Hewson definisce la
+linea. La classificazione non ne risente — moto e tipo si calcolano sulla
+geometria non raffinata — ma la linea *disegnata* può discostarsi fino a
+mezza larghezza di zona da quella verificata. Va riequilibrato dando al TFP
+un peso pari a quello dei termini di gradiente.
+
+### Un confine, una linea
+
+I candidati vengono deduplicati **dentro l'ora**, ma la pubblicazione è per
+**traccia**: due tracce distinte possono consegnare due copie della stessa
+struttura per la stessa ora senza che nulla le confronti. Misurato sul run
+reale, due feature `cold` si sovrapponevano per il **72%** della lunghezza
+entro 60 km a +52 h e per il 64% a +18 h. Sulla mappa si vedeva un fronte
+disegnato due volte e, poiché le due copie avevano orientamento leggermente
+diverso, i loro simboli cadevano su lati visivamente opposti: sembrava un
+errore di convenzione anche se ogni linea presa da sola era corretta.
+
+In pubblicazione la copia più debole viene quindi scartata
+(`DUPLICATE_RADIUS_KM = 60`, `DUPLICATE_OVERLAP = 0.60`, entrate già ordinate
+per qualità). Dopo la correzione la sovrapposizione massima fra due fronti
+pubblicati nell'intera corsa scende a 0,51.
+
+### L'aria calda deve stare a sinistra della linea pubblicata
+
+Da questa convenzione dipende il lato dei simboli: il renderer mette i
+triangoli del fronte freddo a sinistra del verso di percorrenza e i
+semicerchi del caldo a destra, quindi se l'aria calda finisse dal lato
+sbagliato il fronte verrebbe disegnato come se avanzasse all'indietro.
+
+`_orient_warm_left` stabilisce la convenzione sul **candidato**, ma la linea
+pubblicata non è il candidato: viene agganciata alla cresta del supporto e
+può essere tagliata dall'occlusione, e la normale calda memorizzata non
+viene ricalcolata. Misurato su un run, **2 linee su 80** uscivano con l'aria
+calda a destra — entrambe confini i cui due lati differiscono di pochi
+decimi di kelvin, dove l'orientamento ereditato è meno affidabile.
+
+Il lato viene quindi rimisurato contro il campo `theta_w` sulla geometria
+finale (`_orient_published_line`): invertire l'ordine dei punti sposta i
+simboli dall'altra parte della linea, e l'eventuale carattere per-segmento
+viene specchiato con essa. Dopo la correzione: 0 linee su 80.
+
 **Classificazione per-segmento (`segmentTypes`).** La stessa struttura può
 essere freddo attivo su un tratto e quasi stazionaria su un altro **alla
 stessa ora**: la geometria resta *una* linea continua (l'esistenza è tracciata
@@ -528,7 +662,22 @@ La workflow blocca la pubblicazione se falliscono i test sintetici:
   conservazione di una fase reale prolungata;
 - estrazione a cresta (`front_ridge`): la linea rifinita segue il crinale del
   supporto staccandosi da una guess storta, una banda larga dà una sola linea,
-  il percorso evita una penalità di terreno a parità di supporto.
+  il percorso evita una penalità di terreno a parità di supporto;
+- la ZBA supera il gradiente sulla linea, non supera il massimo reale del
+  campo e raggiunge la zona;
+- un'interruzione breve del mascheramento viene ricucita, una lacuna vera no,
+  e una coda al bordo del contorno non viene scambiata per un'interruzione;
+- la calibrazione adattiva non supera il limite di irrigidimento;
+- il verdetto non oscilla lungo il contrasto di densità e il margine di
+  protezione è continuo (il salto si riduce infittendo il campionamento,
+  cosa che un gradino non farebbe);
+- una linea con l'aria calda a destra viene riorientata e i suoi segmenti
+  specchiati; una già corretta resta intatta;
+- due copie dello stesso confine diventano una linea sola, due fronti
+  realmente distinti restano due;
+- convenzione WMO dei simboli nel renderer (lato dei triangoli e dei
+  semicerchi per freddo, caldo, occluso e stazionario) e scala cartografica
+  che lega dimensione, spessore e passo.
 
 ## Riferimenti primari
 
