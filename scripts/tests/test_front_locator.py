@@ -1,6 +1,6 @@
 """Synthetic verification of front_locator.py (v12, Sansom-Catto TFL).
 
-Eight mandatory checks before touching real data:
+Ten mandatory checks before touching real data:
  1 straight ideal front       -> exactly one line on the warm edge
  2 gently curved front        -> single continuous line
  3 uniform gradient, no zone  -> no valid line
@@ -9,6 +9,8 @@ Eight mandatory checks before touching real data:
  6 noise vs smoothing         -> stable
  7 latitude-axis inversion    -> geometrically identical result
  8 two resolutions            -> similar position after physical smoothing
+ 9 independent locator        -> consistent position and null behaviour
+10 explicit second derivative -> exact quadratic, including domain edges
 Plus the critical standard TFP sign test (warm edge negative).
 The directional Hewson-style normal-curvature locator is checked against the
 default isotropic locator without changing the operational null cases.
@@ -155,6 +157,29 @@ if fl.locate_fronts(
     locator_method=fl.LOCATOR_HEWSON,
 ):
     print("  FAIL: il direzionale crea fronti da un gradiente uniforme")
+    ok = False
+
+# --- 10 explicit second derivative / Sansom-Catto numerical update --------
+print("\n10) Laplaciano esplicito di secondo ordine:")
+ny, nx = 9, 11
+dx_km, dy_km = 3.0, 5.0
+x_km = np.arange(nx, dtype=float) * dx_km
+y_km = np.arange(ny, dtype=float) * dy_km
+xg, yg = np.meshgrid(x_km, y_km)
+# d2/dx2 (0.4*x^2) = 0.8; d2/dy2 (0.7*y^2) = 1.4
+quadratic = 0.4 * xg * xg + 0.7 * yg * yg + 2.0 * xg - 3.0 * yg
+analytic_metrics = {
+    "dx_km_col": np.full((ny, 1), dx_km),
+    "dy_km": dy_km,
+}
+lap = fl.laplacian(quadratic, analytic_metrics)
+max_error = float(np.max(np.abs(lap - 2.2)))
+edge_error = float(np.max(np.abs(
+    np.r_[lap[0, :], lap[-1, :], lap[:, 0], lap[:, -1]] - 2.2
+)))
+print(f"   errore max={max_error:.2e}, ai bordi={edge_error:.2e}")
+if max_error > 1.0e-10 or edge_error > 1.0e-10:
+    print("  FAIL: la derivata seconda esplicita non è accurata ai bordi")
     ok = False
 
 print("\nESITO:", "SUPERATO" if ok else "DA RIVEDERE")

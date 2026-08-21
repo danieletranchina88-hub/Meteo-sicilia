@@ -36,8 +36,11 @@ theta_e = 320.0 - 16.0 * sigmoid((LATG - 42.0) / 1.2)
 u, v = const_wind(theta_w.shape, 0.0, -6.0)
 res = fs.physical_support_field(theta_w, theta, theta_e, u, v, LON, LAT)
 afs = res["any_front_support"]
-print(f"A) campo di supporto: min={afs.min():.2f} max={afs.max():.2f}")
-if not (0.0 <= afs.min() and afs.max() <= 1.0):
+geometry = res["geometry_support"]
+print(f"A) campo di supporto: min={afs.min():.2f} max={afs.max():.2f}; "
+      f"geometria max={geometry.max():.2f}")
+if not (0.0 <= afs.min() and afs.max() <= 1.0
+        and 0.0 <= geometry.min() and geometry.max() <= 1.0):
     print("  FAIL: il campo esce da [0,1]"); ok = False
 # the support must peak in a narrow band near 42N, low far away
 band = np.abs(LAT - 42.0) < 1.5
@@ -45,6 +48,10 @@ far = np.abs(LAT - 42.0) > 5.0
 if not (np.nanmax(afs[band]) > 0.5 and np.nanmedian(afs[far]) < 0.25):
     print(f"  FAIL: il campo non si concentra sul fronte "
           f"(banda={np.nanmax(afs[band]):.2f} lontano={np.nanmedian(afs[far]):.2f})")
+    ok = False
+if not (np.nanmax(geometry[band]) > 0.45
+        and np.nanmedian(geometry[far]) < 0.15):
+    print("  FAIL: il supporto geometrico non segue il bordo termico")
     ok = False
 
 # B) NaN handled explicitly, never propagated -------------------------------
@@ -72,6 +79,9 @@ mb = resm["penalties"]["moisture_boundary"]
 print(f"D) confine igrometrico: penalità max={mb.max():.2f}, supporto max={resm['any_front_support'].max():.2f}")
 if not (mb.max() > 0.3 and resm["any_front_support"].max() < 0.5):
     print("  FAIL: un confine di sola umidità non deve dare supporto frontale alto"); ok = False
+if resm["geometry_support"].max() >= 0.25:
+    print("  FAIL: un confine igrometrico non deve guidare la geometria")
+    ok = False
 
 # E) latitude-axis inversion leaves the field essentially unchanged ---------
 res_inv = fs.physical_support_field(

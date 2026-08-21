@@ -1,4 +1,4 @@
-"""ICON-2I objective synoptic-front analysis, consensus physics engine (v16).
+"""ICON-2I objective synoptic-front analysis, precision physics engine (v17).
 
 The detector is intentionally conservative.  It identifies the warm-air
 edge of baroclinic zones in wet-bulb potential temperature at 850 hPa, then
@@ -31,7 +31,7 @@ import thermodynamics as thermo
 from front_analysis import SynopticFrontAnalyzer, _blend_lines, _line_length_km, _rdp
 
 
-FRONT_METHOD = "icon2i-ofa-physics-guided-v16-consensus"
+FRONT_METHOD = "icon2i-ofa-physics-guided-v17-precision"
 ANALYSIS_PRESSURE_PA = 85_000.0
 LOWER_PRESSURE_PA = 92_500.0
 UPPER_PRESSURE_PA = 70_000.0

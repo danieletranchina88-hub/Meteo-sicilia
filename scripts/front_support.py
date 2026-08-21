@@ -1,4 +1,4 @@
-"""Continuous physical-support field for objective front analysis (Fase B).
+"""Continuous physical-support fields for objective front analysis (Fase B).
 
 Biard & Kunkel (2019) let a CNN emit a per-pixel probability field and then
 extract front lines from it. This module keeps the *idea* (a continuous
@@ -10,11 +10,13 @@ kinematics, vertical coherence, synoptic-scale gradient), combined with
 explicit penalties (terrain, domain edge, missing data, moisture-only
 boundary, mesoscale-only structure).
 
-The output ``any_front_support`` is a physical-support heuristic in [0, 1],
-NOT a calibrated probability. It answers "how strongly do the fields support
-*some* front here", independent of cold/warm/stationary. Non-finite input is
-handled explicitly and never silently clipped: invalid cells are marked in
-``valid`` and contribute 0 support.
+The output ``any_front_support`` is an existence heuristic in [0, 1], NOT a
+calibrated probability. ``geometry_support`` is deliberately narrower: it
+keeps only the thermodynamic warm-edge evidence suitable for positioning a
+line. Separating them prevents a pressure trough or a wind-convergence
+maximum from pulling the drawn front away from the actual air-mass boundary.
+Non-finite input is handled explicitly and never silently clipped: invalid
+cells are marked in ``valid`` and contribute 0 support.
 
 Nothing here publishes a line: the field is a diagnostic in Fase B and will
 drive least-cost line extraction in Fase C.
@@ -210,12 +212,33 @@ def physical_support_field(
         + 0.6 * moisture_boundary_penalty + 0.45 * local_scale_penalty,
         0.0, 1.0,
     )
-    any_front_support = np.where(valid, np.clip(positive * (1.0 - penalty), 0.0, 1.0), 0.0)
+    any_front_support = np.where(
+        valid, np.clip(positive * (1.0 - penalty), 0.0, 1.0), 0.0
+    )
+
+    # Geometry must stay on the warm edge of a dry, synoptic thermal zone.
+    # Dynamics and PMSL remain valuable evidence that a front exists, but
+    # their extrema are routinely displaced from the analysed surface line.
+    geometry_positive = (
+        0.28 * thermal + 0.24 * abz_support + 0.24 * tfp_support
+        + 0.16 * dry_thermal + 0.08 * synoptic
+    )
+    geometry_penalty = np.clip(
+        0.65 * terrain_penalty + 0.95 * edge_penalty
+        + 0.75 * moisture_boundary_penalty + 0.50 * local_scale_penalty,
+        0.0, 1.0,
+    )
+    geometry_support = np.where(
+        valid,
+        np.clip(geometry_positive * (1.0 - geometry_penalty), 0.0, 1.0),
+        0.0,
+    )
 
     return {
         "components": components,
         "penalties": penalties,
         "any_front_support": any_front_support,
+        "geometry_support": geometry_support,
         "tfp": tfp,
         "abz": abz,
         "grad_mag_100": grad_mag_100,

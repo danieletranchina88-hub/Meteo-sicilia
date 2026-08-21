@@ -1,4 +1,4 @@
-# Analisi oggettiva dei fronti ICON-2I (v16-consensus)
+# Analisi oggettiva dei fronti ICON-2I (v17-precision)
 
 ## Scopo e limite fondamentale
 
@@ -12,7 +12,7 @@ Meteorologico. `qualityScore` e `uncertaintyIndex` descrivono la coerenza
 interna delle prove in un singolo run deterministico: non sono probabilità
 calibrate e non misurano l'errore previsionale assoluto.
 
-Il metodo operativo è `icon2i-ofa-physics-guided-v16-consensus`.
+Il metodo operativo è `icon2i-ofa-physics-guided-v17-precision`.
 
 ## Dati usati
 
@@ -76,7 +76,7 @@ virtuale. Un confine di sola umidità viene quindi respinto.
 Il nucleo segue Hewson (1998) nella formulazione portabile verificata da
 Sansom e Catto (2024):
 
-1. smoothing gaussiano in chilometri, prima delle derivate;
+1. smoothing gaussiano normalizzato in chilometri, prima delle derivate;
 2. gradiente metrico di `theta_w`;
 3. Thermal Front Locator
    `TFL = laplacian(|grad(theta_w)|)`;
@@ -112,6 +112,17 @@ ABZ = |grad(theta_w)|
 
 Le derivate rispettano le distanze reali della griglia lon/lat; cambiare
 risoluzione non cambia implicitamente le unità delle soglie.
+
+**Aggiornamento numerico v17.** Il TFL usa direttamente le differenze seconde
+centrali, con formule unilaterali di secondo ordine ai bordi, anziché applicare
+due volte la derivata prima. È la correzione esplicitamente raccomandata da
+Sansom e Catto (2024): evita la perdita di accuratezza nelle derivate superiori
+che rende le isolinee più rumorose. Il test analitico su un campo quadratico
+verifica tutto il dominio, bordi inclusi. Il filtro gaussiano usa convoluzione
+normalizzata con spazio esterno mancante: non riflette artificialmente un
+ciclone o una discontinuità oltre il limite di ICON-2I. Le convoluzioni sono
+eseguite in codice compilato (`scipy.ndimage`) mantenendo sigma in chilometri e
+la correzione `cos(lat)` riga per riga.
 
 ## 3. Soppressione del rumore ICON-2I
 
@@ -513,6 +524,12 @@ Con penalità esplicite: `terrain`, `edge` (bordo dominio), `missing_data`
 supporto sinottico). La combinazione pesata è `any_front_support` ∈ [0, 1],
 un supporto fisico **non** una probabilità: dice *quanto* i campi sostengono
 la presenza di un fronte, indipendentemente da freddo/caldo/stazionario.
+Dalla v17 è separato da `geometry_support`, che contiene solo le prove adatte
+a **posizionare** la linea: gradiente θw, ABZ, TFP sul bordo caldo, contrasto
+secco e scala sinottica. Vento, frontogenesi e saccatura possono confermare
+l'esistenza, ma i loro massimi sono spesso spostati rispetto alla
+discontinuità termica e non devono trascinare il disegno fuori dal confine fra
+le masse d'aria.
 
 Nessun candidato scartato sparisce in silenzio: `rejected_candidates(hour)`
 esporta le linee respinte con `rejectedAs` e i motivi, e
@@ -520,15 +537,24 @@ esporta le linee respinte con `rejectedAs` e i motivi, e
 
 ### Geometria a cresta (Fase C/E, `front_ridge.py`)
 
-La linea pubblicata non è più il solo contorno TFL: segue la **cresta** di
-`any_front_support`. Dato un candidato TFL–TFP–ABZ, si apre un **corridoio** di
-±120 km attorno alla linea e si cerca il **percorso a costo minimo** (Dijkstra
-su griglia 8-connessa, `scipy`; nessuna nuova dipendenza, nessun ML) che resta
-sul supporto più alto. Il costo per cella è `log((1+ε)/(supporto+ε))` più
-penalità esplicite di terreno e bordo dominio; stare sulla cresta è economico,
-attraversare un buco di supporto o il terreno è caro. Il percorso ottimo su
-griglia è a gradini (svolte a 45/90°): uno smoothing di **Chaikin** rimuove la
-scala di griglia senza staccarsi dalla cresta, poi un piccolo RDP declutter.
+La linea pubblicata non è più il solo contorno TFL: segue la **cresta termica**
+di `geometry_support`. Dato un candidato TFL–TFP–ABZ, si apre un **corridoio**
+di ±120 km attorno alla linea e si cerca il **percorso a costo minimo**
+(Dijkstra su griglia 8-connessa, `scipy`; nessuna nuova dipendenza, nessun ML)
+che resta sul supporto più alto. Il costo per cella è
+`log((1+ε)/(supporto+ε))`, più penalità esplicite di terreno/bordo e una
+penalità morbida della distanza dal contorno TFL originario: una cresta più
+forte può correggere la posizione, ma il percorso non può saltare liberamente
+su un fronte vicino. Ogni passo è pesato con i suoi **chilometri reali**
+(`dx·cos(lat)`, `dy`, diagonale metrica), non con la distanza fra pixel.
+
+Gli estremi vengono spostati solo localmente (massimo 45 km) verso una cella
+sostenuta, evitando code artificiali che partono da terreno o da un buco. Il
+percorso ottimo su griglia è a gradini: uno smoothing di **Chaikin** rimuove la
+scala di griglia e un piccolo RDP declutter. Prima di pubblicarlo, una guardia
+obbligatoria respinge auto-intersezioni, scorciatoie con lunghezza implausibile,
+uscite dal corridoio e qualunque linea che perda supporto termico rispetto al
+TFL. In tutti questi casi torna automaticamente il contorno originale.
 
 L'estrazione è **subordinata alla fisica**: non inventa una linea dove il
 supporto è alto, rifinisce *dove disegnare* un fronte già rilevato, dentro un
@@ -537,12 +563,14 @@ degenere ripiega sul contorno originale, quindi la pubblicazione non può mai
 regredire a una linea vuota o rotta. Il numero di fronti, i tipi e i segmenti
 restano invariati: cambia solo la posizione della linea.
 
-L'attivazione (`REFINE_PUBLISHED_GEOMETRY = True`) è avvenuta dopo il
-**benchmark Fase E** su 3 run reali (24 linee, metrica equa a passo uniforme):
+L'attivazione originaria (`REFINE_PUBLISHED_GEOMETRY = True`) è avvenuta dopo
+il **benchmark Fase E** su 3 run reali (24 linee, metrica equa a passo uniforme):
 supporto medio lungo la linea 0.43 → 0.50, frazione su supporto forte 0.50 →
 0.67, tortuosità 7.27 → 6.77 °/20 km. La cresta non regredisce su nessun
 criterio e migliora nettamente il supporto fisico; l'interruttore resta
-reversibile (`False` torna ai contorni).
+reversibile (`False` torna ai contorni). La v17 aggiunge le guardie numeriche e
+topologiche sopra descritte; la misura dell'errore meteorologico assoluto resta
+comunque subordinata a un archivio indipendente di analisi frontali ufficiali.
 
 **Classificazione per-segmento (`segmentTypes`).** La stessa struttura può
 essere freddo attivo su un tratto e quasi stazionaria su un altro **alla
@@ -598,13 +626,18 @@ La workflow blocca la pubblicazione se falliscono i test sintetici:
   conservazione di una fase reale prolungata;
 - estrazione a cresta (`front_ridge`): la linea rifinita segue il crinale del
   supporto staccandosi da una guess storta, una banda larga dà una sola linea,
-  il percorso evita una penalità di terreno a parità di supporto.
+  il percorso evita una penalità di terreno a parità di supporto, resta sulla
+  cresta termica quando un massimo dinamico è spostato e rifiuta geometrie
+  auto-intersecanti;
+- Laplaciano esplicito: valore analitico esatto su un campo quadratico anche
+  sui quattro bordi del dominio.
 
 ## Riferimenti primari
 
 - Hewson, 1998, *Objective fronts*:
   [Meteorological Applications](https://www.cambridge.org/core/journals/meteorological-applications/article/objective-fronts/DEF4E8845B0B5DBC102560C658FB4B6B)
-- Sansom e Catto, 2024, *A portable objective front identification method*:
+- Sansom e Catto, 2024, *Objective identification of meteorological fronts and
+  climatologies from ERA-Interim and ERA5*:
   [Geoscientific Model Development](https://gmd.copernicus.org/articles/17/6137/2024/gmd-17-6137-2024.html)
 - Codice ufficiale collegato all'articolo:
   [phil-sansom/front_id](https://github.com/phil-sansom/front_id)
