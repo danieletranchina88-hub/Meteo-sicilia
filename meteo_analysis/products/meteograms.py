@@ -24,7 +24,10 @@ FIELD_METADATA = {
     "cloudCover": ("Copertura nuvolosa", "%", 0),
     "windU10": ("Componente zonale vento 10 m", "m/s", 1),
     "windV10": ("Componente meridionale vento 10 m", "m/s", 1),
-    "convectionProbability": ("Probabilità temporali", "%", 1),
+    "windGust10": ("Raffica massima 10 m", "m/s", 1),
+    "convectionProbability": ("Algoritmo temporali", "%", 1),
+    "stormConfidence": ("Confidenza algoritmo temporali", "%", 1),
+    "stormContradiction": ("Contraddizioni algoritmo temporali", "%", 1),
     "capeMl": ("ML-CAPE", "J/kg", 0),
     "cinMl": ("ML-CIN", "J/kg", 0),
     "omega700": ("Moto verticale 700 hPa", "Pa/s", 3),
@@ -149,11 +152,34 @@ class MeteogramArchive:
             (self.latitudes - lat_origin) / self.tile_size_deg
         ).astype(int)
         for tile_y in sorted(set(y_tiles.tolist())):
-            rows = np.flatnonzero(y_tiles == tile_y)
+            core_rows = np.flatnonzero(y_tiles == tile_y)
             for tile_x in sorted(set(x_tiles.tolist())):
-                columns = np.flatnonzero(x_tiles == tile_x)
-                if rows.size and columns.size:
-                    yield lon_origin, lat_origin, tile_x, tile_y, rows, columns
+                core_columns = np.flatnonzero(x_tiles == tile_x)
+                if core_rows.size and core_columns.size:
+                    # Una cella di sovrapposizione permette l'interpolazione
+                    # bilineare anche nella fascia di confine fra due tile.
+                    # I limiti nel catalogo restano quelli del nucleo, così la
+                    # scelta del file non diventa ambigua.
+                    rows = np.arange(
+                        max(0, int(core_rows[0]) - 1),
+                        min(self.latitudes.size, int(core_rows[-1]) + 2),
+                        dtype=int,
+                    )
+                    columns = np.arange(
+                        max(0, int(core_columns[0]) - 1),
+                        min(self.longitudes.size, int(core_columns[-1]) + 2),
+                        dtype=int,
+                    )
+                    yield (
+                        lon_origin,
+                        lat_origin,
+                        tile_x,
+                        tile_y,
+                        core_rows,
+                        core_columns,
+                        rows,
+                        columns,
+                    )
 
     def write(self, directory):
         if not self.entries:
@@ -167,7 +193,16 @@ class MeteogramArchive:
             for name in entry["fields"]
         })
         tiles = []
-        for lon_origin, lat_origin, tile_x, tile_y, rows, columns in self._tile_groups():
+        for (
+            lon_origin,
+            lat_origin,
+            tile_x,
+            tile_y,
+            core_rows,
+            core_columns,
+            rows,
+            columns,
+        ) in self._tile_groups():
             filename = f"tile_{tile_x}_{tile_y}.json.gz"
             payload = {
                 "schemaVersion": SCHEMA_VERSION,
@@ -206,10 +241,10 @@ class MeteogramArchive:
                 "x": int(tile_x),
                 "y": int(tile_y),
                 "file": filename,
-                "west": round(float(self.longitudes[columns].min()), 4),
-                "east": round(float(self.longitudes[columns].max()), 4),
-                "south": round(float(self.latitudes[rows].min()), 4),
-                "north": round(float(self.latitudes[rows].max()), 4),
+                "west": round(float(self.longitudes[core_columns].min()), 4),
+                "east": round(float(self.longitudes[core_columns].max()), 4),
+                "south": round(float(self.latitudes[core_rows].min()), 4),
+                "north": round(float(self.latitudes[core_rows].max()), 4),
             })
 
         manifest = {

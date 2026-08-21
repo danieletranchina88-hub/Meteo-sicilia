@@ -53,6 +53,28 @@ def metrics(y, probability, threshold):
     }
 
 
+def position_metrics(distance_km, probability, threshold):
+    """Held-out localisation checks that complement cell-wise scores."""
+    distance = np.asarray(distance_km, dtype=float)
+    probability = np.asarray(probability, dtype=float)
+    prediction = probability >= threshold
+    core = np.isfinite(distance) & (distance <= 20.0)
+    far = (~np.isfinite(distance)) | (distance >= 80.0)
+    bins = {}
+    for name, mask in (
+        ("0-20", core),
+        ("20-40", (distance > 20.0) & (distance <= 40.0)),
+        ("40-80", (distance > 40.0) & (distance < 80.0)),
+        ("80+", far),
+    ):
+        bins[name] = float(np.mean(probability[mask])) if np.any(mask) else None
+    return {
+        "coreRecall20Km": float(np.mean(prediction[core])) if np.any(core) else 0.0,
+        "farPositiveRate80Km": float(np.mean(prediction[far])) if np.any(far) else 1.0,
+        "meanProbabilityByDistanceKm": bins,
+    }
+
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("dataset")
@@ -73,7 +95,8 @@ def main():
         if args.feature_profile == "era5-transfer-no-coordinates"
         else ERA5_TRANSFER_FEATURE_COLUMNS
     )
-    missing = sorted(set(features + ["time", "y"]) - set(frame.columns))
+    required = features + ["time", "y", "labelDistanceKm", "labelWeight"]
+    missing = sorted(set(required) - set(frame.columns))
     if missing:
         raise ValueError(f"colonne mancanti: {missing}")
 
@@ -104,7 +127,9 @@ def main():
     )
     classifier.fit(
         train[features], train.y,
+        sample_weight=train.labelWeight,
         eval_set=[(valid[features], valid.y)],
+        sample_weight_eval_set=[valid.labelWeight],
         verbose=25,
     )
 
@@ -113,7 +138,9 @@ def main():
     # Platt calibration corrects probability inflation from scale_pos_weight.
     logits = np.log(np.clip(raw_valid, 1e-7, 1 - 1e-7) /
                     np.clip(1 - raw_valid, 1e-7, 1))
-    calibrator = LogisticRegression(C=1e3).fit(logits[:, None], valid.y)
+    calibrator = LogisticRegression(C=1e3).fit(
+        logits[:, None], valid.y, sample_weight=valid.labelWeight
+    )
 
     def calibrate(raw):
         value = np.log(np.clip(raw, 1e-7, 1 - 1e-7) /
@@ -132,11 +159,16 @@ def main():
     threshold = float(thresholds[int(np.nanargmax(score))])
 
     test_metrics = metrics(test.y, calibrated_test, threshold)
+    localisation = position_metrics(
+        test.labelDistanceKm, calibrated_test, threshold
+    )
     acceptance = {
         "minimumRocAuc": 0.75,
         "minimumAveragePrecision": 0.07,
         "minimumF1": 0.12,
         "maximumBrier": 0.08,
+        "minimumCoreRecall20Km": 0.25,
+        "maximumFarPositiveRate80Km": 0.05,
     }
     accepted = bool(
         test_metrics["rocAuc"] >= acceptance["minimumRocAuc"]
@@ -144,11 +176,15 @@ def main():
         >= acceptance["minimumAveragePrecision"]
         and test_metrics["f1"] >= acceptance["minimumF1"]
         and test_metrics["brier"] <= acceptance["maximumBrier"]
+        and localisation["coreRecall20Km"]
+        >= acceptance["minimumCoreRecall20Km"]
+        and localisation["farPositiveRate80Km"]
+        <= acceptance["maximumFarPositiveRate80Km"]
     )
     if not accepted:
         raise RuntimeError(
             "modello rifiutato dai criteri fuori campione: "
-            + json.dumps(test_metrics)
+            + json.dumps({"cell": test_metrics, "position": localisation})
         )
     model_path = Path(args.model)
     model_path.parent.mkdir(parents=True, exist_ok=True)
@@ -189,6 +225,13 @@ def main():
         "bestIteration": int(classifier.best_iteration),
         "validationMetrics": metrics(valid.y, calibrated_valid, threshold),
         "testMetrics": test_metrics,
+        "testPositionMetrics": localisation,
+        "labelUncertainty": {
+            "method": "distance-to-40-km-boundary sample weighting",
+            "minimumWeight": 0.35,
+            "fullWeightCoreKm": 20.0,
+            "fullWeightFarKm": 80.0,
+        },
         "acceptanceCriteria": acceptance,
         "accepted": accepted,
         "featureImportanceGain": dict(sorted(

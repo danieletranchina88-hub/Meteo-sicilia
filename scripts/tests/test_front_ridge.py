@@ -5,7 +5,9 @@ A) the refined line hugs the crest of a curved support field, pulled off a
 B) a single WIDE support band yields ONE ridge line, not several parallel
    lines (contour-then-mask can produce three lines in one broad gradient;
    the crest path produces one);
-C) terrain and the domain edge are avoided when an equal-support detour exists.
+C) terrain and the domain edge are avoided when an equal-support detour exists;
+D) the geometry-specific thermal field wins over a displaced generic maximum;
+E) a self-intersecting refinement is rejected by the geometry guard.
 """
 
 import os
@@ -69,6 +71,46 @@ on_wall = float(np.mean(np.abs(refined_t[:, 1] - 42.0) < 0.15))
 print(f"C) evitamento terreno: frazione sul muro={on_wall:.2f}")
 if on_wall > 0.6:
     print("  FAIL: il percorso non evita la penalità di terreno"); ok = False
+
+# D) geometry support, not a displaced dynamic/pressure maximum ------------
+lower = support_ridge(lambda lon: 41.0, width_deg=0.35)
+upper = support_ridge(lambda lon: 42.0, width_deg=0.35)
+res_dual = {
+    "any_front_support": np.maximum(0.55 * lower, upper),
+    "geometry_support": 0.78 * lower,
+    "penalties": {},
+}
+guess_dual = np.column_stack((
+    np.linspace(6.0, 19.0, 8), np.full(8, 41.0)
+))
+refined_dual = fr.refine_line(
+    res_dual, LON, LAT, guess_dual, corridor_km=180.0
+)
+mean_dual = float(np.mean(refined_dual[:, 1]))
+print(f"D) cresta termica vs massimo generico: lat media={mean_dual:.2f}°")
+if abs(mean_dual - 41.0) > 0.35:
+    print("  FAIL: la linea è stata trascinata fuori dal bordo termico")
+    ok = False
+
+# E) proper self-intersection guard -----------------------------------------
+bow_tie = np.array([
+    [8.0, 40.0], [14.0, 46.0], [8.0, 46.0], [14.0, 40.0]
+])
+if not fr._has_self_intersection(bow_tie):
+    print("E) FAIL: una geometria auto-intersecante non è stata riconosciuta")
+    ok = False
+else:
+    print("E) auto-intersezione: correttamente respinta")
+
+# F) a one-cell-scale U-turn is not a meteorological front -----------------
+hairpin = np.array([
+    [8.0, 41.0], [12.0, 41.0], [12.1, 41.0], [9.0, 41.1]
+])
+turn = fr._maximum_turn_deg(hairpin)
+print(f"F) inversione locale: svolta massima={turn:.0f}°")
+if turn <= 135.0:
+    print("  FAIL: una brusca inversione locale non è stata riconosciuta")
+    ok = False
 
 print("\nESITO:", "SUPERATO" if ok else "DA RIVEDERE")
 raise SystemExit(0 if ok else 1)

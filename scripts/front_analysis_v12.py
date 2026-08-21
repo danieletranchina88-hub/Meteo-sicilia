@@ -1,4 +1,4 @@
-"""ICON-2I objective synoptic-front analysis, physics-guided engine (v14).
+"""ICON-2I objective synoptic-front analysis, precision physics engine (v17).
 
 The detector is intentionally conservative.  It identifies the warm-air
 edge of baroclinic zones in wet-bulb potential temperature at 850 hPa, then
@@ -18,6 +18,7 @@ import os
 
 import numpy as np
 
+import front_consensus as fcon
 import front_detection as fd
 import front_locator as fl
 import front_occlusion as focc
@@ -30,9 +31,10 @@ import thermodynamics as thermo
 from front_analysis import SynopticFrontAnalyzer, _blend_lines, _line_length_km, _rdp
 
 
-FRONT_METHOD = "icon2i-ofa-physics-guided-v15"
+FRONT_METHOD = "icon2i-ofa-physics-guided-v17-precision"
 ANALYSIS_PRESSURE_PA = 85_000.0
 LOWER_PRESSURE_PA = 92_500.0
+UPPER_PRESSURE_PA = 70_000.0
 
 # Climatological calibration of the detection thresholds (documento sez. 17).
 # Built offline by calibrate_thresholds.py from many ICON-2I runs; picked by
@@ -129,13 +131,16 @@ MIN_PUBLISH_QUALITY = 0.61
 MAX_PUBLISH_UNCERTAINTY = 0.39
 MAX_FRONTS_PER_HOUR = 4
 
-# Two published lines this close over this much of their length are the same
-# boundary drawn twice, not two fronts. Deliberately looser than the 55 km /
-# 0.68 used to de-duplicate candidates: by publication time the two copies
-# have been snapped to the support crest independently and drift further
-# apart than the raw candidates did.
-DUPLICATE_RADIUS_KM = 60.0
-DUPLICATE_OVERLAP = 0.60
+# Two independently tracked lines may converge onto the same physical ridge
+# during the final support-field refinement.  A synoptic boundary cannot have
+# two different identities inside the same ~25 km frontal core for hundreds
+# of kilometres: keep the stronger track on that shared trunk and retain only
+# a genuine non-overlapping branch of the weaker one.  The minimum run keeps
+# ordinary cold/warm junctions and point crossings untouched.
+SHARED_TRUNK_RADIUS_KM = 25.0
+SHARED_TRUNK_MIN_KM = 140.0
+SHARED_TRUNK_SAMPLE_KM = 12.0
+MIN_BRANCH_LENGTH_KM = 100.0
 
 # Fase C/E: la geometria pubblicata segue la cresta di any_front_support
 # (least-cost path in front_ridge), non piu' il solo contorno TFL. Attivato
@@ -169,6 +174,157 @@ def _json_mapping(values: dict, digits: int | None = None) -> dict:
     }
 
 
+def _point_distances_to_line_km(
+    points: np.ndarray, line: np.ndarray
+) -> np.ndarray:
+    """Metric point-to-polyline distances for two lon/lat geometries."""
+    points = np.asarray(points, dtype=float)
+    line = np.asarray(line, dtype=float)
+    mean_lat = np.deg2rad(float(np.mean(np.r_[points[:, 1], line[:, 1]])))
+    scale_lon = fl.EARTH_KM_PER_DEG * np.cos(mean_lat)
+    points_km = np.column_stack((
+        points[:, 0] * scale_lon,
+        points[:, 1] * fl.EARTH_KM_PER_DEG,
+    ))
+    line_km = np.column_stack((
+        line[:, 0] * scale_lon,
+        line[:, 1] * fl.EARTH_KM_PER_DEG,
+    ))
+    return fd._points_to_segments_km(points_km, line_km)
+
+
+def _true_runs(mask: np.ndarray) -> list[tuple[int, int]]:
+    """Inclusive index ranges for contiguous true values."""
+    runs = []
+    start = None
+    for index, value in enumerate(np.asarray(mask, dtype=bool)):
+        if value and start is None:
+            start = index
+        elif not value and start is not None:
+            runs.append((start, index - 1))
+            start = None
+    if start is not None:
+        runs.append((start, len(mask) - 1))
+    return runs
+
+
+def _remap_segment_types(
+    properties: dict, start_fraction: float, end_fraction: float
+) -> None:
+    """Remap along-line type fractions after publishing only one branch."""
+    segments = properties.get("segmentTypes")
+    if not isinstance(segments, list) or not segments:
+        return
+    width = end_fraction - start_fraction
+    if width <= 1.0e-6:
+        properties.pop("segmentTypes", None)
+        return
+    remapped = []
+    for segment in segments:
+        try:
+            first = max(start_fraction, float(segment.get("start", 0.0)))
+            last = min(end_fraction, float(segment.get("end", 1.0)))
+        except (TypeError, ValueError):
+            continue
+        if last <= first:
+            continue
+        updated = dict(segment)
+        updated["start"] = round((first - start_fraction) / width, 3)
+        updated["end"] = round((last - start_fraction) / width, 3)
+        remapped.append(updated)
+    if remapped:
+        # Avoid rounding gaps at the new geometry endpoints.
+        remapped[0]["start"] = 0.0
+        remapped[-1]["end"] = 1.0
+        properties["segmentTypes"] = remapped
+    else:
+        properties.pop("segmentTypes", None)
+
+
+def _entry_strength(entry: tuple[np.ndarray, dict]) -> tuple[float, ...]:
+    """Deterministic ownership order for a shared geometric trunk."""
+    coordinates, properties = entry
+    return (
+        float(properties.get("qualityScore") or 0.0),
+        float(properties.get("detectionQuality") or 0.0),
+        float(properties.get("typeConfidence") or 0.0),
+        float(properties.get("trackQualityScore") or 0.0),
+        _line_length_km(np.asarray(coordinates, dtype=float)),
+    )
+
+
+def deconflict_shared_front_trunks(
+    entries: list[tuple[np.ndarray, dict]],
+    *,
+    radius_km: float = SHARED_TRUNK_RADIUS_KM,
+    minimum_shared_km: float = SHARED_TRUNK_MIN_KM,
+    minimum_branch_km: float = MIN_BRANCH_LENGTH_KM,
+) -> tuple[list[tuple[np.ndarray, dict]], int]:
+    """Publish a shared front ridge once while preserving its strongest branch.
+
+    The operation happens after geometric ridge refinement, where two valid
+    temporal tracks can otherwise snap onto exactly the same crest.  Only a
+    long, near-coincident run is removed; a local crossing or a triple-point
+    junction remains intact.  When the weaker line enters and exits the
+    shared trunk, only its longest independent branch is retained, preventing
+    a single track from being published as disconnected pieces.
+    """
+    ordered = sorted(entries, key=_entry_strength, reverse=True)
+    published: list[tuple[np.ndarray, dict]] = []
+    changed = 0
+    for original_coordinates, original_properties in ordered:
+        coordinates = np.asarray(original_coordinates, dtype=float)
+        if len(coordinates) < 2 or not published:
+            published.append((coordinates, original_properties))
+            continue
+
+        dense = fd._resample_km(coordinates, SHARED_TRUNK_SAMPLE_KM)
+        remove = np.zeros(len(dense), dtype=bool)
+        owner_ids: set[int] = set()
+        for owner_coordinates, owner_properties in published:
+            distances = _point_distances_to_line_km(dense, owner_coordinates)
+            close = distances <= radius_km
+            for first, last in _true_runs(close):
+                if _line_length_km(dense[first:last + 1]) < minimum_shared_km:
+                    continue
+                remove[first:last + 1] = True
+                owner_id = owner_properties.get("trackId")
+                if isinstance(owner_id, (int, np.integer)):
+                    owner_ids.add(int(owner_id))
+
+        if not np.any(remove):
+            published.append((coordinates, original_properties))
+            continue
+
+        # The boundary sample at the edge of the owner is also the physical
+        # junction of the surviving branch; retain that single point so the
+        # map has no artificial gap, without redrawing the common trunk.
+        fragments = []
+        for first, last in _true_runs(~remove):
+            junction_first = max(0, first - 1) if first > 0 else first
+            junction_last = min(len(dense) - 1, last + 1) if last + 1 < len(dense) else last
+            fragment = dense[junction_first:junction_last + 1]
+            length = _line_length_km(fragment)
+            fragments.append((length, junction_first, junction_last, fragment))
+        fragments.sort(key=lambda item: item[0], reverse=True)
+        if not fragments or fragments[0][0] < minimum_branch_km:
+            changed += 1
+            continue
+
+        _, first, last, fragment = fragments[0]
+        properties = dict(original_properties)
+        properties["topologyDeconflicted"] = True
+        properties["sharedGeometryRemoved"] = True
+        properties["suppressedOverlapWithTrackIds"] = sorted(owner_ids)
+        properties["originalExtentKm"] = round(_line_length_km(dense), 1)
+        properties["publishedBranchKm"] = round(_line_length_km(fragment), 1)
+        denominator = max(len(dense) - 1, 1)
+        _remap_segment_types(properties, first / denominator, last / denominator)
+        published.append((fragment, properties))
+        changed += 1
+    return published, changed
+
+
 class IconSynopticFrontAnalyzer(SynopticFrontAnalyzer):
     """OFA front detector assembled around the validated ICON GRIB loader."""
 
@@ -179,6 +335,12 @@ class IconSynopticFrontAnalyzer(SynopticFrontAnalyzer):
         lower_humidity_path: str | None = None,
         lower_u_wind_path: str | None = None,
         lower_v_wind_path: str | None = None,
+        upper_temperature_path: str | None = None,
+        upper_humidity_path: str | None = None,
+        upper_u_wind_path: str | None = None,
+        upper_v_wind_path: str | None = None,
+        surface_u_wind_path: str | None = None,
+        surface_v_wind_path: str | None = None,
         omega_700_path: str | None = None,
         ml_guidance=None,
         **kwargs,
@@ -272,6 +434,61 @@ class IconSynopticFrontAnalyzer(SynopticFrontAnalyzer):
                     self.datasets.pop(key).close()
                     self.keys.pop(key, None)
 
+        if upper_temperature_path and upper_humidity_path:
+            added = []
+            opened = None
+            try:
+                for key, path in (
+                    ("t700", upper_temperature_path),
+                    ("q700", upper_humidity_path),
+                ):
+                    opened = self._open_field(path, key)
+                    self._validate_optional_dataset(opened, key, 700.0)
+                    variable = next(iter(opened.data_vars))
+                    values = np.asarray(opened[variable].values, dtype=float)
+                    median = _finite_median(values)
+                    if key == "t700" and not 170.0 < median < 330.0:
+                        raise ValueError("T700 non espressa in kelvin")
+                    if key == "q700" and not 0.0 <= median < 0.1:
+                        raise ValueError("QV700 non espressa in kg/kg")
+                    self.datasets[key] = opened
+                    self.keys[key] = variable
+                    added.append(key)
+                    opened = None
+            except Exception:
+                if opened is not None:
+                    opened.close()
+                for key in added:
+                    self.datasets.pop(key).close()
+                    self.keys.pop(key, None)
+
+        for paths, keys, level in (
+            ((upper_u_wind_path, upper_v_wind_path), ("u700", "v700"), 700.0),
+            ((surface_u_wind_path, surface_v_wind_path), ("u10", "v10"), None),
+        ):
+            if not all(paths):
+                continue
+            added = []
+            opened = None
+            try:
+                for key, path in zip(keys, paths):
+                    opened = self._open_field(path, key)
+                    self._validate_optional_dataset(opened, key, level)
+                    variable = next(iter(opened.data_vars))
+                    values = np.asarray(opened[variable].values, dtype=float)
+                    if np.nanpercentile(np.abs(values), 99.9) > 150.0:
+                        raise ValueError(f"{key} fuori scala m/s")
+                    self.datasets[key] = opened
+                    self.keys[key] = variable
+                    added.append(key)
+                    opened = None
+            except Exception:
+                if opened is not None:
+                    opened.close()
+                for key in added:
+                    self.datasets.pop(key).close()
+                    self.keys.pop(key, None)
+
         if omega_700_path:
             try:
                 dataset = self._open_field(omega_700_path, "omega700")
@@ -289,7 +506,7 @@ class IconSynopticFrontAnalyzer(SynopticFrontAnalyzer):
                     pass
 
     def _validate_optional_dataset(
-        self, dataset, name: str, expected_level_hpa: float
+        self, dataset, name: str, expected_level_hpa: float | None
     ) -> None:
         level = None
         for coordinate in ("isobaricInhPa", "level"):
@@ -297,7 +514,8 @@ class IconSynopticFrontAnalyzer(SynopticFrontAnalyzer):
                 values = np.atleast_1d(dataset.coords[coordinate].values)
                 if values.size == 1:
                     level = float(values.item())
-        if level is not None and abs(level - expected_level_hpa) > 1.0:
+        if (level is not None and expected_level_hpa is not None
+                and abs(level - expected_level_hpa) > 1.0):
             raise ValueError(
                 f"{name} a {level:.0f} hPa invece di {expected_level_hpa:.0f} hPa"
             )
@@ -323,6 +541,18 @@ class IconSynopticFrontAnalyzer(SynopticFrontAnalyzer):
     @property
     def has_lower_wind(self) -> bool:
         return "u925" in self.datasets and "v925" in self.datasets
+
+    @property
+    def has_upper_level(self) -> bool:
+        return "t700" in self.datasets and "q700" in self.datasets
+
+    @property
+    def has_upper_wind(self) -> bool:
+        return "u700" in self.datasets and "v700" in self.datasets
+
+    @property
+    def has_surface_wind(self) -> bool:
+        return "u10" in self.datasets and "v10" in self.datasets
 
     @staticmethod
     def _offset_points(
@@ -370,6 +600,12 @@ class IconSynopticFrontAnalyzer(SynopticFrontAnalyzer):
             temperature = self._field("t925", hour)
             humidity = self._field("q925", hour)
             pressure = LOWER_PRESSURE_PA
+        elif level_hpa == 700:
+            if not self.has_upper_level:
+                raise KeyError("campi 700 hPa non disponibili")
+            temperature = self._field("t700", hour)
+            humidity = self._field("q700", hour)
+            pressure = UPPER_PRESSURE_PA
         else:
             temperature = self._field("t", hour)
             humidity = self._field("q", hour)
@@ -460,6 +696,26 @@ class IconSynopticFrontAnalyzer(SynopticFrontAnalyzer):
             boundary_margin_km=70.0,
             **(self._threshold_climatology or {}),
         )
+        # Independent directional ridge geometry.  It confirms position and
+        # method agreement, but it is deliberately NOT an autonomous seed:
+        # both Hewson and Laplacian geometry can follow opposite edges of the
+        # same finite-width frontal zone and would otherwise create two track
+        # identities for one physical boundary.
+        directional_candidates = fd.detect_fronts_two_scale(
+            theta_w,
+            self.longitudes,
+            self.latitudes,
+            synoptic_sigma_km=SYNOPTIC_SIGMA_KM,
+            refine_sigma_km=REFINE_SIGMA_KM,
+            derivative_sigma_km=DERIVATIVE_SIGMA_KM,
+            corridor_km=110.0,
+            min_synoptic_support=0.60,
+            synoptic_min_length_km=350.0,
+            refine_min_length_km=220.0,
+            boundary_margin_km=70.0,
+            locator_method=fl.LOCATOR_HEWSON,
+            **(self._threshold_climatology or {}),
+        )
         lower_candidates = self._lower_candidates(hour)
         lower_lines = [np.asarray(item["coordinates"], dtype=float) for item in lower_candidates]
 
@@ -490,15 +746,26 @@ class IconSynopticFrontAnalyzer(SynopticFrontAnalyzer):
         # publish alone: the strict cross-front gates below still require
         # independent dry, moist and density contrasts.
         wet_lines = [np.asarray(c["coordinates"], dtype=float) for c in wet_candidates]
+        directional_lines = [
+            np.asarray(c["coordinates"], dtype=float)
+            for c in directional_candidates
+        ]
         dry_lines = [np.asarray(c["coordinates"], dtype=float) for c in dry_candidates]
         combined = []
-        for source_name, source_items, other_lines in (
-            ("thetaW", wet_candidates, dry_lines),
-            ("dryTheta", dry_candidates, wet_lines),
+        for source_name, source_items, other_lines, alternate_lines in (
+            (
+                "thetaW-laplacian", wet_candidates, dry_lines,
+                dry_lines + directional_lines,
+            ),
+            (
+                "dryTheta-laplacian", dry_candidates, wet_lines,
+                wet_lines + directional_lines,
+            ),
         ):
             for item in source_items:
                 candidate = dict(item)
                 candidate["thermalLocator"] = source_name
+                candidate["locatorSources"] = [source_name]
                 candidate["crossThermalSupport"] = round(
                     fd.line_support_fraction(
                         np.asarray(candidate["coordinates"], dtype=float),
@@ -507,6 +774,41 @@ class IconSynopticFrontAnalyzer(SynopticFrontAnalyzer):
                     ) if other_lines else 0.0,
                     2,
                 )
+                directional_matching = [
+                    line for line in directional_lines
+                    if min(
+                        fd.line_support_fraction(
+                            np.asarray(candidate["coordinates"], dtype=float),
+                            [line], 100.0,
+                        ),
+                        fd.line_support_fraction(
+                            line,
+                            [np.asarray(candidate["coordinates"], dtype=float)],
+                            100.0,
+                        ),
+                    ) >= 0.45
+                ]
+                if directional_matching:
+                    candidate["locatorSources"].append("thetaW-directional")
+                matching = [
+                    line for line in alternate_lines
+                    if min(
+                        fd.line_support_fraction(
+                            np.asarray(candidate["coordinates"], dtype=float),
+                            [line], 100.0,
+                        ),
+                        fd.line_support_fraction(
+                            line, [np.asarray(candidate["coordinates"], dtype=float)],
+                            100.0,
+                        ),
+                    ) >= 0.45
+                ]
+                if matching:
+                    candidate["positionUncertaintyKm"] = round(min(
+                        fcon.symmetric_line_distance_km(
+                            np.asarray(candidate["coordinates"], dtype=float), line
+                        ) for line in matching
+                    ), 1)
                 combined.append(self._orient_warm_left(candidate))
         combined.sort(
             key=lambda c: (
@@ -527,6 +829,22 @@ class IconSynopticFrontAnalyzer(SynopticFrontAnalyzer):
                     fd.line_support_fraction(kept_line, [line], 55.0),
                 )
                 if overlap >= 0.68:
+                    kept["locatorSources"] = sorted(set(
+                        kept.get("locatorSources", [])
+                        + candidate.get("locatorSources", [])
+                    ))
+                    uncertainties = [
+                        value for value in (
+                            kept.get("positionUncertaintyKm"),
+                            candidate.get("positionUncertaintyKm"),
+                            fcon.symmetric_line_distance_km(line, kept_line),
+                        )
+                        if value is not None and np.isfinite(float(value))
+                    ]
+                    if uncertainties:
+                        kept["positionUncertaintyKm"] = round(
+                            float(np.median(uncertainties)), 1
+                        )
                     duplicate = True
                     break
             if not duplicate:
@@ -579,6 +897,56 @@ class IconSynopticFrontAnalyzer(SynopticFrontAnalyzer):
         if self.has_lower_level:
             theta_w_925 = self._theta_w(hour, 925).copy()
             theta_w_925[self.terrain > 650.0] = np.nan
+        theta_w_700 = self._theta_w(hour, 700) if self.has_upper_level else None
+        upper_u_wind = upper_v_wind = None
+        if self.has_upper_wind:
+            upper_u_wind = fl.smooth_km(
+                self._field("u700", hour), REFINE_SIGMA_KM, grid_metrics
+            )
+            upper_v_wind = fl.smooth_km(
+                self._field("v700", hour), REFINE_SIGMA_KM, grid_metrics
+            )
+
+        # Parfitt-F is evaluated at 925 hPa where valid, otherwise 850 hPa.
+        # It remains a sampled confirmation of thermally located candidates.
+        parfitt = None
+        try:
+            if self.has_lower_level and self.has_lower_wind:
+                parfitt_t = self._field("t925", hour).copy()
+                parfitt_u = self._field("u925", hour).copy()
+                parfitt_v = self._field("v925", hour).copy()
+                terrain_mask = self.terrain > 650.0
+                parfitt_t[terrain_mask] = np.nan
+                parfitt_u[terrain_mask] = np.nan
+                parfitt_v[terrain_mask] = np.nan
+            else:
+                parfitt_t, parfitt_u, parfitt_v = raw_temperature, raw_u, raw_v
+            parfitt = fcon.parfitt_f_field(
+                parfitt_t, parfitt_u, parfitt_v,
+                self.longitudes, self.latitudes,
+                smoothing_km=REFINE_SIGMA_KM,
+            )
+        except Exception:
+            parfitt = None
+
+        wnd = None
+        if self.has_surface_wind:
+            previous = [
+                value for value in self.available_hours
+                if 0 < hour - value <= 6
+            ]
+            if previous:
+                before = max(previous)
+                try:
+                    wnd = fcon.temporal_wind_shift_field(
+                        self._field("u10", before), self._field("v10", before),
+                        self._field("u10", hour), self._field("v10", hour),
+                        self.longitudes, self.latitudes,
+                        elapsed_hours=hour - before,
+                        smoothing_km=REFINE_SIGMA_KM,
+                    )
+                except Exception:
+                    wnd = None
 
         accepted = []
         rejected: list[dict] = []
@@ -775,6 +1143,12 @@ class IconSynopticFrontAnalyzer(SynopticFrontAnalyzer):
                     self._sample(self.terrain, coordinates) > 1_200.0
                 )),
             }
+            metrics.update(fcon.line_consensus_metrics(
+                coordinates, self.longitudes, self.latitudes,
+                parfitt=parfitt,
+                wnd=wnd,
+                locator_sources=candidate.get("locatorSources", []),
+            ))
 
             if theta_tendency is not None:
                 gradient_at_line = np.maximum(
@@ -855,6 +1229,31 @@ class IconSynopticFrontAnalyzer(SynopticFrontAnalyzer):
             else:
                 metrics["lowerValidFraction"] = 0.0
 
+            if theta_w_700 is not None:
+                upper_warm = self._sample(theta_w_700, warm)
+                upper_cold = self._sample(theta_w_700, cold)
+                upper_valid = np.isfinite(upper_warm) & np.isfinite(upper_cold)
+                metrics["upperValidFraction"] = float(np.mean(upper_valid))
+                metrics["deltaThetaW700"] = _finite_median(
+                    (upper_warm - upper_cold)[upper_valid]
+                )
+                if upper_u_wind is not None and upper_v_wind is not None:
+                    upper_warm_u = self._sample(upper_u_wind, warm)
+                    upper_warm_v = self._sample(upper_v_wind, warm)
+                    upper_cold_u = self._sample(upper_u_wind, cold)
+                    upper_cold_v = self._sample(upper_v_wind, cold)
+                    upper_wind_valid = (
+                        np.isfinite(upper_warm_u) & np.isfinite(upper_warm_v)
+                        & np.isfinite(upper_cold_u) & np.isfinite(upper_cold_v)
+                    )
+                    metrics["upperWindValidFraction"] = float(np.mean(
+                        upper_wind_valid
+                    ))
+                    metrics["windShift700Ms"] = _finite_median(np.hypot(
+                        upper_warm_u - upper_cold_u,
+                        upper_warm_v - upper_cold_v,
+                    )[upper_wind_valid])
+
             # Cross-front sections (front_sections): the transition-zone
             # profile at 850 hPa, and its 925 hPa vertical coherence when the
             # lower level exists. Width/offset stay diagnostics (not gates);
@@ -863,6 +1262,7 @@ class IconSynopticFrontAnalyzer(SynopticFrontAnalyzer):
                 theta_w, self.longitudes, self.latitudes, coordinates, normal,
             ))
             metrics.update(section_850)
+            section_925 = None
             if theta_w_925 is not None:
                 section_925 = fsec.profile_diagnostics(fsec.cross_profiles(
                     theta_w_925, self.longitudes, self.latitudes,
@@ -872,6 +1272,20 @@ class IconSynopticFrontAnalyzer(SynopticFrontAnalyzer):
                 coherence = fsec.vertical_coherence(section_850, section_925)
                 if coherence is not None:
                     metrics["verticalCoherence"] = coherence
+            section_700 = None
+            if theta_w_700 is not None:
+                section_700 = fsec.profile_diagnostics(fsec.cross_profiles(
+                    theta_w_700, self.longitudes, self.latitudes,
+                    coordinates, normal,
+                ))
+                metrics["frontWidth700Km"] = section_700.get("frontWidthKm")
+            vertical = fsec.multilevel_vertical_coherence(
+                section_925, section_850, section_700
+            )
+            metrics.update({
+                key: value for key, value in vertical.items()
+                if value is not None
+            })
 
             evidence = fp.candidate_evidence(metrics)
             metrics.update(evidence)
@@ -990,6 +1404,9 @@ class IconSynopticFrontAnalyzer(SynopticFrontAnalyzer):
             "detectionErrors": len(detection_errors),
             "lowerLevel925": self.has_lower_level,
             "lowerWind925": self.has_lower_wind,
+            "upperLevel700": self.has_upper_level,
+            "upperWind700": self.has_upper_wind,
+            "temporalWind10m": self.has_surface_wind,
             "omega700": "omega700" in self.datasets,
             "pressure": "p" in self.datasets,
             "mlFusion": getattr(self, "ml_guidance", None) is not None,
@@ -1090,6 +1507,12 @@ class IconSynopticFrontAnalyzer(SynopticFrontAnalyzer):
                     hour, geometry, hour_properties
                 )
                 by_hour.setdefault(hour, []).append((geometry, hour_properties))
+
+        deconflicted = 0
+        for hour, entries in by_hour.items():
+            by_hour[hour], changed = deconflict_shared_front_trunks(entries)
+            deconflicted += changed
+        self.analysis_summary["deconflictedSharedTrunks"] = deconflicted
         self._occlusion_hours = self._apply_occlusions(by_hour)
         self._by_hour = by_hour
 
@@ -1269,6 +1692,22 @@ class IconSynopticFrontAnalyzer(SynopticFrontAnalyzer):
             "qualityScore": round(float(track["qualityScore"]), 2),
             "uncertaintyIndex": round(float(track["uncertaintyIndex"]), 2),
             "uncertaintyClass": track.get("uncertaintyClass", "low"),
+            "existenceConfidence": round(float(track["qualityScore"]), 2),
+            "typeConfidence": _json_number(
+                classification.get("classificationCertainty"), 2
+            ),
+            "positionUncertaintyKm": _json_number(
+                (track.get("diagnostics") or {}).get("positionUncertaintyKm"), 1
+            ),
+            "methodAgreement": {
+                "count": _json_number(
+                    (track.get("diagnostics") or {}).get("methodAgreementCount"), 0
+                ),
+                "available": _json_number(
+                    (track.get("diagnostics") or {}).get("methodAvailability"), 0
+                ),
+            },
+            "confidenceSemantics": "heuristic-not-calibrated-probability",
             "trackQualityScore": round(
                 float(track.get("trackQualityScore", track["qualityScore"])), 2
             ),
@@ -1333,6 +1772,7 @@ class IconSynopticFrontAnalyzer(SynopticFrontAnalyzer):
             # Directly observed hour: instantaneous quality view.
             properties["qualityScore"] = round(float(hourly_quality), 2)
             properties["confidence"] = properties["qualityScore"]
+            properties["existenceConfidence"] = properties["qualityScore"]
             properties["uncertaintyIndex"] = _json_number(
                 (track.get("hourlyUncertainty") or {}).get(hour), 2
             ) or properties["uncertaintyIndex"]
@@ -1347,6 +1787,20 @@ class IconSynopticFrontAnalyzer(SynopticFrontAnalyzer):
             )
             observation = (track.get("observations") or {}).get(hour) or {}
             hour_diagnostics = observation.get("diagnostics") or {}
+            properties["typeConfidence"] = properties[
+                "classificationConfidence"
+            ]
+            properties["positionUncertaintyKm"] = _json_number(
+                hour_diagnostics.get("positionUncertaintyKm"), 1
+            )
+            properties["methodAgreement"] = {
+                "count": _json_number(
+                    hour_diagnostics.get("methodAgreementCount"), 0
+                ),
+                "available": _json_number(
+                    hour_diagnostics.get("methodAvailability"), 0
+                ),
+            }
             properties["gateStatus"] = observation.get("gateStatus")
             properties["fusion"] = {
                 "decision": observation.get("fusionDecision", "physics-only"),
@@ -1388,6 +1842,7 @@ class IconSynopticFrontAnalyzer(SynopticFrontAnalyzer):
                 bridged = float(np.mean(neighbour_scores)) * 0.85
                 properties["qualityScore"] = round(bridged, 2)
                 properties["confidence"] = properties["qualityScore"]
+                properties["existenceConfidence"] = properties["qualityScore"]
                 properties["uncertaintyIndex"] = round(
                     float(np.clip(1.0 - bridged + 0.10, 0.0, 1.0)), 2
                 )
@@ -1426,7 +1881,9 @@ class IconSynopticFrontAnalyzer(SynopticFrontAnalyzer):
             "source": self.source,
             "level": "850 hPa",
             "lowerLevelSupport": "925 hPa" if self.has_lower_level else None,
+            "upperLevelSupport": "700 hPa" if self.has_upper_level else None,
             "classificationWind": "925/850 hPa" if self.has_lower_wind else "850 hPa",
+            "temporalWindDiagnostic": "10 m / 6 h" if self.has_surface_wind else None,
             "estimated": True,
             "uncertainty": "diagnostic-not-probabilistic",
             "mlFusion": getattr(self, "ml_guidance", None) is not None,
@@ -1455,31 +1912,14 @@ class IconSynopticFrontAnalyzer(SynopticFrontAnalyzer):
         entries = list(self._by_hour.get(hour, []))
         entries.sort(key=lambda item: item[1]["qualityScore"], reverse=True)
         features = []
-        # One boundary, one line. Candidates are de-duplicated within an hour,
-        # but the published output is per TRACK, and two tracks can each hand
-        # in a line for the same hour with nothing comparing them. Measured on
-        # a real run, two "cold" features at +52 h overlapped over 72% of their
-        # length within 60 km, and 64% at +18 h: the map showed one front drawn
-        # twice, and because the two copies were slightly differently oriented
-        # their pips fell on visually opposite sides, which reads as an error
-        # even though each line was individually correct. No forecaster draws
-        # that. The weaker copy is dropped; entries are already sorted by
-        # quality, so what survives is the better-supported line.
-        published_lines: list[np.ndarray] = []
+        # The same boundary handed in twice by two tracks is resolved upstream
+        # by ``deconflict_shared_front_trunks``, which trims the shared ridge
+        # and keeps a genuine independent branch of the weaker line instead of
+        # discarding it whole.
         for coordinates, properties in entries[:MAX_FRONTS_PER_HOUR]:
             simplified = _rdp(coordinates, 0.025)
             if len(simplified) < 2 or _line_length_km(simplified) < 100.0:
                 continue
-            duplicate = any(
-                min(
-                    fd.line_support_fraction(simplified, [kept], DUPLICATE_RADIUS_KM),
-                    fd.line_support_fraction(kept, [simplified], DUPLICATE_RADIUS_KM),
-                ) >= DUPLICATE_OVERLAP
-                for kept in published_lines
-            )
-            if duplicate:
-                continue
-            published_lines.append(np.asarray(simplified, dtype=float))
             features.append({
                 "type": "Feature",
                 "geometry": {
@@ -1573,6 +2013,12 @@ class IconSynopticFrontAnalyzer(SynopticFrontAnalyzer):
                 theta_w_925[self.terrain > 650.0] = np.nan
             except Exception:
                 theta_w_925 = None
+        theta_w_700 = None
+        if self.has_upper_level:
+            try:
+                theta_w_700 = self._theta_w(hour, 700)
+            except Exception:
+                theta_w_700 = None
         field = fsup.physical_support_field(
             thermodynamics["theta_w"], thermodynamics["theta"],
             thermodynamics["theta_e"],
@@ -1581,6 +2027,7 @@ class IconSynopticFrontAnalyzer(SynopticFrontAnalyzer):
             terrain=self.terrain,
             pressure_hpa=self._pressure_hpa(hour),
             theta_w_925=theta_w_925,
+            theta_w_700=theta_w_700,
             synoptic_sigma_km=SYNOPTIC_SIGMA_KM,
             refine_sigma_km=REFINE_SIGMA_KM,
             derivative_sigma_km=DERIVATIVE_SIGMA_KM,

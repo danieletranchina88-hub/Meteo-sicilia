@@ -1,4 +1,4 @@
-# Analisi oggettiva dei fronti ICON-2I (v14)
+# Analisi oggettiva dei fronti ICON-2I (v17-precision)
 
 ## Scopo e limite fondamentale
 
@@ -12,7 +12,7 @@ Meteorologico. `qualityScore` e `uncertaintyIndex` descrivono la coerenza
 interna delle prove in un singolo run deterministico: non sono probabilità
 calibrate e non misurano l'errore previsionale assoluto.
 
-Il metodo operativo è `icon2i-ofa-physics-guided-v14`.
+Il metodo operativo è `icon2i-ofa-physics-guided-v17-precision`.
 
 ## Dati usati
 
@@ -21,6 +21,10 @@ Per ogni run 00/12 UTC e per tutte le 73 scadenze orarie:
 - T, QV, U e V a 850 hPa: campi obbligatori e geometria primaria;
 - PMSL: firma di saccatura e tendenza barica, opzionale;
 - T, QV, U e V a 925 hPa: coerenza verticale e vento più vicino al suolo,
+  opzionali;
+- T, QV, U e V a 700 hPa: struttura verticale, inclinazione e vento in quota,
+  opzionali;
+- U e V a 10 m su ore consecutive: controllo temporale del salto di vento,
   opzionali;
 - OMEGA a 700 hPa: attività/ascesa frontale, opzionale;
 - HSURF: controllo orografico.
@@ -72,13 +76,25 @@ virtuale. Un confine di sola umidità viene quindi respinto.
 Il nucleo segue Hewson (1998) nella formulazione portabile verificata da
 Sansom e Catto (2024):
 
-1. smoothing gaussiano in chilometri, prima delle derivate;
+1. smoothing gaussiano normalizzato in chilometri, prima delle derivate;
 2. gradiente metrico di `theta_w`;
 3. Thermal Front Locator
    `TFL = laplacian(|grad(theta_w)|)`;
 4. estrazione delle sole isolinee `TFL = 0`;
 5. mascheramento della linea con TFP e intensità della zona baroclina
    adiacente (ABZ).
+
+In parallelo viene eseguito un secondo localizzatore: la derivata seconda di
+`|grad(theta_w)|` lungo la normale termica locale. È una realizzazione
+metrica dell'idea direzionale di Hewson, dichiaratamente non una riproduzione
+letterale dei suoi assi medi a cinque punti. Il localizzatore isotropo resta
+il riferimento; la distanza simmetrica fra le due geometrie produce
+`positionUncertaintyKm` e il loro accordo è una conferma indipendente. Anche
+la linea direzionale deve superare identici corridoi e filtri. Non fonda però
+una seconda traccia autonoma: può seguire l'altro bordo della stessa fascia
+frontale finita e, se pubblicata separatamente, produrrebbe due fronti per una
+sola discontinuità fisica. Conferma quindi le geometrie `theta_w`/`theta`
+principali e ne quantifica l'incertezza di posizione.
 
 Il Thermal Front Parameter è scritto nella forma di Sansom e Catto:
 
@@ -134,6 +150,17 @@ Effetto misurato su fronti reali del run ICON-2I del 21 agosto 2026 00 UTC:
 
 Le derivate rispettano le distanze reali della griglia lon/lat; cambiare
 risoluzione non cambia implicitamente le unità delle soglie.
+
+**Aggiornamento numerico v17.** Il TFL usa direttamente le differenze seconde
+centrali, con formule unilaterali di secondo ordine ai bordi, anziché applicare
+due volte la derivata prima. È la correzione esplicitamente raccomandata da
+Sansom e Catto (2024): evita la perdita di accuratezza nelle derivate superiori
+che rende le isolinee più rumorose. Il test analitico su un campo quadratico
+verifica tutto il dominio, bordi inclusi. Il filtro gaussiano usa convoluzione
+normalizzata con spazio esterno mancante: non riflette artificialmente un
+ciclone o una discontinuità oltre il limite di ICON-2I. Le convoluzioni sono
+eseguite in codice compilato (`scipy.ndimage`) mantenendo sigma in chilometri e
+la correzione `cos(lat)` riga per riga.
 
 ## 3. Soppressione del rumore ICON-2I
 
@@ -230,6 +257,17 @@ Sulla linea si calcolano inoltre:
 - velocità frontale OFA;
 - profondità della saccatura PMSL a ±100 km e tendenza isallobarica;
 - supporto 925 hPa e omega 700 hPa, quando disponibili.
+- contrasto e profilo trasversale a 700 hPa, coerenza 925–850–700 e
+  inclinazione della superficie frontale;
+- indice Parfitt-F a 925 hPa (fallback 850 hPa), con soglia di riferimento
+  `F = 1`;
+- variazione del vento a 10 m normalizzata a sei ore, incluso il classico
+  passaggio da vento da SW a vento da NW descritto dal metodo WND.
+
+Parfitt-F e WND sono campionati **solo lungo linee già termiche**: non
+generano geometrie e non sono porte d'esistenza. Sono conferme limitate,
+particolarmente utili quando i localizzatori geometrici concordano ma una
+singola diagnostica è marginale.
 
 I requisiti duri impongono un vero contrasto secco e di densità, persistenza
 del contrasto alle tre distanze, allineamento termico plausibile e geometria
@@ -240,7 +278,7 @@ L'algoritmo ragiona come un meteorologo, non come una catena di soglie:
 **individua un possibile fronte** (TFL/TFP/ABZ), **raccoglie tutte le prove
 disponibili** (contrasto di θw, temperatura secca, densità virtuale, gradiente
 secco, corridoio sinottico, lunghezza, geometria, vento, convergenza,
-vorticità, frontogenesi, saccatura, 925 hPa, omega 700 hPa), **osserva
+vorticità, frontogenesi, saccatura, 925/700 hPa, Parfitt-F, WND), **osserva
 l'evoluzione nel tempo** (durata, copertura, coerenza del moto), **confronta le
 spiegazioni alternative** e **sceglie l'ipotesi che spiega meglio l'intero
 quadro**, rendendo trasparente il motivo.
@@ -301,7 +339,7 @@ tipo freddo/caldo, non per nascondere un confine di masse d'aria reale.
 Le statistiche sono calcolate anche come frazioni della linea: un ottimo
 segnale su pochi punti non può nascondere una maggioranza incoerente.
 
-Soltanto dopo queste porte il punteggio di evidenza ordina le linee ammesse:
+Soltanto dopo queste porte il punteggio fisico di base ordina le linee ammesse:
 
 - 38% termodinamica;
 - 24% dinamica;
@@ -309,6 +347,10 @@ Soltanto dopo queste porte il punteggio di evidenza ordina le linee ammesse:
 - 10% coerenza verticale;
 - 4% attività a 700 hPa;
 - 14% struttura.
+
+Il consenso multi-metodo può aggiungere al massimo **0,04**. Non sottrae
+evidenza e non compensa un gate fallito: serve a distinguere una linea
+confermata da più metodi da una linea sostenuta da una sola geometria.
 
 È un indice trasparente e diagnostico, non machine learning addestrato su
 etichette e non una probabilità.
@@ -430,6 +472,18 @@ ricucito è poi colmato dall'interpolazione descritta sopra, e la linea è
 disegnata come un unico fronte continuo. Una perdita di segnale più lunga
 resta invece una nuova identità.
 
+**Risoluzione topologica dei tronchi comuni.** Il raffinamento finale aggancia
+ogni traccia alla cresta continua del supporto fisico. Due identità temporali
+possono quindi convergere sulla stessa cresta per un lungo tratto e poi
+separarsi in rami: disegnarle entrambe in quel tratto crea la sovrapposizione
+grafica e attribuisce due identità allo stesso fronte. Dopo il raffinamento,
+un corridoio condiviso entro 25 km per almeno 140 km viene assegnato una sola
+volta alla traccia con qualità oraria, rilevamento e tipo più solidi. Della
+traccia più debole sopravvive il ramo indipendente più lungo, purché misuri
+almeno 100 km; le frazioni dei tipi locali vengono rimappate sulla nuova
+geometria. Un incrocio puntuale o una normale giunzione freddo/caldo non
+raggiunge la lunghezza minima e rimane quindi intatto.
+
 ## 5b. Qualità oraria e qualità di traccia (v15)
 
 Fino alla v14 `qualityScore`, diagnostica e spiegazione erano mediane
@@ -480,7 +534,30 @@ superficie interseca il terreno, già mascherate — sono **neutri**, mai prova
 contraria: una grave incoerenza riduce l'evidenza ma non cancella da sola un
 fronte ben sostenuto a 850 hPa.
 
+Dalla v16 lo stesso profilo è calcolato anche a 700 hPa. Le coerenze
+925–850 e 850–700 vengono combinate in `verticalCoherence3Level`; la
+differenza fra gli offset 700 e 925 hPa misura `frontalTiltKm`. L'inclinazione
+è diagnostica, non un veto, perché orografia, occlusioni e deformazione
+verticale possono produrre strutture reali non ideali.
+
 ## 6. Significato dell'incertezza
+
+Il GeoJSON separa quattro giudizi che non vanno confusi:
+
+- `existenceConfidence`: robustezza diagnostica dell'esistenza nell'ora;
+- `typeConfidence`: certezza della classificazione freddo/caldo/stazionario;
+- `positionUncertaintyKm`: disaccordo metrico fra localizzatori indipendenti;
+- `methodAgreement`: quanti controlli indipendenti concordano e quanti erano
+  disponibili.
+
+Restano euristiche esplicitamente marcate
+`heuristic-not-calibrated-probability`; `confidence` e `qualityScore` sono
+mantenuti per compatibilità con l'interfaccia esistente.
+
+Precipitazione e radar restano fuori dai gate. Lo script
+`front_impact_validation.py` misura offline tasso di precipitazione vicino e
+lontano dalle linee già rilevate: valida l'impatto meteorologico, ma non può
+creare né cancellare un fronte secco.
 
 L'indice aumenta con prove fisiche deboli, scarsa continuità, moto instabile,
 geometria dubbia o classificazione discordante. Il sito pubblica soltanto la
@@ -527,7 +604,7 @@ diagnostica già affidabile:
 
 - `thermal`, `abz`, `tfp` (nucleo termodinamico); `dry_thermal`, `moisture`;
 - `dynamic` (convergenza, vorticità, frontogenesi); `pressure` (saccatura);
-- `vertical` (925 hPa); `synoptic` (gradiente alla scala 100 km).
+- `vertical` (925/700 hPa); `synoptic` (gradiente alla scala 100 km).
 
 Con penalità esplicite: `terrain`, `edge` (bordo dominio), `missing_data`
 (NaN gestiti esplicitamente, mai azzerati in silenzio), `moisture_boundary`
@@ -535,6 +612,12 @@ Con penalità esplicite: `terrain`, `edge` (bordo dominio), `missing_data`
 supporto sinottico). La combinazione pesata è `any_front_support` ∈ [0, 1],
 un supporto fisico **non** una probabilità: dice *quanto* i campi sostengono
 la presenza di un fronte, indipendentemente da freddo/caldo/stazionario.
+Dalla v17 è separato da `geometry_support`, che contiene solo le prove adatte
+a **posizionare** la linea: gradiente θw, ABZ, TFP sul bordo caldo, contrasto
+secco e scala sinottica. Vento, frontogenesi e saccatura possono confermare
+l'esistenza, ma i loro massimi sono spesso spostati rispetto alla
+discontinuità termica e non devono trascinare il disegno fuori dal confine fra
+le masse d'aria.
 
 Nessun candidato scartato sparisce in silenzio: `rejected_candidates(hour)`
 esporta le linee respinte con `rejectedAs` e i motivi, e
@@ -542,15 +625,24 @@ esporta le linee respinte con `rejectedAs` e i motivi, e
 
 ### Geometria a cresta (Fase C/E, `front_ridge.py`)
 
-La linea pubblicata non è più il solo contorno TFL: segue la **cresta** di
-`any_front_support`. Dato un candidato TFL–TFP–ABZ, si apre un **corridoio** di
-±120 km attorno alla linea e si cerca il **percorso a costo minimo** (Dijkstra
-su griglia 8-connessa, `scipy`; nessuna nuova dipendenza, nessun ML) che resta
-sul supporto più alto. Il costo per cella è `log((1+ε)/(supporto+ε))` più
-penalità esplicite di terreno e bordo dominio; stare sulla cresta è economico,
-attraversare un buco di supporto o il terreno è caro. Il percorso ottimo su
-griglia è a gradini (svolte a 45/90°): uno smoothing di **Chaikin** rimuove la
-scala di griglia senza staccarsi dalla cresta, poi un piccolo RDP declutter.
+La linea pubblicata non è più il solo contorno TFL: segue la **cresta termica**
+di `geometry_support`. Dato un candidato TFL–TFP–ABZ, si apre un **corridoio**
+di ±120 km attorno alla linea e si cerca il **percorso a costo minimo**
+(Dijkstra su griglia 8-connessa, `scipy`; nessuna nuova dipendenza, nessun ML)
+che resta sul supporto più alto. Il costo per cella è
+`log((1+ε)/(supporto+ε))`, più penalità esplicite di terreno/bordo e una
+penalità morbida della distanza dal contorno TFL originario: una cresta più
+forte può correggere la posizione, ma il percorso non può saltare liberamente
+su un fronte vicino. Ogni passo è pesato con i suoi **chilometri reali**
+(`dx·cos(lat)`, `dy`, diagonale metrica), non con la distanza fra pixel.
+
+Gli estremi vengono spostati solo localmente (massimo 45 km) verso una cella
+sostenuta, evitando code artificiali che partono da terreno o da un buco. Il
+percorso ottimo su griglia è a gradini: uno smoothing di **Chaikin** rimuove la
+scala di griglia e un piccolo RDP declutter. Prima di pubblicarlo, una guardia
+obbligatoria respinge auto-intersezioni, scorciatoie con lunghezza implausibile,
+uscite dal corridoio e qualunque linea che perda supporto termico rispetto al
+TFL. In tutti questi casi torna automaticamente il contorno originale.
 
 L'estrazione è **subordinata alla fisica**: non inventa una linea dove il
 supporto è alto, rifinisce *dove disegnare* un fronte già rilevato, dentro un
@@ -559,39 +651,25 @@ degenere ripiega sul contorno originale, quindi la pubblicazione non può mai
 regredire a una linea vuota o rotta. Il numero di fronti, i tipi e i segmenti
 restano invariati: cambia solo la posizione della linea.
 
-L'attivazione (`REFINE_PUBLISHED_GEOMETRY = True`) è avvenuta dopo il
-**benchmark Fase E** su 3 run reali (24 linee, metrica equa a passo uniforme):
+L'attivazione originaria (`REFINE_PUBLISHED_GEOMETRY = True`) è avvenuta dopo
+il **benchmark Fase E** su 3 run reali (24 linee, metrica equa a passo uniforme):
 supporto medio lungo la linea 0.43 → 0.50, frazione su supporto forte 0.50 →
 0.67, tortuosità 7.27 → 6.77 °/20 km. La cresta non regredisce su nessun
 criterio e migliora nettamente il supporto fisico; l'interruttore resta
-reversibile (`False` torna ai contorni).
+reversibile (`False` torna ai contorni). La v17 aggiunge le guardie numeriche e
+topologiche sopra descritte; la misura dell'errore meteorologico assoluto resta
+comunque subordinata a un archivio indipendente di analisi frontali ufficiali.
 
-**Limite noto.** Il raffinamento sposta la linea rispetto al contorno TFL:
-misurato su un run reale la mediana è −4 km ma la dispersione è ampia, da
-−43 a +62 km, con tendenza verso l'aria fredda nel 61% dei casi. Il campo di
-supporto è dominato da termini che culminano al *centro* della zona
-baroclina (`thermal`, `abz`, `dry_thermal`, `synoptic` pesano insieme 4,6 su
-7,9), mentre solo il TFP culmina sul bordo caldo dove Hewson definisce la
-linea. La classificazione non ne risente — moto e tipo si calcolano sulla
-geometria non raffinata — ma la linea *disegnata* può discostarsi fino a
-mezza larghezza di zona da quella verificata. Va riequilibrato dando al TFP
-un peso pari a quello dei termini di gradiente.
-
-### Un confine, una linea
-
-I candidati vengono deduplicati **dentro l'ora**, ma la pubblicazione è per
-**traccia**: due tracce distinte possono consegnare due copie della stessa
-struttura per la stessa ora senza che nulla le confronti. Misurato sul run
-reale, due feature `cold` si sovrapponevano per il **72%** della lunghezza
-entro 60 km a +52 h e per il 64% a +18 h. Sulla mappa si vedeva un fronte
-disegnato due volte e, poiché le due copie avevano orientamento leggermente
-diverso, i loro simboli cadevano su lati visivamente opposti: sembrava un
-errore di convenzione anche se ogni linea presa da sola era corretta.
-
-In pubblicazione la copia più debole viene quindi scartata
-(`DUPLICATE_RADIUS_KM = 60`, `DUPLICATE_OVERLAP = 0.60`, entrate già ordinate
-per qualità). Dopo la correzione la sovrapposizione massima fra due fronti
-pubblicati nell'intera corsa scende a 0,51.
+**Il limite di posizione trovato durante l'audit e' stato corretto in v17.**
+Misurato su un run reale, il raffinamento spostava la linea disegnata rispetto
+al contorno TFL con mediana −4 km ma dispersione ampia, da −43 a +62 km, e
+tendenza verso l'aria fredda nel 61% dei casi: il campo di supporto era
+dominato da termini che culminano al *centro* della zona baroclina, mentre
+solo il TFP culmina sul bordo caldo dove Hewson definisce la linea. La
+separazione di `geometry_support` risolve esattamente questo: la geometria
+usa solo le prove termodinamiche di bordo caldo, con il TFP al peso dei
+termini di gradiente, e le firme dinamiche e bariche restano prove di
+*esistenza* senza tirare la linea via dal confine di massa d'aria.
 
 ### L'aria calda deve stare a sinistra della linea pubblicata
 
@@ -640,6 +718,10 @@ La workflow blocca la pubblicazione se falliscono i test sintetici:
 
 - segno TFP e posizione sul bordo caldo;
 - invarianza a orientamento della griglia e risoluzione;
+- accordo e casi nulli del localizzatore direzionale;
+- Parfitt-F nullo in traslazione uniforme e positivo con vorticità ciclonica;
+- WND positivo nel passaggio SW→NW e nullo con vento invariato;
+- distanza metrica fra localizzatori e coerenza verticale 925–850–700;
 - rimozione di patch locali e anomalie chiuse;
 - traslazione rigida senza falsa frontogenesi;
 - convergenza con frontogenesi positiva;
@@ -648,7 +730,7 @@ La workflow blocca la pubblicazione se falliscono i test sintetici:
 - rifiuto di gradiente termico con vento divergente/contrario;
 - promontorio barico che indebolisce una linea ma non cancella un fronte
   termicamente coerente già tracciato;
-- tracciamento, classificazione e separazione delle identità.
+- tracciamento, classificazione e separazione delle identità;
 - consenso obbligatorio fra moto geometrico, fase termica e vento;
 - continuità di una traccia lunga a prevalenza "continuazione" e persistenza
   visibile di un fronte quasi stazionario passato ogni porta fisica;
@@ -662,7 +744,11 @@ La workflow blocca la pubblicazione se falliscono i test sintetici:
   conservazione di una fase reale prolungata;
 - estrazione a cresta (`front_ridge`): la linea rifinita segue il crinale del
   supporto staccandosi da una guess storta, una banda larga dà una sola linea,
-  il percorso evita una penalità di terreno a parità di supporto;
+  il percorso evita una penalità di terreno a parità di supporto, resta sulla
+  cresta termica quando un massimo dinamico è spostato e rifiuta geometrie
+  auto-intersecanti;
+- Laplaciano esplicito: valore analitico esatto su un campo quadratico anche
+  sui quattro bordi del dominio;
 - la ZBA supera il gradiente sulla linea, non supera il massimo reale del
   campo e raggiunge la zona;
 - un'interruzione breve del mascheramento viene ricucita, una lacuna vera no,
@@ -673,8 +759,6 @@ La workflow blocca la pubblicazione se falliscono i test sintetici:
   cosa che un gradino non farebbe);
 - una linea con l'aria calda a destra viene riorientata e i suoi segmenti
   specchiati; una già corretta resta intatta;
-- due copie dello stesso confine diventano una linea sola, due fronti
-  realmente distinti restano due;
 - convenzione WMO dei simboli nel renderer (lato dei triangoli e dei
   semicerchi per freddo, caldo, occluso e stazionario) e scala cartografica
   che lega dimensione, spessore e passo.
@@ -683,7 +767,8 @@ La workflow blocca la pubblicazione se falliscono i test sintetici:
 
 - Hewson, 1998, *Objective fronts*:
   [Meteorological Applications](https://www.cambridge.org/core/journals/meteorological-applications/article/objective-fronts/DEF4E8845B0B5DBC102560C658FB4B6B)
-- Sansom e Catto, 2024, *A portable objective front identification method*:
+- Sansom e Catto, 2024, *Objective identification of meteorological fronts and
+  climatologies from ERA-Interim and ERA5*:
   [Geoscientific Model Development](https://gmd.copernicus.org/articles/17/6137/2024/gmd-17-6137-2024.html)
 - Codice ufficiale collegato all'articolo:
   [phil-sansom/front_id](https://github.com/phil-sansom/front_id)
@@ -695,3 +780,15 @@ La workflow blocca la pubblicazione se falliscono i test sintetici:
   [International Journal of Climatology](https://rmets.onlinelibrary.wiley.com/doi/10.1002/joc.7208)
 - Davies-Jones, 2008, temperatura potenziale di bulbo umido:
   [Monthly Weather Review](https://journals.ametsoc.org/view/journals/mwre/136/7/2007mwr2224_1.xml)
+- Parfitt, Czaja e Kwon, 2017, indice dinamico-termico F:
+  [Journal of Climate](https://doi.org/10.1175/JCLI-D-16-0904.1)
+- Schemm, Rudeva e Simmonds, 2015, rilevamento e WND temporale:
+  [Journal of Climate](https://doi.org/10.1175/JCLI-D-14-00718.1)
+- Niebler et al., 2022, classificazione multivariata e valutazione a oggetti:
+  [Weather and Climate Dynamics](https://doi.org/10.5194/wcd-3-113-2022)
+- Berry, Reeder e Jakob, 2011, climatologia globale dei fronti:
+  [Geophysical Research Letters](https://doi.org/10.1029/2010GL046451)
+- Biard e Kunkel, 2019, rilevamento supervisionato a campo continuo:
+  [Advances in Statistical Climatology, Meteorology and Oceanography](https://doi.org/10.5194/ascmo-5-147-2019)
+- Dagon et al., 2022, fronti ML e associazione con precipitazioni estreme:
+  [JGR Atmospheres](https://doi.org/10.1029/2022JD037038)

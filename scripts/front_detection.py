@@ -131,6 +131,7 @@ def detect_fronts_two_scale(
     refined_tfp_full: float = -9.0e-5,
     refined_abz_weak: float = 0.90,
     refined_abz_full: float = 1.70,
+    locator_method: str = fl.LOCATOR_LAPLACIAN,
 ):
     """Two-scale detection: refined candidates constrained by a synoptic prior.
 
@@ -148,6 +149,7 @@ def detect_fronts_two_scale(
         abz_gradient_full_strength=synoptic_abz_full,
         min_length_km=synoptic_min_length_km,
         boundary_margin_km=boundary_margin_km,
+        locator_method=locator_method,
     )
     refined = fl.locate_fronts(
         theta_w, longitudes, latitudes,
@@ -161,6 +163,7 @@ def detect_fronts_two_scale(
         abz_gradient_full_strength=refined_abz_full,
         min_length_km=refine_min_length_km,
         boundary_margin_km=boundary_margin_km,
+        locator_method=locator_method,
     )
     synoptic_lines = [c["coordinates"] for c in synoptic]
 

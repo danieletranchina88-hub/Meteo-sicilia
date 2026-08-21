@@ -8,6 +8,7 @@ import numpy as np
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "../..")))
 from meteo_analysis.ml import features
 from meteo_analysis.ml.fusion import fuse_candidate
+from meteo_analysis.ml.labels import grid_labels
 
 ok = True
 
@@ -82,6 +83,32 @@ if not (
     and fused["candidateEvidence"] <= 0.69
 ):
     print("FAIL: la conferma ML non è limitata o altera i gate fisici")
+    ok = False
+
+# Manual-line uncertainty is explicit: the 40-km raster boundary has lower
+# training authority than the front core and the distant background.
+manual = [{
+    "type": "cold",
+    "coordinates": [[10.0, 40.0], [15.0, 40.0]],
+}]
+labelled = grid_labels(
+    manual, valid_time="2025-01-01T00:00:00Z",
+    bounds=(9.0, 16.0, 39.0, 41.0), resolution=0.2,
+)
+near = labelled.iloc[np.argmin(labelled.labelDistanceKm.to_numpy())]
+boundary = labelled.iloc[np.argmin(
+    np.abs(labelled.labelDistanceKm.to_numpy() - 40.0)
+)]
+far = labelled.iloc[np.argmax(labelled.labelDistanceKm.to_numpy())]
+print(
+    "pesi etichette: core=%.2f bordo=%.2f lontano=%.2f"
+    % (near.labelWeight, boundary.labelWeight, far.labelWeight)
+)
+if not (
+    near.y == 1 and near.labelWeight > boundary.labelWeight
+    and far.y == 0 and far.labelWeight > boundary.labelWeight
+):
+    print("FAIL: incertezza spaziale delle etichette non rispettata")
     ok = False
 
 # High ML can never override a pressure-only/orographic/mesoscale diagnosis.

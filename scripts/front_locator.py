@@ -30,10 +30,11 @@ import math
 
 import contourpy
 import numpy as np
+from scipy.ndimage import gaussian_filter1d
 
 EARTH_KM_PER_DEG = 111.32
 LOCATOR_LAPLACIAN = "laplacian_gradient"   # default (Sansom-Catto)
-LOCATOR_HEWSON = "hewson_directional"      # reserved for future comparison
+LOCATOR_HEWSON = "hewson_directional"
 
 # How far the in-line quantile calibration may tighten a configured
 # threshold.  See the adaptive block in ``locate_fronts`` for why an
@@ -59,42 +60,41 @@ def grid_metrics(longitudes: np.ndarray, latitudes: np.ndarray) -> dict:
 # --------------------------------------------------------------------------
 # NaN-aware physical (km) Gaussian smoothing
 # --------------------------------------------------------------------------
-def _gaussian_kernel(sigma_points: float) -> np.ndarray:
-    sigma = max(float(sigma_points), 1.0e-3)
-    radius = max(1, int(round(3.0 * sigma)))
-    x = np.arange(-radius, radius + 1, dtype=float)
-    kernel = np.exp(-0.5 * (x / sigma) ** 2)
-    return kernel / kernel.sum()
+def _conv_axis(data: np.ndarray, sigma_points: float, axis: int) -> np.ndarray:
+    """Fast Gaussian convolution without mirroring weather across an edge.
 
-
-def _conv_axis(data: np.ndarray, kernel: np.ndarray, axis: int) -> np.ndarray:
-    radius = len(kernel) // 2
-    pad = [(radius, radius) if a == axis else (0, 0) for a in range(data.ndim)]
-    padded = np.pad(data, pad, mode="reflect")
-    out = np.zeros_like(data, dtype=float)
-    for i, weight in enumerate(kernel):
-        index = [slice(None)] * data.ndim
-        index[axis] = slice(i, i + data.shape[axis])
-        out += weight * padded[tuple(index)]
-    return out
+    Missing space outside a limited-area model is zero-padded here and then
+    removed by the normalised-convolution denominator in :func:`smooth_km`.
+    Reflect padding would duplicate a cyclone/front outside the ICON domain
+    and can create a false derivative on the inner side of the boundary.
+    """
+    return gaussian_filter1d(
+        np.asarray(data, dtype=float),
+        sigma=max(float(sigma_points), 1.0e-3),
+        axis=axis,
+        mode="constant",
+        cval=0.0,
+        truncate=3.0,
+    )
 
 
 def _conv_x_perrow(data: np.ndarray, sigma_points_per_row: np.ndarray) -> np.ndarray:
     """1-D Gaussian along x with a sigma that varies per latitude row."""
     out = np.empty_like(data, dtype=float)
-    # Group rows with near-equal sigma to reuse kernels (cheap and exact
-    # enough: sigma rounded to 0.05 points).
+    # Group rows with near-equal sigma so scipy executes the long convolution
+    # in compiled code. At ICON-2I resolution this is orders of magnitude
+    # cheaper than a Python loop over a 100-km kernel.
     rounded = np.round(sigma_points_per_row / 0.05) * 0.05
     for sigma in np.unique(rounded):
         rows = np.where(rounded == sigma)[0]
-        kernel = _gaussian_kernel(sigma)
-        block = data[rows, :]
-        radius = len(kernel) // 2
-        padded = np.pad(block, ((0, 0), (radius, radius)), mode="reflect")
-        acc = np.zeros_like(block, dtype=float)
-        for i, weight in enumerate(kernel):
-            acc += weight * padded[:, i:i + block.shape[1]]
-        out[rows, :] = acc
+        out[rows, :] = gaussian_filter1d(
+            data[rows, :],
+            sigma=max(float(sigma), 1.0e-3),
+            axis=1,
+            mode="constant",
+            cval=0.0,
+            truncate=3.0,
+        )
     return out
 
 
@@ -116,7 +116,7 @@ def smooth_km(field: np.ndarray, sigma_km: float, metrics: dict) -> np.ndarray:
     sigma_x_row = sigma_km / metrics["dx_km_col"].ravel()
 
     def blur(array: np.ndarray) -> np.ndarray:
-        array = _conv_axis(array, _gaussian_kernel(sigma_y), axis=0)
+        array = _conv_axis(array, sigma_y, axis=0)
         array = _conv_x_perrow(array, sigma_x_row)
         return array
 
@@ -140,11 +140,79 @@ def gradient(field: np.ndarray, metrics: dict) -> tuple[np.ndarray, np.ndarray]:
     return east, north
 
 
+def second_derivative(
+    field: np.ndarray, spacing, axis: int
+) -> np.ndarray:
+    """Explicit second-order second derivative on a regular metric axis.
+
+    Sansom & Catto (2024, Sect. 3.4) show that applying the first-derivative
+    stencil twice degrades the higher derivative used by the TFL. This uses
+    the direct centred stencil internally and the matching second-order
+    one-sided stencil at both domain edges. ``spacing`` may be a scalar or a
+    per-latitude column (the zonal grid spacing on a lon/lat grid).
+    """
+    values = np.asarray(field, dtype=float)
+    if values.ndim != 2 or axis not in (0, 1):
+        raise ValueError("second_derivative richiede un campo 2-D e asse 0/1")
+    count = values.shape[axis]
+    if count < 3:
+        return np.full_like(values, np.nan)
+    moved = np.moveaxis(values, axis, -1)
+    result = np.empty_like(moved, dtype=float)
+    result[..., 1:-1] = (
+        moved[..., 2:] - 2.0 * moved[..., 1:-1] + moved[..., :-2]
+    )
+    if count >= 4:
+        result[..., 0] = (
+            2.0 * moved[..., 0] - 5.0 * moved[..., 1]
+            + 4.0 * moved[..., 2] - moved[..., 3]
+        )
+        result[..., -1] = (
+            2.0 * moved[..., -1] - 5.0 * moved[..., -2]
+            + 4.0 * moved[..., -3] - moved[..., -4]
+        )
+    else:
+        result[..., 0] = result[..., 1]
+        result[..., -1] = result[..., 1]
+    result = np.moveaxis(result, -1, axis)
+    step = np.asarray(spacing, dtype=float)
+    return result / np.maximum(step * step, 1.0e-12)
+
+
 def laplacian(field: np.ndarray, metrics: dict) -> np.ndarray:
-    east, north = gradient(field, metrics)
-    east_x, _ = gradient(east, metrics)
-    _, north_y = gradient(north, metrics)
-    return east_x + north_y
+    """Local metric Laplacian using explicit second derivatives."""
+    east_east = second_derivative(field, metrics["dx_km_col"], axis=1)
+    north_north = second_derivative(field, metrics["dy_km"], axis=0)
+    return east_east + north_north
+
+
+def directional_curvature(
+    gradient_magnitude: np.ndarray,
+    theta_gradient_east: np.ndarray,
+    theta_gradient_north: np.ndarray,
+    metrics: dict,
+) -> np.ndarray:
+    """Second derivative of ``|grad(theta)|`` along the thermal normal.
+
+    This is a metric, local-normal implementation of the directional ridge
+    idea in Hewson (1998): unlike the isotropic Laplacian it does not mix the
+    along-front curvature into the locator.  It intentionally does not claim
+    to reproduce Hewson's implementation-specific five-point mean axes.
+    """
+    gm_e, gm_n = gradient(gradient_magnitude, metrics)
+    gm_ee, gm_en = gradient(gm_e, metrics)
+    gm_ne, gm_nn = gradient(gm_n, metrics)
+    mixed = 0.5 * (gm_en + gm_ne)
+    safe = np.maximum(
+        np.hypot(theta_gradient_east, theta_gradient_north), 1.0e-12
+    )
+    normal_e = theta_gradient_east / safe
+    normal_n = theta_gradient_north / safe
+    return (
+        normal_e * normal_e * gm_ee
+        + 2.0 * normal_e * normal_n * mixed
+        + normal_n * normal_n * gm_nn
+    )
 
 
 # --------------------------------------------------------------------------
@@ -338,10 +406,10 @@ def locate_fronts(
     classification).  With ``return_fields`` also returns the diagnostic
     fields for inspection/plotting.
     """
-    if locator_method != LOCATOR_LAPLACIAN:
-        raise NotImplementedError(
-            f"locator '{locator_method}' non ancora implementato "
-            f"(default: {LOCATOR_LAPLACIAN})"
+    if locator_method not in {LOCATOR_LAPLACIAN, LOCATOR_HEWSON}:
+        raise ValueError(
+            f"locator '{locator_method}' sconosciuto; "
+            f"validi: {LOCATOR_LAPLACIAN}, {LOCATOR_HEWSON}"
         )
     lon = np.asarray(longitudes, dtype=float)
     lat = np.asarray(latitudes, dtype=float)
@@ -367,8 +435,13 @@ def locate_fronts(
     grad_mag = np.hypot(grad_e, grad_n)
     grad_mag = smooth_km(grad_mag, derivative_sigma_km, metrics)
 
-    # 3) TFL = laplacian(|grad theta_w|), zero contour locates the ridge
-    tfl = laplacian(grad_mag, metrics)
+    # 3) TFL zero contour locates the ridge.  The default Sansom-Catto
+    #    locator is isotropic; the parallel Hewson-style locator follows only
+    #    the local thermal normal and is therefore less sensitive to bends.
+    if locator_method == LOCATOR_HEWSON:
+        tfl = directional_curvature(grad_mag, grad_e, grad_n, metrics)
+    else:
+        tfl = laplacian(grad_mag, metrics)
 
     # 4) Standard thermal front parameter (Hewson eq. 9).  It is NEGATIVE
     #    on the warm side of the baroclinic zone.
@@ -546,5 +619,6 @@ def locate_fronts(
             "abz_gradient": abz_gradient,
             "effective_tfp_threshold": effective_tfp,
             "effective_gradient_threshold": effective_gradient,
+            "locator_method": locator_method,
         }
     return candidates

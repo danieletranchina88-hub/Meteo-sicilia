@@ -1,6 +1,6 @@
 """Synthetic verification of front_locator.py (v12, Sansom-Catto TFL).
 
-Eight mandatory checks before touching real data:
+Ten mandatory checks before touching real data:
  1 straight ideal front       -> exactly one line on the warm edge
  2 gently curved front        -> single continuous line
  3 uniform gradient, no zone  -> no valid line
@@ -9,7 +9,11 @@ Eight mandatory checks before touching real data:
  6 noise vs smoothing         -> stable
  7 latitude-axis inversion    -> geometrically identical result
  8 two resolutions            -> similar position after physical smoothing
+ 9 independent locator        -> consistent position and null behaviour
+10 explicit second derivative -> exact quadratic, including domain edges
 Plus the critical standard TFP sign test (warm edge negative).
+The directional Hewson-style normal-curvature locator is checked against the
+default isotropic locator without changing the operational null cases.
 """
 
 import os
@@ -131,11 +135,58 @@ print(f"   lat media 0.15deg={lat_hi:.3f} 0.30deg={lat_lo:.3f} (diff attesa picc
 if not (c_hi and c_lo and abs(lat_hi - lat_lo) < 0.4):
     print("  FAIL: posizione troppo diversa fra risoluzioni"); ok = False
 
-# --- 9 the ABZ measures the zone, not the line -----------------------------
+# --- 9 independent directional locator ------------------------------------
+print("\n9) localizzatore direzionale parallelo:")
+c_directional = fl.locate_fronts(
+    theta_w_straight(), LON, LAT, locator_method=fl.LOCATOR_HEWSON
+)
+lat_directional = (
+    float(np.mean(c_directional[0]["coordinates"][:, 1]))
+    if c_directional else np.nan
+)
+print(f"   lat Laplaciano={lat_hi:.3f} direzionale={lat_directional:.3f}")
+if not (
+    c_directional
+    and c_directional[0]["locatorMethod"] == fl.LOCATOR_HEWSON
+    and abs(lat_hi - lat_directional) < 0.5
+):
+    print("  FAIL: localizzatore direzionale non coerente sul fronte ideale")
+    ok = False
+if fl.locate_fronts(
+    300.0 - 0.3 * (LATG - 34.0), LON, LAT,
+    locator_method=fl.LOCATOR_HEWSON,
+):
+    print("  FAIL: il direzionale crea fronti da un gradiente uniforme")
+    ok = False
+
+# --- 10 explicit second derivative / Sansom-Catto numerical update --------
+print("\n10) Laplaciano esplicito di secondo ordine:")
+ny, nx = 9, 11
+dx_km, dy_km = 3.0, 5.0
+x_km = np.arange(nx, dtype=float) * dx_km
+y_km = np.arange(ny, dtype=float) * dy_km
+xg, yg = np.meshgrid(x_km, y_km)
+# d2/dx2 (0.4*x^2) = 0.8; d2/dy2 (0.7*y^2) = 1.4
+quadratic = 0.4 * xg * xg + 0.7 * yg * yg + 2.0 * xg - 3.0 * yg
+analytic_metrics = {
+    "dx_km_col": np.full((ny, 1), dx_km),
+    "dy_km": dy_km,
+}
+lap = fl.laplacian(quadratic, analytic_metrics)
+max_error = float(np.max(np.abs(lap - 2.2)))
+edge_error = float(np.max(np.abs(
+    np.r_[lap[0, :], lap[-1, :], lap[:, 0], lap[:, -1]] - 2.2
+)))
+print(f"   errore max={max_error:.2e}, ai bordi={edge_error:.2e}")
+if max_error > 1.0e-10 or edge_error > 1.0e-10:
+    print("  FAIL: la derivata seconda esplicita non è accurata ai bordi")
+    ok = False
+
+# --- 11 the ABZ measures the zone, not the line -----------------------------
 # On the warm edge the gradient has not yet peaked, so a correct ABZ must be
 # strictly larger than |grad theta_w| on the line, and must land on the true
 # maximum of the gradient across the zone.
-print("\n9) zona baroclina adiacente misurata dove sta:")
+print("\n11) zona baroclina adiacente misurata dove sta:")
 field = theta_w_straight()
 cands, diag = fl.locate_fronts(field, LON, LAT, return_fields=True)
 if not cands:
@@ -159,9 +210,9 @@ else:
         print(f"  FAIL: la ZBA ({abz:.2f}) non raggiunge la zona ({peak:.2f})")
         ok = False
 
-# --- 10 short mask interruptions must not split one front ------------------
+# --- 12 short mask interruptions must not split one front ------------------
 # A frontal zone that weakens over a limited stretch is one front, not two.
-print("\n10) interruzione breve ricucita, lacuna vera no:")
+print("\n12) interruzione breve ricucita, lacuna vera no:")
 coords = np.column_stack((np.linspace(5.0, 15.0, 60), np.full(60, 42.0)))
 keep = np.ones(60, dtype=bool)
 keep[28:31] = False           # ~50 km di interruzione
@@ -179,8 +230,8 @@ if fl._bridge_short_gaps(coords, edge, 90.0)[:5].any():
     print("  FAIL: coda al bordo trattata come interruzione interna"); ok = False
 print("   breve ricucita, larga separata, coda al bordo intatta")
 
-# --- 11 the in-line quantile may not run away from the published threshold --
-print("\n11) calibrazione adattiva limitata:")
+# --- 13 the in-line quantile may not run away from the published threshold --
+print("\n13) calibrazione adattiva limitata:")
 noisy_field = theta_w_straight() + 0.9 * np.random.default_rng(7).standard_normal(LONG.shape)
 _, dn = fl.locate_fronts(noisy_field, LON, LAT, tfp_threshold=-2.5e-5,
                          tfp_full_strength=-9.0e-5, abz_gradient_threshold=0.90,

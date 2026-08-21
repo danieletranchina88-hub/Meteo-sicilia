@@ -114,6 +114,8 @@ def main():
                 ["time", *ERA5_TRANSFER_FEATURE_COLUMNS]
             ].copy()
             frame["y"] = labels["y"].to_numpy()
+            frame["labelDistanceKm"] = labels["labelDistanceKm"].to_numpy()
+            frame["labelWeight"] = labels["labelWeight"].to_numpy()
             table = pa.Table.from_pandas(frame, preserve_index=False)
             if first_write:
                 writer = pq.ParquetWriter(output, table.schema, compression="zstd")

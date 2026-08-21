@@ -3,6 +3,8 @@
 import os
 import sys
 
+import numpy as np
+
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 import front_analysis_v12 as v12
 
@@ -77,7 +79,10 @@ fake_track = {
         5: {"gateStatus": "strong", "diagnosis": "synoptic-front",
             "diagnostics": {"deltaThetaW": 3.4}},
         6: {"gateStatus": "continuation", "diagnosis": "synoptic-front",
-            "diagnostics": {"deltaThetaW": 1.1}},
+            "diagnostics": {
+                "deltaThetaW": 1.1, "positionUncertaintyKm": 28.0,
+                "methodAgreementCount": 2, "methodAvailability": 3,
+            }},
         8: {"gateStatus": "strong", "diagnosis": "synoptic-front",
             "diagnostics": {"deltaThetaW": 3.2}},
     },
@@ -92,7 +97,13 @@ if not (observed["qualityScore"] == 0.44
         and observed["detectionQuality"] == 0.40
         and observed["uncertaintyIndex"] == 0.60
         and observed["diagnostics"].get("deltaThetaW") == 1.1
-        and observed["trackDiagnostics"].get("deltaThetaW") == 3.0):
+        and observed["trackDiagnostics"].get("deltaThetaW") == 3.0
+        and observed["existenceConfidence"] == 0.44
+        and observed["typeConfidence"] == 0.5
+        and observed["positionUncertaintyKm"] == 28.0
+        and observed["methodAgreement"] == {"count": 2.0, "available": 3.0}
+        and observed["confidenceSemantics"]
+        == "heuristic-not-calibrated-probability"):
     print("FAIL: l'ora osservata deve esporre la vista oraria + quella di traccia")
     ok = False
 
@@ -111,8 +122,6 @@ if not (interpolated["detectionQuality"] is None
 # E' la convenzione da cui dipende il lato dei simboli: se salta, un fronte
 # freddo viene disegnato come se avanzasse all'indietro. Va garantita sulla
 # geometria finale, non ereditata dal candidato.
-import numpy as np  # noqa: E402
-
 side = object.__new__(v12.IconSynopticFrontAnalyzer)
 side.longitudes = np.arange(3.0, 22.01, 0.20)
 side.latitudes = np.arange(34.0, 49.01, 0.20)
@@ -154,57 +163,44 @@ if untouched_props.get("warmSideReoriented") or not np.allclose(kept, east_to_we
     print("FAIL: una linea gia' orientata bene e' stata invertita")
     ok = False
 
-# --- v16: un confine, una linea ------------------------------------------
-# I candidati vengono deduplicati dentro l'ora, ma la pubblicazione e' per
-# TRACCIA: due tracce possono consegnare due copie dello stesso fronte senza
-# che nulla le confronti. Sul run reale due "cold" si sovrapponevano per il
-# 72% della lunghezza entro 60 km.
-def line(lon0, lon1, lat, count=40, shift=0.0):
-    return np.column_stack((np.linspace(lon0, lon1, count),
-                            np.full(count, lat + shift)))
-
-
-def published_with(entries):
-    stub = object.__new__(v12.IconSynopticFrontAnalyzer)
-    stub.available_hours = [0]
-    stub.hour_to_index = {0: 0}
-    stub.datasets = {}
-    stub.method = v12.FRONT_METHOD
-    stub.source = "synthetic"
-    stub._detection_errors = {}
-    stub._by_hour = {0: entries}
-    stub._tracks = []
-    stub.analysis_summary = {}
-    return stub.analyze(0)
-
-
-def props(quality, front_type="cold"):
-    return {"frontType": front_type, "qualityScore": quality,
-            "confidence": quality, "uncertaintyIndex": 1.0 - quality}
-
-
-# Due copie quasi coincidenti (spostate di 0,2 gradi, ~22 km): resta la
-# migliore.
-twins = published_with([
-    (line(6.0, 16.0, 44.0), props(0.75)),
-    (line(6.0, 16.0, 44.0, shift=0.20), props(0.61)),
+# --- shared-ridge topology: one trunk, independent branch retained ----------
+owner = np.array([[7.0, 44.0], [17.0, 44.0]])
+branching = np.array([
+    [4.0, 42.0], [8.0, 44.0], [15.0, 44.0], [20.0, 46.0]
 ])
-print("due copie dello stesso fronte -> pubblicate:", len(twins["features"]))
-if len(twins["features"]) != 1:
-    print("FAIL: lo stesso confine viene disegnato due volte")
-    ok = False
-elif twins["features"][0]["properties"]["qualityScore"] != 0.75:
-    print("FAIL: e' sopravvissuta la copia peggiore")
+topology, changed = v12.deconflict_shared_front_trunks([
+    (owner, {"trackId": 1, "qualityScore": 0.80, "typeConfidence": 0.8}),
+    (branching, {
+        "trackId": 2, "qualityScore": 0.60, "typeConfidence": 0.7,
+        "segmentTypes": [
+            {"start": 0.0, "end": 0.55, "type": "cold"},
+            {"start": 0.55, "end": 1.0, "type": "stationary"},
+        ],
+    }),
+])
+print("topologia condivisa:", changed, "feature:", len(topology))
+branch = next(item for item in topology if item[1].get("trackId") == 2)
+branch_support = v12.fd.line_support_fraction(branch[0], [owner], 25.0)
+if not (
+    changed == 1
+    and len(topology) == 2
+    and branch[1].get("topologyDeconflicted") is True
+    and branch[1].get("suppressedOverlapWithTrackIds") == [1]
+    and branch_support < 0.25
+    and branch[1]["segmentTypes"][0]["start"] == 0.0
+    and branch[1]["segmentTypes"][-1]["end"] == 1.0
+):
+    print("FAIL: il tronco comune non e' stato assegnato a una sola traccia")
     ok = False
 
-# Due fronti realmente distinti (4 gradi di latitudine, ~440 km): restano due.
-distinct = published_with([
-    (line(6.0, 16.0, 44.0), props(0.75)),
-    (line(6.0, 16.0, 40.0), props(0.70, "warm")),
+# A front crossing another at one point is a real junction, not a duplicate.
+crossing = np.array([[12.0, 40.0], [12.0, 48.0]])
+crossed, crossing_changes = v12.deconflict_shared_front_trunks([
+    (owner, {"trackId": 1, "qualityScore": 0.80}),
+    (crossing, {"trackId": 3, "qualityScore": 0.70}),
 ])
-print("due fronti distinti -> pubblicati:", len(distinct["features"]))
-if len(distinct["features"]) != 2:
-    print("FAIL: due fronti distinti sono stati fusi")
+if crossing_changes != 0 or len(crossed) != 2:
+    print("FAIL: una giunzione puntuale e' stata confusa con un tronco duplicato")
     ok = False
 
 print("ESITO:", "SUPERATO" if ok else "DA RIVEDERE")

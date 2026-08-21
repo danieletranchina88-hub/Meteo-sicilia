@@ -233,7 +233,29 @@
       .bulletin-copy { position: relative; z-index: 1; display: grid; grid-template-columns: repeat(2,minmax(0,1fr)); gap: 0 28px; margin-top: 17px; }
       .bulletin-copy p { margin: 0; padding: 11px 0; border-top: 1px solid rgba(178,219,237,.14); color: #d6e7ef; font-size: 11px; line-height: 1.62; }
       .bulletin-copy p:first-child { color: white; font-size: 12px; font-weight: 800; }
+      .bulletin-copy strong { display: block; margin-bottom: 3px; color: #78e0ea; font-size: 9px; letter-spacing: .06em; text-transform: uppercase; }
       .bulletin-note { position: relative; z-index: 1; margin: 12px 0 0; color: #86a9bb; font-size: 8.5px; }
+
+      .weather-strip-card {
+        margin-top: 14px; padding: 18px; border: 1px solid rgba(167,195,212,.55);
+        border-radius: 9px; background: white; box-shadow: var(--shadow);
+      }
+      .weather-strip {
+        display: grid; grid-auto-flow: column; grid-auto-columns: minmax(76px, 1fr);
+        gap: 6px; margin-top: 13px; overflow-x: auto; padding-bottom: 4px;
+        scrollbar-width: thin;
+      }
+      .weather-cell {
+        display: grid; min-height: 105px; place-items: center; gap: 2px; padding: 9px 6px;
+        border: 1px solid #dce8ee; border-radius: 7px; background: #f7fbfd;
+        color: #173c51; text-align: center;
+      }
+      .weather-cell .when { color: #668194; font-size: 7.5px; font-weight: 850; text-transform: uppercase; }
+      .weather-cell .symbol { font-size: 25px; line-height: 1; }
+      .weather-cell b { font-family: var(--mono); font-size: 12px; }
+      .weather-cell small { color: #648093; font-size: 7.5px; white-space: nowrap; }
+      .weather-cell.storm { border-color: #e9a8b0; background: #fff3f4; }
+      .weather-cell.rain { border-color: #abd4ea; background: #f0f9fd; }
 
       .charts-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px; }
       .chart-card {
@@ -433,6 +455,11 @@
           <p id="point-bulletin-note" class="bulletin-note"></p>
         </section>
 
+        <section class="weather-strip-card" aria-label="Sequenza meteorologica sintetica">
+          <div class="chart-head"><div><h3>Colpo d’occhio sulle 72 ore</h3><p>Condizione prevalente ogni tre ore, con temperatura e fenomeni principali</p></div><span class="chart-badge">3 h</span></div>
+          <div id="weather-strip" class="weather-strip"></div>
+        </section>
+
         <div class="section-head">
           <div>
             <h2>Andamento previsto</h2>
@@ -460,7 +487,7 @@
             <div id="legend-pressure" class="legend"></div><div id="chart-pressure" class="chart-wrap"></div>
           </article>
           <article class="chart-card wide" data-chart-group="surface">
-            <div class="chart-head"><div><h3>Vento al suolo</h3><p>Velocità a 10 m e direzione di provenienza ora per ora</p></div><span class="chart-badge">km/h</span></div>
+            <div class="chart-head"><div><h3>Vento al suolo</h3><p>Vento medio, raffiche e direzione di provenienza ora per ora</p></div><span class="chart-badge">km/h</span></div>
             <div id="legend-wind" class="legend"></div><div id="chart-wind" class="chart-wrap"></div><div id="wind-direction" class="direction-strip"></div>
           </article>
           <article class="chart-card wide" data-chart-group="surface">
@@ -472,7 +499,7 @@
             <div id="legend-visibility" class="legend"></div><div id="chart-visibility" class="chart-wrap"></div>
           </article>
           <article class="chart-card" data-chart-group="convection">
-            <div class="chart-head"><div><h3>Probabilità temporali</h3><p>Innesco fisico da CAPE, CIN, convergenza, omega e fronti</p></div><span class="chart-badge">%</span></div>
+            <div class="chart-head"><div><h3>Algoritmo temporali</h3><p>Probabilità fisica, confidenza della diagnosi e contraddizioni interne</p></div><span class="chart-badge">%</span></div>
             <div id="legend-convection" class="legend"></div><div id="chart-convection" class="chart-wrap"></div>
           </article>
           <article class="chart-card wide" data-chart-group="convection">
@@ -499,7 +526,7 @@
           <div class="table-scroll"><table id="hourly-table"></table></div>
         </section>
 
-        <p class="method-note">Dati numerici ICON-2I. Le serie sono campionate sulla griglia dedicata più vicina (circa 0,20°) e non sostituiscono osservazioni, allerte o bollettini ufficiali. CAPE, CIN e probabilità temporali vengono mostrati solo quando realmente disponibili nel run.</p>
+        <p class="method-note">Dati numerici ICON-2I. Le serie sono interpolate bilinearmente fra i quattro punti dell’archivio dedicato (passo circa 0,20°), senza inventare valori mancanti. Mappa, bollettino e meteogramma usano lo stesso algoritmo temporali fisico. Il prodotto non sostituisce osservazioni, allerte o bollettini ufficiali.</p>
       </div>
     </main>
 
@@ -621,17 +648,50 @@
         return selected;
       }
 
+      function bracketIndices(values, target) {
+        for (let index = 0; index < values.length - 1; index += 1) {
+          const first = Number(values[index]), second = Number(values[index + 1]);
+          if (target >= Math.min(first, second) && target <= Math.max(first, second)) {
+            return {
+              first:index, second:index + 1,
+              fraction:first === second ? 0 : clamp((target - first) / (second - first), 0, 1)
+            };
+          }
+        }
+        const nearest = nearestIndex(values, target);
+        return { first:nearest, second:nearest, fraction:0 };
+      }
+
+      function interpolateTileValue(values, nx, rows, columns) {
+        const corners = [
+          [rows.first, columns.first, (1-rows.fraction)*(1-columns.fraction)],
+          [rows.first, columns.second, (1-rows.fraction)*columns.fraction],
+          [rows.second, columns.first, rows.fraction*(1-columns.fraction)],
+          [rows.second, columns.second, rows.fraction*columns.fraction]
+        ];
+        let total = 0, weight = 0;
+        corners.forEach(corner => {
+          const value = values[corner[0] * nx + corner[1]];
+          if (!finite(value)) return;
+          total += Number(value) * corner[2];
+          weight += corner[2];
+        });
+        return weight > 0 ? total / weight : null;
+      }
+
       function extractSeries(tile, lat, lon) {
-        const row = nearestIndex(tile.grid.latitudes, lat);
-        const column = nearestIndex(tile.grid.longitudes, lon);
+        const rows = bracketIndices(tile.grid.latitudes, lat);
+        const columns = bracketIndices(tile.grid.longitudes, lon);
         const nx = tile.grid.longitudes.length;
-        const point = row * nx + column;
         const result = { times: tile.times };
         Object.entries(tile.fields).forEach(([name, field]) => {
-          result[name] = field.values.map(values => valueOrNull(values[point]));
+          result[name] = field.values.map(values =>
+            valueOrNull(interpolateTileValue(values, nx, rows, columns))
+          );
         });
-        result.sampleLatitude = Number(tile.grid.latitudes[row]);
-        result.sampleLongitude = Number(tile.grid.longitudes[column]);
+        result.sampleLatitude = Number(lat);
+        result.sampleLongitude = Number(lon);
+        result.samplingMethod = "bilinear-4-points";
         return result;
       }
 
@@ -850,6 +910,37 @@
         }).join("");
       }
 
+      function weatherSymbol(series, index) {
+        const storm = series.convectionProbability && series.convectionProbability[index];
+        const rain = series.rainStep && series.rainStep[index];
+        const cloud = series.cloudCover && series.cloudCover[index];
+        if (finite(storm) && Number(storm) >= 70) return { symbol:"⚡", label:"temporali", className:"storm" };
+        if (finite(rain) && Number(rain) >= 2) return { symbol:"🌧", label:"pioggia", className:"rain" };
+        if (finite(rain) && Number(rain) >= .1) return { symbol:"🌦", label:"rovesci", className:"rain" };
+        if (finite(cloud) && Number(cloud) >= 80) return { symbol:"☁", label:"coperto", className:"" };
+        if (finite(cloud) && Number(cloud) >= 45) return { symbol:"⛅", label:"variabile", className:"" };
+        return { symbol:"☀", label:"sereno", className:"" };
+      }
+
+      function renderWeatherStrip(series) {
+        const indexes = series.times.map((_, index) => index)
+          .filter(index => index % 3 === 0 || index === series.times.length - 1);
+        document.getElementById("weather-strip").innerHTML = indexes.map(index => {
+          const condition = weatherSymbol(series, index);
+          const time = new Date(series.times[index].validTime);
+          const when = new Intl.DateTimeFormat("it-IT", {
+            weekday:"short", hour:"2-digit"
+          }).format(time);
+          const extra = finite(series.rainStep[index]) && Number(series.rainStep[index]) >= .1
+            ? format(series.rainStep[index], 1, " mm")
+            : (finite((series.convectionProbability || [])[index]) && Number(series.convectionProbability[index]) >= 40
+              ? format(series.convectionProbability[index], 0, "% temp.") : condition.label);
+          return `<div class="weather-cell ${condition.className}" title="${escapeHtml(dateLabel(series.times[index].validTime, true))}">` +
+            `<span class="when">${escapeHtml(when)}</span><span class="symbol" aria-hidden="true">${condition.symbol}</span>` +
+            `<b>${format(series.temperature2m[index],0,"°")}</b><small>${escapeHtml(extra)}</small></div>`;
+        }).join("");
+      }
+
       function renderRisks(series) {
         const definitions = [
           ["Probabilità nebbia", series.fogProbability, value => value >= 65 ? "high" : value >= 35 ? "medium" : value > 10 ? "low" : ""],
@@ -875,14 +966,20 @@
       function renderSummary(series) {
         const temperature = minMax(series.temperature2m);
         const wind = minMax(series.wind10);
+        const gust = minMax(series.gust10);
         const convection = minMax(series.convectionProbability);
         const visibility = minMax(series.visibilityKm);
+        const convectionIndex = (series.convectionProbability || []).reduce((best, value, index) =>
+          finite(value) && (!best || Number(value) > best.value)
+            ? { value:Number(value), index:index } : best, null);
+        const confidenceAtPeak = convectionIndex && series.stormConfidence
+          ? series.stormConfidence[convectionIndex.index] : null;
         const cards = [
           ["Temperatura minima", format(temperature[0],1," °C"), "nelle 72 ore"],
           ["Temperatura massima", format(temperature[1],1," °C"), "nelle 72 ore"],
           ["Pioggia totale", format(sum(series.rainStep),1," mm"), "somma dei passi"],
-          ["Vento massimo", format(wind[1],0," km/h"), "a 10 metri"],
-          ["Picco temporali", format(convection[1],0,"%"), "probabilità massima"],
+          ["Vento / raffica", format(gust[1] !== null ? Math.max(wind[1] || 0, gust[1]) : wind[1],0," km/h"), gust[1] !== null ? "massimo previsto" : "vento a 10 metri"],
+          ["Picco temporali", format(convection[1],0,"%"), finite(confidenceAtPeak) ? "confidenza " + format(confidenceAtPeak,0,"%") : "probabilità massima"],
           ["Visibilità minima", format(visibility[0],1," km"), "stima diagnostica"]
         ];
         document.getElementById("summary").innerHTML = cards.map(card =>
@@ -898,10 +995,14 @@
         document.getElementById("point-bulletin-validity").textContent = "Validità " + bulletin.validity;
         document.getElementById("point-bulletin-confidence").textContent =
           "Affidabilità " + bulletin.confidence + " · dati " + bulletin.completeness + "%";
+        const sections = bulletin.sections || bulletin.paragraphs.map(text => ({ title:"Analisi", text:text }));
         document.getElementById("point-bulletin-copy").replaceChildren(
-          ...bulletin.paragraphs.map(text => {
+          ...sections.map(section => {
             const paragraph = document.createElement("p");
-            paragraph.textContent = text;
+            const title = document.createElement("strong");
+            title.textContent = section.title;
+            paragraph.appendChild(title);
+            paragraph.appendChild(document.createTextNode(section.text));
             return paragraph;
           })
         );
@@ -917,27 +1018,31 @@
             `<td>${format(series.dewPoint[index],1,"°")}</td>` +
             `<td>${format(series.rainStep[index],2,"")}</td>` +
             `<td>${format(series.wind10[index],0,"")} ${compass(direction)}</td>` +
+            `<td>${format(series.gust10[index],0,"")}</td>` +
             `<td>${format(series.relativeHumidity2m[index],0,"%")}</td>` +
             `<td>${format(series.cloudCover[index],0,"%")}</td>` +
             `<td>${format(series.pressureMsl[index],1,"")}</td>` +
             `<td>${format(series.convectionProbability[index],0,"%")}</td>` +
+            `<td>${format((series.stormConfidence || [])[index],0,"%")}</td>` +
             `<td>${format(series.capeMl[index],0,"")}</td>` +
             `<td>${format(series.cinMl[index],0,"")}</td>` +
             `<td>${format(series.visibilityKm[index],1,"")}</td></tr>`;
         }).join("");
         document.getElementById("hourly-table").innerHTML =
-          "<thead><tr><th>Validità</th><th>T 2m</th><th>Percepita</th><th>Rugiada</th><th>Pioggia mm</th><th>Vento km/h</th><th>UR</th><th>Nubi</th><th>Pressione</th><th>Temporali</th><th>CAPE</th><th>CIN</th><th>Vis. km</th></tr></thead><tbody>" + rows + "</tbody>";
+          "<thead><tr><th>Validità</th><th>T 2m</th><th>Percepita</th><th>Rugiada</th><th>Pioggia mm</th><th>Vento km/h</th><th>Raffica km/h</th><th>UR</th><th>Nubi</th><th>Pressione</th><th>Temporali</th><th>Conf.</th><th>CAPE</th><th>CIN</th><th>Vis. km</th></tr></thead><tbody>" + rows + "</tbody>";
       }
 
       function renderAll() {
         const s = state.series;
         s.dewPoint = dewPoint(s.temperature2m, s.relativeHumidity2m);
         s.wind10 = windSpeed(s.windU10, s.windV10);
+        s.gust10 = (s.windGust10 || []).map(value => finite(value) ? Number(value) * 3.6 : null);
         s.direction10 = windDirection(s.windU10, s.windV10);
         s.visibilityKm = (s.visibility || []).map(value => finite(value) ? Number(value) / 1000 : null);
 
         renderSummary(s);
         renderPointBulletin(s);
+        renderWeatherStrip(s);
         renderChart("chart-temperature", [
           { label:"Temperatura", values:s.temperature2m || [], color:"#e14b5a", unit:" °C", decimals:1 },
           { label:"Percepita", values:s.feelsLike || [], color:"#ef922f", unit:" °C", decimals:1 },
@@ -950,8 +1055,9 @@
           { label:"Pressione", values:s.pressureMsl || [], color:"#8656ce", unit:" hPa", decimals:1 }
         ], { axisDecimals:0 });
         renderChart("chart-wind", [
-          { label:"Vento a 10 m", values:s.wind10, color:"#168bd2", unit:" km/h", decimals:0 }
-        ], { domain:[0, Math.max(20, ...s.wind10.filter(finite))], axisDecimals:0 });
+          { label:"Vento a 10 m", values:s.wind10, color:"#168bd2", unit:" km/h", decimals:0 },
+          { label:"Raffica", values:s.gust10, color:"#ef922f", unit:" km/h", decimals:0, fill:false }
+        ], { domain:[0, Math.max(20, ...s.wind10.filter(finite), ...s.gust10.filter(finite))], axisDecimals:0 });
         renderDirection(s.direction10);
         renderChart("chart-moisture", [
           { label:"UR 2 m", values:s.relativeHumidity2m || [], color:"#168bd2", unit:"%", decimals:0 },
@@ -962,7 +1068,9 @@
           { label:"Visibilità", values:s.visibilityKm, color:"#18a66f", unit:" km", decimals:1 }
         ], { domain:[0, Math.max(10, ...s.visibilityKm.filter(finite))], axisDecimals:0 });
         renderChart("chart-convection", [
-          { label:"Probabilità", values:s.convectionProbability || [], color:"#e14b5a", unit:"%", decimals:0 }
+          { label:"Probabilità", values:s.convectionProbability || [], color:"#e14b5a", unit:"%", decimals:0 },
+          { label:"Confidenza", values:s.stormConfidence || [], color:"#168bd2", unit:"%", decimals:0, fill:false },
+          { label:"Contraddizioni", values:s.stormContradiction || [], color:"#7b8f9d", unit:"%", decimals:0, fill:false, width:1.6 }
         ], { domain:[0,100], axisDecimals:0 });
         renderChart("chart-cape", [
           { label:"ML-CAPE", values:s.capeMl || [], color:"#e14b5a", unit:" J/kg", decimals:0 },
@@ -995,7 +1103,7 @@
           state.series = extractSeries(tile, lat, lon);
           document.getElementById("location-title").textContent = state.locationName;
           document.getElementById("location-meta").textContent =
-            `Richiesta ${lat.toFixed(3)}°N, ${lon.toFixed(3)}°E · griglia ${state.series.sampleLatitude.toFixed(3)}°N, ${state.series.sampleLongitude.toFixed(3)}°E`;
+            `Richiesta ${lat.toFixed(3)}°N, ${lon.toFixed(3)}°E · interpolazione bilineare su quattro punti dell’archivio 0,20°`;
           const query = `?lat=${encodeURIComponent(lat.toFixed(4))}&lon=${encodeURIComponent(lon.toFixed(4))}`;
           document.querySelectorAll(".map-link").forEach(link => link.href = "index.html" + query);
           renderAll();

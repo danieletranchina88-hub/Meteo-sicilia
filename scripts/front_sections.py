@@ -216,6 +216,43 @@ def vertical_coherence(diagnostics_850: dict, diagnostics_925: dict | None):
     return round(float(np.clip(coherence, 0.0, 1.0)), 3)
 
 
+def multilevel_vertical_coherence(
+    diagnostics_925: dict | None,
+    diagnostics_850: dict,
+    diagnostics_700: dict | None,
+) -> dict:
+    """925-850-700 hPa structural coherence and frontal tilt diagnostics.
+
+    Missing pressure surfaces remain neutral.  The tilt is reported rather
+    than hard-gated because occlusions, topography and vertical deformation
+    can produce legitimate departures from the textbook slope.
+    """
+    lower = vertical_coherence(diagnostics_850, diagnostics_925)
+    upper = vertical_coherence(diagnostics_850, diagnostics_700)
+    pairs = [value for value in (lower, upper) if value is not None]
+    result = {
+        "verticalCoherence925": lower,
+        "verticalCoherence700": upper,
+        "verticalCoherence3Level": (
+            round(float(np.mean(pairs)), 3) if pairs else None
+        ),
+        "frontalTiltKm": None,
+        "frontalTiltConsistency": None,
+    }
+    if diagnostics_925 and diagnostics_700:
+        low_offset = diagnostics_925.get("frontOffsetKm")
+        upper_offset = diagnostics_700.get("frontOffsetKm")
+        if _finite(low_offset) and _finite(upper_offset):
+            # Warm normal is positive. A classical NH frontal surface leans
+            # coldward aloft, hence a negative upper-minus-lower displacement.
+            tilt = float(upper_offset - low_offset)
+            result["frontalTiltKm"] = round(tilt, 1)
+            result["frontalTiltConsistency"] = round(float(np.clip(
+                (40.0 - tilt) / 100.0, 0.0, 1.0
+            )), 3)
+    return result
+
+
 def _finite(value) -> bool:
     try:
         return np.isfinite(float(value))

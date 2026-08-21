@@ -84,9 +84,33 @@ def grid_labels(
             continue
         tree = cKDTree(_unit_sphere(dense[:, 1], dense[:, 0]))
         distance, _ = tree.query(points, k=1)
-        closer = (distance <= chord_limit) & (distance < best_distance)
-        labels[closer] = code if multiclass else 1
+        closer = distance < best_distance
+        labels[closer] = np.where(
+            distance[closer] <= chord_limit,
+            code if multiclass else 1,
+            0,
+        )
         best_distance[closer] = distance[closer]
+
+    clipped_chord = np.clip(best_distance, 0.0, 2.0)
+    nearest_km = (
+        2.0 * EARTH_RADIUS_M * np.arcsin(clipped_chord / 2.0) / 1000.0
+    )
+    nearest_km[~np.isfinite(best_distance)] = np.inf
+    # Human front positions and rasterisation have a fuzzy edge. Cells close
+    # to the 40-km class boundary receive less training weight, while the
+    # front core and the far background retain full authority.
+    label_weight = np.ones_like(nearest_km)
+    inner_edge = (nearest_km > 20.0) & (nearest_km <= distance_km)
+    outer_edge = (nearest_km > distance_km) & (nearest_km < 80.0)
+    label_weight[inner_edge] = 1.0 - 0.65 * (
+        (nearest_km[inner_edge] - 20.0) / max(distance_km - 20.0, 1.0)
+    )
+    label_weight[outer_edge] = 0.35 + 0.65 * (
+        (nearest_km[outer_edge] - distance_km)
+        / max(80.0 - distance_km, 1.0)
+    )
+    label_weight[~np.isfinite(nearest_km)] = 1.0
 
     timestamp = pd.Timestamp(valid_time)
     if timestamp.tzinfo is None:
@@ -98,4 +122,6 @@ def grid_labels(
         "lat": lat2d.ravel(),
         "lon": lon2d.ravel(),
         "y": labels,
+        "labelDistanceKm": nearest_km,
+        "labelWeight": label_weight,
     })

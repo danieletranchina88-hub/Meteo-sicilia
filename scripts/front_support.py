@@ -1,4 +1,4 @@
-"""Continuous physical-support field for objective front analysis (Fase B).
+"""Continuous physical-support fields for objective front analysis (Fase B).
 
 Biard & Kunkel (2019) let a CNN emit a per-pixel probability field and then
 extract front lines from it. This module keeps the *idea* (a continuous
@@ -10,11 +10,13 @@ kinematics, vertical coherence, synoptic-scale gradient), combined with
 explicit penalties (terrain, domain edge, missing data, moisture-only
 boundary, mesoscale-only structure).
 
-The output ``any_front_support`` is a physical-support heuristic in [0, 1],
-NOT a calibrated probability. It answers "how strongly do the fields support
-*some* front here", independent of cold/warm/stationary. Non-finite input is
-handled explicitly and never silently clipped: invalid cells are marked in
-``valid`` and contribute 0 support.
+The output ``any_front_support`` is an existence heuristic in [0, 1], NOT a
+calibrated probability. ``geometry_support`` is deliberately narrower: it
+keeps only the thermodynamic warm-edge evidence suitable for positioning a
+line. Separating them prevents a pressure trough or a wind-convergence
+maximum from pulling the drawn front away from the actual air-mass boundary.
+Non-finite input is handled explicitly and never silently clipped: invalid
+cells are marked in ``valid`` and contribute 0 support.
 
 Nothing here publishes a line: the field is a diagnostic in Fase B and will
 drive least-cost line extraction in Fase C.
@@ -103,6 +105,7 @@ def physical_support_field(
     terrain: np.ndarray | None = None,
     pressure_hpa: np.ndarray | None = None,
     theta_w_925: np.ndarray | None = None,
+    theta_w_700: np.ndarray | None = None,
     synoptic_sigma_km: float = 100.0,
     refine_sigma_km: float = 45.0,
     derivative_sigma_km: float = 15.0,
@@ -151,12 +154,20 @@ def physical_support_field(
     synoptic_grad_100 = _grad_mag_100(theta_w, metrics, synoptic_sigma_km)
     synoptic = smoothstep_field(synoptic_grad_100, cfg["synoptic_grad_weak"], cfg["synoptic_grad_full"])
 
-    # --- vertical coherence (optional 925 hPa) ---------------------------
-    if theta_w_925 is not None:
-        lower_grad_100 = _grad_mag_100(np.asarray(theta_w_925, float), metrics, refine_sigma_km)
-        vertical = smoothstep_field(lower_grad_100, cfg["vertical_grad_weak"], cfg["vertical_grad_full"])
-    else:
-        vertical = np.full_like(theta_w, 0.5)
+    # --- vertical coherence (optional 925/700 hPa) -----------------------
+    vertical_levels = []
+    for level_field in (theta_w_925, theta_w_700):
+        if level_field is not None:
+            level_grad_100 = _grad_mag_100(
+                np.asarray(level_field, float), metrics, refine_sigma_km
+            )
+            vertical_levels.append(smoothstep_field(
+                level_grad_100, cfg["vertical_grad_weak"], cfg["vertical_grad_full"]
+            ))
+    vertical = (
+        np.mean(vertical_levels, axis=0)
+        if vertical_levels else np.full_like(theta_w, 0.5)
+    )
 
     # --- pressure trough (optional PMSL): laplacian>0 is a relative trough
     if pressure_hpa is not None:
@@ -201,12 +212,33 @@ def physical_support_field(
         + 0.6 * moisture_boundary_penalty + 0.45 * local_scale_penalty,
         0.0, 1.0,
     )
-    any_front_support = np.where(valid, np.clip(positive * (1.0 - penalty), 0.0, 1.0), 0.0)
+    any_front_support = np.where(
+        valid, np.clip(positive * (1.0 - penalty), 0.0, 1.0), 0.0
+    )
+
+    # Geometry must stay on the warm edge of a dry, synoptic thermal zone.
+    # Dynamics and PMSL remain valuable evidence that a front exists, but
+    # their extrema are routinely displaced from the analysed surface line.
+    geometry_positive = (
+        0.28 * thermal + 0.24 * abz_support + 0.24 * tfp_support
+        + 0.16 * dry_thermal + 0.08 * synoptic
+    )
+    geometry_penalty = np.clip(
+        0.65 * terrain_penalty + 0.95 * edge_penalty
+        + 0.75 * moisture_boundary_penalty + 0.50 * local_scale_penalty,
+        0.0, 1.0,
+    )
+    geometry_support = np.where(
+        valid,
+        np.clip(geometry_positive * (1.0 - geometry_penalty), 0.0, 1.0),
+        0.0,
+    )
 
     return {
         "components": components,
         "penalties": penalties,
         "any_front_support": any_front_support,
+        "geometry_support": geometry_support,
         "tfp": tfp,
         "abz": abz,
         "grad_mag_100": grad_mag_100,
