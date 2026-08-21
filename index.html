@@ -6589,8 +6589,19 @@
       }
 
       function walkFront(points, spacing, offset, callback) {
-        let remaining = offset;
+        // A step that is zero, negative or not finite would never advance the
+        // walk: the same freeze the stationary bands used to cause. The step
+        // is a drawing parameter, so refusing a bad one here is cheaper than
+        // trusting every caller.
+        if (!Number.isFinite(spacing) || spacing < 1) return;
+        let remaining = Number.isFinite(offset) ? offset : 0;
         let symbolIndex = 0;
+        // Zoomed far in, one front spans millions of screen pixels and the
+        // walk would place tens of thousands of symbols, almost all of them
+        // off screen. The visible line can hold only so many.
+        const symbolBudget = Math.ceil(
+          (window.innerWidth + window.innerHeight) / spacing
+        ) * 8 + 64;
         for (let index = 1; index < points.length; index += 1) {
           const start = points[index - 1];
           const end = points[index];
@@ -6600,6 +6611,7 @@
           if (!Number.isFinite(length) || length < 1) continue;
 
           while (remaining <= length) {
+            if (symbolIndex >= symbolBudget) return;
             const fraction = remaining / length;
             callback(
               start.x + dx * fraction,
@@ -6718,32 +6730,33 @@
           return;
         }
 
-        let travelled = 0;
-        const bandLength = 28 * s;
-        for (let index = 1; index < points.length; index += 1) {
-          const start = points[index - 1];
-          const end = points[index];
-          const dx = end.x - start.x;
-          const dy = end.y - start.y;
-          const length = Math.hypot(dx, dy);
-          if (length < 0.5) continue;
-          let position = 0;
-          while (position < length) {
-            const band = Math.floor(travelled / bandLength);
-            const available = bandLength - (travelled % bandLength);
-            const piece = Math.min(available, length - position);
-            const from = position / length;
-            const to = (position + piece) / length;
-            vectorContext.beginPath();
-            vectorContext.moveTo(start.x + dx * from, start.y + dy * from);
-            vectorContext.lineTo(start.x + dx * to, start.y + dy * to);
-            vectorContext.strokeStyle = band % 2 === 0 ? "#0875df" : "#e32638";
-            vectorContext.lineWidth = 2.9 * s;
-            vectorContext.stroke();
-            position += piece;
-            travelled += piece;
-          }
-        }
+        // Stationary front: alternating blue and red bands along the line.
+        // Drawn with the canvas dash pattern rather than by walking the line
+        // band by band. The walk used to accumulate a distance and take its
+        // modulo against the band length, and that is not safe in floating
+        // point: with a band of 21.84 px the accumulated distance reached
+        // 65.52, the remainder came out as 21.84 minus 3.6e-15, and the next
+        // step was 3.6e-15 -- too small to change a number of magnitude 65.
+        // The loop then advanced by nothing, for ever, and the page froze the
+        // moment a stationary front was on screen.
+        //
+        // The dash pattern has no accumulator to lose precision in, and it
+        // costs two strokes instead of one per band, so the work no longer
+        // grows with how far the line is zoomed in.
+        const bandLength = Math.max(28 * s, 1);
+        vectorContext.save();
+        // Butt caps keep the colour change exactly on the band boundary;
+        // round caps would let each band bleed over its neighbour.
+        vectorContext.lineCap = "butt";
+        vectorContext.setLineDash([bandLength, bandLength]);
+        vectorContext.lineWidth = 2.9 * s;
+        vectorContext.strokeStyle = "#0875df";
+        vectorContext.lineDashOffset = 0;
+        vectorContext.stroke();
+        vectorContext.strokeStyle = "#e32638";
+        vectorContext.lineDashOffset = bandLength;
+        vectorContext.stroke();
+        vectorContext.restore();
         vectorContext.globalAlpha = 1;
       }
 

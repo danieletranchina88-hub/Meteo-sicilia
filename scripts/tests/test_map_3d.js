@@ -624,4 +624,100 @@ assert.match(styled[0], /const spacing = \(window\.innerWidth < 900 \? 48 : 54\)
 assert.match(styled[0], /strokeFrontLine\(points, frontType, alpha, s\)/,
   "lo spessore della linea non segue la scala");
 
+// --- Il disegno dei fronti deve terminare, a ogni zoom -----------------------
+// Le altre verifiche di questo file leggono il sorgente; questa lo ESEGUE,
+// perche' il difetto che ha bloccato i telefoni era invisibile a una regex.
+// Le bande del fronte stazionario accumulavano una distanza e ne facevano il
+// modulo sulla lunghezza di banda: con una banda di 21,84 px la distanza
+// arrivava a 65,52, il resto usciva 21,84 meno 3,6e-15, e il passo successivo
+// valeva 3,6e-15 -- troppo piccolo per cambiare un numero di grandezza 65. Il
+// ciclo avanzava di nulla, per sempre.
+function frontDrawingApi(viewportWidth, viewportHeight, zoom, budget) {
+  const names = ["walkFront", "drawFrontTriangle", "drawFrontSemicircle",
+                 "drawOccludedSemicircle", "strokeFrontLine", "frontSlice",
+                 "frontDrawScale", "drawFrontStyled"];
+  const source = names.map((name) => {
+    const found = html.match(new RegExp("function " + name + "\\([\\s\\S]*?\\n {6}\\}"));
+    assert.ok(found, "funzione di disegno assente: " + name);
+    return found[0];
+  }).join("\n");
+
+  const calls = { stroke: 0, fill: 0 };
+  const ctx = new Proxy({}, {
+    get(_target, property) {
+      if (property === "stroke" || property === "fill") {
+        return function () {
+          calls[property] += 1;
+          // Un ciclo che non avanza si manifesta qui: senza questo tetto il
+          // test non fallirebbe, si bloccherebbe come il telefono.
+          if (calls.stroke + calls.fill > budget) {
+            throw new Error("BUDGET");
+          }
+        };
+      }
+      if (property === "setLineDash" || property === "save" || property === "restore"
+          || property === "beginPath" || property === "moveTo" || property === "lineTo"
+          || property === "arc" || property === "translate" || property === "rotate"
+          || property === "closePath") {
+        return function () {};
+      }
+      return undefined;
+    },
+    set() { return true; },
+  });
+
+  const factory = new Function(
+    "vectorContext", "map", "clamp", "window",
+    source + "\nreturn { drawFrontStyled: drawFrontStyled, frontDrawScale: frontDrawScale };"
+  );
+  const api = factory(
+    ctx,
+    { getZoom: () => zoom },
+    (v, a, b) => Math.min(Math.max(v, a), b),
+    { innerWidth: viewportWidth, innerHeight: viewportHeight }
+  );
+  return { api, calls };
+}
+
+// Un fronte come quelli pubblicati: una dozzina di vertici su ~7 gradi.
+const frontLonLat = [];
+for (let i = 0; i < 12; i += 1) {
+  frontLonLat.push([6.0 + i * 0.63, 44.0 + Math.sin(i * 0.7) * 0.8]);
+}
+
+["cold", "warm", "stationary", "occluded", "uncertain"].forEach((frontType) => {
+  let previous = null;
+  [4, 8, 12, 16].forEach((zoom) => {
+    // Viewport da telefono: e' li' che il blocco e' stato osservato.
+    const { api, calls } = frontDrawingApi(390, 844, zoom, 20000);
+    const worldPx = 512 * Math.pow(2, zoom);
+    const points = frontLonLat.map(([lon, lat]) => ({
+      x: (lon - frontLonLat[0][0]) / 360 * worldPx + 195,
+      y: -(lat - frontLonLat[0][1]) / 360 * worldPx + 422,
+    }));
+    assert.doesNotThrow(
+      () => api.drawFrontStyled(points, frontType, 0.95, api.frontDrawScale()),
+      `il disegno del fronte ${frontType} non termina a zoom ${zoom}`
+    );
+    const total = calls.stroke + calls.fill;
+    // Il costo non deve crescere con lo zoom: la linea si allunga in pixel,
+    // ma la parte visibile no.
+    if (previous !== null) {
+      assert.ok(total <= previous * 3 + 24,
+        `il costo del fronte ${frontType} cresce con lo zoom (${previous} -> ${total})`);
+    }
+    previous = total;
+  });
+});
+
+// Un passo non valido non deve mai diventare un ciclo che non avanza.
+[0, -5, NaN, Infinity].forEach((spacing) => {
+  const { api } = frontDrawingApi(390, 844, 6, 5000);
+  const straight = [{ x: 0, y: 0 }, { x: 4000, y: 0 }];
+  assert.doesNotThrow(
+    () => api.drawFrontStyled(straight, "cold", 1, spacing / 54),
+    `passo ${spacing} non gestito`
+  );
+});
+
 console.log("3D map regression checks: OK");
