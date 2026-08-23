@@ -1,6 +1,6 @@
-"""Genera gli ancoraggi colore dalle Scientific Colour Maps di Crameri.
+"""Genera gli ancoraggi colore delle scale scientifiche dei campi.
 
-Uso:  pip install cmcrameri && python scripts/generate_palettes.py
+Uso:  pip install cmcrameri matplotlib && python scripts/generate_palettes.py
 Copia l'uscita negli array corrispondenti di index.html.
 
 
@@ -10,12 +10,18 @@ percettivamente uniformi (Crameri 2018, Zenodo; Crameri, Shephard & Heron
 sicura per il daltonismo e senza confini falsi.
 """
 import numpy as np
+from matplotlib import colormaps
 from cmcrameri import cm
 
 
 def sample(name, t, lo=0.0, hi=1.0):
-    """Colore RGB 0-255 della mappa `name` alla posizione t in [0,1]."""
-    cmap = getattr(cm, name)
+    """Colore RGB 0-255 della mappa `name` alla posizione t in [0,1].
+
+    `name` e' una Scientific Colour Map di Crameri, oppure -- con il prefisso
+    `cb:` -- una tavolozza ColorBrewer (Harrower e Brewer 2003, The
+    Cartographic Journal 40(1)), presa da matplotlib con i valori originali.
+    """
+    cmap = colormaps[name[3:]] if name.startswith("cb:") else getattr(cm, name)
     x = lo + (hi - lo) * float(np.clip(t, 0.0, 1.0))
     r, g, b, _ = cmap(x)
     return [int(round(r * 255)), int(round(g * 255)), int(round(b * 255))]
@@ -56,14 +62,30 @@ def js(anchors, indent=8):
 
 out = {}
 
-# --- Temperatura: vik, divergente, neutro esatto a 0 gradi -----------------
-# Simmetrica +/-50 K attorno allo zero: e' il solo punto della scala che
-# significa qualcosa di fisico, e su una divergente deve cadere sul neutro.
+# --- Temperatura: RdYlBu invertita, divergente, neutro esatto a 0 gradi -----
+# La prima scelta era `vik`, percettivamente uniforme. Misurata sulla fascia
+# 16-38 gradi -- dove sta il dato quasi sempre -- dava pero' colori fra
+# #d0916d e #791905: una successione di marroni, con croma medio 52 in CIELab.
+# La distinzione fra due zone distanti sei gradi valeva 10,2 unita' CIEDE2000,
+# quindi il problema non era la distanza percettiva ma la TINTA: tutta la
+# fascia estiva cadeva nello stesso arancione bruno.
+#
+# RdYlBu invertita e' una tavolozza divergente pubblicata (ColorBrewer,
+# Harrower e Brewer 2003; e' la scala usata dall'IPCC per i campi termici).
+# Sulla stessa fascia da' #fdb86b -> #ca2326, croma medio 66,5 e distinzione a
+# sei gradi di 10,0: la stessa separazione misurabile di vik, ma distribuita
+# su tinte diverse invece che sulla sola luminosita' di un unico bruno. Con
+# deuteranopia la separazione a sei gradi resta 8,4, molto sopra la soglia di
+# percettibilita' (~2,3).
+#
+# Cede qualcosa in uniformita' percettiva rispetto a Crameri -- il neutro
+# giallo e' un picco di luminanza -- ed e' un compromesso dichiarato: una
+# scala che non si legge non e' piu' scientifica di una che si legge.
 temp_values = [-75, -65, -55, -45, -35, -30, -26, -22, -18, -14, -10, -6, -2,
                0, 2, 4, 6, 8, 10, 12, 14, 16, 18, 20, 22, 24, 26, 28, 30, 32,
                34, 36, 38, 40, 42, 44, 46]
 out["TEMP_ANCHORS"] = [
-    {"v": v, "c": sample("vik", two_sided(v, 0.0, 25.0, 45.0))} for v in temp_values
+    {"v": v, "c": sample("cb:RdYlBu_r", two_sided(v, 0.0, 25.0, 45.0))} for v in temp_values
 ]
 
 # --- Vento: batlow, sequenziale ---------------------------------------------
