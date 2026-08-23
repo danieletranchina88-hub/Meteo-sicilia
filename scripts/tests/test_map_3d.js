@@ -305,7 +305,15 @@ assert.match(html, /const length = clamp\(5 \+ speed \* 0\.46/,
   "la lunghezza delle frecce non segue abbastanza la velocita'");
 assert.match(html, /function strokeArrowPath\(/,
   "la freccia non usa il tratto a punta aperta");
-assert.doesNotMatch(html, /function drawArrow[\s\S]*?closePath\(\)[\s\S]*?function drawVectors/,
+// Il controllo deve guardare il corpo di drawArrow e basta. Prima leggeva
+// tutto il testo fino a drawVectors, e li' in mezzo e' finito il corredo della
+// carta: la rosa dei venti chiude legittimamente il suo ago con closePath, e
+// il controllo scattava su quello invece che sulla punta della freccia.
+const arrowStart = html.indexOf("function drawArrow(");
+assert.ok(arrowStart > 0, "drawArrow non trovata");
+const arrowEnd = html.indexOf("\n      }", arrowStart);
+assert.ok(arrowEnd > arrowStart, "fine di drawArrow non trovata");
+assert.doesNotMatch(html.slice(arrowStart, arrowEnd), /closePath\(\)/,
   "la punta dei vettori e' tornata a triangolo pieno");
 
 // Fondo scuro e piatto predefinito. Il chiaro e il rilievo sono due scelte
@@ -611,7 +619,10 @@ assert.ok(styled, "disegno del fronte assente");
 // il semicerchio caldo e non quello dell'occluso.
 assert.match(styled[0], /frontType === "stationary" && index % 2 === 0[\s\S]{0,220}?drawFrontSemicircle/,
   "il fronte stazionario non alterna i due simboli su lati opposti");
-assert.match(styled[0], /drawOccludedSemicircle\(x, y, angle, "#8b3fd0"/,
+// Il colore arriva da frontInk, perche' sulla carta gli inchiostri sono altri:
+// qui conta che il fronte occluso usi il semicerchio dallo stesso lato, non
+// con quale tinta lo disegni.
+assert.match(styled[0], /drawOccludedSemicircle\(x, y, angle, frontInk\("occluded"\)/,
   "il fronte occluso non usa il semicerchio dallo stesso lato del triangolo");
 
 // La scala cartografica lega dimensione dei simboli, spessore della linea e
@@ -635,8 +646,17 @@ assert.match(styled[0], /strokeFrontLine\(points, frontType, alpha, s\)/,
 function frontDrawingApi(viewportWidth, viewportHeight, zoom, budget) {
   const names = ["walkFront", "drawFrontTriangle", "drawFrontSemicircle",
                  "drawOccludedSemicircle", "strokeFrontLine", "frontSlice",
-                 "frontDrawScale", "drawFrontStyled"];
-  const source = names.map((name) => {
+                 "frontDrawScale", "drawFrontStyled", "frontInk",
+                 "frontHaloColour"];
+  // Le tavolozze sono dati, non funzioni, ma il disegno non gira senza: le
+  // prendo dal sorgente cosi' il test non ne tiene una copia che puo'
+  // divergere da quella vera.
+  const tables = ["FRONT_SCREEN_INK", "FRONT_PAPER_INK"].map((name) => {
+    const found = html.match(new RegExp("const " + name + " = \\{[\\s\\S]*?\\n {6}\\};"));
+    assert.ok(found, "tavolozza dei fronti assente: " + name);
+    return found[0];
+  }).join("\n");
+  const source = tables + "\n" + names.map((name) => {
     const found = html.match(new RegExp("function " + name + "\\([\\s\\S]*?\\n {6}\\}"));
     assert.ok(found, "funzione di disegno assente: " + name);
     return found[0];
@@ -667,14 +687,15 @@ function frontDrawingApi(viewportWidth, viewportHeight, zoom, budget) {
   });
 
   const factory = new Function(
-    "vectorContext", "map", "clamp", "window",
+    "vectorContext", "map", "clamp", "window", "synopticChart",
     source + "\nreturn { drawFrontStyled: drawFrontStyled, frontDrawScale: frontDrawScale };"
   );
   const api = factory(
     ctx,
     { getZoom: () => zoom },
     (v, a, b) => Math.min(Math.max(v, a), b),
-    { innerWidth: viewportWidth, innerHeight: viewportHeight }
+    { innerWidth: viewportWidth, innerHeight: viewportHeight },
+    false
   );
   return { api, calls };
 }
@@ -725,14 +746,30 @@ assert.ok(html.includes('data-toggle="synoptic"'),
   "manca l'interruttore della carta sinottica");
 const synopticMode = html.match(/function setSynopticChart\([\s\S]*?\n {6}\}\n/);
 assert.ok(synopticMode, "modalita' carta sinottica assente");
-// Una carta si legge perche' non c'e' nient'altro sopra: la modalita' deve
-// spegnere il campo colorato, la base fotografica e tutto l'animato.
-["activeLayer = \"none\"", "showSatellite = false", "showVectors = false",
- "showParticles = false", "showIsotherms = false", "show3D = false",
- "showRadar = false"].forEach((expected) => {
-  assert.ok(synopticMode[0].includes(expected),
-    "la carta sinottica non spegne: " + expected);
-});
+// La modalita' deve spegnere la base fotografica, l'animato e tutto cio' che
+// compete con il tratto.
+["showSatellite = false", "showVectors = false", "showParticles = false",
+ "showIsotherms = false", "show3D = false", "showRadar = false"]
+  .forEach((expected) => {
+    assert.ok(synopticMode[0].includes(expected),
+      "la carta sinottica non spegne: " + expected);
+  });
+// Il campo colorato invece resta: velato sotto l'inchiostro e' quello che
+// distingue una carta di analisi da una carta muta. Se la modalita' tornasse
+// a forzare activeLayer a "none" il foglio si svuoterebbe.
+assert.ok(!synopticMode[0].includes('activeLayer = "none"'),
+  "la carta spegne ancora il campo colorato invece di velarlo");
+assert.match(synopticMode[0], /activeLayer === "none" \? "none" : "visible"/,
+  "la carta non lascia visibile il campo colorato");
+// Scegliere un campo non deve piu' far uscire dalla carta.
+const layerSwitch = html.match(/function setLayer\([\s\S]*?\n {6}\}\n/);
+assert.ok(layerSwitch, "setLayer assente");
+assert.ok(!/synopticChart = false/.test(layerSwitch[0]),
+  "scegliere un campo colorato chiude ancora la carta");
+// Sul foglio il campo e' un acquerello: se restasse pieno coprirebbe isobare
+// e simboli frontali, che sono il motivo per cui la carta esiste.
+assert.match(html, /const paperWash = synopticChart \?/,
+  "il campo colorato non viene velato sulla carta");
 // ...e accendere quello che una carta al suolo contiene.
 ["showIsobars = true", "showGraticule = true", "showFronts = frontsAvailable()"]
   .forEach((expected) => {
@@ -766,17 +803,68 @@ assert.match(html, /const ISOBAR_INTERVAL_HPA = \d+;/,
   "il passo delle isobare non e' una costante");
 assert.match(html, /createContourFeatures\(\s*\n?\s*pressure, meta, ISOBAR_INTERVAL_HPA, ISOBAR_MAJOR_EVERY\s*\n?\s*\)/,
   "le isobare non usano la costante dichiarata nel cartiglio");
-assert.match(html, /"Isobare ogni " \+ ISOBAR_INTERVAL_HPA/,
+// ISOBAR_MAJOR_EVERY e' un MODULO sul valore, non un moltiplicatore: sono
+// marcate le isobare il cui valore e' multiplo di 4, quindi ogni 4 hPa. La
+// didascalia diceva "ogni 8" perche' moltiplicava i due numeri.
+assert.match(html, /"isobare ogni " \+ ISOBAR_INTERVAL_HPA/,
   "il cartiglio non legge il passo dalla stessa costante");
+assert.ok(!/ISOBAR_INTERVAL_HPA \* ISOBAR_MAJOR_EVERY/.test(html),
+  "il cartiglio moltiplica di nuovo passo e modulo: dichiara 8 hPa invece di 4");
+
+// La PMSL a 2,2 km porta gli artefatti della riduzione al livello del mare:
+// contornata cosi' com'e' disegna il profilo dei rilievi invece della
+// pressione. Le isobare vanno tracciate su un campo lisciato a scala
+// sinottica, e due passaggi, perche' uno solo lascia le valli alpine.
+const pressureProducts = html.match(/function buildPressureProducts\([\s\S]*?\n {6}\}\n/);
+assert.ok(pressureProducts, "buildPressureProducts assente");
+assert.match(pressureProducts[0], /createIsobarFeatures\(isobarField, meta\)/,
+  "le isobare sono ancora tracciate sul campo grezzo");
+assert.equal(
+  (pressureProducts[0].match(/smoothPressureGrid\(/g) || []).length, 2,
+  "la lisciatura delle isobare non e' a due passaggi"
+);
+// I centri barici invece devono restare sul campo vero: hanno gia' la loro
+// lisciatura interna, calibrata sulla prominenza.
+assert.match(pressureProducts[0], /detectPressureCenters\(pressure, meta\)/,
+  "i centri barici non usano piu' il campo di pressione vero");
 
 // La legenda disegna i simboli con la stessa funzione della mappa: due
 // disegni separati potrebbero raccontare due convenzioni diverse.
-const furniture = html.match(/function drawChartFurniture\([\s\S]*?\n {6}\}\n/);
-assert.ok(furniture, "cartiglio della carta assente");
-assert.match(furniture[0], /drawFrontStyled\(/,
+const legend = html.match(/function paperTitleBlock\([\s\S]*?\n {6}\}\n/);
+assert.ok(legend, "cartiglio della carta assente");
+assert.match(legend[0], /drawFrontStyled\(/,
   "la legenda non usa il disegno reale dei fronti");
 assert.match(html, /if \(synopticChart\) drawChartFurniture\(\);/,
   "il cartiglio non viene disegnato");
+
+// --- La carta e' una carta: cornice, margine, reticolo, scala, rosa ---------
+// Senza il margine il disegno sconfina fino ai bordi dello schermo e la
+// cornice diventa una decorazione appoggiata sopra una mappa infinita.
+const furniture = html.match(/function drawChartFurniture\([\s\S]*?\n {6}\}\n/);
+assert.ok(furniture, "corredo della carta assente");
+["paperMask", "paperGraticuleTicks", "paperScaleBar", "paperCompass",
+ "paperNeatline", "paperTitleBlock"].forEach((piece) => {
+  assert.match(furniture[0], new RegExp(piece + "\\(box\\)"),
+    "il corredo della carta non disegna: " + piece);
+});
+// Il margine va riempito PRIMA della cornice e delle etichette di bordo,
+// altrimenti coprirebbe proprio quello che deve incorniciare.
+assert.ok(
+  furniture[0].indexOf("paperMask(box)") < furniture[0].indexOf("paperNeatline(box)"),
+  "il margine viene riempito dopo la cornice"
+);
+// Le etichette delle isobare sulla carta stanno DENTRO la linea: la linea si
+// interrompe e il numero occupa il vuoto. E' anche il motivo per cui restano
+// leggibili sopra un campo colorato -- non c'e' alone chiaro che lo sporchi.
+assert.match(html, /function strokePaperIsobar\(/,
+  "manca il tratto cartaceo delle isobare");
+assert.match(html, /function paperIsobarGaps\(/,
+  "le etichette delle isobare non sono incassate nella linea");
+const paperIsobar = html.match(/function strokePaperIsobar\([\s\S]*?\n {6}\}\n/);
+assert.match(paperIsobar[0], /setLineDash\(dash\)/,
+  "il buco per il numero non e' un tratteggio calcolato");
+assert.ok(!/strokeText/.test(paperIsobar[0]),
+  "l'etichetta della carta usa ancora un alone invece del buco nella linea");
 
 // --- Scala della temperatura: la linea del gelo cade a zero ------------------
 // La scala ha un salto voluto in meno di un kelvin, fra il blu di 273,15 K e

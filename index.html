@@ -111,6 +111,93 @@
           linear-gradient(90deg, rgba(255, 255, 255, 0.06), transparent 26%, transparent 74%, rgba(255, 255, 255, 0.06));
       }
 
+      /* Il foglio: grana finissima e luce non uniforme, come la texture di una
+         carta stampata sotto una lampada. Sta sopra tutto il disegno (z-index
+         9: il canvas dei vettori e' 7, i pannelli dell'interfaccia partono da
+         25), cosi' anche l'inchiostro e il margine bianco condividono la
+         stessa carta invece di sembrare incollati sopra. L'alone e' tenue di
+         proposito: piu' marcato sporcherebbe il tratto nero.
+         La grana e' un feTurbulence in un data-URI, quindi nessuna richiesta
+         di rete e nessun ciclo di rumore da eseguire a ogni fotogramma. */
+      #paper-grain {
+        position: fixed;
+        inset: 0;
+        width: 100%;
+        height: 100%;
+        pointer-events: none;
+        z-index: 9;
+        opacity: 0;
+        transition: opacity 0.35s ease;
+        background-image:
+          radial-gradient(125% 95% at 46% 28%, rgba(255, 252, 244, 0.26) 0%, rgba(126, 108, 82, 0.2) 100%),
+          url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='170' height='170'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.85' numOctaves='3' stitchTiles='stitch'/%3E%3CfeColorMatrix type='saturate' values='0'/%3E%3C/filter%3E%3Crect width='170' height='170' filter='url(%23n)' opacity='0.16'/%3E%3C/svg%3E");
+        background-size: auto, 170px 170px;
+      }
+
+      body.synoptic-chart #paper-grain {
+        opacity: 1;
+      }
+
+      /* La vignettatura bluastra e' pensata per la mappa scura: sul foglio
+         sporcherebbe la carta. Il foglio ha gia' la sua luce. */
+      body.synoptic-chart #map-vignette {
+        display: none;
+      }
+
+      /* La velatura del campo: un velo color carta steso sopra l'acquerello e
+         sotto l'inchiostro (z-index 4, il canvas dei vettori e' 7). E' quello
+         che toglie brillantezza alla tinta e la fa sembrare stampata invece
+         che retroilluminata. Separato dalla grana perche' quella sta sopra
+         tutto e un velo cosi' sbiadirebbe anche il tratto nero. */
+      #paper-wash {
+        position: fixed;
+        inset: 0;
+        width: 100%;
+        height: 100%;
+        pointer-events: none;
+        z-index: 4;
+        opacity: 0;
+        background: rgba(244, 239, 227, 0.26);
+        transition: opacity 0.35s ease;
+      }
+
+      body.synoptic-chart #paper-wash {
+        opacity: 1;
+      }
+
+      /* Sulla carta il cartiglio stampato dice run e validita': la scheda a
+         schermo direbbe la stessa cosa una seconda volta, in un altro
+         linguaggio grafico, proprio sopra il foglio. */
+      body.synoptic-chart #meta-card {
+        display: none;
+      }
+
+      /* La scala del campo velato e' l'unico pannello che poggia davvero sul
+         foglio, dentro la cornice. Un rettangolo blu scuro traslucido sopra
+         una carta stampata si vede per quello che e': un pannello di
+         un'applicazione. Qui diventa un riquadro di legenda stampato, con la
+         stessa carta e lo stesso inchiostro del resto. */
+      body.synoptic-chart #legend-card {
+        border: 1px solid rgba(29, 26, 22, 0.5);
+        border-radius: 3px;
+        background: rgba(244, 239, 227, 0.93);
+        box-shadow: none;
+        backdrop-filter: none;
+        -webkit-backdrop-filter: none;
+      }
+
+      body.synoptic-chart #legend-card .micro-label,
+      body.synoptic-chart #legend-card #legend-range,
+      body.synoptic-chart #legend-card #legend-ticks,
+      body.synoptic-chart #legend-card #legend-note {
+        color: #4a4239;
+      }
+
+      body.synoptic-chart #legend-card h2,
+      body.synoptic-chart #legend-card #legend-unit {
+        color: #1d1a16;
+      }
+
       /* Foschia atmosferica: compare solo in vista 3D, sfuma verso l'orizzonte
          come la prospettiva aerea reale. Sotto le particelle (z-index 5) per
          non offuscarne il tratto. */
@@ -1644,6 +1731,8 @@
     <canvas id="particle-canvas" aria-hidden="true"></canvas>
     <canvas id="vector-canvas" aria-hidden="true"></canvas>
     <div id="sky-haze" aria-hidden="true"></div>
+    <div id="paper-wash" aria-hidden="true"></div>
+    <div id="paper-grain" aria-hidden="true"></div>
     <div id="map-vignette" aria-hidden="true"></div>
 
     <header id="app-header">
@@ -2759,18 +2848,30 @@
       let showSatelliteClouds = false;
       let showLightBase = false;
       let showGraticule = false;
-      // Carta sinottica: non un livello in piu', un modo di presentare la
-      // mappa. Spegne ogni campo colorato e la base fotografica e lascia le
-      // sole cose che si disegnano su una carta al suolo -- isobare con i loro
-      // valori, centri di pressione, fronti -- su fondo bianco. Lo stato
-      // precedente viene messo da parte per poterci tornare.
+      // Carta cartografica: non un livello in piu', un modo di presentare la
+      // mappa. Spegne la base fotografica, le particelle e tutto cio' che
+      // compete con il tratto, e rimette il disegno su un foglio di carta:
+      // isobare in inchiostro con il valore incassato nella linea, centri
+      // barici in tondo con grazie, fronti WMO, reticolo, cornice, scala e
+      // rosa dei venti. Il campo colorato resta sotto, steso come acquerello.
+      // Lo stato precedente viene messo da parte per poterci tornare.
       let synopticChart = false;
       let synopticRestore = null;
       // Passo delle isobare: una sola definizione, usata sia per tracciarle
       // sia per dichiararlo nel cartiglio della carta. Se cambia il disegno
       // cambia la didascalia, e non possono raccontare due cose diverse.
       const ISOBAR_INTERVAL_HPA = 2;
+      // Attenzione: e' un modulo sul valore, non un moltiplicatore. Marcate
+      // sono le isobare il cui valore e' multiplo di questo numero, quindi
+      // ogni 4 hPa. Il cartiglio deve dichiarare questo, non il prodotto dei
+      // due numeri.
       const ISOBAR_MAJOR_EVERY = 4;
+      // Le isobare sono un prodotto a scala sinottica e vanno tracciate su un
+      // campo lisciato a quella scala. Vedi buildPressureProducts.
+      const ISOBAR_SMOOTHING_KM = 60;
+      // Il foglio, l'inchiostro e i due colori dei fronti stampati.
+      const PAPER_SHEET = "#f4efe3";
+      const PAPER_INK = "#1d1a16";
       let isMapMoving = false;
       let selectedPoint = null;
       let particleFrame = null;
@@ -4738,12 +4839,17 @@
         closeReadout();
       }
 
-      // Una carta al suolo si legge perche' *non* c'e' nient'altro sopra. Il
-      // fondo fotografico, i campi colorati, le particelle e le frecce sono
-      // tutti utili, e tutti in competizione con le tre cose che una carta
-      // sinottica deve dire: dove sta la pressione, dove sono i suoi centri e
-      // dove passano i fronti. Questa modalita' li toglie di mezzo e rimette
-      // la mappa su fondo bianco.
+      // Una carta si legge perche' ogni cosa che c'e' sopra ha un motivo per
+      // esserci. Il fondo fotografico, le particelle, il radar e le frecce
+      // sono tutti utili, e tutti in competizione con le tre cose che una
+      // carta al suolo deve dire: dove sta la pressione, dove sono i suoi
+      // centri e dove passano i fronti. Questa modalita' li toglie di mezzo e
+      // rimette il disegno su un foglio di carta.
+      //
+      // Il campo colorato invece resta: steso sotto l'inchiostro e velato
+      // dalla grana del foglio diventa un acquerello, e la carta continua a
+      // dire anche che tempo fa, non solo che pressione c'e'. E' la differenza
+      // fra una carta di analisi e una carta muta.
       function setSynopticChart(enabled) {
         const wanted = Boolean(enabled);
         if (wanted === synopticChart) return;
@@ -4760,10 +4866,12 @@
             threed: show3D, graticule: showGraticule,
           };
           synopticChart = true;
-          activeLayer = "none";
-          document.body.classList.add("map-only-layer", "synoptic-chart");
+          document.body.classList.add("synoptic-chart");
           showParticles = false;
           showVectors = false;
+          // Le isoterme direbbero in linee quello che il campo dice gia' in
+          // colore, e sulla carta si accavallerebbero alle isobare: due
+          // famiglie di isolinee nere non si distinguono piu'.
           showIsotherms = false;
           showRadar = false;
           showSatelliteClouds = false;
@@ -4778,7 +4886,10 @@
           showFronts = frontsAvailable();
           stopParticles();
           if (map && map.getLayer("weather-layer")) {
-            map.setLayoutProperty("weather-layer", "visibility", "none");
+            map.setLayoutProperty(
+              "weather-layer", "visibility",
+              activeLayer === "none" ? "none" : "visible"
+            );
           }
           if (map && map.getLayer("radar-layer")) {
             map.setLayoutProperty("radar-layer", "visibility", "none");
@@ -4832,7 +4943,7 @@
         requestVectorRender();
         refreshSelectedPoint();
         toast(wanted
-          ? "Carta sinottica: pressione al suolo, centri e fronti su fondo bianco"
+          ? "Carta cartografica: isobare, centri e fronti su carta, campo velato sotto"
           : "Torno alla mappa dei campi");
         closeDrawerOnMobile();
       }
@@ -4850,20 +4961,28 @@
           toast(unavailableLayerMessage(nextLayer));
           return;
         }
-        // Scegliere un campo colorato e' il modo naturale di dire "basta
-        // carta": la modalita' si chiude da sola invece di lasciare il campo
-        // acceso sotto un fondo che lo nasconde.
-        if (synopticChart && nextLayer !== "none") {
-          synopticChart = false;
-          synopticRestore = null;
-          document.body.classList.remove("synoptic-chart");
-          updateSatelliteBase();
-        }
-
+        // Sulla carta il campo colorato e' un ospite, non un intruso: si
+        // cambia livello restando sul foglio. Prima la scelta di un campo
+        // chiudeva la modalita', perche' il fondo bianco lo avrebbe nascosto;
+        // ora il campo sta sotto l'inchiostro e la carta resta.
         activeLayer = nextLayer;
         document.body.classList.toggle("map-only-layer", nextLayer === "none");
 
         if (nextLayer === "none") {
+          // Sul foglio "nessun campo" vuol dire togliere l'acquerello, non
+          // svuotare la carta: isobare, centri e fronti sono la carta stessa.
+          if (synopticChart) {
+            if (map && map.getLayer("weather-layer")) {
+              map.setLayoutProperty("weather-layer", "visibility", "none");
+            }
+            updateLayerUi();
+            updateLegend();
+            requestVectorRender();
+            refreshSelectedPoint();
+            toast("Carta muta: resta la sola analisi al suolo");
+            closeDrawerOnMobile();
+            return;
+          }
           clearMeteorologicalLayers();
           updateLayerUi();
           updateLegend();
@@ -4877,7 +4996,9 @@
           map.setLayoutProperty("weather-layer", "visibility", "visible");
         }
 
-        if (nextLayer === "wind") {
+        // Particelle e frecce sono animazione: sul foglio non hanno posto, e
+        // il vento si legge dal colore e dalla spaziatura delle isobare.
+        if (nextLayer === "wind" && !synopticChart) {
           if (!showParticles && !prefersReducedMotion) showParticles = true;
           showVectors = true;
           startParticles();
@@ -5071,7 +5192,13 @@
         // del chiaroscuro senza alterare in modo apprezzabile i colori della
         // legenda. I layer categorici di pericolo restano più coprenti.
         const terrainBlend = show3D ? (info.categorical ? 0.99 : 0.95) : 1;
-        const baseOpacity = info.opacity * terrainBlend;
+        // Sulla carta il campo e' un acquerello steso sotto l'inchiostro: se
+        // resta pieno mangia le isobare e i simboli frontali, che sono il
+        // motivo per cui esiste una carta al suolo. I campi categorici
+        // (pericoli, precipitazione) restano piu' coprenti: li' il colore *e'*
+        // il messaggio, e sbiadirli renderebbe indistinguibili le classi.
+        const paperWash = synopticChart ? (info.categorical ? 0.5 : 0.34) : 1;
+        const baseOpacity = info.opacity * terrainBlend * paperWash;
         // Sull'ortofoto il velo del campo si alleggerisce avvicinandosi. A scala
         // sinottica il colore e' l'informazione, quindi resta pieno; zoomando su
         // una zona si vuole invece riconoscere il terreno sotto, e un campo che
@@ -5416,7 +5543,7 @@
       // diversi lo impostavano, e quello che girava per ultimo vinceva --
       // ecco perche' la carta sinottica restava su fondo scuro.
       function mapBackgroundColour() {
-        if (synopticChart) return "#ffffff";
+        if (synopticChart) return PAPER_SHEET;
         return !showLightBase && !showSatellite ? "#0a1018" : "#c4cace";
       }
 
@@ -6125,9 +6252,22 @@
           return;
         }
 
+        // La PMSL di ICON-2I e' un campo a 2,2 km e porta sopra i rilievi gli
+        // artefatti della riduzione al livello del mare. Contornata cosi'
+        // com'e', disegna il profilo delle Alpi, dell'Appennino e delle isole
+        // invece dell'andamento barico: contorni frammentati che nessun
+        // meteorologo traccerebbe. Le isobare sono un prodotto a scala
+        // sinottica, e a quella scala va lisciato il campo prima di
+        // contornarlo. Due passaggi di media a 60 km: uno solo lascia ancora
+        // il segno delle valli alpine.
+        const cellKm = Math.abs(meta.dy) * 111.32;
+        const isobarRadius = Math.max(1, Math.round(ISOBAR_SMOOTHING_KM / cellKm));
+        let isobarField = smoothPressureGrid(pressure, meta.nx, meta.ny, isobarRadius);
+        isobarField = smoothPressureGrid(isobarField, meta.nx, meta.ny, isobarRadius);
+
         data.isobars = {
           type: "FeatureCollection",
-          features: createIsobarFeatures(pressure, meta)
+          features: createIsobarFeatures(isobarField, meta)
         };
 
         let accepted = [];
@@ -6653,6 +6793,132 @@
         return result;
       }
 
+      // Il riquadro utile della carta: la fascia libera fra l'intestazione e
+      // la timeline. Cornice, reticolo, cartiglio, scala e rosa dei venti si
+      // appoggiano tutti a questo rettangolo, cosi' restano coerenti fra loro
+      // a ogni misura di finestra. Null quando la finestra e' troppo piccola
+      // perche' una cornice abbia senso.
+      function paperFrame() {
+        const width = window.innerWidth;
+        const height = window.innerHeight;
+        const mobile = width < 900;
+        const inset = mobile ? 9 : 15;
+        const top = mobile ? 80 : 88;
+        const bottom = mobile ? 100 : 108;
+        // Sul desktop il pannello dei livelli e' sempre aperto e occupa la
+        // fascia destra. Una cornice che gli passasse sotto non sarebbe una
+        // cornice: il bordo destro del foglio si ferma dove comincia il
+        // pannello. Lo misuro invece di scriverne la larghezza a mano, cosi'
+        // resta giusto se il pannello cambia misura o e' chiuso.
+        let rightReserve = inset;
+        const drawer = document.getElementById("drawer");
+        if (drawer) {
+          const rect = drawer.getBoundingClientRect();
+          const onScreen = rect.width > 0 && rect.left < width - 4
+            && rect.top < height - 4 && rect.bottom > 0;
+          if (onScreen) rightReserve = Math.max(rightReserve, width - rect.left + 10);
+        }
+        const box = {
+          x: inset,
+          y: top,
+          w: width - inset - rightReserve,
+          h: height - top - bottom,
+          mobile: mobile,
+        };
+        return (box.w > 260 && box.h > 220) ? box : null;
+      }
+
+      // Le etichette delle isobare sulla carta non stanno *sopra* la linea con
+      // un alone: la linea si interrompe e il numero occupa il vuoto. E' la
+      // convenzione tipografica delle carte stampate, ed e' anche il motivo per
+      // cui restano leggibili sopra un campo colorato -- non c'e' nessun alone
+      // chiaro che sporca l'acquerello.
+      function paperIsobarGaps(points, text, size, box) {
+        vectorContext.font = "600 " + size + "px ui-monospace, SFMono-Regular, Menlo, monospace";
+        const half = vectorContext.measureText(text).width / 2 + 4;
+        const cumulative = [0];
+        for (let index = 1; index < points.length; index += 1) {
+          cumulative.push(cumulative[index - 1] + Math.hypot(
+            points[index].x - points[index - 1].x,
+            points[index].y - points[index - 1].y
+          ));
+        }
+        const total = cumulative[cumulative.length - 1];
+        const spacing = box.mobile ? 260 : 340;
+        const gaps = [];
+        // Un tetto ai buchi: una linea lunghissima a forte zoom produrrebbe
+        // centinaia di etichette e un dash pattern altrettanto lungo.
+        const maximum = box.mobile ? 3 : 6;
+        for (let distance = spacing * 0.55;
+             distance < total - 40 && gaps.length < maximum;
+             distance += spacing) {
+          let index = 1;
+          while (index < cumulative.length && cumulative[index] < distance) index += 1;
+          if (index >= cumulative.length) break;
+          const span = Math.max(cumulative[index] - cumulative[index - 1], 1e-6);
+          const fraction = (distance - cumulative[index - 1]) / span;
+          const x = points[index - 1].x + (points[index].x - points[index - 1].x) * fraction;
+          const y = points[index - 1].y + (points[index].y - points[index - 1].y) * fraction;
+          // Un numero a cavallo della cornice non si legge: meglio nessuno.
+          if (x < box.x + 26 || x > box.x + box.w - 26) continue;
+          if (y < box.y + 22 || y > box.y + box.h - 22) continue;
+          const angle = Math.atan2(
+            points[index].y - points[index - 1].y,
+            points[index].x - points[index - 1].x
+          );
+          gaps.push({ distance: distance, x: x, y: y, angle: angle, half: half });
+        }
+        return gaps;
+      }
+
+      function strokePaperIsobar(points, value, major, box) {
+        const text = String(value);
+        const size = major ? (box.mobile ? 9.5 : 10.5) : 9.5;
+        const gaps = major ? paperIsobarGaps(points, text, size, box) : [];
+
+        vectorContext.save();
+        vectorContext.strokeStyle = PAPER_INK;
+        vectorContext.lineWidth = major ? 1.5 : 0.75;
+        vectorContext.lineJoin = "round";
+        vectorContext.lineCap = "butt";
+        vectorContext.beginPath();
+        points.forEach(function (point, index) {
+          if (index === 0) vectorContext.moveTo(point.x, point.y);
+          else vectorContext.lineTo(point.x, point.y);
+        });
+
+        if (!gaps.length) {
+          vectorContext.stroke();
+          vectorContext.restore();
+          return;
+        }
+
+        // Tratteggio calcolato una volta: pieno ovunque, vuoto dove va il
+        // numero. Costa un solo stroke invece di uno per segmento.
+        const dash = [];
+        let previous = 0;
+        gaps.forEach(function (gap) {
+          dash.push(Math.max(gap.distance - gap.half - previous, 0), gap.half * 2);
+          previous = gap.distance + gap.half;
+        });
+        vectorContext.setLineDash(dash);
+        vectorContext.stroke();
+        vectorContext.setLineDash([]);
+
+        vectorContext.fillStyle = PAPER_INK;
+        vectorContext.font = "600 " + size + "px ui-monospace, SFMono-Regular, Menlo, monospace";
+        vectorContext.textAlign = "center";
+        vectorContext.textBaseline = "middle";
+        gaps.forEach(function (gap) {
+          vectorContext.save();
+          vectorContext.translate(gap.x, gap.y);
+          vectorContext.rotate(uprightTextAngle(gap.angle));
+          vectorContext.fillText(text, 0, 0.5);
+          vectorContext.restore();
+        });
+        vectorContext.restore();
+      }
+
       function drawIsobarText(text, x, y, angle) {
         vectorContext.save();
         vectorContext.translate(x, y);
@@ -6712,25 +6978,40 @@
 
         const properties = feature.properties || {};
         const kind = properties.kind === "A" ? "A" : "B";
-        const color = kind === "A" ? "#e21b2d" : "#1266d6";
         const mobile = window.innerWidth < 900;
+        // Sulla carta la A e la B si stampano in tondo con grazie, nei rossi e
+        // nei blu dell'inchiostro tipografico, e l'alone e' color carta perche'
+        // il bianco puro su un foglio avorio si vede come una macchia.
+        const paper = synopticChart;
+        const color = paper
+          ? (kind === "A" ? "#961319" : "#123f74")
+          : (kind === "A" ? "#e21b2d" : "#1266d6");
+        const halo = paper ? "rgba(244,239,227,0.96)" : "rgba(255,255,255,0.98)";
+        const family = paper
+          ? '"Iowan Old Style", "Palatino Linotype", Palatino, Georgia, serif'
+          : "system-ui, -apple-system, Segoe UI, sans-serif";
+        const offset = mobile ? 24 : 28;
 
         vectorContext.save();
         vectorContext.textAlign = "center";
         vectorContext.textBaseline = "middle";
         vectorContext.lineJoin = "round";
-        vectorContext.font = "950 " + (mobile ? 31 : 36) + "px system-ui, -apple-system, Segoe UI, sans-serif";
-        vectorContext.strokeStyle = "rgba(255,255,255,0.98)";
+        vectorContext.font = (paper ? "700 " : "950 ")
+          + (mobile ? 31 : 36) + "px " + family;
+        vectorContext.strokeStyle = halo;
         vectorContext.lineWidth = 6;
         vectorContext.strokeText(kind, point.x, point.y);
         vectorContext.fillStyle = color;
         vectorContext.fillText(kind, point.x, point.y);
 
-        vectorContext.font = "850 " + (mobile ? 11 : 12) + "px ui-monospace, SFMono-Regular, Menlo, monospace";
+        vectorContext.font = (paper ? "600 " : "850 ")
+          + (mobile ? 11 : 12) + "px ui-monospace, SFMono-Regular, Menlo, monospace";
         vectorContext.lineWidth = 3.5;
-        vectorContext.strokeText(String(properties.value), point.x, point.y + (mobile ? 24 : 28));
-        vectorContext.fillStyle = kind === "A" ? "#a80d1c" : "#084ca8";
-        vectorContext.fillText(String(properties.value), point.x, point.y + (mobile ? 24 : 28));
+        vectorContext.strokeText(String(properties.value), point.x, point.y + offset);
+        vectorContext.fillStyle = paper
+          ? PAPER_INK
+          : (kind === "A" ? "#a80d1c" : "#084ca8");
+        vectorContext.fillText(String(properties.value), point.x, point.y + offset);
         vectorContext.restore();
       }
 
@@ -6750,6 +7031,9 @@
           ? synTerrain.exaggeration
           : 1;
         const synElevated = Boolean(synTerrain) && show3D;
+        // Non nullo solo sulla carta: e' insieme l'interruttore dello stile
+        // cartaceo e il riquadro a cui le etichette si devono attenere.
+        const paperBox = synopticChart ? paperFrame() : null;
 
         // Isoterme sotto tutto il resto: sono il campo di fondo, pressione e
         // fronti devono restare leggibili sopra.
@@ -6879,28 +7163,28 @@
             }
             const major = Boolean(feature.properties && feature.properties.major);
 
+            // Sulla carta l'isobara si stampa: tratto pieno, nessun alone, e
+            // il valore incassato nella linea. Altrove sotto c'e' un fondo
+            // scuro o fotografico, e li' l'alone chiaro e' l'unica cosa che
+            // rende leggibile una linea sottile.
+            if (paperBox) {
+              strokePaperIsobar(points, feature.properties.value, major, paperBox);
+              return;
+            }
+
             vectorContext.beginPath();
             points.forEach(function (point, pointIndex) {
               if (pointIndex === 0) vectorContext.moveTo(point.x, point.y);
               else vectorContext.lineTo(point.x, point.y);
             });
-            // Su fondo scuro o fotografico l'alone bianco e' quello che rende
-            // leggibile una linea sottile. Su carta bianca non serve a nulla e
-            // anzi mangia il tratto: li' l'isobara va disegnata piena, come
-            // sarebbe stampata.
-            if (!synopticChart) {
-              vectorContext.strokeStyle =
-                "rgba(255,255,255," + (major ? "0.72" : "0.48") + ")";
-              vectorContext.lineWidth = major ? 3.5 : 2.5;
-              vectorContext.stroke();
-            }
+            vectorContext.strokeStyle =
+              "rgba(255,255,255," + (major ? "0.72" : "0.48") + ")";
+            vectorContext.lineWidth = major ? 3.5 : 2.5;
+            vectorContext.stroke();
 
-            vectorContext.strokeStyle = synopticChart
-              ? (major ? "rgba(10,18,26,1)" : "rgba(28,42,54,0.9)")
-              : (major ? "rgba(5,12,18,0.96)" : "rgba(7,16,23,0.78)");
-            vectorContext.lineWidth = synopticChart
-              ? (major ? 1.9 : 1.05)
-              : (major ? 1.45 : 0.82);
+            vectorContext.strokeStyle =
+              major ? "rgba(5,12,18,0.96)" : "rgba(7,16,23,0.78)";
+            vectorContext.lineWidth = major ? 1.45 : 0.82;
             vectorContext.stroke();
 
             if (major) {
@@ -6963,6 +7247,29 @@
         return clamp(0.78 + (zoom - 4) * 0.085, 0.78, 1.35);
       }
 
+      // I colori dei fronti. Sullo schermo sono i blu e i rossi accesi che
+      // reggono su un fondo scuro; sulla carta sono gli inchiostri stampati,
+      // piu' profondi e meno saturi, perche' su un foglio avorio un blu
+      // elettrico non e' un colore che esista.
+      const FRONT_SCREEN_INK = {
+        cold: "#0875df", warm: "#e32638",
+        occluded: "#8b3fd0", uncertain: "#30343b",
+      };
+      const FRONT_PAPER_INK = {
+        cold: "#12457e", warm: "#a01b22",
+        occluded: "#5b2277", uncertain: "#3c3830",
+      };
+      function frontInk(kind) {
+        return (synopticChart ? FRONT_PAPER_INK : FRONT_SCREEN_INK)[kind];
+      }
+
+      // L'alone che stacca il simbolo dal fondo. Sulla carta e' color foglio:
+      // un bianco puro su avorio si vedrebbe come una macchia attorno a ogni
+      // triangolo, invece di sparire nel fondo come deve.
+      function frontHaloColour() {
+        return synopticChart ? "rgba(244,239,227,0.94)" : "rgba(255,255,255,0.94)";
+      }
+
       function drawFrontTriangle(x, y, angle, color, alpha, scale) {
         const s = scale || 1;
         vectorContext.save();
@@ -6976,7 +7283,7 @@
         vectorContext.closePath();
         vectorContext.fillStyle = color;
         vectorContext.fill();
-        vectorContext.strokeStyle = "rgba(255,255,255,0.94)";
+        vectorContext.strokeStyle = frontHaloColour();
         vectorContext.lineWidth = 1.25 * s;
         vectorContext.stroke();
         vectorContext.restore();
@@ -6990,7 +7297,7 @@
         vectorContext.globalAlpha = alpha;
         vectorContext.beginPath();
         vectorContext.arc(0, 0, 7 * s, 0, Math.PI, false);
-        vectorContext.strokeStyle = "rgba(255,255,255,0.94)";
+        vectorContext.strokeStyle = frontHaloColour();
         vectorContext.lineWidth = 5.6 * s;
         vectorContext.stroke();
         vectorContext.strokeStyle = color;
@@ -7009,7 +7316,7 @@
         vectorContext.globalAlpha = alpha;
         vectorContext.beginPath();
         vectorContext.arc(0, 0, 7 * s, Math.PI, 2 * Math.PI, false);
-        vectorContext.strokeStyle = "rgba(255,255,255,0.94)";
+        vectorContext.strokeStyle = frontHaloColour();
         vectorContext.lineWidth = 5.6 * s;
         vectorContext.stroke();
         vectorContext.strokeStyle = color;
@@ -7026,14 +7333,14 @@
           else vectorContext.lineTo(point.x, point.y);
         });
         vectorContext.globalAlpha = alpha;
-        vectorContext.strokeStyle = "rgba(255,255,255,0.94)";
+        vectorContext.strokeStyle = frontHaloColour();
         vectorContext.lineWidth = 5.4 * s;
         vectorContext.stroke();
 
         if (frontType === "uncertain") {
           vectorContext.save();
           vectorContext.setLineDash([8 * s, 7 * s]);
-          vectorContext.strokeStyle = "#30343b";
+          vectorContext.strokeStyle = frontInk("uncertain");
           vectorContext.lineWidth = 2.7 * s;
           vectorContext.stroke();
           vectorContext.restore();
@@ -7042,7 +7349,7 @@
         }
 
         if (frontType === "occluded") {
-          vectorContext.strokeStyle = "#8b3fd0";
+          vectorContext.strokeStyle = frontInk("occluded");
           vectorContext.lineWidth = 2.9 * s;
           vectorContext.stroke();
           vectorContext.globalAlpha = 1;
@@ -7050,7 +7357,7 @@
         }
 
         if (frontType !== "stationary") {
-          vectorContext.strokeStyle = frontType === "cold" ? "#0875df" : "#e32638";
+          vectorContext.strokeStyle = frontInk(frontType === "cold" ? "cold" : "warm");
           vectorContext.lineWidth = 2.9 * s;
           vectorContext.stroke();
           vectorContext.globalAlpha = 1;
@@ -7077,10 +7384,10 @@
         vectorContext.lineCap = "butt";
         vectorContext.setLineDash([bandLength, bandLength]);
         vectorContext.lineWidth = 2.9 * s;
-        vectorContext.strokeStyle = "#0875df";
+        vectorContext.strokeStyle = frontInk("cold");
         vectorContext.lineDashOffset = 0;
         vectorContext.stroke();
-        vectorContext.strokeStyle = "#e32638";
+        vectorContext.strokeStyle = frontInk("warm");
         vectorContext.lineDashOffset = bandLength;
         vectorContext.stroke();
         vectorContext.restore();
@@ -7140,19 +7447,19 @@
         walkFront(points, spacing, 25 * s, function (x, y, angle, index) {
           if (x < -18 || x > window.innerWidth + 18 || y < 70 || y > window.innerHeight + 18) return;
           if (frontType === "cold") {
-            drawFrontTriangle(x, y, angle, "#0875df", alpha, s);
+            drawFrontTriangle(x, y, angle, frontInk("cold"), alpha, s);
           } else if (frontType === "warm") {
-            drawFrontSemicircle(x, y, angle, "#e32638", alpha, s);
+            drawFrontSemicircle(x, y, angle, frontInk("warm"), alpha, s);
           } else if (frontType === "occluded") {
             if (index % 2 === 0) {
-              drawFrontTriangle(x, y, angle, "#8b3fd0", alpha, s);
+              drawFrontTriangle(x, y, angle, frontInk("occluded"), alpha, s);
             } else {
-              drawOccludedSemicircle(x, y, angle, "#8b3fd0", alpha, s);
+              drawOccludedSemicircle(x, y, angle, frontInk("occluded"), alpha, s);
             }
           } else if (frontType === "stationary" && index % 2 === 0) {
-            drawFrontTriangle(x, y, angle, "#0875df", alpha, s);
+            drawFrontTriangle(x, y, angle, frontInk("cold"), alpha, s);
           } else if (frontType === "stationary") {
-            drawFrontSemicircle(x, y, angle, "#e32638", alpha, s);
+            drawFrontSemicircle(x, y, angle, frontInk("warm"), alpha, s);
           }
         });
       }
@@ -7255,87 +7562,406 @@
         );
       }
 
-      // Cornice, cartiglio e legenda: quello che su una carta stampata sta
-      // attorno al disegno e senza cui il disegno non si sa leggere. Chi
-      // guarda deve poter dire, senza uscire dalla carta, che analisi e' e a
-      // che ora vale.
-      function drawChartFurniture() {
+      // Il corredo della carta: quello che su un foglio stampato sta attorno
+      // al disegno e senza cui il disegno non si sa leggere. Chi guarda deve
+      // poter dire, senza uscire dalla carta, che analisi e', a che ora vale,
+      // che convenzioni usa, quanto e' grande e da che parte e' il nord.
+      const PAPER_SERIF =
+        '"Iowan Old Style", "Palatino Linotype", Palatino, Georgia, serif';
+      const PAPER_MONO = "ui-monospace, SFMono-Regular, Menlo, monospace";
+
+      // Il margine del foglio. Il disegno si ferma alla cornice: fuori c'e'
+      // carta bianca, non mappa tagliata a meta'. E' quello che rende la
+      // schermata una carta invece di una finestra su una mappa infinita.
+      function paperMask(box) {
         const width = window.innerWidth;
         const height = window.innerHeight;
-        const mobile = width < 900;
-        // In basso a sinistra: le schede del sito stanno in alto, il pannello
-        // dei livelli a destra e la timeline occupa la fascia inferiore. E'
-        // l'unico angolo che resta libero a ogni dimensione di finestra.
-        const margin = mobile ? 10 : 16;
-        const timelineGap = mobile ? 104 : 112;
+        vectorContext.save();
+        vectorContext.fillStyle = PAPER_SHEET;
+        vectorContext.fillRect(0, 0, width, box.y);
+        vectorContext.fillRect(0, box.y + box.h, width, height - box.y - box.h);
+        vectorContext.fillRect(0, box.y, box.x, box.h);
+        vectorContext.fillRect(box.x + box.w, box.y, width - box.x - box.w, box.h);
+        vectorContext.restore();
+      }
 
-        const entries = [
-          { type: "cold", label: "Fronte freddo" },
-          { type: "warm", label: "Fronte caldo" },
-          { type: "occluded", label: "Occluso" },
-          { type: "stationary", label: "Stazionario" },
-        ];
-        const titleSize = mobile ? 12 : 13;
-        const bodySize = mobile ? 10 : 11;
-        const pad = mobile ? 9 : 11;
-        const rowHeight = mobile ? 19 : 21;
-        const sampleWidth = mobile ? 48 : 58;
-        const caption = "Isobare ogni " + ISOBAR_INTERVAL_HPA + " hPa · marcate ogni "
-          + ISOBAR_INTERVAL_HPA * ISOBAR_MAJOR_EVERY + " · PMSL ICON-2I";
+      function paperNeatline(box) {
+        vectorContext.save();
+        vectorContext.strokeStyle = PAPER_INK;
+        vectorContext.setLineDash([]);
+        vectorContext.lineWidth = 0.9;
+        vectorContext.strokeRect(box.x - 0.5, box.y - 0.5, box.w + 1, box.h + 1);
+        vectorContext.lineWidth = 2.4;
+        vectorContext.strokeRect(box.x - 5.5, box.y - 5.5, box.w + 11, box.h + 11);
+        vectorContext.restore();
+      }
+
+      // Denti di graduazione sui quattro bordi, come su una carta nautica: i
+      // gradi si leggono dalla cornice, non da etichette sparse sul disegno.
+      // La mappa in questa modalita' non ruota (il 3D e' spento), quindi un
+      // meridiano e' una verticale e un parallelo un'orizzontale, e basta una
+      // proiezione per ciascuno invece di tracciare linee intere.
+      function paperGraticuleTicks(box) {
+        if (!map) return;
+        let bounds;
+        try {
+          bounds = map.getBounds();
+        } catch (error) {
+          return;
+        }
+        if (!bounds) return;
+        const west = bounds.getWest();
+        const east = bounds.getEast();
+        const south = bounds.getSouth();
+        const north = bounds.getNorth();
+        const span = Math.max(east - west, north - south);
+        // Il passo segue lo zoom: a scala continentale un grado, zoomando su
+        // una provincia i dieci primi. Senza questo, o si contano centinaia di
+        // denti o non se ne vede nessuno.
+        const step = span > 24 ? 5 : span > 10 ? 2 : span > 4 ? 1 : span > 1.6 ? 0.5 : 0.25;
+        const majorStep = step * 2;
+        const centreLat = (south + north) / 2;
+        const centreLon = (west + east) / 2;
+        const label = function (value, suffix) {
+          const rounded = Math.round(value * 100) / 100;
+          return (Number.isInteger(rounded) ? rounded : rounded.toFixed(2)) + "°" + suffix;
+        };
+        const isMajor = function (value) {
+          return Math.abs(value / majorStep - Math.round(value / majorStep)) < 1e-6;
+        };
+
+        vectorContext.save();
+        vectorContext.strokeStyle = PAPER_INK;
+        vectorContext.fillStyle = PAPER_INK;
+        vectorContext.setLineDash([]);
+        vectorContext.lineWidth = 1;
+        vectorContext.font = "500 " + (box.mobile ? 8.5 : 9.5) + "px " + PAPER_MONO;
+
+        // Reticolo interno: tratteggio finissimo, solo sui gradi marcati, per
+        // non riempire il disegno di linee che competono con le isobare.
+        vectorContext.save();
+        vectorContext.beginPath();
+        vectorContext.rect(box.x, box.y, box.w, box.h);
+        vectorContext.clip();
+        vectorContext.strokeStyle = "rgba(60,52,40,0.20)";
+        vectorContext.lineWidth = 0.6;
+        vectorContext.setLineDash([1.5, 3.5]);
+        for (let lon = Math.ceil(west / majorStep) * majorStep; lon <= east; lon += majorStep) {
+          const x = map.project([lon, centreLat]).x;
+          vectorContext.beginPath();
+          vectorContext.moveTo(x, box.y);
+          vectorContext.lineTo(x, box.y + box.h);
+          vectorContext.stroke();
+        }
+        for (let lat = Math.ceil(south / majorStep) * majorStep; lat <= north; lat += majorStep) {
+          const y = map.project([centreLon, lat]).y;
+          vectorContext.beginPath();
+          vectorContext.moveTo(box.x, y);
+          vectorContext.lineTo(box.x + box.w, y);
+          vectorContext.stroke();
+        }
+        vectorContext.restore();
+
+        vectorContext.strokeStyle = PAPER_INK;
+        vectorContext.lineWidth = 1;
+        vectorContext.textAlign = "center";
+        vectorContext.textBaseline = "top";
+        for (let lon = Math.ceil(west / step) * step; lon <= east; lon += step) {
+          const x = map.project([lon, centreLat]).x;
+          if (x < box.x + 4 || x > box.x + box.w - 4) continue;
+          const major = isMajor(lon);
+          const length = major ? 6 : 3;
+          vectorContext.beginPath();
+          vectorContext.moveTo(x, box.y);
+          vectorContext.lineTo(x, box.y - length);
+          vectorContext.moveTo(x, box.y + box.h);
+          vectorContext.lineTo(x, box.y + box.h + length);
+          vectorContext.stroke();
+          if (major) vectorContext.fillText(label(lon, "E"), x, box.y + box.h + 9);
+        }
+        // Le latitudini vanno DENTRO la cornice, appoggiate al bordo. Fuori
+        // starebbero nel margine laterale, e su uno schermo quel margine
+        // dovrebbe essere largo quaranta pixel solo per ospitarle: quaranta
+        // pixel di carta bianca tolti al disegno da entrambi i lati. Un alone
+        // color foglio le stacca da quello che ci passa sotto.
+        vectorContext.textAlign = "left";
+        vectorContext.textBaseline = "middle";
+        vectorContext.lineJoin = "round";
+        for (let lat = Math.ceil(south / step) * step; lat <= north; lat += step) {
+          const y = map.project([centreLon, lat]).y;
+          if (y < box.y + 12 || y > box.y + box.h - 12) continue;
+          const major = isMajor(lat);
+          const length = major ? 6 : 3;
+          vectorContext.strokeStyle = PAPER_INK;
+          vectorContext.lineWidth = 1;
+          vectorContext.beginPath();
+          vectorContext.moveTo(box.x, y);
+          vectorContext.lineTo(box.x + length, y);
+          vectorContext.moveTo(box.x + box.w, y);
+          vectorContext.lineTo(box.x + box.w - length, y);
+          vectorContext.stroke();
+          if (!major) continue;
+          const text = label(lat, "N");
+          vectorContext.strokeStyle = "rgba(244,239,227,0.94)";
+          vectorContext.lineWidth = 3.2;
+          vectorContext.strokeText(text, box.x + 10, y);
+          vectorContext.fillText(text, box.x + 10, y);
+        }
+        vectorContext.restore();
+      }
+
+      // Scala grafica alla latitudine media della vista: e' li' che una scala
+      // vale davvero su una proiezione cilindrica, e dichiararlo e' parte
+      // della scala stessa.
+      function paperScaleBar(box) {
+        if (!map) return;
+        let bounds;
+        try {
+          bounds = map.getBounds();
+        } catch (error) {
+          return;
+        }
+        if (!bounds) return;
+        const midLat = (bounds.getSouth() + bounds.getNorth()) / 2;
+        const kmPerDegree = 111.32 * Math.cos(midLat * Math.PI / 180);
+        const spanKm = (bounds.getEast() - bounds.getWest()) * kmPerDegree;
+        if (!Number.isFinite(spanKm) || spanKm <= 0) return;
+        const pixelsPerKm = box.w / spanKm;
+        // Un segmento della serie 1-2-5 largo circa un quinto della carta:
+        // cosi' la barra resta della stessa misura a ogni scala.
+        const target = spanKm / 5;
+        const magnitude = Math.pow(10, Math.floor(Math.log10(Math.max(target, 0.001))));
+        const normalised = target / magnitude;
+        const segment = (normalised >= 5 ? 5 : normalised >= 2 ? 2 : 1) * magnitude;
+        const segments = 3;
+        const barWidth = segment * segments * pixelsPerKm;
+        if (barWidth < 60 || barWidth > box.w * 0.6) return;
+
+        const height = 7;
+        const x = box.x + box.w - barWidth - 30;
+        let y = box.y + box.h - 30;
+        // Sul telefono la scala del campo occupa tutta la larghezza in basso e
+        // la barra ci finisce sotto. Invece di scrivere una posizione diversa
+        // per il telefono, misuro dove arriva davvero quella scheda e alzo la
+        // barra quanto basta: resta giusto anche se la scheda cambia altezza.
+        const legendCard = document.getElementById("legend-card");
+        if (legendCard) {
+          const rect = legendCard.getBoundingClientRect();
+          const overlaps = rect.width > 0 && rect.height > 0
+            && rect.right > x - 14 && rect.left < x + barWidth + 14
+            && rect.bottom > y - 15 && rect.top < y + 23;
+          if (overlaps) y = rect.top - 26;
+        }
+        if (y < box.y + 40) return;
+        const unit = segment >= 1 ? "km" : "km";
+        const format = function (value) {
+          return segment >= 1 ? String(Math.round(value)) : String(Math.round(value * 10) / 10);
+        };
 
         vectorContext.save();
         vectorContext.setLineDash([]);
-        vectorContext.font = "500 " + bodySize +
-          "px system-ui, -apple-system, Segoe UI, sans-serif";
-        const captionWidth = vectorContext.measureText(caption).width;
-        const boxWidth = Math.min(
-          Math.max(captionWidth + pad * 2, sampleWidth + pad * 3 + (mobile ? 78 : 92)),
-          width - margin * 2
-        );
-        const boxHeight = pad * 2 + titleSize + 4 + bodySize + 8
-          + entries.length * rowHeight;
-        const boxX = margin;
-        const boxY = height - timelineGap - boxHeight;
-        if (boxY < 90) { vectorContext.restore(); return; }
-
-        vectorContext.fillStyle = "rgba(255,255,255,0.94)";
-        vectorContext.strokeStyle = "rgba(20,32,44,0.55)";
-        vectorContext.lineWidth = 1;
-        vectorContext.fillRect(boxX, boxY, boxWidth, boxHeight);
-        vectorContext.strokeRect(boxX + 0.5, boxY + 0.5, boxWidth - 1, boxHeight - 1);
-
+        vectorContext.fillStyle = "rgba(244,239,227,0.9)";
+        vectorContext.fillRect(x - 14, y - 15, barWidth + 28, 38);
+        vectorContext.strokeStyle = PAPER_INK;
+        vectorContext.lineWidth = 0.9;
+        vectorContext.strokeRect(x - 14.5, y - 15.5, barWidth + 28, 38);
+        for (let index = 0; index < segments; index += 1) {
+          vectorContext.fillStyle = index % 2 ? PAPER_SHEET : PAPER_INK;
+          vectorContext.fillRect(
+            x + index * segment * pixelsPerKm, y, segment * pixelsPerKm, height
+          );
+        }
+        vectorContext.lineWidth = 0.8;
+        vectorContext.strokeRect(x, y, barWidth, height);
+        vectorContext.fillStyle = PAPER_INK;
+        vectorContext.font = "500 8.5px " + PAPER_MONO;
+        vectorContext.textAlign = "center";
         vectorContext.textBaseline = "top";
+        for (let index = 0; index <= segments; index += 1) {
+          vectorContext.fillText(
+            format(index * segment), x + index * segment * pixelsPerKm, y + height + 2
+          );
+        }
         vectorContext.textAlign = "left";
-        vectorContext.fillStyle = "#0d1b26";
-        vectorContext.font = "800 " + titleSize +
-          "px system-ui, -apple-system, Segoe UI, sans-serif";
-        vectorContext.fillText("ANALISI AL SUOLO", boxX + pad, boxY + pad);
-        vectorContext.font = "500 " + bodySize +
-          "px system-ui, -apple-system, Segoe UI, sans-serif";
-        vectorContext.fillStyle = "#43555f";
-        vectorContext.fillText(caption, boxX + pad, boxY + pad + titleSize + 4);
+        vectorContext.textBaseline = "bottom";
+        vectorContext.font = "400 8.5px " + PAPER_SERIF;
+        vectorContext.fillText(unit + " a " + Math.round(midLat) + "°N", x, y - 3);
+        vectorContext.restore();
+      }
 
-        // I simboli della legenda sono disegnati dalla stessa funzione che
-        // disegna i fronti sulla carta: non possono raccontare una convenzione
-        // diversa da quella che si vede sulla mappa.
+      function paperCompass(box) {
+        const cx = box.x + box.w - 44;
+        const cy = box.y + 46;
+        const radius = 19;
+        vectorContext.save();
+        vectorContext.setLineDash([]);
+        vectorContext.fillStyle = "rgba(244,239,227,0.9)";
+        vectorContext.beginPath();
+        vectorContext.arc(cx, cy, radius + 9, 0, Math.PI * 2);
+        vectorContext.fill();
+        vectorContext.strokeStyle = PAPER_INK;
+        vectorContext.lineWidth = 0.9;
+        vectorContext.stroke();
+        // Ago a losanga: meta' piena verso nord, meta' vuota verso sud.
+        vectorContext.beginPath();
+        vectorContext.moveTo(cx, cy - radius);
+        vectorContext.lineTo(cx + 5.5, cy);
+        vectorContext.lineTo(cx, cy + radius);
+        vectorContext.lineTo(cx - 5.5, cy);
+        vectorContext.closePath();
+        vectorContext.fillStyle = PAPER_SHEET;
+        vectorContext.fill();
+        vectorContext.stroke();
+        vectorContext.beginPath();
+        vectorContext.moveTo(cx, cy - radius);
+        vectorContext.lineTo(cx + 5.5, cy);
+        vectorContext.lineTo(cx, cy);
+        vectorContext.closePath();
+        vectorContext.fillStyle = PAPER_INK;
+        vectorContext.fill();
+        vectorContext.font = "700 9px " + PAPER_MONO;
+        vectorContext.textAlign = "center";
+        vectorContext.textBaseline = "middle";
+        vectorContext.fillText("N", cx, cy - radius - 4.5);
+        vectorContext.restore();
+      }
+
+      // Il cartiglio: su una carta stampata e' un riquadro solo, in un angolo,
+      // e contiene tutto quello che serve per leggere il foglio -- che analisi
+      // e', a che ora vale, da che corsa viene e con che convenzioni e'
+      // disegnata. Sul sito prende il posto della scheda run/validita', che in
+      // questa modalita' viene nascosta: due riquadri che dicono la stessa
+      // cosa, uno stampato e uno a schermo, sarebbero solo rumore.
+      function paperTitleBlock(box) {
+        const meta = (currentData && currentData.meta) || {};
+        const valid = meta.validTime ? new Date(meta.validTime) : null;
+        const compact = box.mobile;
+        const titleSize = compact ? 14 : 18;
+        const bodySize = compact ? 9.5 : 10.5;
+        const pad = compact ? 10 : 13;
+        const rowHeight = compact ? 17 : 19;
+        const sample = compact ? 62 : 78;
+        const entries = compact ? [] : [
+          { type: "cold", label: "fronte freddo" },
+          { type: "warm", label: "fronte caldo" },
+          { type: "occluded", label: "occluso" },
+          { type: "stationary", label: "stazionario" },
+        ];
+        const caption = "isobare ogni " + ISOBAR_INTERVAL_HPA
+          + " hPa · marcate ogni " + ISOBAR_MAJOR_EVERY;
+        const field = (activeLayer !== "none" && LAYER_INFO[activeLayer])
+          ? LAYER_INFO[activeLayer].label.toLowerCase() + " in campo velato"
+          : "nessun campo in velatura";
+
+        vectorContext.save();
+        vectorContext.setLineDash([]);
+        vectorContext.textAlign = "left";
+        vectorContext.font = "400 " + bodySize + "px " + PAPER_SERIF;
+        let innerWidth = Math.max(
+          vectorContext.measureText(caption).width,
+          vectorContext.measureText(field).width
+        );
+        entries.forEach(function (entry) {
+          innerWidth = Math.max(
+            innerWidth, sample + 16 + vectorContext.measureText(entry.label).width
+          );
+        });
+        vectorContext.font = "700 " + titleSize + "px " + PAPER_SERIF;
+        innerWidth = Math.max(innerWidth, vectorContext.measureText("ANALISI AL SUOLO").width);
+        // Il cartiglio lascia libera la striscia di bordo: le latitudini sono
+        // scritte li' dentro, e un riquadro appoggiato al bordo sinistro le
+        // coprirebbe proprio dove servono.
+        const borderStrip = 42;
+        const blockWidth = Math.min(innerWidth + pad * 2, box.w - borderStrip - 14);
+        // Titolo, validita', corsa, filetto, righe della legenda, e le due
+        // ultime righe di didascalia: il conto deve tornare riga per riga,
+        // altrimenti l'ultima esce dal riquadro.
+        const blockHeight = pad * 2
+          + (titleSize + 8) + (bodySize + 6) + (bodySize + 8) + 8
+          + entries.length * rowHeight + (entries.length ? 6 : 0)
+          + (bodySize + 4) + bodySize;
+        // Se il riquadro mangiasse mezza carta e' meglio non disegnarlo: il
+        // disegno viene prima del suo cartiglio.
+        if (blockHeight > box.h * 0.55 || blockWidth < 130) {
+          vectorContext.restore();
+          return;
+        }
+        const x = box.x + borderStrip;
+        const y = box.y + 12;
+
+        vectorContext.fillStyle = "rgba(244,239,227,0.92)";
+        vectorContext.fillRect(x, y, blockWidth, blockHeight);
+        vectorContext.strokeStyle = PAPER_INK;
+        vectorContext.lineWidth = 0.9;
+        vectorContext.strokeRect(x + 0.5, y + 0.5, blockWidth - 1, blockHeight - 1);
+
+        let cursor = y + pad;
+        vectorContext.textBaseline = "top";
+        vectorContext.fillStyle = PAPER_INK;
+        vectorContext.font = "700 " + titleSize + "px " + PAPER_SERIF;
+        vectorContext.fillText("ANALISI AL SUOLO", x + pad, cursor);
+        cursor += titleSize + 8;
+
+        vectorContext.font = "500 " + bodySize + "px " + PAPER_MONO;
+        vectorContext.fillText(
+          valid && !Number.isNaN(valid.getTime()) ? formatDateTime(valid) : "--",
+          x + pad, cursor
+        );
+        cursor += bodySize + 6;
+        vectorContext.font = "400 " + (bodySize - 0.5) + "px " + PAPER_MONO;
+        vectorContext.fillStyle = "#4a4239";
+        vectorContext.fillText(
+          formatRun(meta).toLowerCase() + " · +" + (meta.leadHours || 0) + " h",
+          x + pad, cursor
+        );
+        cursor += bodySize + 8;
+
+        vectorContext.strokeStyle = "rgba(29,26,22,0.35)";
+        vectorContext.lineWidth = 0.7;
+        vectorContext.beginPath();
+        vectorContext.moveTo(x + pad, cursor + 0.5);
+        vectorContext.lineTo(x + blockWidth - pad, cursor + 0.5);
+        vectorContext.stroke();
+        cursor += 8;
+
+        // I simboli della legenda escono dalla stessa funzione che disegna i
+        // fronti sulla carta: non possono raccontare una convenzione diversa
+        // da quella che si vede sul foglio.
         vectorContext.lineCap = "round";
         vectorContext.lineJoin = "round";
-        const firstRow = boxY + pad + titleSize + 4 + bodySize + 8;
-        entries.forEach(function (entry, index) {
-          const y = firstRow + rowHeight * index + rowHeight / 2;
-          const x0 = boxX + pad;
+        entries.forEach(function (entry) {
+          const centre = cursor + rowHeight / 2;
           drawFrontStyled(
-            [{ x: x0, y: y }, { x: x0 + sampleWidth, y: y }], entry.type, 1, 0.58
+            [{ x: x + pad, y: centre }, { x: x + pad + sample, y: centre }],
+            entry.type, 1, 0.6
           );
           vectorContext.setLineDash([]);
           vectorContext.textBaseline = "middle";
-          vectorContext.textAlign = "left";
-          vectorContext.font = "600 " + bodySize +
-            "px system-ui, -apple-system, Segoe UI, sans-serif";
-          vectorContext.fillStyle = "#26363f";
-          vectorContext.fillText(entry.label, x0 + sampleWidth + pad, y);
+          vectorContext.fillStyle = PAPER_INK;
+          vectorContext.font = "400 " + bodySize + "px " + PAPER_SERIF;
+          vectorContext.fillText(entry.label, x + pad + sample + 16, centre);
+          cursor += rowHeight;
         });
+        if (entries.length) cursor += 6;
+
+        vectorContext.textBaseline = "top";
+        vectorContext.fillStyle = "#4a4239";
+        vectorContext.font = "400 " + bodySize + "px " + PAPER_SERIF;
+        vectorContext.fillText(caption, x + pad, cursor);
+        cursor += bodySize + 4;
+        vectorContext.fillText(field, x + pad, cursor);
         vectorContext.restore();
+      }
+
+      function drawChartFurniture() {
+        const box = paperFrame();
+        if (!box) return;
+        paperMask(box);
+        paperGraticuleTicks(box);
+        paperScaleBar(box);
+        paperCompass(box);
+        paperNeatline(box);
+        paperTitleBlock(box);
       }
 
       function drawVectors() {
