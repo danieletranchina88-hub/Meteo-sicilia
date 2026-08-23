@@ -778,4 +778,50 @@ assert.match(furniture[0], /drawFrontStyled\(/,
 assert.match(html, /if \(synopticChart\) drawChartFurniture\(\);/,
   "il cartiglio non viene disegnato");
 
+// --- Scala della temperatura: la linea del gelo cade a zero ------------------
+// La scala ha un salto voluto in meno di un kelvin, fra il blu di 273,15 K e
+// il verde di 274 K. Il sito colora ogni fascia discreta con un solo colore:
+// prendendolo sul bordo inferiore, la fascia [0, 2) leggeva il colore a zero
+// gradi esatti -- il blu del gelo -- e dipingeva come sottozero temperature
+// fino a due gradi sopra. Il colore va preso al centro della fascia.
+{
+  const anchorsSource = html.match(/const TEMP_ANCHORS = \[\n([\s\S]*?)\n {6}\];/);
+  assert.ok(anchorsSource, "ancoraggi della temperatura assenti");
+  const bandsSource = html.match(/const TEMP_BANDS = [^;]+;/);
+  assert.ok(bandsSource, "fasce della temperatura assenti");
+  assert.match(bandsSource[0], /,\s*true\s*\)/,
+    "le fasce di temperatura non sono campionate al centro");
+
+  const pick = (name) => {
+    const found = html.match(new RegExp("function " + name + "\\([\\s\\S]*?\\n {6}\\}"));
+    assert.ok(found, "manca " + name);
+    return found[0];
+  };
+  const temperature = new Function(
+    pick("interpolateScale") + "\n" + pick("buildDiscreteBands") + "\n"
+    + "const TEMP_ANCHORS=[" + anchorsSource[1] + "];\n" + bandsSource[0] + "\n"
+    + pick("colorFor") + "\nreturn { TEMP_BANDS, colorFor };"
+  )();
+  const info = { stops: temperature.TEMP_BANDS, discrete: true };
+  const at = (value) => temperature.colorFor(value, info).slice(0, 3).map(Math.round);
+  const isBlueish = (c) => c[2] > c[1] && c[2] > c[0];
+  const isGreenish = (c) => c[1] > c[2] && c[1] >= c[0];
+
+  assert.ok(isBlueish(at(-0.1)),
+    "sotto zero deve restare il blu del gelo, trovato " + at(-0.1));
+  assert.ok(isGreenish(at(0)),
+    "a zero gradi deve iniziare il verde, trovato " + at(0));
+  assert.ok(isGreenish(at(1.9)),
+    "la fascia sopra lo zero non deve tornare blu, trovato " + at(1.9));
+  // Gli estremi della scala fornita devono arrivare intatti.
+  assert.match(anchorsSource[1], /\{ v: 0, c: \[93, 133, 198\] \}/,
+    "l'ancoraggio a 0 gradi non e' quello della scala fornita");
+  assert.match(anchorsSource[1], /\{ v: 0\.85, c: \[68, 125, 99\] \}/,
+    "l'ancoraggio subito sopra lo zero non e' quello della scala fornita");
+  assert.match(anchorsSource[1], /\{ v: -70\.15, c: \[115, 70, 105\] \}/,
+    "l'estremo freddo non e' quello della scala fornita");
+  assert.match(anchorsSource[1], /\{ v: 46\.85, c: \[71, 14, 0\] \}/,
+    "l'estremo caldo non e' quello della scala fornita");
+}
+
 console.log("3D map regression checks: OK");

@@ -62,30 +62,34 @@ def js(anchors, indent=8):
 
 out = {}
 
-# --- Temperatura: RdYlBu invertita, divergente, neutro esatto a 0 gradi -----
-# La prima scelta era `vik`, percettivamente uniforme. Misurata sulla fascia
-# 16-38 gradi -- dove sta il dato quasi sempre -- dava pero' colori fra
-# #d0916d e #791905: una successione di marroni, con croma medio 52 in CIELab.
-# La distinzione fra due zone distanti sei gradi valeva 10,2 unita' CIEDE2000,
-# quindi il problema non era la distanza percettiva ma la TINTA: tutta la
-# fascia estiva cadeva nello stesso arancione bruno.
+# --- Temperatura: scala fornita, in kelvin ----------------------------------
+# Questa non viene da una libreria: e' una scala fornita, espressa in kelvin.
+# Qui si limita a essere convertita in gradi Celsius, senza ricampionarla ne'
+# rimappare i valori, perche' le posizioni degli ancoraggi fanno parte della
+# scala tanto quanto i colori.
 #
-# RdYlBu invertita e' una tavolozza divergente pubblicata (ColorBrewer,
-# Harrower e Brewer 2003; e' la scala usata dall'IPCC per i campi termici).
-# Sulla stessa fascia da' #fdb86b -> #ca2326, croma medio 66,5 e distinzione a
-# sei gradi di 10,0: la stessa separazione misurabile di vik, ma distribuita
-# su tinte diverse invece che sulla sola luminosita' di un unico bruno. Con
-# deuteranopia la separazione a sei gradi resta 8,4, molto sopra la soglia di
-# percettibilita' (~2,3).
-#
-# Cede qualcosa in uniformita' percettiva rispetto a Crameri -- il neutro
-# giallo e' un picco di luminanza -- ed e' un compromesso dichiarato: una
-# scala che non si legge non e' piu' scientifica di una che si legge.
-temp_values = [-75, -65, -55, -45, -35, -30, -26, -22, -18, -14, -10, -6, -2,
-               0, 2, 4, 6, 8, 10, 12, 14, 16, 18, 20, 22, 24, 26, 28, 30, 32,
-               34, 36, 38, 40, 42, 44, 46]
+# Il salto fra 273,15 K e 274 K -- blu [93,133,198] e verde [68,125,99] in
+# meno di un kelvin -- e' la linea del gelo e va conservato. Perche' cada
+# davvero a zero, le fasce discrete del sito vanno campionate al centro e non
+# al bordo inferiore: vedi ``sampleAtMidpoint`` in index.html.
+TEMPERATURE_KELVIN = [
+    (203.0, [115, 70, 105]),
+    (218.0, [202, 172, 195]),
+    (233.0, [162, 70, 145]),
+    (248.0, [143, 89, 169]),
+    (258.0, [157, 219, 217]),
+    (265.0, [106, 191, 181]),
+    (269.0, [100, 166, 189]),
+    (273.15, [93, 133, 198]),
+    (274.0, [68, 125, 99]),
+    (283.0, [128, 147, 24]),
+    (294.0, [243, 183, 4]),
+    (303.0, [232, 83, 25]),
+    (320.0, [71, 14, 0]),
+]
 out["TEMP_ANCHORS"] = [
-    {"v": v, "c": sample("cb:RdYlBu_r", two_sided(v, 0.0, 25.0, 45.0))} for v in temp_values
+    {"v": round(kelvin - 273.15, 2), "c": colour}
+    for kelvin, colour in TEMPERATURE_KELVIN
 ]
 
 # --- Vento: batlow, sequenziale ---------------------------------------------

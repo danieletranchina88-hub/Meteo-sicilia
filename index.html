@@ -2132,10 +2132,19 @@
         return anchors[anchors.length - 1];
       }
 
-      function buildDiscreteBands(anchors, minimum, maximum, step, forcedAlpha) {
+      // ``sampleAtMidpoint`` prende il colore della fascia al suo centro invece
+      // che al bordo inferiore. Serve dove la scala ha un salto voluto: con il
+      // campionamento sul bordo, la fascia [0, 2) leggeva il colore a 0 gradi
+      // esatti -- il blu del gelo -- e dipingeva come sottozero temperature
+      // fino a due gradi sopra. Al centro la fascia [0, 2) legge 1 grado, che
+      // e' quello che quella fascia rappresenta davvero, e la linea del gelo
+      // cade dove deve.
+      function buildDiscreteBands(anchors, minimum, maximum, step, forcedAlpha,
+                                  sampleAtMidpoint) {
         const bands = [];
+        const offset = sampleAtMidpoint ? step / 2 : 0;
         for (let value = minimum; value <= maximum + 0.0001; value += step) {
-          const sampled = interpolateScale(anchors, value);
+          const sampled = interpolateScale(anchors, value + offset);
           bands.push({
             v: Number(value.toFixed(3)),
             c: sampled.c.slice(),
@@ -2146,45 +2155,25 @@
       }
 
       const TEMP_ANCHORS = [
-        { v: -75, c: [49, 54, 149] },
-        { v: -65, c: [49, 54, 149] },
-        { v: -55, c: [49, 54, 149] },
-        { v: -45, c: [49, 54, 149] },
-        { v: -35, c: [49, 54, 149] },
-        { v: -30, c: [49, 54, 149] },
-        { v: -26, c: [49, 54, 149] },
-        { v: -22, c: [61, 91, 167] },
-        { v: -18, c: [87, 138, 191] },
-        { v: -14, c: [127, 182, 214] },
-        { v: -10, c: [170, 216, 233] },
-        { v: -6, c: [214, 238, 245] },
-        { v: -2, c: [242, 250, 214] },
-        { v: 0, c: [255, 254, 190] },
-        { v: 2, c: [255, 248, 181] },
-        { v: 4, c: [255, 241, 170] },
-        { v: 6, c: [254, 234, 159] },
-        { v: 8, c: [254, 228, 150] },
-        { v: 10, c: [254, 218, 138] },
-        { v: 12, c: [254, 206, 127] },
-        { v: 14, c: [253, 197, 118] },
-        { v: 16, c: [253, 185, 107] },
-        { v: 18, c: [253, 173, 96] },
-        { v: 20, c: [251, 160, 91] },
-        { v: 22, c: [249, 145, 83] },
-        { v: 24, c: [247, 129, 76] },
-        { v: 26, c: [245, 117, 71] },
-        { v: 28, c: [241, 102, 64] },
-        { v: 30, c: [234, 87, 57] },
-        { v: 32, c: [227, 73, 51] },
-        { v: 34, c: [221, 61, 45] },
-        { v: 36, c: [214, 47, 39] },
-        { v: 38, c: [202, 36, 39] },
-        { v: 40, c: [192, 26, 39] },
-        { v: 42, c: [181, 15, 38] },
-        { v: 44, c: [169, 4, 38] },
-        { v: 46, c: [165, 0, 38] }
+        // Scala fornita, espressa in kelvin e convertita qui in gradi
+        // Celsius una volta sola. Il salto fra 273,15 K e 274 K -- blu
+        // [93,133,198] e verde [68,125,99] in meno di un kelvin -- non e' un
+        // artefatto: e' la linea del gelo, e va conservata cosi' com'e'.
+        { v: -70.15, c: [115, 70, 105] },
+        { v: -55.15, c: [202, 172, 195] },
+        { v: -40.15, c: [162, 70, 145] },
+        { v: -25.15, c: [143, 89, 169] },
+        { v: -15.15, c: [157, 219, 217] },
+        { v: -8.15, c: [106, 191, 181] },
+        { v: -4.15, c: [100, 166, 189] },
+        { v: 0, c: [93, 133, 198] },
+        { v: 0.85, c: [68, 125, 99] },
+        { v: 9.85, c: [128, 147, 24] },
+        { v: 20.85, c: [243, 183, 4] },
+        { v: 29.85, c: [232, 83, 25] },
+        { v: 46.85, c: [71, 14, 0] }
       ];
-      const TEMP_BANDS = buildDiscreteBands(TEMP_ANCHORS, -76, 46, 2, 1);
+      const TEMP_BANDS = buildDiscreteBands(TEMP_ANCHORS, -76, 46, 2, 1, true);
 
       const WIND_ANCHORS = [
         { v: 0, c: [1, 25, 89] },
