@@ -720,4 +720,62 @@ for (let i = 0; i < 12; i += 1) {
   );
 });
 
+// --- Carta sinottica -------------------------------------------------------
+assert.ok(html.includes('data-toggle="synoptic"'),
+  "manca l'interruttore della carta sinottica");
+const synopticMode = html.match(/function setSynopticChart\([\s\S]*?\n {6}\}\n/);
+assert.ok(synopticMode, "modalita' carta sinottica assente");
+// Una carta si legge perche' non c'e' nient'altro sopra: la modalita' deve
+// spegnere il campo colorato, la base fotografica e tutto l'animato.
+["activeLayer = \"none\"", "showSatellite = false", "showVectors = false",
+ "showParticles = false", "showIsotherms = false", "show3D = false",
+ "showRadar = false"].forEach((expected) => {
+  assert.ok(synopticMode[0].includes(expected),
+    "la carta sinottica non spegne: " + expected);
+});
+// ...e accendere quello che una carta al suolo contiene.
+["showIsobars = true", "showGraticule = true", "showFronts = frontsAvailable()"]
+  .forEach((expected) => {
+    assert.ok(synopticMode[0].includes(expected),
+      "la carta sinottica non accende: " + expected);
+  });
+// Uscendo si deve tornare esattamente allo stato di prima, non a un default.
+assert.match(synopticMode[0], /synopticRestore = \{[\s\S]*?layer: activeLayer/,
+  "lo stato precedente non viene messo da parte");
+assert.match(synopticMode[0], /const previous = synopticRestore \|\| \{\};/,
+  "lo stato precedente non viene ripristinato");
+
+// Il colore del foglio ha una sola definizione: tre punti diversi lo
+// impostavano e l'ultimo vinceva, ed e' per questo che la carta restava scura.
+assert.match(html, /function mapBackgroundColour\(\)/,
+  "il colore del fondo non ha una definizione unica");
+const backgroundAssignments = html.match(
+  /setPaintProperty\(\s*\n?\s*"background",?\s*\n?\s*"background-color"/g
+) || [];
+backgroundAssignments.forEach(() => {});
+assert.equal(
+  (html.match(/"background-color",\s*\n?\s*mapBackgroundColour\(\)/g) || []).length
+  + (html.match(/mapBackgroundColour\(\)\s*\n?\s*:/g) || []).length,
+  3,
+  "non tutti i punti che impostano il fondo passano dalla definizione unica"
+);
+
+// Il passo delle isobare dichiarato nel cartiglio deve essere quello con cui
+// sono davvero tracciate, non un numero scritto a mano.
+assert.match(html, /const ISOBAR_INTERVAL_HPA = \d+;/,
+  "il passo delle isobare non e' una costante");
+assert.match(html, /createContourFeatures\(\s*\n?\s*pressure, meta, ISOBAR_INTERVAL_HPA, ISOBAR_MAJOR_EVERY\s*\n?\s*\)/,
+  "le isobare non usano la costante dichiarata nel cartiglio");
+assert.match(html, /"Isobare ogni " \+ ISOBAR_INTERVAL_HPA/,
+  "il cartiglio non legge il passo dalla stessa costante");
+
+// La legenda disegna i simboli con la stessa funzione della mappa: due
+// disegni separati potrebbero raccontare due convenzioni diverse.
+const furniture = html.match(/function drawChartFurniture\([\s\S]*?\n {6}\}\n/);
+assert.ok(furniture, "cartiglio della carta assente");
+assert.match(furniture[0], /drawFrontStyled\(/,
+  "la legenda non usa il disegno reale dei fronti");
+assert.match(html, /if \(synopticChart\) drawChartFurniture\(\);/,
+  "il cartiglio non viene disegnato");
+
 console.log("3D map regression checks: OK");

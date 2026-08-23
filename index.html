@@ -1956,6 +1956,18 @@
 
           <section class="drawer-section">
             <div class="section-title">
+              <h3>Carta sinottica</h3>
+              <span>analisi al suolo su carta</span>
+            </div>
+            <div class="toggle-list">
+              <button class="toggle-row" type="button" data-toggle="synoptic" aria-pressed="false">
+                <span><b>Modalità carta</b><small>fondo bianco, isobare, centri di pressione e fronti — niente campi colorati</small></span><span class="switch"></span>
+              </button>
+            </div>
+          </section>
+
+          <section class="drawer-section">
+            <div class="section-title">
               <h3>Presentazione</h3>
               <span>lettura della griglia</span>
             </div>
@@ -2753,6 +2765,18 @@
       let showSatelliteClouds = false;
       let showLightBase = false;
       let showGraticule = false;
+      // Carta sinottica: non un livello in piu', un modo di presentare la
+      // mappa. Spegne ogni campo colorato e la base fotografica e lascia le
+      // sole cose che si disegnano su una carta al suolo -- isobare con i loro
+      // valori, centri di pressione, fronti -- su fondo bianco. Lo stato
+      // precedente viene messo da parte per poterci tornare.
+      let synopticChart = false;
+      let synopticRestore = null;
+      // Passo delle isobare: una sola definizione, usata sia per tracciarle
+      // sia per dichiararlo nel cartiglio della carta. Se cambia il disegno
+      // cambia la didascalia, e non possono raccontare due cose diverse.
+      const ISOBAR_INTERVAL_HPA = 2;
+      const ISOBAR_MAJOR_EVERY = 4;
       let isMapMoving = false;
       let selectedPoint = null;
       let particleFrame = null;
@@ -3864,7 +3888,9 @@
           map.setPaintProperty(
             "background",
             "background-color",
-            onDark ? "rgb(38,48,64)" : "rgb(188,204,218)"
+            synopticChart
+              ? mapBackgroundColour()
+              : (onDark ? "rgb(38,48,64)" : "rgb(188,204,218)")
           );
         }
       }
@@ -4662,6 +4688,7 @@
           lightbase: showLightBase,
           threed: show3D,
           graticule: showGraticule,
+          synoptic: synopticChart,
           raw: useNearestCell
         };
 
@@ -4717,11 +4744,126 @@
         closeReadout();
       }
 
+      // Una carta al suolo si legge perche' *non* c'e' nient'altro sopra. Il
+      // fondo fotografico, i campi colorati, le particelle e le frecce sono
+      // tutti utili, e tutti in competizione con le tre cose che una carta
+      // sinottica deve dire: dove sta la pressione, dove sono i suoi centri e
+      // dove passano i fronti. Questa modalita' li toglie di mezzo e rimette
+      // la mappa su fondo bianco.
+      function setSynopticChart(enabled) {
+        const wanted = Boolean(enabled);
+        if (wanted === synopticChart) return;
+
+        if (wanted) {
+          synopticRestore = {
+            layer: activeLayer,
+            particles: showParticles, vectors: showVectors,
+            isobars: showIsobars, isotherms: showIsotherms,
+            isohypses: showIsohypses, radar: showRadar,
+            satclouds: showSatelliteClouds, fusion: showFusion,
+            fronts: showFronts, terrain: showTerrain,
+            satellite: showSatellite, lightbase: showLightBase,
+            threed: show3D, graticule: showGraticule,
+          };
+          synopticChart = true;
+          activeLayer = "none";
+          document.body.classList.add("map-only-layer", "synoptic-chart");
+          showParticles = false;
+          showVectors = false;
+          showIsotherms = false;
+          showRadar = false;
+          showSatelliteClouds = false;
+          showFusion = false;
+          showTerrain = false;
+          showSatellite = false;
+          showLightBase = false;
+          show3D = false;
+          // Il contenuto della carta.
+          showIsobars = true;
+          showGraticule = true;
+          showFronts = frontsAvailable();
+          stopParticles();
+          if (map && map.getLayer("weather-layer")) {
+            map.setLayoutProperty("weather-layer", "visibility", "none");
+          }
+          if (map && map.getLayer("radar-layer")) {
+            map.setLayoutProperty("radar-layer", "visibility", "none");
+          }
+        } else {
+          const previous = synopticRestore || {};
+          synopticChart = false;
+          synopticRestore = null;
+          document.body.classList.remove("synoptic-chart");
+          showParticles = Boolean(previous.particles);
+          showVectors = Boolean(previous.vectors);
+          showIsobars = Boolean(previous.isobars);
+          showIsotherms = Boolean(previous.isotherms);
+          showIsohypses = Boolean(previous.isohypses);
+          showRadar = Boolean(previous.radar);
+          showSatelliteClouds = Boolean(previous.satclouds);
+          showFusion = Boolean(previous.fusion);
+          showFronts = Boolean(previous.fronts);
+          showTerrain = Boolean(previous.terrain);
+          showSatellite = Boolean(previous.satellite);
+          showLightBase = Boolean(previous.lightbase);
+          show3D = Boolean(previous.threed);
+          showGraticule = Boolean(previous.graticule);
+          const restoredLayer = previous.layer || "temp";
+          activeLayer = restoredLayer;
+          document.body.classList.toggle("map-only-layer", restoredLayer === "none");
+          if (map && map.getLayer("weather-layer")) {
+            map.setLayoutProperty(
+              "weather-layer", "visibility",
+              restoredLayer === "none" ? "none" : "visible"
+            );
+          }
+          if (showParticles && !prefersReducedMotion) startParticles();
+        }
+
+        if (map && map.getLayer("radar-layer")) {
+          map.setLayoutProperty(
+            "radar-layer", "visibility", showRadar ? "visible" : "none"
+          );
+        }
+        updateSatelliteBase();
+        updateReliefShading();
+        updateTerrain3D();
+        updateSatelliteClouds();
+        updateStationMarkers();
+        updateIsobars();
+        updateMapPresentation();
+        updateLayerUi();
+        updateLegend();
+        renderWeather();
+        requestVectorRender();
+        refreshSelectedPoint();
+        toast(wanted
+          ? "Carta sinottica: pressione al suolo, centri e fronti su fondo bianco"
+          : "Torno alla mappa dei campi");
+        closeDrawerOnMobile();
+      }
+
+      function frontsAvailable() {
+        return Boolean(
+          currentData && currentData.meta && currentData.meta.frontMethod
+          && currentData.meta.frontAnalysisStatus !== "unavailable"
+        );
+      }
+
       function setLayer(nextLayer) {
         if (nextLayer !== "none" && !LAYER_INFO[nextLayer]) return;
         if (currentData && !hasLayerData(nextLayer)) {
           toast(unavailableLayerMessage(nextLayer));
           return;
+        }
+        // Scegliere un campo colorato e' il modo naturale di dire "basta
+        // carta": la modalita' si chiude da sola invece di lasciare il campo
+        // acceso sotto un fondo che lo nasconde.
+        if (synopticChart && nextLayer !== "none") {
+          synopticChart = false;
+          synopticRestore = null;
+          document.body.classList.remove("synoptic-chart");
+          updateSatelliteBase();
         }
 
         activeLayer = nextLayer;
@@ -4887,6 +5029,8 @@
               : (currentData.meta.frontAnalysisMessage
                 || "Nessun fronte sinottico abbastanza robusto in questa ora"));
           }
+        } else if (name === "synoptic") {
+          setSynopticChart(!synopticChart);
         } else if (name === "terrain") {
           showTerrain = !showTerrain;
           updateMapPresentation();
@@ -5274,14 +5418,23 @@
       // Base fotorealistica. Sull'ortofoto i toponimi scuri della carta
       // sparirebbero: passo a testo bianco con contorno scuro, e li riporto ai
       // colori originali quando si torna alla carta.
+      // Il colore del foglio sotto la mappa. Una sola definizione: tre punti
+      // diversi lo impostavano, e quello che girava per ultimo vinceva --
+      // ecco perche' la carta sinottica restava su fondo scuro.
+      function mapBackgroundColour() {
+        if (synopticChart) return "#ffffff";
+        return !showLightBase && !showSatellite ? "#0a1018" : "#c4cace";
+      }
+
       function updateSatelliteBase() {
         if (!mapLoaded || !map) return;
         // Tre basi possibili, una sola visibile. L'ortofoto ha la precedenza:
         // e' gia' una foto, il fondo scuro sotto non servirebbe.
-        const dark = !showLightBase && !showSatellite;
+        const dark = !synopticChart && !showLightBase && !showSatellite;
         if (map.getLayer("satellite-layer")) {
           map.setLayoutProperty(
-            "satellite-layer", "visibility", showSatellite ? "visible" : "none"
+            "satellite-layer", "visibility",
+            (showSatellite && !synopticChart) ? "visible" : "none"
           );
         }
         if (map.getLayer("basemap-dark-layer")) {
@@ -5291,23 +5444,46 @@
         }
         if (map.getLayer("basemap-layer")) {
           map.setLayoutProperty(
-            "basemap-layer", "visibility", (showSatellite || dark) ? "none" : "visible"
+            "basemap-layer", "visibility",
+            (!synopticChart && (showSatellite || dark)) ? "none" : "visible"
           );
+          // Su una carta il fondo non e' un'immagine da guardare: e' il foglio
+          // su cui si disegna. Coste e confini restano come linee grigie
+          // sottili su bianco, tutto il resto della cartografia si spegne, e
+          // isobare, centri e fronti hanno il contrasto per intero.
+          // La base va mostrata quasi per intero, solo desaturata. Il primo
+          // tentativo alzava anche la luminosita' minima per "schiarire il
+          // foglio": appiattiva tutto a bianco e fuori dall'Italia sparivano
+          // le coste, perche' queste tessere sono gia' terra bianca su mare
+          // grigio chiarissimo. Lasciata la luminosita' com'e', terra e mare
+          // si distinguono su tutto il dominio.
+          const paper = {
+            "raster-opacity": synopticChart ? 0.95 : 0.78,
+            "raster-saturation": synopticChart ? -1 : -0.82,
+            "raster-contrast": synopticChart ? 0.15 : 0.1,
+            "raster-brightness-min": synopticChart ? 0 : 0.12,
+            "raster-brightness-max": synopticChart ? 1 : 0.7,
+          };
+          Object.keys(paper).forEach(function (property) {
+            map.setPaintProperty("basemap-layer", property, paper[property]);
+          });
         }
         if (map.getLayer("background")) {
-          map.setPaintProperty(
-            "background", "background-color", dark ? "#0a1018" : "#c4cace"
-          );
+          map.setPaintProperty("background", "background-color", mapBackgroundColour());
         }
         // Sul fondo scuro confini e reticolo devono restare leggibili senza
         // diventare protagonisti. Sul chiaro ripristino il tratto originale.
+        // Sulla carta i confini sono il tratto piu' leggero di tutti: servono
+        // a riconoscere dove si e', non a farsi guardare.
         if (map.getLayer("regions-layer")) {
           map.setPaintProperty(
             "regions-layer", "line-color",
-            dark || showSatellite ? "rgba(222,235,250,0.88)" : "rgba(22,52,70,0.76)"
+            synopticChart ? "rgba(96,110,122,0.9)"
+              : (dark || showSatellite ? "rgba(222,235,250,0.88)" : "rgba(22,52,70,0.76)")
           );
           map.setPaintProperty(
-            "regions-layer", "line-opacity", dark || showSatellite ? 0.68 : 0.44
+            "regions-layer", "line-opacity",
+            synopticChart ? 0.5 : (dark || showSatellite ? 0.68 : 0.44)
           );
         }
         if (map.getLayer("graticule-layer")) {
@@ -5375,8 +5551,7 @@
           stopParticles();
           if (map.getLayer("background")) {
             map.setPaintProperty(
-              "background", "background-color",
-              !showLightBase && !showSatellite ? "#0a1018" : "#c4cace"
+              "background", "background-color", mapBackgroundColour()
             );
           }
           updateReliefShading();
@@ -5682,7 +5857,9 @@
       }
 
       function createIsobarFeatures(pressure, meta) {
-        return createContourFeatures(pressure, meta, 2, 4);
+        return createContourFeatures(
+          pressure, meta, ISOBAR_INTERVAL_HPA, ISOBAR_MAJOR_EVERY
+        );
       }
 
       // Generic marching-squares contouring on a scalar grid at a fixed
@@ -6568,12 +6745,23 @@
               if (pointIndex === 0) vectorContext.moveTo(point.x, point.y);
               else vectorContext.lineTo(point.x, point.y);
             });
-            vectorContext.strokeStyle = "rgba(255,255,255," + (major ? "0.72" : "0.48") + ")";
-            vectorContext.lineWidth = major ? 3.5 : 2.5;
-            vectorContext.stroke();
+            // Su fondo scuro o fotografico l'alone bianco e' quello che rende
+            // leggibile una linea sottile. Su carta bianca non serve a nulla e
+            // anzi mangia il tratto: li' l'isobara va disegnata piena, come
+            // sarebbe stampata.
+            if (!synopticChart) {
+              vectorContext.strokeStyle =
+                "rgba(255,255,255," + (major ? "0.72" : "0.48") + ")";
+              vectorContext.lineWidth = major ? 3.5 : 2.5;
+              vectorContext.stroke();
+            }
 
-            vectorContext.strokeStyle = major ? "rgba(5,12,18,0.96)" : "rgba(7,16,23,0.78)";
-            vectorContext.lineWidth = major ? 1.45 : 0.82;
+            vectorContext.strokeStyle = synopticChart
+              ? (major ? "rgba(10,18,26,1)" : "rgba(28,42,54,0.9)")
+              : (major ? "rgba(5,12,18,0.96)" : "rgba(7,16,23,0.78)");
+            vectorContext.lineWidth = synopticChart
+              ? (major ? 1.9 : 1.05)
+              : (major ? 1.45 : 0.82);
             vectorContext.stroke();
 
             if (major) {
@@ -6928,6 +7116,89 @@
         );
       }
 
+      // Cornice, cartiglio e legenda: quello che su una carta stampata sta
+      // attorno al disegno e senza cui il disegno non si sa leggere. Chi
+      // guarda deve poter dire, senza uscire dalla carta, che analisi e' e a
+      // che ora vale.
+      function drawChartFurniture() {
+        const width = window.innerWidth;
+        const height = window.innerHeight;
+        const mobile = width < 900;
+        // In basso a sinistra: le schede del sito stanno in alto, il pannello
+        // dei livelli a destra e la timeline occupa la fascia inferiore. E'
+        // l'unico angolo che resta libero a ogni dimensione di finestra.
+        const margin = mobile ? 10 : 16;
+        const timelineGap = mobile ? 104 : 112;
+
+        const entries = [
+          { type: "cold", label: "Fronte freddo" },
+          { type: "warm", label: "Fronte caldo" },
+          { type: "occluded", label: "Occluso" },
+          { type: "stationary", label: "Stazionario" },
+        ];
+        const titleSize = mobile ? 12 : 13;
+        const bodySize = mobile ? 10 : 11;
+        const pad = mobile ? 9 : 11;
+        const rowHeight = mobile ? 19 : 21;
+        const sampleWidth = mobile ? 48 : 58;
+        const caption = "Isobare ogni " + ISOBAR_INTERVAL_HPA + " hPa · marcate ogni "
+          + ISOBAR_INTERVAL_HPA * ISOBAR_MAJOR_EVERY + " · PMSL ICON-2I";
+
+        vectorContext.save();
+        vectorContext.setLineDash([]);
+        vectorContext.font = "500 " + bodySize +
+          "px system-ui, -apple-system, Segoe UI, sans-serif";
+        const captionWidth = vectorContext.measureText(caption).width;
+        const boxWidth = Math.min(
+          Math.max(captionWidth + pad * 2, sampleWidth + pad * 3 + (mobile ? 78 : 92)),
+          width - margin * 2
+        );
+        const boxHeight = pad * 2 + titleSize + 4 + bodySize + 8
+          + entries.length * rowHeight;
+        const boxX = margin;
+        const boxY = height - timelineGap - boxHeight;
+        if (boxY < 90) { vectorContext.restore(); return; }
+
+        vectorContext.fillStyle = "rgba(255,255,255,0.94)";
+        vectorContext.strokeStyle = "rgba(20,32,44,0.55)";
+        vectorContext.lineWidth = 1;
+        vectorContext.fillRect(boxX, boxY, boxWidth, boxHeight);
+        vectorContext.strokeRect(boxX + 0.5, boxY + 0.5, boxWidth - 1, boxHeight - 1);
+
+        vectorContext.textBaseline = "top";
+        vectorContext.textAlign = "left";
+        vectorContext.fillStyle = "#0d1b26";
+        vectorContext.font = "800 " + titleSize +
+          "px system-ui, -apple-system, Segoe UI, sans-serif";
+        vectorContext.fillText("ANALISI AL SUOLO", boxX + pad, boxY + pad);
+        vectorContext.font = "500 " + bodySize +
+          "px system-ui, -apple-system, Segoe UI, sans-serif";
+        vectorContext.fillStyle = "#43555f";
+        vectorContext.fillText(caption, boxX + pad, boxY + pad + titleSize + 4);
+
+        // I simboli della legenda sono disegnati dalla stessa funzione che
+        // disegna i fronti sulla carta: non possono raccontare una convenzione
+        // diversa da quella che si vede sulla mappa.
+        vectorContext.lineCap = "round";
+        vectorContext.lineJoin = "round";
+        const firstRow = boxY + pad + titleSize + 4 + bodySize + 8;
+        entries.forEach(function (entry, index) {
+          const y = firstRow + rowHeight * index + rowHeight / 2;
+          const x0 = boxX + pad;
+          drawFrontStyled(
+            [{ x: x0, y: y }, { x: x0 + sampleWidth, y: y }], entry.type, 1, 0.58
+          );
+          vectorContext.setLineDash([]);
+          vectorContext.textBaseline = "middle";
+          vectorContext.textAlign = "left";
+          vectorContext.font = "600 " + bodySize +
+            "px system-ui, -apple-system, Segoe UI, sans-serif";
+          vectorContext.fillStyle = "#26363f";
+          vectorContext.fillText(entry.label, x0 + sampleWidth + pad, y);
+        });
+        vectorContext.restore();
+      }
+
       function drawVectors() {
         clearVectors();
         if (!currentData || !map || isMapMoving) return;
@@ -6935,6 +7206,7 @@
 
         drawSynopticCanvas();
         drawFrontsCanvas();
+        if (synopticChart) drawChartFurniture();
         if (!showVectors) return;
 
         const wind = windField();
