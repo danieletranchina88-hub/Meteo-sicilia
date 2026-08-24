@@ -12,13 +12,18 @@ function grab(name) {
   return m[0];
 }
 const consts = ["CENTER_ANALYSIS_KM", "CENTER_SMOOTHING_KM",
-                "CENTER_MAX_PROMINENCE_STEPS", "ISOBAR_INTERVAL_HPA"]
+                "CENTER_MAX_PROMINENCE_STEPS", "ISOBAR_INTERVAL_HPA",
+                "ISOBAR_MAJOR_EVERY", "PRESSURE_ANALYSIS_RADIUS_KM",
+                "PRESSURE_ANALYSIS_PASSES"]
   .map((n) => html.match(new RegExp("const " + n + " = [^;]+;"))[0]).join("\n");
 const src = consts + "\n" + ["smoothPressureGrid", "parabolicCenterOffset",
-  "sampleBilinear", "coarsenPressureGrid", "closedContourProminence",
-  "detectPressureCenters"].map(grab).join("\n");
+  "pressureAnalysisGrid", "sampleBilinear", "coarsenPressureGrid",
+  "closedContourProminence", "detectPressureCenters", "isobarPointKey",
+  "interpolateIsobarPoint", "stitchIsobarSegments", "smoothIsobarLine",
+  "createIsobarFeatures", "createContourFeatures"].map(grab).join("\n");
 const api = new Function("clamp", "getGrid", src +
-  "\nreturn { detectPressureCenters, closedContourProminence, coarsenPressureGrid };")(
+  "\nreturn { detectPressureCenters, closedContourProminence, coarsenPressureGrid,"
+  + " pressureAnalysisGrid, createIsobarFeatures };")(
   (v, a, b) => Math.min(Math.max(v, a), b), (a) => a);
 
 // Dominio simile a ICON-2I: 2,2 km, ma per le prove basta piu' grosso.
@@ -113,8 +118,77 @@ out = api.detectPressureCenters(field, meta);
 console.log("   centri da puro rumore:", out.length);
 check(out.length === 0, "il rumore non deve produrre centri");
 
-// 7) Campo PMSL vero del run pubblicato.
-console.log("7) campo PMSL reale");
+// 7) La carta della pressione usa una vera media sinottica. Deve abbattere il
+// dettaglio di griglia, mantenere una depressione larga e avere lo stesso
+// raggio fisico est-ovest e nord-sud (quindi piu' celle in longitudine).
+console.log("7) media sinottica e isobare operative");
+const analysisMeta = makeMeta(240, 200, 0.02);
+const noisy = build(analysisMeta.nx, analysisMeta.ny, (x, y) => {
+  const r2 = Math.pow(x - 120, 2) + Math.pow(y - 100, 2);
+  const synopticLow = -16 * Math.exp(-r2 / (2 * 52 * 52));
+  const gridNoise = ((x + y) % 2 ? 1.5 : -1.5);
+  return 1018 + synopticLow + gridNoise;
+});
+const analysisData = { meta: analysisMeta, press: noisy };
+const analysis = api.pressureAnalysisGrid(analysisData, noisy, "pressureAnalysis");
+const cachedAnalysis = api.pressureAnalysisGrid(analysisData, noisy, "pressureAnalysis");
+function roughness(grid, nx, ny) {
+  let total = 0, count = 0;
+  for (let y = 0; y < ny; y += 1) {
+    for (let x = 0; x < nx; x += 1) {
+      const index = y * nx + x;
+      if (x + 1 < nx) { total += Math.abs(grid[index + 1] - grid[index]); count += 1; }
+      if (y + 1 < ny) { total += Math.abs(grid[index + nx] - grid[index]); count += 1; }
+    }
+  }
+  return total / count;
+}
+const rawRoughness = roughness(noisy, analysisMeta.nx, analysisMeta.ny);
+const smoothRoughness = roughness(analysis, analysisMeta.nx, analysisMeta.ny);
+const centre = analysis[100 * analysisMeta.nx + 120];
+const corner = analysis[10 * analysisMeta.nx + 10];
+console.log("   rugosita': " + rawRoughness.toFixed(2) + " -> "
+  + smoothRoughness.toFixed(3) + " hPa/cella; depressione conservata "
+  + (corner - centre).toFixed(1) + " hPa");
+check(analysis === cachedAnalysis, "la media sinottica non viene riusata dalla cache");
+check(smoothRoughness < rawRoughness * 0.08,
+  "la media non attenua abbastanza il dettaglio di griglia");
+check(corner - centre > 5,
+  "la media cancella anche la struttura barica sinottica");
+
+const impulse = build(analysisMeta.nx, analysisMeta.ny, (x, y) =>
+  (x === 120 && y === 100 ? 1 : 0));
+const impulseAnalysis = api.pressureAnalysisGrid(
+  { meta: analysisMeta, press: impulse }, impulse, "pressureAnalysis"
+);
+let minX = analysisMeta.nx, maxX = -1, minY = analysisMeta.ny, maxY = -1;
+for (let y = 0; y < analysisMeta.ny; y += 1) {
+  for (let x = 0; x < analysisMeta.nx; x += 1) {
+    if (impulseAnalysis[y * analysisMeta.nx + x] <= 0) continue;
+    minX = Math.min(minX, x); maxX = Math.max(maxX, x);
+    minY = Math.min(minY, y); maxY = Math.max(maxY, y);
+  }
+}
+const supportX = maxX - minX + 1;
+const supportY = maxY - minY + 1;
+console.log("   supporto fisico: " + supportX + " celle lon × "
+  + supportY + " celle lat");
+check(supportX > supportY * 1.25,
+  "il raggio in km non compensa la convergenza dei meridiani");
+
+const contourMeta = makeMeta(80, 60, 0.1);
+const contourField = build(80, 60, (x) => 996 + x * 28 / 79);
+const isobars = api.createIsobarFeatures(contourField, contourMeta);
+const isobarValues = [...new Set(isobars.map((f) => f.properties.value))];
+console.log("   livelli tracciati:", isobarValues.join(", "), "hPa");
+check(isobars.length > 0, "il marching squares non ha prodotto isobare");
+check(isobars.every((f) => f.properties.value % 4 === 0),
+  "e' stata tracciata un'isobara fuori dal passo di 4 hPa");
+check(isobars.every((f) => f.properties.major === (f.properties.value % 8 === 0)),
+  "la classificazione principale/secondaria delle isobare e' errata");
+
+// 8) Campo PMSL vero del run pubblicato.
+console.log("8) campo PMSL reale");
 const stepFile = process.env.PRESSURE_TEST_STEP || "data_weather/step_0.json.gz";
 if (fs.existsSync(stepFile)) {
   const data = JSON.parse(zlib.gunzipSync(fs.readFileSync(stepFile)));

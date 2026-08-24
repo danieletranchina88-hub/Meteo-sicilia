@@ -1897,7 +1897,7 @@
                 <span class="layer-swatch"></span><span><b>Bulbo umido</b><small>2 m · soglia neve</small></span>
               </button>
               <button class="layer-card" type="button" data-layer="press" style="--swatch: linear-gradient(90deg,#4b1d78,#4da6c6,#ece8d9,#e7a24a,#7a1f3d)">
-                <span class="layer-swatch"></span><span><b>Pressione</b><small>al suolo</small></span>
+                <span class="layer-swatch"></span><span><b>Pressione</b><small>livello medio del mare · analisi sinottica</small></span>
               </button>
               <button class="layer-card" type="button" data-layer="theta850" style="--swatch: linear-gradient(90deg,#253494,#7fcdbb,#f3f1da,#fdbb5c,#8c1d40)">
                 <span class="layer-swatch"></span><span><b>θw 850 hPa</b><small>masse d'aria · fronti</small></span>
@@ -2319,7 +2319,10 @@
         { v: 1040, c: [195, 74, 58] },
         { v: 1048, c: [122, 31, 61] }
       ];
-      const PRESS_STOPS = buildDiscreteBands(PRESS_ANCHORS, 960, 1048, 2, 1);
+      // La pressione e' una carta sinottica, non una radiografia di ogni
+      // cella ICON-2I: anche le fasce cromatiche seguono il passo operativo
+      // delle isobare, cosi' colore e linee raccontano la stessa struttura.
+      const PRESS_STOPS = buildDiscreteBands(PRESS_ANCHORS, 960, 1048, 4, 1);
 
       // Scala sinottica dedicata alle masse d'aria: freddo in indaco/blu,
       // fascia frontale chiara e aria subtropicale in ambra/rosso. Il dominio
@@ -2586,13 +2589,13 @@
           terrainOpacity: 0.3
         },
         press: {
-          label: "Pressione al suolo",
+          label: "Pressione al livello del mare",
           unit: "hPa",
           stops: PRESS_STOPS,
           discrete: true,
           decimals: 0,
           ticks: [960, 980, 1000, 1012, 1020, 1040, 1048],
-          note: "Fasce e isobare ogni 2 hPa, con centri A/B derivati dal campo.",
+          note: "Media sinottica del campo MSLP ICON-2I: fasce e isobare ogni 4 hPa, marcate ogni 8 hPa. Il valore puntuale segue lo stesso campo mediato.",
           opacity: 0.92,
           terrainOpacity: 0.3
         },
@@ -2850,15 +2853,17 @@
       // Passo delle isobare: una sola definizione, usata sia per tracciarle
       // sia per dichiararlo nel cartiglio della carta. Se cambia il disegno
       // cambia la didascalia, e non possono raccontare due cose diverse.
-      const ISOBAR_INTERVAL_HPA = 2;
+      const ISOBAR_INTERVAL_HPA = 4;
       // Attenzione: e' un modulo sul valore, non un moltiplicatore. Marcate
       // sono le isobare il cui valore e' multiplo di questo numero, quindi
-      // ogni 4 hPa. Il cartiglio deve dichiarare questo, non il prodotto dei
+      // ogni 8 hPa. Il cartiglio deve dichiarare questo, non il prodotto dei
       // due numeri.
-      const ISOBAR_MAJOR_EVERY = 4;
-      // Le isobare sono un prodotto a scala sinottica e vanno tracciate su un
-      // campo lisciato a quella scala. Vedi buildPressureProducts.
-      const ISOBAR_SMOOTHING_KM = 60;
+      const ISOBAR_MAJOR_EVERY = 8;
+      // Media mobile fisica: raggio uguale in km nelle due direzioni e due
+      // passaggi. Riduce il rumore orografico della PMSL ad alta risoluzione,
+      // ma conserva depressioni, promontori e gradiente barico sinottico.
+      const PRESSURE_ANALYSIS_RADIUS_KM = 60;
+      const PRESSURE_ANALYSIS_PASSES = 2;
       // Il foglio, l'inchiostro e i due colori dei fronti stampati.
       const PAPER_SHEET = "#f4efe3";
       const PAPER_INK = "#1d1a16";
@@ -3179,6 +3184,22 @@
         if (key === "wind") {
           const vector = windUV(gx, gy);
           return Math.hypot(vector.u, vector.v) * 3.6;
+        }
+
+        if (key === "press") {
+          let pressure = getGrid(currentData.press);
+          if (!pressure) return NaN;
+          const fused = Boolean(
+            showFusion && activeLayer === "press" && obsStations.length
+          );
+          if (fused) {
+            pressure = buildFusedGrid("press", pressure, currentData.meta);
+          }
+          return sample(pressureAnalysisGrid(
+            currentData,
+            pressure,
+            fused ? "_fusedPressureAnalysis" : "pressureAnalysis"
+          ), gx, gy);
         }
 
         const dataKey = key === "feels" ? "feels_like" : key;
@@ -5097,9 +5118,15 @@
                 updateLayerUi();
                 return;
               }
-              if (currentData) currentData._fused = {};
+              if (currentData) {
+                currentData._fused = {};
+                currentData._fusedPressureAnalysis = null;
+                currentData._pressureProductKind = "";
+              }
               updateStationMarkers();
               renderWeather();
+              requestVectorRender();
+              refreshSelectedPoint();
               updateLayerUi();
               toast(
                 "Analisi osservata attiva · " + obsStations.length
@@ -5109,6 +5136,8 @@
           } else {
             updateStationMarkers();
             renderWeather();
+            requestVectorRender();
+            refreshSelectedPoint();
           }
         } else if (name === "fronts") {
           if (
@@ -5410,6 +5439,16 @@
         ) {
           fieldGrid = buildFusedGrid(activeLayer, fieldGrid, fieldMeta);
         }
+        // La pressione mostrata non deve essere una radiografia a 2,2 km del
+        // modello. Il raster usa la stessa media sinottica delle isobare e
+        // della lettura puntuale, inclusa l'eventuale correzione METAR.
+        if (activeLayer === "press" && fieldGrid) {
+          fieldGrid = pressureAnalysisGrid(
+            currentData,
+            fieldGrid,
+            showFusion ? "_fusedPressureAnalysis" : "pressureAnalysis"
+          );
+        }
         const windLevel = upperActive ? upperLevelData("wind") : null;
         const windUGrid = isWindField ? getGrid(windLevel ? windLevel.u : currentData.wind_u) : null;
         const windVGrid = isWindField ? getGrid(windLevel ? windLevel.v : currentData.wind_v) : null;
@@ -5692,7 +5731,11 @@
         }
       }
 
-      function smoothPressureGrid(pressure, nx, ny, radius) {
+      function smoothPressureGrid(pressure, nx, ny, radiusX, radiusY) {
+        const rx = Math.max(0, Math.round(Number(radiusX) || 0));
+        const ry = Math.max(0, Math.round(
+          radiusY === undefined ? rx : (Number(radiusY) || 0)
+        ));
         const stride = nx + 1;
         const size = (nx + 1) * (ny + 1);
         const sums = new Float64Array(size);
@@ -5717,12 +5760,12 @@
         }
 
         for (let y = 0; y < ny; y += 1) {
-          const y0 = Math.max(0, y - radius);
-          const y1 = Math.min(ny - 1, y + radius);
+          const y0 = Math.max(0, y - ry);
+          const y1 = Math.min(ny - 1, y + ry);
 
           for (let x = 0; x < nx; x += 1) {
-            const x0 = Math.max(0, x - radius);
-            const x1 = Math.min(nx - 1, x + radius);
+            const x0 = Math.max(0, x - rx);
+            const x1 = Math.min(nx - 1, x + rx);
             const bottomRight = (y1 + 1) * stride + x1 + 1;
             const topRight = y0 * stride + x1 + 1;
             const bottomLeft = (y1 + 1) * stride + x0;
@@ -5734,6 +5777,39 @@
         }
 
         return output;
+      }
+
+      // Un solo campo di analisi per tutto cio' che l'utente vede quando
+      // sceglie la pressione: riempimento cromatico, valore puntuale, isobare
+      // e centri. Prima il colore usava la griglia grezza a 2,2 km mentre le
+      // isobare erano mediate: le due letture potevano quindi contraddirsi.
+      function pressureAnalysisGrid(data, pressure, cacheKey) {
+        if (!data || !data.meta) return null;
+        const source = getGrid(pressure || data.press);
+        if (!source) return null;
+
+        const key = cacheKey || "pressureAnalysis";
+        const cached = getGrid(data[key]);
+        if (cached && cached.length === source.length) return cached;
+
+        const meta = data.meta;
+        const middleLatitude = meta.la1 - (meta.ny - 1) * meta.dy / 2;
+        const cellKmX = Math.max(
+          Math.abs(meta.dx) * 111.32 * Math.cos(middleLatitude * Math.PI / 180),
+          0.25
+        );
+        const cellKmY = Math.max(Math.abs(meta.dy) * 111.32, 0.25);
+        const radiusX = Math.max(1, Math.round(PRESSURE_ANALYSIS_RADIUS_KM / cellKmX));
+        const radiusY = Math.max(1, Math.round(PRESSURE_ANALYSIS_RADIUS_KM / cellKmY));
+
+        let analysis = source;
+        for (let pass = 0; pass < PRESSURE_ANALYSIS_PASSES; pass += 1) {
+          analysis = smoothPressureGrid(
+            analysis, meta.nx, meta.ny, radiusX, radiusY
+          );
+        }
+        data[key] = analysis;
+        return analysis;
       }
 
       function parabolicCenterOffset(left, center, right) {
@@ -6119,7 +6195,7 @@
       }
 
       // Generic marching-squares contouring on a scalar grid at a fixed
-      // interval, reused for both isobars (2 hPa) and 500 hPa isohypses.
+      // interval, reused for both isobars (4 hPa) and 500 hPa isohypses.
       function createContourFeatures(pressure, meta, interval, majorEvery) {
         let minimum = Infinity;
         let maximum = -Infinity;
@@ -6232,37 +6308,45 @@
       }
 
       function buildPressureProducts(data) {
-        if (data.isobars && data.pressureCenters) return;
-
         const meta = data.meta;
-        const pressure = getGrid(data.press);
+        let pressure = getGrid(data.press);
         if (!pressure) {
           data.isobars = { type: "FeatureCollection", features: [] };
           data.pressureCenters = { type: "FeatureCollection", features: [] };
           return;
         }
 
-        // La PMSL di ICON-2I e' un campo a 2,2 km e porta sopra i rilievi gli
-        // artefatti della riduzione al livello del mare. Contornata cosi'
-        // com'e', disegna il profilo delle Alpi, dell'Appennino e delle isole
-        // invece dell'andamento barico: contorni frammentati che nessun
-        // meteorologo traccerebbe. Le isobare sono un prodotto a scala
-        // sinottica, e a quella scala va lisciato il campo prima di
-        // contornarlo. Due passaggi di media a 60 km: uno solo lascia ancora
-        // il segno delle valli alpine.
-        const cellKm = Math.abs(meta.dy) * 111.32;
-        const isobarRadius = Math.max(1, Math.round(ISOBAR_SMOOTHING_KM / cellKm));
-        let isobarField = smoothPressureGrid(pressure, meta.nx, meta.ny, isobarRadius);
-        isobarField = smoothPressureGrid(isobarField, meta.nx, meta.ny, isobarRadius);
+        // Quando la fusione METAR e' accesa, anche colore, isobare e lettere
+        // A/B devono usare l'analisi osservata; altrimenti una stazione
+        // correggerebbe il fondo ma non le linee tracciate sopra.
+        const fused = Boolean(
+          showFusion && activeLayer === "press" && obsStations.length
+        );
+        const productKind = fused ? "fused" : "model";
+        if (
+          data.isobars && data.pressureCenters
+          && data._pressureProductKind === productKind
+        ) return;
+        if (fused) pressure = buildFusedGrid("press", pressure, meta);
+
+        // La PMSL ICON-2I mantiene dettagli di pochi chilometri, compresi gli
+        // artefatti della riduzione al mare sui rilievi. La media fisica e'
+        // calcolata una volta, memorizzata e riutilizzata da ogni prodotto.
+        const analysisKey = fused
+          ? "_fusedPressureAnalysis"
+          : "pressureAnalysis";
+        const analysis = pressureAnalysisGrid(
+          data, pressure, analysisKey
+        );
 
         data.isobars = {
           type: "FeatureCollection",
-          features: createIsobarFeatures(isobarField, meta)
+          features: createIsobarFeatures(analysis, meta)
         };
 
         let accepted = [];
         try {
-          accepted = detectPressureCenters(pressure, meta);
+          accepted = detectPressureCenters(analysis, meta);
         } catch (error) {
           console.error("Errore nel rilevamento dei centri di pressione", error);
         }
@@ -6284,6 +6368,7 @@
             };
           })
         };
+        data._pressureProductKind = productKind;
       }
 
       function buildGeopotentialProducts(data) {
@@ -7135,7 +7220,10 @@
         }
 
         if (showIsobars) {
-          if (!currentData.isobars || !currentData.pressureCenters) buildPressureProducts(currentData);
+          // La funzione e' cache-aware: chiamarla sempre permette di passare
+          // subito da analisi modello ad analisi METAR (e viceversa) senza
+          // lasciare sul canvas le vecchie isobare.
+          buildPressureProducts(currentData);
           const features = currentData.isobars ? currentData.isobars.features : [];
           features.forEach(function (feature, featureIndex) {
             const coordinates = feature.geometry && feature.geometry.coordinates;
@@ -8384,9 +8472,12 @@
         ui.pointUnit.textContent = info.unit;
         ui.pointLocation.textContent = selectedPoint.lat.toFixed(3) + "°N · " + selectedPoint.lng.toFixed(3) + "°E";
         const bandRange = bandRangeFor(selectedValue, info);
-        ui.pointSampling.textContent = (useNearestCell
-          ? "Lettura: cella modello più vicina"
-          : "Lettura: interpolazione bilineare") + (bandRange ? " · " + bandRange : "");
+        const samplingMethod = useNearestCell
+          ? "cella più vicina"
+          : "interpolazione bilineare";
+        ui.pointSampling.textContent = (activeLayer === "press"
+          ? "Lettura: media sinottica su 60 km · " + samplingMethod
+          : "Lettura: " + samplingMethod) + (bandRange ? " · " + bandRange : "");
 
         ui.detailTemp.textContent = formatValue(fieldValue("temp", point.gx, point.gy), 1, "°C");
         ui.detailFeels.textContent = formatValue(fieldValue("feels", point.gx, point.gy), 1, "°C");

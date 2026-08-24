@@ -799,34 +799,51 @@ assert.equal(
 
 // Il passo delle isobare dichiarato nel cartiglio deve essere quello con cui
 // sono davvero tracciate, non un numero scritto a mano.
-assert.match(html, /const ISOBAR_INTERVAL_HPA = \d+;/,
-  "il passo delle isobare non e' una costante");
+assert.match(html, /const ISOBAR_INTERVAL_HPA = 4;/,
+  "le isobare non seguono il passo sinottico operativo di 4 hPa");
+assert.match(html, /const ISOBAR_MAJOR_EVERY = 8;/,
+  "le isobare principali non sono marcate ogni 8 hPa");
 assert.match(html, /createContourFeatures\(\s*\n?\s*pressure, meta, ISOBAR_INTERVAL_HPA, ISOBAR_MAJOR_EVERY\s*\n?\s*\)/,
   "le isobare non usano la costante dichiarata nel cartiglio");
 // ISOBAR_MAJOR_EVERY e' un MODULO sul valore, non un moltiplicatore: sono
-// marcate le isobare il cui valore e' multiplo di 4, quindi ogni 4 hPa. La
-// didascalia diceva "ogni 8" perche' moltiplicava i due numeri.
+// marcate le isobare il cui valore e' multiplo di 8, quindi ogni 8 hPa.
 assert.match(html, /"isobare ogni " \+ ISOBAR_INTERVAL_HPA/,
   "il cartiglio non legge il passo dalla stessa costante");
 assert.ok(!/ISOBAR_INTERVAL_HPA \* ISOBAR_MAJOR_EVERY/.test(html),
-  "il cartiglio moltiplica di nuovo passo e modulo: dichiara 8 hPa invece di 4");
+  "il cartiglio moltiplica passo e modulo invece di dichiarare il modulo reale");
 
-// La PMSL a 2,2 km porta gli artefatti della riduzione al livello del mare:
-// contornata cosi' com'e' disegna il profilo dei rilievi invece della
-// pressione. Le isobare vanno tracciate su un campo lisciato a scala
-// sinottica, e due passaggi, perche' uno solo lascia le valli alpine.
+// La PMSL a 2,2 km porta gli artefatti della riduzione al livello del mare.
+// Colore, lettura puntuale, isobare e centri devono quindi condividere una
+// sola analisi sinottica, fisicamente isotropa in chilometri.
+assert.match(html, /const PRESSURE_ANALYSIS_RADIUS_KM = 60;/,
+  "manca la scala fisica della media sinottica della pressione");
+assert.match(html, /const PRESSURE_ANALYSIS_PASSES = 2;/,
+  "la media sinottica non usa i due passaggi previsti");
+const pressureAnalysis = html.match(/function pressureAnalysisGrid\([\s\S]*?\n {6}\}\n/);
+assert.ok(pressureAnalysis, "pressureAnalysisGrid assente");
+assert.match(pressureAnalysis[0], /Math\.cos\(middleLatitude \* Math\.PI \/ 180\)/,
+  "la media non corregge la distanza zonale con la latitudine");
+assert.match(pressureAnalysis[0], /radiusX, radiusY/,
+  "la media usa lo stesso numero di celle sui due assi e non lo stesso raggio in km");
+assert.match(pressureAnalysis[0], /pass < PRESSURE_ANALYSIS_PASSES/,
+  "il numero di passaggi non usa la costante dichiarata");
+
 const pressureProducts = html.match(/function buildPressureProducts\([\s\S]*?\n {6}\}\n/);
 assert.ok(pressureProducts, "buildPressureProducts assente");
-assert.match(pressureProducts[0], /createIsobarFeatures\(isobarField, meta\)/,
+assert.match(pressureProducts[0], /createIsobarFeatures\(analysis, meta\)/,
   "le isobare sono ancora tracciate sul campo grezzo");
-assert.equal(
-  (pressureProducts[0].match(/smoothPressureGrid\(/g) || []).length, 2,
-  "la lisciatura delle isobare non e' a due passaggi"
-);
-// I centri barici invece devono restare sul campo vero: hanno gia' la loro
-// lisciatura interna, calibrata sulla prominenza.
-assert.match(pressureProducts[0], /detectPressureCenters\(pressure, meta\)/,
-  "i centri barici non usano piu' il campo di pressione vero");
+assert.match(pressureProducts[0], /detectPressureCenters\(analysis, meta\)/,
+  "i centri barici non seguono il campo mostrato dalle isobare");
+assert.match(pressureProducts[0], /_pressureProductKind === productKind/,
+  "la cache delle isobare non distingue modello e fusione METAR");
+assert.match(html, /if \(activeLayer === "press" && fieldGrid\)[\s\S]*?pressureAnalysisGrid\(/,
+  "il colore della pressione usa ancora la griglia grezza");
+const fieldValue = html.match(/function fieldValue\([\s\S]*?\n {6}\}\n/);
+assert.ok(fieldValue, "fieldValue assente");
+assert.match(fieldValue[0], /key === "press"[\s\S]*?pressureAnalysisGrid\(/,
+  "la lettura puntuale della pressione non usa la media sinottica");
+assert.match(html, /buildDiscreteBands\(PRESS_ANCHORS, 960, 1048, 4, 1\)/,
+  "le fasce di pressione sono piu' fitte delle isobare da 4 hPa");
 
 // La legenda disegna i simboli con la stessa funzione della mappa: due
 // disegni separati potrebbero raccontare due convenzioni diverse.
