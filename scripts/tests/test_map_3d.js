@@ -630,7 +630,7 @@ assert.match(styled[0], /drawOccludedSemicircle\(x, y, angle, frontInk\("occlude
 // sovrapporrebbero in una fascia continua.
 assert.match(html, /function frontDrawScale\(\)/,
   "manca la scala cartografica dei fronti");
-assert.match(styled[0], /const spacing = \(window\.innerWidth < 900 \? 48 : 54\) \* s;/,
+assert.match(styled[0], /const spacing = \(isMobile\(\) \? 48 : 54\) \* s;/,
   "il passo fra i simboli non segue la loro dimensione");
 assert.match(styled[0], /strokeFrontLine\(points, frontType, alpha, s\)/,
   "lo spessore della linea non segue la scala");
@@ -647,15 +647,17 @@ function frontDrawingApi(viewportWidth, viewportHeight, zoom, budget) {
   const names = ["walkFront", "drawFrontTriangle", "drawFrontSemicircle",
                  "drawOccludedSemicircle", "strokeFrontLine", "frontSlice",
                  "frontDrawScale", "drawFrontStyled", "frontInk",
-                 "frontHaloColour"];
+                 "frontHaloColour", "isMobile"];
   // Le tavolozze sono dati, non funzioni, ma il disegno non gira senza: le
   // prendo dal sorgente cosi' il test non ne tiene una copia che puo'
   // divergere da quella vera.
-  const tables = ["FRONT_SCREEN_INK", "FRONT_PAPER_INK"].map((name) => {
+  const breakpoint = html.match(/const MOBILE_BREAKPOINT = \d+;/);
+  assert.ok(breakpoint, "confine unico fra telefono e scrivania assente");
+  const tables = [breakpoint[0]].concat(["FRONT_SCREEN_INK", "FRONT_PAPER_INK"].map((name) => {
     const found = html.match(new RegExp("const " + name + " = \\{[\\s\\S]*?\\n {6}\\};"));
     assert.ok(found, "tavolozza dei fronti assente: " + name);
     return found[0];
-  }).join("\n");
+  })).join("\n");
   const source = tables + "\n" + names.map((name) => {
     const found = html.match(new RegExp("function " + name + "\\([\\s\\S]*?\\n {6}\\}"));
     assert.ok(found, "funzione di disegno assente: " + name);
@@ -740,6 +742,95 @@ for (let i = 0; i < 12; i += 1) {
     `passo ${spacing} non gestito`
   );
 });
+
+// --- Gerarchia dell'interfaccia sul telefono --------------------------------
+// La mappa e' il contenuto; tutto il resto e' cornice. Queste verifiche
+// difendono la gerarchia, non l'estetica: ogni pannello permanente in piu'
+// toglie mappa su uno schermo da 390 px.
+
+// Un solo confine fra telefono e scrivania, letto sia dal CSS sia dal JS.
+assert.match(html, /const MOBILE_BREAKPOINT = 960;/,
+  "il confine fra telefono e scrivania non e' una costante");
+assert.doesNotMatch(html, /window\.innerWidth < 900/,
+  "e' tornato il secondo confine a 900 px nel JavaScript");
+assert.doesNotMatch(html, /@media \(min-width: 720px\)/,
+  "e' tornato il gradino intermedio a 720 px nel foglio di stile");
+
+// Tre sole azioni fisse nell'intestazione: pannello, bollettino, altro. Il
+// resto sta nel menu, che sulla scrivania torna una fila in linea.
+assert.match(html, /id="header-extra"/,
+  "le azioni secondarie non sono raccolte in un blocco unico");
+assert.match(html, /id="more-button"/, "manca il menu delle azioni secondarie");
+assert.match(html, /body\.more-open #header-extra \{\s*display: flex;/,
+  "il menu secondario non si apre");
+assert.match(html, /#drawer-button,\s*\n\s*#more-button \{\s*\n\s*display: none;/,
+  "sulla scrivania il menu secondario non sparisce");
+// Un solo pannello pesante alla volta.
+const moreMenu = html.match(/function setMoreMenu\([\s\S]*?\n {6}\}/);
+assert.ok(moreMenu, "gestione del menu secondario assente");
+assert.match(moreMenu[0], /setDrawer\(false\)/,
+  "aprire il menu non chiude il pannello dei livelli");
+assert.match(moreMenu[0], /setBulletin\(false\)/,
+  "aprire il menu non chiude il bollettino");
+
+// La scheda run/validita' e' la stessa cosa che dice l'intestazione.
+assert.match(html, /id="brand-meta"/,
+  "manca la riga compatta di corsa e validita' nell'intestazione");
+assert.match(html, /@media \(max-width: 959px\) \{\s*\n\s*#meta-card \{\s*\n\s*display: none;/,
+  "sul telefono la scheda dei metadati occupa ancora una fascia di mappa");
+
+// Il riquadro del punto nasce compatto: valore, posizione, una riga.
+assert.match(html, /id="readout-details"/,
+  "il dettaglio del punto non e' separato dalla sintesi");
+assert.match(html, /#readout-card\.expanded #readout-details \{\s*\n\s*display: block;/,
+  "il dettaglio del punto non si apre a richiesta");
+const readoutClose = html.match(/function closeReadout\([\s\S]*?\n {6}\}/);
+assert.match(readoutClose[0], /classList\.remove\("expanded"\)/,
+  "il riquadro del punto resta espanso per il punto successivo");
+// La sintesi deve restare una riga: il fronte entra solo se e' vicino.
+assert.match(html, /function nearestFrontSummary\(/,
+  "la sintesi del punto usa il testo lungo del fronte");
+
+// Legenda a pastiglia sul telefono.
+assert.match(html, /#legend-card:not\(\.expanded\) #legend-note \{\s*\n\s*display: none;/,
+  "la legenda sul telefono non e' ridotta a pastiglia");
+assert.match(html, /body\.readout-open #legend-card \{\s*\n\s*pointer-events: none;/,
+  "la pastiglia sbiadita intercetta ancora i tocchi del riquadro del punto");
+
+// Il pannello dei livelli e' organizzato, non un catalogo.
+assert.match(html, /<h3>Campo<\/h3>/, "manca la sezione Campo");
+assert.match(html, /<h3>Analisi<\/h3>/, "manca la sezione Analisi");
+assert.match(html, /<h3>Punto e strumenti<\/h3>/, "manca la sezione Punto e strumenti");
+assert.match(html, /<details class="drawer-more">/,
+  "gli interruttori rari non sono raccolti in Altro");
+["isotherms", "isohypses", "satclouds", "fusion", "terrain", "satellite",
+ "lightbase", "threed", "graticule", "raw"].forEach((rare) => {
+  const more = html.match(/<details class="drawer-more">[\s\S]*?<\/details>/);
+  assert.ok(more[0].includes('data-toggle="' + rare + '"'),
+    "e' tornato in prima vista un interruttore raro: " + rare);
+});
+
+// Particelle e frecce sono due disegni dello stesso campo u/v: un solo
+// interruttore, e sul telefono la meta' costosa resta spenta.
+assert.doesNotMatch(html, /data-toggle="flow"/,
+  "e' tornato l'interruttore separato delle particelle");
+assert.doesNotMatch(html, /data-toggle="vectors"/,
+  "e' tornato l'interruttore separato dei vettori");
+assert.match(html, /data-toggle="windanim"/, "manca il vento animato unico");
+const windToggle = html.match(/if \(name === "windanim"\)[\s\S]*?\} else if/);
+assert.ok(windToggle, "il vento animato non e' gestito");
+assert.match(windToggle[0], /showParticles = wanted && !isMobile\(\)/,
+  "sul telefono le particelle si accendono ancora insieme alle frecce");
+
+// Il bollettino sale dal basso invece di coprire la mappa dall'alto.
+assert.match(html, /@media \(max-width: 959px\) \{[\s\S]{0,400}?#bulletin-card \{[\s\S]{0,300}?border-radius: 20px 20px 0 0;/,
+  "il bollettino non e' un foglio dal basso sul telefono");
+assert.match(html, /function enableSwipeToClose\(/,
+  "i fogli non si chiudono con lo scorrimento verso il basso");
+
+// Un bersaglio da dito non scende sotto 44 px.
+assert.match(html, /\.header-button \{[\s\S]{0,120}?min-width: 44px;\s*\n\s*height: 44px;/,
+  "i pulsanti dell'intestazione sono sotto la misura minima da dito");
 
 // --- Carta sinottica -------------------------------------------------------
 assert.ok(html.includes('data-toggle="synoptic"'),
