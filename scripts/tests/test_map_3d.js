@@ -911,5 +911,24 @@ assert.ok(!/strokeText/.test(paperIsobar[0]),
   assert.match(anchorsSource[1], /\{ v: 46\.85, c: \[71, 14, 0\] \}/,
     "l'estremo caldo non e' quello della scala fornita");
 }
+// --- Palette meteorologiche ---
+// Le tre temperature al suolo sono una scelta grafica consolidata e devono
+// restare sulla stessa scala. La temperatura in libera atmosfera usa invece
+// una rampa dedicata, cosi' una futura revisione non le accorpa per errore.
+["temp", "feels", "wetbulb"].forEach((key) => {
+  assert.match(html, new RegExp(key + ":\\s*\\{[\\s\\S]{0,180}?stops:\\s*TEMP_BANDS,"),
+    "il layer " + key + " non usa piu' la palette termica protetta");
+});
+assert.match(html, /const T850_STOPS = buildDiscreteBands\(T850_ANCHORS, -30, 35, 1, 1\);/,
+  "manca la scala dedicata della temperatura a 850 hPa");
+assert.match(html, /t850:\s*\{[\s\S]{0,180}?stops:\s*T850_STOPS,/,
+  "la temperatura a 850 hPa e' tornata sulla palette al suolo");
 
+// I campi senza fenomeno devono lasciare visibile la carta geografica.
+assert.match(html, /const RAIN_STOPS = \[\s*\{ v: 0, c: \[0, 0, 0\], a: 0 \}/,
+  "assenza di pioggia non trasparente");
+assert.match(html, /const STORM_STOPS = \[\s*\{ v: 0, c: \[221, 234, 242\], a: 0 \}/,
+  "assenza di probabilita' temporalesca non trasparente");
+assert.match(html, /const CAPE_STOPS = \[\s*\{ v: 0, c: \[238, 244, 240\], a: 0 \}/,
+  "assenza di CAPE non trasparente");
 console.log("3D map regression checks: OK");

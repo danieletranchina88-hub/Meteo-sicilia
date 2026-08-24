@@ -1,51 +1,14 @@
-"""Genera gli ancoraggi colore delle scale scientifiche dei campi.
+"""Stampa la sorgente canonica delle palette operative della mappa.
 
-Uso:  pip install cmcrameri matplotlib && python scripts/generate_palettes.py
-Copia l'uscita negli array corrispondenti di index.html.
+Uso: ``python scripts/generate_palettes.py``. L'output e' JavaScript pronto
+da confrontare o copiare negli array omonimi di ``index.html``.
 
-
-Non colori scelti a occhio: i valori escono dai dati pubblicati delle mappe
-percettivamente uniformi (Crameri 2018, Zenodo; Crameri, Shephard & Heron
-2020, Nature Communications 11:5444). Ogni mappa e' monotona in luminanza,
-sicura per il daltonismo e senza confini falsi.
+Le rampe sono esplicite e dipendono dal significato del campo: neutro e
+trasparente quando il fenomeno non esiste, sequenziale per intensita',
+divergente solo dove esiste una soglia fisica o sinottica utile. Non servono
+dipendenze grafiche esterne, quindi lo stesso RGB viene rigenerato in ogni
+ambiente senza cambiamenti fra versioni di libreria.
 """
-import numpy as np
-from matplotlib import colormaps
-from cmcrameri import cm
-
-
-def sample(name, t, lo=0.0, hi=1.0):
-    """Colore RGB 0-255 della mappa `name` alla posizione t in [0,1].
-
-    `name` e' una Scientific Colour Map di Crameri, oppure -- con il prefisso
-    `cb:` -- una tavolozza ColorBrewer (Harrower e Brewer 2003, The
-    Cartographic Journal 40(1)), presa da matplotlib con i valori originali.
-    """
-    cmap = colormaps[name[3:]] if name.startswith("cb:") else getattr(cm, name)
-    x = lo + (hi - lo) * float(np.clip(t, 0.0, 1.0))
-    r, g, b, _ = cmap(x)
-    return [int(round(r * 255)), int(round(g * 255)), int(round(b * 255))]
-
-
-def diverging(value, centre, half_span):
-    """Posizione su una mappa divergente, con il neutro esattamente al centro."""
-    return np.clip(0.5 + (value - centre) / (2.0 * half_span), 0.0, 1.0)
-
-
-def two_sided(value, centre, below, above):
-    """Divergente asimmetrica: il neutro resta al centro, ma i due rami
-    coprono escursioni diverse.
-
-    La temperatura a 2 m sull'Italia va da circa -25 a +45: una scala
-    simmetrica su +/-40 spreca meta' del ramo freddo su valori che non
-    esistono, e comprime tutto l'anno in un terzo della rampa. I due rami
-    hanno quindi pendenze diverse -- un grado di freddo non colora quanto un
-    grado di caldo -- ed e' un compromesso dichiarato, non un errore: senza,
-    una mappa estiva sarebbe una parete arancione uniforme.
-    """
-    if value >= centre:
-        return float(np.clip(0.5 + 0.5 * (value - centre) / above, 0.5, 1.0))
-    return float(np.clip(0.5 - 0.5 * (centre - value) / below, 0.0, 0.5))
 
 
 def js(anchors, indent=8):
@@ -92,60 +55,168 @@ out["TEMP_ANCHORS"] = [
     for kelvin, colour in TEMPERATURE_KELVIN
 ]
 
-# --- Vento: batlow, sequenziale ---------------------------------------------
-wind_values = list(range(0, 131, 10))
+# --- Campi di superficie ----------------------------------------------------
 out["WIND_ANCHORS"] = [
-    {"v": v, "c": sample("batlow", v / 130.0)} for v in wind_values
+    {"v": 0, "c": [232, 241, 242]},
+    {"v": 10, "c": [205, 237, 232]},
+    {"v": 20, "c": [132, 216, 201]},
+    {"v": 40, "c": [49, 183, 165]},
+    {"v": 60, "c": [242, 213, 92]},
+    {"v": 80, "c": [242, 142, 43]},
+    {"v": 100, "c": [214, 69, 98]},
+    {"v": 130, "c": [111, 42, 142]},
 ]
 
-# --- Pressione: broc, divergente sulla standard 1013,25 hPa ------------------
-press_values = [960, 970, 980, 990, 1000, 1004, 1008, 1012, 1016, 1020,
-                1024, 1028, 1032, 1036, 1040, 1048]
-out["PRESS_ANCHORS"] = [
-    {"v": v, "c": sample("broc", diverging(v, 1013.25, 40.0), 0.06, 0.94)} for v in press_values
-]
-
-# --- Umidita' relativa: davos invertita, secco chiaro -> umido scuro ---------
-rh_values = list(range(0, 101, 10))
-out["RH_ANCHORS"] = [
-    {"v": v, "c": sample("davos", 1.0 - v / 100.0, 0.05, 0.95)} for v in rh_values
-]
-
-# --- Nuvolosita': grayC, il grigio e' l'aspetto fisico della nube ------------
-cloud_values = list(range(0, 101, 10))
-cloud_alpha = [0, 0.58, 0.7, 0.78, 0.84, 0.88, 0.91, 0.94, 0.96, 0.98, 0.99]
-out["CLOUD_ANCHORS"] = [
-    {"v": v, "c": sample("grayC", 1.0 - v / 100.0, 0.12, 0.98), "a": a}
-    for v, a in zip(cloud_values, cloud_alpha)
-]
-
-# --- Precipitazione: oslo invertita, soglie discrete -------------------------
-rain_values = [0, 0.1, 0.5, 1, 2, 4, 6, 10, 15, 20, 30, 40, 60, 80]
-rain_alpha = [0, 0.88, 0.94, 0.97, 0.98, 0.98, 0.99, 1, 1, 1, 1, 1, 1, 1]
-rain_positions = np.linspace(0.0, 1.0, len(rain_values))
 out["RAIN_STOPS"] = [
-    {"v": v, "c": sample("oslo", 1.0 - p, 0.10, 0.80), "a": a}
-    for v, p, a in zip(rain_values, rain_positions, rain_alpha)
+    {"v": 0, "c": [0, 0, 0], "a": 0},
+    {"v": 0.1, "c": [213, 240, 255], "a": 0.78},
+    {"v": 0.5, "c": [134, 210, 255], "a": 0.9},
+    {"v": 1, "c": [57, 168, 242], "a": 0.95},
+    {"v": 2, "c": [37, 102, 212], "a": 0.98},
+    {"v": 4, "c": [32, 180, 134], "a": 0.98},
+    {"v": 10, "c": [242, 211, 79], "a": 1},
+    {"v": 20, "c": [242, 142, 43], "a": 1},
+    {"v": 40, "c": [214, 69, 69], "a": 1},
+    {"v": 80, "c": [142, 47, 143], "a": 1},
 ]
 
-# --- theta-w 850 hPa: batlow sequenziale -------------------------------------
-# Sequenziale e non divergente: fra 276 e 312 K non esiste un valore neutro
-# con un significato fisico su cui centrare una divergente, e inventarne uno
-# e' esattamente l'errore che le scale uniformi servono a evitare. Il fronte
-# si legge lo stesso -- meglio, perche' a pari salto di theta-w corrisponde
-# ora pari salto di colore.
-theta_values = [276.0, 279.6, 283.2, 286.8, 290.4, 294.0, 297.6, 301.2,
-                304.8, 308.4, 312.0]
+out["CLOUD_ANCHORS"] = [
+    {"v": 0, "c": [247, 250, 250], "a": 0},
+    {"v": 10, "c": [241, 245, 246], "a": 0.28},
+    {"v": 30, "c": [221, 230, 233], "a": 0.62},
+    {"v": 50, "c": [187, 200, 205], "a": 0.78},
+    {"v": 70, "c": [139, 154, 162], "a": 0.88},
+    {"v": 90, "c": [91, 105, 113], "a": 0.95},
+    {"v": 100, "c": [57, 70, 77], "a": 0.99},
+]
+
+out["RH_ANCHORS"] = [
+    {"v": 0, "c": [112, 64, 37]},
+    {"v": 20, "c": [185, 120, 62]},
+    {"v": 40, "c": [217, 185, 110]},
+    {"v": 60, "c": [121, 185, 158]},
+    {"v": 80, "c": [42, 145, 163]},
+    {"v": 100, "c": [39, 75, 143]},
+]
+
+out["PRESS_ANCHORS"] = [
+    {"v": 960, "c": [75, 29, 120]},
+    {"v": 980, "c": [40, 86, 168]},
+    {"v": 1000, "c": [77, 166, 198]},
+    {"v": 1013, "c": [236, 232, 217]},
+    {"v": 1025, "c": [231, 162, 74]},
+    {"v": 1040, "c": [195, 74, 58]},
+    {"v": 1048, "c": [122, 31, 61]},
+]
+
+# --- Campi sinottici e in quota --------------------------------------------
 out["THETA_ANCHORS"] = [
-    {"v": v, "c": sample("batlow", (v - 276.0) / 36.0)} for v in theta_values
+    {"v": 276, "c": [37, 52, 148]},
+    {"v": 282, "c": [44, 127, 184]},
+    {"v": 288, "c": [127, 205, 187]},
+    {"v": 294, "c": [243, 241, 218]},
+    {"v": 300, "c": [253, 187, 92]},
+    {"v": 306, "c": [227, 74, 51]},
+    {"v": 312, "c": [140, 29, 64]},
 ]
 
-# --- Geopotenziale 500 hPa: batlow sequenziale -------------------------------
-geo_values = [5200, 5400, 5520, 5640, 5700, 5760, 5820, 5880, 5960]
-geo_alpha = [0.86, 0.85, 0.84, 0.82, 0.78, 0.8, 0.82, 0.85, 0.88]
 out["GEOPOT500_STOPS"] = [
-    {"v": v, "c": sample("batlow", (v - 5200) / 760.0), "a": a}
-    for v, a in zip(geo_values, geo_alpha)
+    {"v": 5200, "c": [59, 15, 112], "a": 0.88},
+    {"v": 5400, "c": [44, 77, 155], "a": 0.86},
+    {"v": 5520, "c": [38, 136, 184], "a": 0.84},
+    {"v": 5640, "c": [183, 216, 216], "a": 0.8},
+    {"v": 5700, "c": [242, 230, 177], "a": 0.78},
+    {"v": 5820, "c": [231, 163, 75], "a": 0.83},
+    {"v": 5960, "c": [182, 64, 59], "a": 0.88},
+]
+
+out["T850_ANCHORS"] = [
+    {"v": -30, "c": [22, 11, 53]},
+    {"v": -20, "c": [36, 22, 79]},
+    {"v": -10, "c": [46, 94, 170]},
+    {"v": -5, "c": [111, 195, 213]},
+    {"v": 0, "c": [237, 242, 242]},
+    {"v": 10, "c": [246, 211, 101]},
+    {"v": 20, "c": [233, 122, 52]},
+    {"v": 30, "c": [181, 54, 74]},
+    {"v": 35, "c": [111, 27, 58]},
+]
+
+# --- Diagnostica convettiva e fenomeni a impatto ---------------------------
+out["CONVECTION_STOPS"] = [
+    {"v": 0, "c": [255, 255, 255], "a": 0},
+    {"v": 20, "c": [178, 210, 223], "a": 0.45},
+    {"v": 40, "c": [242, 212, 92], "a": 0.75},
+    {"v": 70, "c": [229, 111, 55], "a": 0.9},
+    {"v": 95, "c": [143, 40, 92], "a": 1.0},
+]
+
+out["VISIBILITY_STOPS"] = [
+    {"v": 0, "c": [63, 45, 86], "a": 1.0},
+    {"v": 200, "c": [102, 90, 120], "a": 0.9},
+    {"v": 1000, "c": [154, 167, 184], "a": 0.72},
+    {"v": 5000, "c": [214, 227, 232], "a": 0.35},
+    {"v": 10000, "c": [247, 250, 250], "a": 0},
+]
+
+out["FREEZING_STOPS"] = [
+    {"v": 0, "c": [255, 255, 255], "a": 0},
+    {"v": 1, "c": [139, 197, 227], "a": 0.9},
+    {"v": 2, "c": [135, 57, 166], "a": 1.0},
+]
+
+out["FOEHN_STOPS"] = [
+    {"v": 0, "c": [255, 255, 255], "a": 0},
+    {"v": 1, "c": [47, 128, 237], "a": 0.88},
+    {"v": 2, "c": [231, 111, 81], "a": 0.88},
+]
+
+out["STORM_STOPS"] = [
+    {"v": 0, "c": [221, 234, 242], "a": 0},
+    {"v": 10, "c": [201, 223, 233], "a": 0.25},
+    {"v": 20, "c": [178, 210, 223], "a": 0.45},
+    {"v": 40, "c": [242, 212, 92], "a": 0.78},
+    {"v": 60, "c": [240, 147, 53], "a": 0.9},
+    {"v": 80, "c": [209, 73, 91], "a": 0.97},
+    {"v": 100, "c": [118, 30, 89], "a": 1.0},
+]
+
+out["UPDRAFT_STOPS"] = [
+    {"v": -5, "c": [35, 78, 155]},
+    {"v": -1, "c": [131, 189, 227]},
+    {"v": 0, "c": [238, 243, 243]},
+    {"v": 1, "c": [168, 216, 163]},
+    {"v": 3, "c": [243, 212, 91]},
+    {"v": 8, "c": [242, 142, 43]},
+    {"v": 15, "c": [214, 69, 80]},
+    {"v": 30, "c": [123, 30, 99]},
+]
+
+out["CAPE_STOPS"] = [
+    {"v": 0, "c": [238, 244, 240], "a": 0},
+    {"v": 300, "c": [201, 233, 212], "a": 0.5},
+    {"v": 800, "c": [231, 222, 84], "a": 0.82},
+    {"v": 1500, "c": [242, 180, 71], "a": 0.9},
+    {"v": 2500, "c": [230, 91, 58], "a": 0.97},
+    {"v": 4000, "c": [133, 30, 90], "a": 1.0},
+]
+
+out["TRIGGER_STOPS"] = [
+    {"v": 0, "c": [234, 240, 239], "a": 0},
+    {"v": 15, "c": [214, 232, 229], "a": 0.35},
+    {"v": 35, "c": [143, 203, 179], "a": 0.72},
+    {"v": 55, "c": [241, 211, 107], "a": 0.84},
+    {"v": 75, "c": [238, 145, 64], "a": 0.93},
+    {"v": 100, "c": [184, 50, 74], "a": 1.0},
+]
+
+out["BOWEN_STOPS"] = [
+    {"v": 0, "c": [31, 111, 120]},
+    {"v": 0.3, "c": [76, 165, 139]},
+    {"v": 0.8, "c": [168, 198, 134]},
+    {"v": 1.5, "c": [217, 181, 109]},
+    {"v": 3, "c": [185, 120, 62]},
+    {"v": 6, "c": [108, 58, 36]},
 ]
 
 for name, anchors in out.items():
