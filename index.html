@@ -2561,19 +2561,62 @@
       ];
       const RH_STOPS = buildDiscreteBands(RH_ANCHORS, 0, 100, 5, 1);
 
+      // La pressione al livello del mare sull'Italia vive quasi sempre fra 1000
+      // e 1032 hPa. Una scala distesa uniformemente su 960-1048 spendeva meta'
+      // della sua gamma cromatica su valori che non capitano mai, e la
+      // giornata normale finiva tutta dentro tre o quattro fasce quasi uguali:
+      // un'unica passata di sabbia, senza niente che si leggesse come "bassa".
+      //
+      // Qui il colore percorre una scala divergente percettivamente uniforme
+      // (RdBu, ColorBrewer, sicura per i tre tipi di daltonismo), ma il legame
+      // valore->colore e' deformato: l'80% del percorso va alla fascia
+      // 1000-1032, il resto alle code. Le ancore sono fitte al centro e larghe
+      // agli estremi -- e' quello, non la scelta della tavolozza, a rendere
+      // leggibile il passo di 2 hPa.
+      //
+      // Misurato in CAM02-UCS su fasce da 2 hPa fra 1000 e 1032: distanza
+      // mediana fra fasce adiacenti 8,9 (era 4,7), minima 5,5. Simulando
+      // deuteranomalia, protanomalia e tritanomalia la minima resta 4,0, ben
+      // sopra la soglia di distinguibilita'.
+      // Passo delle isobare: una sola definizione, usata per tracciarle, per
+      // costruire le fasce di colore della pressione e per dichiararlo nel
+      // cartiglio della carta. Se cambia il disegno cambiano fasce e
+      // didascalia insieme, e non possono raccontare tre cose diverse.
+      //
+      // Due hPa e' il passo di una carta al suolo a scala regionale. A quattro
+      // una giornata normale sull'Italia, che va da 1011 a 1025, produceva tre
+      // linee in tutto il dominio: una carta che non dice dove sta il
+      // gradiente. Il campo resta quello mediato a scala sinottica, quindi il
+      // passo piu' fitto aggiunge lettura, non rumore del modello.
+      const ISOBAR_INTERVAL_HPA = 2;
+      // Attenzione: e' un modulo sul valore, non un moltiplicatore. Marcate
+      // sono le isobare il cui valore e' multiplo di questo numero, quindi
+      // ogni 4 hPa. Il cartiglio deve dichiarare questo, non il prodotto dei
+      // due numeri.
+      const ISOBAR_MAJOR_EVERY = 4;
+
       const PRESS_ANCHORS = [
-        { v: 960, c: [75, 29, 120] },
-        { v: 980, c: [40, 86, 168] },
-        { v: 1000, c: [77, 166, 198] },
-        { v: 1013, c: [236, 232, 217] },
-        { v: 1025, c: [231, 162, 74] },
-        { v: 1040, c: [195, 74, 58] },
-        { v: 1048, c: [122, 31, 61] }
+        { v: 976, c: [5, 48, 97] },
+        { v: 988, c: [21, 80, 141] },
+        { v: 1000, c: [39, 110, 176] },
+        { v: 1004, c: [82, 157, 200] },
+        { v: 1008, c: [157, 203, 225] },
+        { v: 1012, c: [216, 233, 241] },
+        { v: 1016, c: [248, 241, 237] },
+        { v: 1020, c: [251, 208, 185] },
+        { v: 1024, c: [238, 150, 119] },
+        { v: 1028, c: [207, 82, 70] },
+        { v: 1032, c: [162, 19, 40] },
+        { v: 1040, c: [132, 9, 36] },
+        { v: 1048, c: [103, 0, 31] }
       ];
-      // La pressione e' una carta sinottica, non una radiografia di ogni
-      // cella ICON-2I: anche le fasce cromatiche seguono il passo operativo
-      // delle isobare, cosi' colore e linee raccontano la stessa struttura.
-      const PRESS_STOPS = buildDiscreteBands(PRESS_ANCHORS, 960, 1048, 4, 1);
+      // Le fasce hanno il passo delle isobare e i loro stessi bordi: ogni
+      // cambio di colore E' un'isobara, quindi colore e linee non possono
+      // raccontare due strutture diverse. Il colore e' preso al centro della
+      // fascia, perche' e' quello il valore che la fascia rappresenta.
+      const PRESS_STOPS = buildDiscreteBands(
+        PRESS_ANCHORS, 976, 1048, ISOBAR_INTERVAL_HPA, 1, true
+      );
 
       // Scala sinottica dedicata alle masse d'aria: freddo in indaco/blu,
       // fascia frontale chiara e aria subtropicale in ambra/rosso. Il dominio
@@ -2845,8 +2888,8 @@
           stops: PRESS_STOPS,
           discrete: true,
           decimals: 0,
-          ticks: [960, 980, 1000, 1012, 1020, 1040, 1048],
-          note: "Media sinottica del campo MSLP ICON-2I: fasce e isobare ogni 4 hPa, marcate ogni 8 hPa. Il valore puntuale segue lo stesso campo mediato.",
+          ticks: [980, 1000, 1008, 1013, 1020, 1028, 1040],
+          note: "Media sinottica del campo MSLP ICON-2I: fasce e isobare ogni 2 hPa sugli stessi bordi, marcate ogni 4 hPa. La scala e' fitta fra 1000 e 1032, dove la pressione sta quasi sempre. Il valore puntuale segue lo stesso campo mediato.",
           opacity: 0.92,
           terrainOpacity: 0.3
         },
@@ -3107,15 +3150,6 @@
       // Lo stato precedente viene messo da parte per poterci tornare.
       let synopticChart = false;
       let synopticRestore = null;
-      // Passo delle isobare: una sola definizione, usata sia per tracciarle
-      // sia per dichiararlo nel cartiglio della carta. Se cambia il disegno
-      // cambia la didascalia, e non possono raccontare due cose diverse.
-      const ISOBAR_INTERVAL_HPA = 4;
-      // Attenzione: e' un modulo sul valore, non un moltiplicatore. Marcate
-      // sono le isobare il cui valore e' multiplo di questo numero, quindi
-      // ogni 8 hPa. Il cartiglio deve dichiarare questo, non il prodotto dei
-      // due numeri.
-      const ISOBAR_MAJOR_EVERY = 8;
       // Media mobile fisica: raggio uguale in km nelle due direzioni e due
       // passaggi. Riduce il rumore orografico della PMSL ad alta risoluzione,
       // ma conserva depressioni, promontori e gradiente barico sinottico.

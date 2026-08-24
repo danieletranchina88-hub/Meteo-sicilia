@@ -890,10 +890,13 @@ assert.equal(
 
 // Il passo delle isobare dichiarato nel cartiglio deve essere quello con cui
 // sono davvero tracciate, non un numero scritto a mano.
-assert.match(html, /const ISOBAR_INTERVAL_HPA = 4;/,
-  "le isobare non seguono il passo sinottico operativo di 4 hPa");
-assert.match(html, /const ISOBAR_MAJOR_EVERY = 8;/,
-  "le isobare principali non sono marcate ogni 8 hPa");
+// Due hPa e' il passo di una carta al suolo a scala regionale. A quattro, una
+// giornata normale sull'Italia (1011-1025) produceva tre linee in tutto il
+// dominio: non si vedeva dove stesse il gradiente.
+assert.match(html, /const ISOBAR_INTERVAL_HPA = 2;/,
+  "le isobare non seguono il passo regionale di 2 hPa");
+assert.match(html, /const ISOBAR_MAJOR_EVERY = 4;/,
+  "le isobare principali non sono marcate ogni 4 hPa");
 assert.match(html, /createContourFeatures\(\s*\n?\s*pressure, meta, ISOBAR_INTERVAL_HPA, ISOBAR_MAJOR_EVERY\s*\n?\s*\)/,
   "le isobare non usano la costante dichiarata nel cartiglio");
 // ISOBAR_MAJOR_EVERY e' un MODULO sul valore, non un moltiplicatore: sono
@@ -902,6 +905,30 @@ assert.match(html, /"isobare ogni " \+ ISOBAR_INTERVAL_HPA/,
   "il cartiglio non legge il passo dalla stessa costante");
 assert.ok(!/ISOBAR_INTERVAL_HPA \* ISOBAR_MAJOR_EVERY/.test(html),
   "il cartiglio moltiplica passo e modulo invece di dichiarare il modulo reale");
+
+// Colore e linee devono raccontare la stessa struttura: stesso passo, stessi
+// bordi, stesso campo. Se le fasce avessero un passo proprio, ogni cambio di
+// tinta cadrebbe fra due isobare invece che sopra una.
+assert.match(html, /buildDiscreteBands\(\s*\n?\s*PRESS_ANCHORS, 976, 1048, ISOBAR_INTERVAL_HPA, 1, true\s*\n?\s*\)/,
+  "le fasce della pressione non condividono passo e bordi con le isobare");
+// Le costanti servono gia' alla costruzione delle fasce: se restassero
+// dichiarate piu' in basso, leggerle da li' sarebbe un errore di zona morta.
+assert.ok(
+  html.indexOf("const ISOBAR_INTERVAL_HPA = 2;") < html.indexOf("const PRESS_ANCHORS"),
+  "il passo delle isobare e' dichiarato dopo le fasce che lo usano"
+);
+// La scala e' fitta dove la pressione vive davvero: senza le ancore ogni 4 hPa
+// fra 1000 e 1032 la giornata normale ricade in tre tinte quasi uguali.
+{
+  const anchors = html.match(/const PRESS_ANCHORS = \[([\s\S]*?)\];/);
+  assert.ok(anchors, "ancore della pressione assenti");
+  const values = [...anchors[1].matchAll(/v: (\d+)/g)].map((m) => Number(m[1]));
+  const core = values.filter((v) => v >= 1000 && v <= 1032);
+  assert.ok(core.length >= 9,
+    "la scala della pressione non e' infittita fra 1000 e 1032 hPa");
+  assert.ok(Math.max(...values) >= 1048 && Math.min(...values) <= 976,
+    "la scala della pressione non copre piu' gli estremi reali");
+}
 
 // La PMSL a 2,2 km porta gli artefatti della riduzione al livello del mare.
 // Colore, lettura puntuale, isobare e centri devono quindi condividere una
@@ -933,8 +960,6 @@ const fieldValue = html.match(/function fieldValue\([\s\S]*?\n {6}\}\n/);
 assert.ok(fieldValue, "fieldValue assente");
 assert.match(fieldValue[0], /key === "press"[\s\S]*?pressureAnalysisGrid\(/,
   "la lettura puntuale della pressione non usa la media sinottica");
-assert.match(html, /buildDiscreteBands\(PRESS_ANCHORS, 960, 1048, 4, 1\)/,
-  "le fasce di pressione sono piu' fitte delle isobare da 4 hPa");
 
 // La legenda disegna i simboli con la stessa funzione della mappa: due
 // disegni separati potrebbero raccontare due convenzioni diverse.

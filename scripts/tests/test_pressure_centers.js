@@ -23,7 +23,8 @@ const src = consts + "\n" + ["smoothPressureGrid", "parabolicCenterOffset",
   "createIsobarFeatures", "createContourFeatures"].map(grab).join("\n");
 const api = new Function("clamp", "getGrid", src +
   "\nreturn { detectPressureCenters, closedContourProminence, coarsenPressureGrid,"
-  + " pressureAnalysisGrid, createIsobarFeatures };")(
+  + " pressureAnalysisGrid, createIsobarFeatures,"
+  + " ISOBAR_INTERVAL_HPA, ISOBAR_MAJOR_EVERY };")(
   (v, a, b) => Math.min(Math.max(v, a), b), (a) => a);
 
 // Dominio simile a ICON-2I: 2,2 km, ma per le prove basta piu' grosso.
@@ -182,9 +183,13 @@ const isobars = api.createIsobarFeatures(contourField, contourMeta);
 const isobarValues = [...new Set(isobars.map((f) => f.properties.value))];
 console.log("   livelli tracciati:", isobarValues.join(", "), "hPa");
 check(isobars.length > 0, "il marching squares non ha prodotto isobare");
-check(isobars.every((f) => f.properties.value % 4 === 0),
-  "e' stata tracciata un'isobara fuori dal passo di 4 hPa");
-check(isobars.every((f) => f.properties.major === (f.properties.value % 8 === 0)),
+// Il passo si legge dalla costante del sito, non da un numero scritto qui:
+// due numeri per la stessa cosa prima o poi divergono, ed e' successo.
+check(isobars.every((f) => f.properties.value % api.ISOBAR_INTERVAL_HPA === 0),
+  "e' stata tracciata un'isobara fuori dal passo di "
+  + api.ISOBAR_INTERVAL_HPA + " hPa");
+check(isobars.every((f) =>
+    f.properties.major === (f.properties.value % api.ISOBAR_MAJOR_EVERY === 0)),
   "la classificazione principale/secondaria delle isobare e' errata");
 
 // 8) Campo PMSL vero del run pubblicato.
@@ -216,10 +221,10 @@ if (fs.existsSync(stepFile)) {
   check(out.every((c) => c.closedIsobars >= 1),
     "pubblicato un centro senza isobare chiuse");
   check(realIsobars.length > 0, "nessuna isobara prodotta sul campo reale");
-  check(realIsobars.every((f) => f.properties.value % 4 === 0),
-    "livello non multiplo di 4 hPa sul campo reale");
+  check(realIsobars.every((f) => f.properties.value % api.ISOBAR_INTERVAL_HPA === 0),
+    "livello non multiplo di " + api.ISOBAR_INTERVAL_HPA + " hPa sul campo reale");
   check(realIsobars.every((f) =>
-    f.properties.major === (f.properties.value % 8 === 0)),
+    f.properties.major === (f.properties.value % api.ISOBAR_MAJOR_EVERY === 0)),
   "classificazione principale/secondaria errata sul campo reale");
 } else {
   console.log("   (nessun campo PMSL locale: prova saltata)");

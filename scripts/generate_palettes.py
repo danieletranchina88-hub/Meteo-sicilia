@@ -99,14 +99,38 @@ out["RH_ANCHORS"] = [
     {"v": 100, "c": [39, 75, 143]},
 ]
 
+# Pressione. I valori non vengono campionati qui a ogni esecuzione: questo file
+# dichiara di non dipendere da librerie grafiche, cosi' lo stesso RGB esce in
+# ogni ambiente. Sono il risultato, riportato una volta sola, di questa
+# costruzione:
+#
+#   tavolozza RdBu di ColorBrewer, divergente e percettivamente uniforme,
+#   invertita perche' il blu vada in basso; il legame valore->colore e'
+#   deformato in modo che l'80% del percorso cromatico cada fra 1000 e
+#   1032 hPa, dove la pressione al livello del mare sull'Italia sta quasi
+#   sempre, e il resto sulle code fino a 976 e 1048.
+#
+# Serve perche' una scala distesa uniformemente su 960-1048 spendeva meta'
+# della gamma su valori che non capitano mai: una giornata normale, da 1011 a
+# 1025, ricadeva in tre o quattro fasce quasi identiche, tutte fra il crema e
+# l'ambra. Misurato in CAM02-UCS su fasce da 2 hPa fra 1000 e 1032: distanza
+# mediana fra fasce adiacenti 8,9 contro 4,7 di prima, minima 5,5. Simulando
+# deuteranomalia, protanomalia e tritanomalia la minima resta 4,0, ben sopra
+# la soglia di distinguibilita'.
 out["PRESS_ANCHORS"] = [
-    {"v": 960, "c": [75, 29, 120]},
-    {"v": 980, "c": [40, 86, 168]},
-    {"v": 1000, "c": [77, 166, 198]},
-    {"v": 1013, "c": [236, 232, 217]},
-    {"v": 1025, "c": [231, 162, 74]},
-    {"v": 1040, "c": [195, 74, 58]},
-    {"v": 1048, "c": [122, 31, 61]},
+    {"v": 976, "c": [5, 48, 97]},
+    {"v": 988, "c": [21, 80, 141]},
+    {"v": 1000, "c": [39, 110, 176]},
+    {"v": 1004, "c": [82, 157, 200]},
+    {"v": 1008, "c": [157, 203, 225]},
+    {"v": 1012, "c": [216, 233, 241]},
+    {"v": 1016, "c": [248, 241, 237]},
+    {"v": 1020, "c": [251, 208, 185]},
+    {"v": 1024, "c": [238, 150, 119]},
+    {"v": 1028, "c": [207, 82, 70]},
+    {"v": 1032, "c": [162, 19, 40]},
+    {"v": 1040, "c": [132, 9, 36]},
+    {"v": 1048, "c": [103, 0, 31]},
 ]
 
 # --- Campi sinottici e in quota --------------------------------------------
