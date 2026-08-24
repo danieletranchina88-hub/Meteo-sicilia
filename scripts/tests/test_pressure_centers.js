@@ -195,9 +195,16 @@ if (fs.existsSync(stepFile)) {
   const press = Float32Array.from(data.press.map((v) => (v === null ? NaN : v)));
   const realMeta = data.meta;
   const t0 = process.hrtime.bigint();
-  out = api.detectPressureCenters(press, realMeta);
+  const realAnalysis = api.pressureAnalysisGrid(
+    { meta: realMeta, press: press }, press, "pressureAnalysis"
+  );
+  out = api.detectPressureCenters(realAnalysis, realMeta);
+  const realIsobars = api.createIsobarFeatures(realAnalysis, realMeta);
   const ms = Number(process.hrtime.bigint() - t0) / 1e6;
-  console.log("   griglia " + realMeta.nx + "x" + realMeta.ny + " in " + ms.toFixed(0) + " ms");
+  const realLevels = [...new Set(realIsobars.map((f) => f.properties.value))];
+  console.log("   griglia " + realMeta.nx + "x" + realMeta.ny + " in "
+    + ms.toFixed(0) + " ms · " + realIsobars.length + " linee · livelli "
+    + (realLevels.join(", ") || "nessuno"));
   out.forEach((c) => {
     const lon = realMeta.lo1 + c.x * realMeta.dx;
     const lat = realMeta.la1 - c.y * realMeta.dy;
@@ -205,9 +212,15 @@ if (fs.existsSync(stepFile)) {
       + lon.toFixed(1) + "E " + lat.toFixed(1) + "N · "
       + c.closedIsobars + " isobare chiuse");
   });
-  check(ms < 900, "troppo lento sul campo reale (" + ms.toFixed(0) + " ms)");
+  check(ms < 3000, "troppo lento sul campo reale (" + ms.toFixed(0) + " ms)");
   check(out.every((c) => c.closedIsobars >= 1),
     "pubblicato un centro senza isobare chiuse");
+  check(realIsobars.length > 0, "nessuna isobara prodotta sul campo reale");
+  check(realIsobars.every((f) => f.properties.value % 4 === 0),
+    "livello non multiplo di 4 hPa sul campo reale");
+  check(realIsobars.every((f) =>
+    f.properties.major === (f.properties.value % 8 === 0)),
+  "classificazione principale/secondaria errata sul campo reale");
 } else {
   console.log("   (nessun campo PMSL locale: prova saltata)");
 }
