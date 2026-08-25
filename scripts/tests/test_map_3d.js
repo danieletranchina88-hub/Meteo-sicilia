@@ -188,9 +188,24 @@ assert.match(prepare[0], /deriveWetBulb\(data\)/,
 assert.match(html, /data-layer="wetbulb"/, "selettore del campo bulbo umido assente");
 assert.match(html, /id="detail-wetbulb"/, "lettura puntuale del bulbo umido assente");
 
-// Fondo cartografico grigio, non bianco.
-assert.match(html, /"raster-saturation": -0\.82/,
-  "il fondo cartografico non e' desaturato a grigio");
+// --- Il fondo cartografico e' nostro ---------------------------------------
+// Un fondo raster sta SOTTO il campo colorato: quando il campo si accende la
+// costa sparisce proprio dove serve. Queste sono linee, e si disegnano SOPRA.
+assert.match(html, /const MAP_LAND = "#e7e5d9";/, "colore della terra assente");
+assert.match(html, /const MAP_SEA = "#9dc0de";/, "colore del mare assente");
+["land", "sea", "coast", "borders", "lakes", "rivers"].forEach((tema) => {
+  assert.ok(html.includes('data: "data_base/' + tema + '.json"'),
+    "il fondo non carica il tema: " + tema);
+});
+assert.doesNotMatch(html, /basemaps\.cartocdn\.com/,
+  "il fondo dipende ancora dalle tessere di un fornitore esterno");
+assert.doesNotMatch(html, /raw\.githubusercontent\.com/,
+  "i confini regionali arrivano ancora dal repository di un terzo");
+// L'ordine e' il punto: l'inchiostro va aggiunto dopo il livello meteo.
+assert.ok(
+  html.indexOf('id: "weather-layer"') < html.indexOf('id: "base-coast-layer"'),
+  "la costa e' sotto il campo colorato: sparirebbe appena si accende un campo"
+);
 assert.doesNotMatch(html, /#dfeaf1/, "residui del vecchio fondo azzurro");
 
 // In 3D ogni proiezione interroga il DEM. Le particelle si aggiornano a
@@ -220,10 +235,15 @@ assert.match(animate[0], /queryTerrainElevation/,
 assert.match(animate[0], /particle\.groundAt/,
   "la quota del suolo non viene messa in cache: tornerebbe il costo per frame");
 
-// Etichette vettoriali: quelle raster si stiravano sul terreno inclinato.
-assert.match(html, /CARTO_LABEL_LAYERS/, "livelli di etichetta vettoriali assenti");
-assert.match(html, /tiles\.basemaps\.cartocdn\.com\/fonts/,
-  "font delle etichette vettoriali non configurati");
+// I toponimi si disegnano sulla stessa tela di isobare, fronti e cartiglio:
+// niente server di glifi, niente font da scaricare, e il diradamento per zoom
+// lo decidiamo noi invece di subirlo.
+assert.match(html, /function drawPlaceNames\(/, "toponimi sul canvas assenti");
+assert.match(html, /data_base\/places\.json/, "i nomi dei luoghi non vengono caricati");
+assert.doesNotMatch(html, /CARTO_LABEL_LAYERS/,
+  "sono tornati i diciotto livelli di etichette del fornitore esterno");
+assert.doesNotMatch(html, /glyphs:/,
+  "e' tornato il server di glifi esterno");
 assert.doesNotMatch(html, /id: "labels-layer"/,
   "le etichette raster, che si stirano in 3D, sono tornate");
 
@@ -316,36 +336,42 @@ assert.ok(arrowEnd > arrowStart, "fine di drawArrow non trovata");
 assert.doesNotMatch(html.slice(arrowStart, arrowEnd), /closePath\(\)/,
   "la punta dei vettori e' tornata a triangolo pieno");
 
-// Fondo scuro e piatto predefinito. Il chiaro e il rilievo sono due scelte
-// esplicite, mentre su scuro il rilievo (quando richiesto) inverte la luce.
+// La carta chiara e' il fondo, e basta. Rilievo e terreno reale sono due
+// scelte esplicite, spente all'avvio.
 assert.match(html, /let showTerrain = false;/,
   "il rilievo e' ancora attivo all'avvio");
-assert.match(html, /let showLightBase = false;/,
-  "il fondo chiaro e' ancora attivo all'avvio");
-assert.match(html, /const onDark = !showLightBase && !showSatellite;/,
-  "il rilievo non distingue il fondo scuro");
+assert.doesNotMatch(html, /let showLightBase/,
+  "esiste ancora una seconda base da cui distinguere quella chiara");
+assert.doesNotMatch(html, /const onDark =/,
+  "il codice distingue ancora un fondo scuro che non esiste piu'");
 // Niente piu' simulazione del Sole: il rilievo ha una luce cartografica
 // fissa da nord-ovest, uguale a qualunque ora della previsione.
 assert.match(html, /const RELIEF_ILLUMINATION = 315;/,
   "manca la luce cartografica fissa del rilievo");
 assert.match(html, /"hillshade-illumination-direction", RELIEF_ILLUMINATION/,
   "il rilievo non usa la direzione di luce fissa");
-assert.match(html, /onDark \? "rgba\(196,224,255,0\.44\)" : "rgba\(255,250,238,0\.18\)"/,
-  "su fondo scuro i versanti esposti non si accendono");
+// Il fondo e' sempre chiaro: il rilievo si legge in un modo solo, scurendo i
+// versanti in ombra. La taratura invertita serviva alla base scura, sparita.
+assert.match(html, /"hillshade-highlight-color",\s*\n?\s*"rgba\(255,250,238,0\.18\)"/,
+  "il rilievo non e' tarato sul fondo chiaro");
 assert.doesNotMatch(html, /solarPosition|SOLAR_CENTER|updateSolarLighting/,
   "la simulazione della luce solare e' tornata");
 assert.doesNotMatch(html, /updateSkyPalette\(day/,
   "il cielo dipende ancora dall'altezza del Sole");
-assert.match(html, /data-toggle="lightbase"/, "interruttore fondo chiaro assente");
-assert.match(html, /id: "basemap-dark-layer"/, "base scura assente");
-assert.match(html, /id: "basemap-layer"[\s\S]*?layout: \{ visibility: "none" \}/,
-  "la base chiara non e' spenta nello stile iniziale");
+// Una sola carta, e la fotografia come alternativa spenta di default.
+assert.doesNotMatch(html, /data-toggle="lightbase"/,
+  "e' tornato l'interruttore del fondo chiaro, che ora e' l'unico fondo");
+assert.doesNotMatch(html, /basemap-dark-layer/, "e' tornata la base scura");
+assert.match(html, /let showSatellite = false;/,
+  "il terreno reale e' di nuovo acceso di default");
+assert.match(html, /id: "satellite-layer"[\s\S]*?layout: \{ visibility: "none" \}/,
+  "il terreno reale non e' spento nello stile iniziale");
 assert.match(html, /id: "terrain-base"[\s\S]*?layout: \{ visibility: "none" \}/,
   "il rilievo raster non e' spento nello stile iniziale");
 assert.match(html, /id: "terrain-detail"[\s\S]*?layout: \{ visibility: "none" \}/,
   "il rilievo DEM non e' spento nello stile iniziale");
-assert.match(html, /#map\s*\{[\s\S]*?background: #0a1018;/,
-  "prima del caricamento compare ancora un lampo di fondo chiaro");
+assert.match(html, /#map\s*\{[\s\S]*?background: #9dc0de;/,
+  "prima del caricamento il fondo non e' gia' quello della carta");
 
 // Interfaccia: i pannelli galleggiano sulla mappa, quindi il campo di vento
 // arriva ai bordi dello schermo invece di lasciare fasce vuote.
@@ -494,8 +520,9 @@ assert.match(html, /function radarFrameNearestTo\(when\)/,
   "manca la scelta del radar temporalmente piu' vicino al satellite");
 assert.match(html, /latest\.path \+ "\/512\/\{z\}\/\{x\}\/\{y\}/,
   "la mappa principale non usa i tile radar RainViewer da 512 px");
-assert.match(html, /source: "satellite",\s*\n\s*layout: \{ visibility: "visible" \}/,
-  "il fondo fotografico satellitare non e' quello predefinito");
+// Il terreno reale non e' piu' il fondo predefinito: la carta lo e'.
+assert.match(html, /source: "satellite",\s*\n\s*layout: \{ visibility: "none" \}/,
+  "il terreno reale e' di nuovo il fondo predefinito");
 assert.match(html, /maxzoom: 7,/,
   "RainViewer riceverebbe ancora richieste oltre lo zoom nativo supportato");
 assert.match(html, /function nearestStepTo\(when\)/,
@@ -804,7 +831,7 @@ assert.match(html, /<h3>Punto e strumenti<\/h3>/, "manca la sezione Punto e stru
 assert.match(html, /<details class="drawer-more">/,
   "gli interruttori rari non sono raccolti in Altro");
 ["isotherms", "isohypses", "satclouds", "fusion", "terrain", "satellite",
- "lightbase", "threed", "graticule", "raw"].forEach((rare) => {
+ "threed", "graticule", "raw"].forEach((rare) => {
   const more = html.match(/<details class="drawer-more">[\s\S]*?<\/details>/);
   assert.ok(more[0].includes('data-toggle="' + rare + '"'),
     "e' tornato in prima vista un interruttore raro: " + rare);
