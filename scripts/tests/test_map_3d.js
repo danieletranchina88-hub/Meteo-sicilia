@@ -86,6 +86,13 @@ assert.match(html, /\(\(topPanel - bottomPanel\) \/ 2 \/ worldPx\) \* 2 \* Math\
 // longitudine e le fasce sud e nord restano irraggiungibili.
 assert.match(html, /minZoom: startView\.zoom,\s*\n\s*maxBounds: paddedModelBounds\(startView\),/,
   "zoom-out o trascinamento possono ancora uscire dal dominio del modello");
+// Due zoom: si parte pieni, ma non si scende sotto quello che fa entrare tutto
+// il dominio. Il dominio e' quasi quadrato e uno schermo e' largo: aprirsi
+// gia' inquadrati lascia due fasce vuote ai lati.
+assert.match(html, /zoom: startView\.fillZoom,/,
+  "la vista iniziale non riempie lo schermo");
+assert.match(html, /const fill = Math\.max\(zoomX, zoomY\);/,
+  "manca lo zoom che riempie");
 assert.match(html, /function paddedModelBounds\(/,
   "i limiti non tengono conto della forma dello schermo");
 assert.match(html, /map\.setMaxBounds\(paddedModelBounds\(view\)\);/,
@@ -1126,4 +1133,39 @@ assert.match(html, /const STORM_STOPS = \[\s*\{ v: 0, c: \[221, 234, 242\], a: 0
   "assenza di probabilita' temporalesca non trasparente");
 assert.match(html, /const CAPE_STOPS = \[\s*\{ v: 0, c: \[238, 244, 240\], a: 0 \}/,
   "assenza di CAPE non trasparente");
+
+// --- Raffiche ---
+// La scala delle raffiche vale come scala solo se i suoi bordi restano i
+// gradi Beaufort: e' il motivo per cui una fascia cambia colore dove cambia
+// il grado, e le tre soglie che fanno danni si leggono senza legenda.
+{
+  const gustSource = html.match(/const GUST_STOPS = \[[\s\S]*?\n {6}\];/);
+  assert.ok(gustSource, "scala delle raffiche assente");
+  const edges = [...gustSource[0].matchAll(/\{ v: (-?[\d.]+),/g)]
+    .map((m) => Number(m[1]));
+  assert.deepEqual(edges, [0, 12, 20, 29, 39, 50, 62, 75, 89, 103, 118, 140],
+    "i bordi delle fasce non sono piu' i gradi Beaufort in km/h");
+  const layerInfo = html.match(/\n {8}gust: \{[\s\S]*?\n {8}\},/);
+  assert.ok(layerInfo, "il layer delle raffiche non e' in LAYER_INFO");
+  assert.match(layerInfo[0], /stops: GUST_STOPS,/,
+    "il layer delle raffiche non usa la propria scala");
+  assert.match(layerInfo[0], /discrete: true,/,
+    "le raffiche devono restare a fasce nette, non sfumate");
+  assert.match(layerInfo[0], /unit: "km\/h",/,
+    "le raffiche non sono piu' pubblicate in km/h");
+  assert.match(html, /data-layer="gust"/,
+    "manca la scheda delle raffiche nel pannello dei livelli");
+  assert.match(html, /id="detail-gust"/,
+    "manca la riga delle raffiche nella lettura del punto");
+  assert.match(html, /"temp", "feels_like", "rain", "press", "rh", "cloud", "gust",/,
+    "il campo delle raffiche non viene compattato come gli altri");
+}
+// Il campo deve anche esistere: la scala serve a poco se la pipeline non lo
+// pubblica. Le raffiche arrivano da vmax_10m, in m/s, e vanno in km/h.
+{
+  const pipeline = fs.readFileSync(
+    path.join(__dirname, "..", "process_data.py"), "utf8");
+  assert.match(pipeline, /"gust": \(\s*\n\s*clean_for_json\(np\.asarray\(wind_gust_10m\) \* 3\.6, 0\)/,
+    "la pipeline non pubblica le raffiche in km/h");
+}
 console.log("3D map regression checks: OK");

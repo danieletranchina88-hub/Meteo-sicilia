@@ -2118,6 +2118,9 @@
               <button class="layer-card" type="button" data-layer="wind" style="--swatch: linear-gradient(90deg,#e8f1f2,#31b7a5,#f2d55c,#d64562,#6f2a8e)">
                 <span class="layer-swatch"></span><span><b>Vento</b><small>a 10 metri</small></span>
               </button>
+              <button class="layer-card" type="button" data-layer="gust" style="--swatch: linear-gradient(90deg,#cee8e2,#6cbeb0,#60b076,#d6c74a,#de6a2f,#a01c4a,#6e1e6e)">
+                <span class="layer-swatch"></span><span><b>Raffiche</b><small>a 10 metri · scala Beaufort</small></span>
+              </button>
               <button class="layer-card" type="button" data-layer="rain" style="--swatch: linear-gradient(90deg,#d5f0ff,#2566d4,#20b486,#f2d34f,#d64545,#8e2f8f)">
                 <span class="layer-swatch"></span><span><b>Precipitazioni</b><small>accumulo del passo</small></span>
               </button>
@@ -2381,6 +2384,7 @@
         <div class="point-detail"><b>Bulbo umido</b><span id="detail-wetbulb">--</span></div>
         <div class="point-detail"><b>Precipitazioni</b><span id="detail-rain">--</span></div>
         <div class="point-detail"><b>Vento 10 m</b><span id="detail-wind">--</span></div>
+        <div class="point-detail"><b>Raffica</b><span id="detail-gust">--</span></div>
         <div class="point-detail"><b>Direzione</b><span id="detail-direction">--</span></div>
         <div class="point-detail"><b>Umidità</b><span id="detail-rh">--</span></div>
         <div class="point-detail"><b>Nuvolosità</b><span id="detail-cloud">--</span></div>
@@ -2530,6 +2534,28 @@
         { v: 130, c: [111, 42, 142] }
       ];
       const WIND_STOPS = buildDiscreteBands(WIND_ANCHORS, 0, 130, 5, 1);
+
+      // Raffiche. Non una rampa uniforme: i valori che contano sono soglie, non
+      // gradienti, e i bordi delle fasce sono i gradi Beaufort in km/h. Un
+      // cambio di colore E' un salto di grado, e i tre gradini che fanno danni
+      // -- 50, 75, 103 km/h -- si riconoscono senza leggere la legenda.
+      // Misurato in CAM02-UCS: distanza minima fra fasce adiacenti 7,6, e 4,9
+      // simulando il daltonismo piu' penalizzante. Il salto piu' grande, 26,4,
+      // cade a 50 km/h: la prima soglia che si nota davvero.
+      const GUST_STOPS = [
+        { v: 0, c: [236, 242, 244] },
+        { v: 12, c: [206, 232, 226] },
+        { v: 20, c: [160, 214, 200] },
+        { v: 29, c: [108, 190, 176] },
+        { v: 39, c: [96, 176, 118] },
+        { v: 50, c: [214, 199, 74] },
+        { v: 62, c: [232, 155, 53] },
+        { v: 75, c: [222, 106, 47] },
+        { v: 89, c: [199, 56, 56] },
+        { v: 103, c: [160, 28, 74] },
+        { v: 118, c: [110, 30, 110] },
+        { v: 140, c: [70, 22, 92] }
+      ];
 
       const RAIN_STOPS = [
         { v: 0, c: [0, 0, 0], a: 0 },
@@ -2842,6 +2868,17 @@
           opacity: 0.93,
           terrainOpacity: 0.29
         },
+        gust: {
+          label: "Raffiche a 10 m",
+          unit: "km/h",
+          stops: GUST_STOPS,
+          discrete: true,
+          decimals: 0,
+          ticks: [20, 39, 50, 62, 75, 89, 103, 118],
+          note: "Il picco del vento nell'intervallo, non la media: è il valore che rompe rami e ombrelloni. I bordi delle fasce sono i gradi Beaufort, così 50 km/h (vento forte), 75 (burrasca forte) e 103 (tempesta violenta) si riconoscono a colpo d'occhio.",
+          opacity: 0.93,
+          terrainOpacity: 0.29
+        },
         rain: {
           label: "Precipitazioni",
           unit: "mm",
@@ -3080,6 +3117,7 @@
         detailFeels: document.getElementById("detail-feels"),
         detailRain: document.getElementById("detail-rain"),
         detailWind: document.getElementById("detail-wind"),
+        detailGust: document.getElementById("detail-gust"),
         detailDirection: document.getElementById("detail-direction"),
         detailRh: document.getElementById("detail-rh"),
         detailCloud: document.getElementById("detail-cloud"),
@@ -3328,7 +3366,7 @@
       function compactNumericFields(data) {
         if (!data || !data.meta) return;
         const keys = [
-          "temp", "feels_like", "rain", "press", "rh", "cloud",
+          "temp", "feels_like", "rain", "press", "rh", "cloud", "gust",
           "convection_prob", "hail_threat", "visibility",
           "freezing_rain", "foehn"
         ];
@@ -3817,6 +3855,9 @@
 
       function unavailableLayerMessage(key) {
         const meta = currentData && currentData.meta ? currentData.meta : {};
+        if (key === "gust") {
+          return "Raffiche non disponibili per questa scadenza";
+        }
         if (key === "freezing_rain") {
           return meta.freezingRainMessage ||
             "Rischio gelicidio non disponibile per questa scadenza";
@@ -8949,6 +8990,7 @@
         ui.detailFeels.textContent = formatValue(fieldValue("feels", point.gx, point.gy), 1, "°C");
         ui.detailRain.textContent = formatValue(fieldValue("rain", point.gx, point.gy), 1, "mm");
         ui.detailWind.textContent = formatValue(fieldValue("wind", point.gx, point.gy), 0, "km/h");
+        ui.detailGust.textContent = formatValue(fieldValue("gust", point.gx, point.gy), 0, "km/h");
         ui.detailDirection.textContent = formatWindDirection(windDirection);
         ui.detailRh.textContent = formatValue(fieldValue("rh", point.gx, point.gy), 0, "%");
         ui.detailCloud.textContent = formatValue(fieldValue("cloud", point.gx, point.gy), 0, "%");
@@ -8973,6 +9015,12 @@
           ui.detailTemp.textContent,
           ui.detailWind.textContent + " " + ui.detailDirection.textContent,
         ];
+        // La raffica entra solo quando dice qualcosa in piu' del vento medio:
+        // sotto i 40 km/h e' la stessa notizia scritta due volte.
+        const gust = fieldValue("gust", point.gx, point.gy);
+        if (Number.isFinite(gust) && gust >= 40) {
+          summary.push("raffiche " + Math.round(gust) + " km/h");
+        }
         const rain = fieldValue("rain", point.gx, point.gy);
         if (Number.isFinite(rain) && rain >= 0.1) {
           summary.push(ui.detailRain.textContent);

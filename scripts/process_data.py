@@ -1857,6 +1857,14 @@ def process_data():
                     ),
                     "rh": clean_for_json(rh_val, 0),
                     "cloud": clean_for_json(cloud, 0),
+                    # Raffica massima a 10 m. Il campo era gia' scaricato per
+                    # la diagnostica convettiva e per i meteogrammi, ma non
+                    # arrivava alla mappa: e' la raffica a fare i danni, non il
+                    # vento medio. Pubblicata in km/h, come viene mostrata.
+                    "gust": (
+                        clean_for_json(np.asarray(wind_gust_10m) * 3.6, 0)
+                        if wind_gust_10m is not None else None
+                    ),
                     "convection_prob": (
                         clean_for_json(convection_prob, 1)
                         if convection_prob is not None else None
