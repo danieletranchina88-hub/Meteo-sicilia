@@ -2179,12 +2179,16 @@
               <button class="toggle-row" type="button" data-toggle="isobars" aria-pressed="false">
                 <span><b>Isobare e A/B</b><small>passo 2 hPa · marcate ogni 4</small></span><span class="switch"></span>
               </button>
-              <!-- Particelle e vettori sono due modi di disegnare lo stesso
-                   campo u/v: tenerli come due interruttori indipendenti
-                   permetteva di accenderli insieme, cioe' due tele intere
-                   ridisegnate a ogni fotogramma per dire la stessa cosa. -->
-              <button class="toggle-row" type="button" data-toggle="windanim" aria-pressed="false">
-                <span><b>Vento animato</b><small>flusso reale da u/v</small></span><span class="switch"></span>
+              <!-- Due modi di disegnare lo stesso campo u/v, separati perche'
+                   servono a cose diverse: le frecce dicono la direzione in un
+                   colpo d'occhio, le particelle fanno vedere il flusso. Accesi
+                   insieme sono due tele intere ridisegnate a ogni fotogramma,
+                   quindi le particelle avvisano di quanto pesano. -->
+              <button class="toggle-row" type="button" data-toggle="vectors" aria-pressed="false">
+                <span><b>Vettori di vento</b><small>direzione · colore e lunghezza = velocità</small></span><span class="switch"></span>
+              </button>
+              <button class="toggle-row" type="button" data-toggle="flow" aria-pressed="false">
+                <span><b>Particelle di vento</b><small>flusso animato da u/v · pesa sul telefono</small></span><span class="switch"></span>
               </button>
               <button class="toggle-row" type="button" data-toggle="radar" aria-pressed="false">
                 <span><b>Radar precipitazioni</b><small>RainViewer HD · osservato</small></span><span class="switch"></span>
@@ -5102,7 +5106,8 @@
         ui.levelSelect.value = selectedLevel;
 
         const states = {
-          windanim: showParticles || showVectors,
+          flow: showParticles,
+          vectors: showVectors,
           isobars: showIsobars,
           isotherms: showIsotherms,
           isohypses: showIsohypses,
@@ -5377,21 +5382,19 @@
       }
 
       function setToggle(name) {
-        if (name === "windanim") {
-          // Particelle e frecce sono due modi di disegnare lo stesso campo
-          // u/v. Accesi insieme erano due tele intere ridisegnate a ogni
-          // fotogramma per dire la stessa cosa, e sui telefoni di fascia media
-          // si vedeva. Ora si accendono e si spengono insieme; sul telefono le
-          // particelle restano spente, che e' la meta' che costa.
-          const wanted = !(showParticles || showVectors);
-          showVectors = wanted;
-          showParticles = wanted && !isMobile() && !prefersReducedMotion;
-          if (showParticles) startParticles();
-          else stopParticles();
+        if (name === "vectors") {
+          showVectors = !showVectors;
           requestVectorRender();
-          if (wanted && !showParticles) {
-            toast("Vento animato: frecce di flusso"
-              + (isMobile() ? " · particelle spente per non appesantire" : ""));
+        } else if (name === "flow") {
+          showParticles = !showParticles;
+          if (showParticles) {
+            startParticles();
+            // Le particelle sono la meta' costosa del disegno del vento: una
+            // tela intera ridisegnata a ogni fotogramma. Sul telefono si
+            // accendono solo se le si chiede, e conviene dirlo.
+            if (isMobile()) toast("Particelle attive · sul telefono pesano");
+          } else {
+            stopParticles();
           }
         } else if (name === "isotherms") {
           showIsotherms = !showIsotherms;
@@ -6258,7 +6261,13 @@
         return { prominence: best, region: bestRegion };
       }
 
-      function detectPressureCenters(pressure, meta) {
+      // presmoothed: il campo in ingresso e' gia' l'analisi sinottica. Il sito
+      // gliela passa sempre, perche' centri e isobare devono stare sullo stesso
+      // campo; ma allora lisciare di nuovo a 120 km significa filtrare due
+      // volte, e il risultato e' cosi' piatto che nessun contorno chiuso arriva
+      // a un'isobara di prominenza. Misurato sui passi reali: con la doppia
+      // lisciatura zero centri, senza la seconda l'anticiclone torna.
+      function detectPressureCenters(pressure, meta, presmoothed) {
         const nx = meta.nx;
         const ny = meta.ny;
         const middleLatitude = meta.la1 - (ny - 1) * meta.dy / 2;
@@ -6276,10 +6285,18 @@
         if (gx < 9 || gy < 9) return [];
 
         // Scala sinottica: due passaggi di media mobile approssimano una
-        // gaussiana meglio di uno, a parita' di costo.
-        const smoothingRadius = Math.max(1, Math.round(CENTER_SMOOTHING_KM / cellKm / 2));
-        let field = smoothPressureGrid(coarse.values, gx, gy, smoothingRadius);
-        field = smoothPressureGrid(field, gx, gy, smoothingRadius);
+        // gaussiana meglio di uno, a parita' di costo. Saltati quando il campo
+        // arriva gia' analizzato: li' il grosso del lavoro l'ha fatto chi
+        // chiama, e l'infittimento a celle da CENTER_ANALYSIS_KM basta a
+        // togliere quello che resta del rumore di piccola scala.
+        let field = coarse.values;
+        if (!presmoothed) {
+          const smoothingRadius = Math.max(
+            1, Math.round(CENTER_SMOOTHING_KM / cellKm / 2)
+          );
+          field = smoothPressureGrid(field, gx, gy, smoothingRadius);
+          field = smoothPressureGrid(field, gx, gy, smoothingRadius);
+        }
 
         const candidates = [];
         for (let y = 1; y < gy - 1; y += 1) {
@@ -6649,7 +6666,7 @@
 
         let accepted = [];
         try {
-          accepted = detectPressureCenters(analysis, meta);
+          accepted = detectPressureCenters(analysis, meta, true);
         } catch (error) {
           console.error("Errore nel rilevamento dei centri di pressione", error);
         }
@@ -7364,7 +7381,11 @@
         const color = paper
           ? (kind === "A" ? "#961319" : "#123f74")
           : (kind === "A" ? "#e21b2d" : "#1266d6");
-        const halo = paper ? "rgba(244,239,227,0.96)" : "rgba(255,255,255,0.98)";
+        // Sul fondo crema un alone bianco non stacca: la A resta un'ombra
+        // rossa su una tinta chiara. Serve un alone che faccia da bordo, non
+        // da schiarita.
+        const halo = paper ? "rgba(244,239,227,0.96)"
+          : (showSatellite ? "rgba(6,14,20,0.82)" : "rgba(255,255,255,0.96)");
         const family = paper
           ? '"Iowan Old Style", "Palatino Linotype", Palatino, Georgia, serif'
           : "system-ui, -apple-system, Segoe UI, sans-serif";
@@ -7377,8 +7398,15 @@
         vectorContext.font = (paper ? "700 " : "950 ")
           + (mobile ? 31 : 36) + "px " + family;
         vectorContext.strokeStyle = halo;
-        vectorContext.lineWidth = 6;
+        vectorContext.lineWidth = 7;
         vectorContext.strokeText(kind, point.x, point.y);
+        // Un filo di inchiostro attorno alla lettera: e' quello che la fa
+        // leggere come un simbolo stampato invece che come una macchia.
+        if (!paper) {
+          vectorContext.strokeStyle = "rgba(10,20,28,0.55)";
+          vectorContext.lineWidth = 1.6;
+          vectorContext.strokeText(kind, point.x, point.y);
+        }
         vectorContext.fillStyle = color;
         vectorContext.fillText(kind, point.x, point.y);
 
@@ -9282,23 +9310,74 @@
         const longitudeFraction =
           (MODEL_DOMAIN.east - MODEL_DOMAIN.west) / 360;
         const latitudeFraction = (northY - southY) / (2 * Math.PI);
+        // La mappa occupa tutto lo schermo, ma la fascia utile no: sopra c'e'
+        // l'intestazione e sotto la timeline, che sono opachi. Inquadrare il
+        // dominio sull'altezza intera lo fa finire in parte sotto quei
+        // pannelli -- e un centro barico sul bordo sud del modello veniva
+        // disegnato a 816 pixel su 900, cioe' dietro la timeline. Non era il
+        // rilevatore a sbagliare: era la cornice.
+        const topPanel = 92;
+        const bottomPanel = 104;
+        const usableHeight = Math.max(height - topPanel - bottomPanel, 120);
         const zoomX = Math.log2(width / (512 * longitudeFraction));
-        const zoomY = Math.log2(height / (512 * latitudeFraction));
-        const centreMercatorY = (southY + northY) / 2;
+        const zoomY = Math.log2(usableHeight / (512 * latitudeFraction));
+        const zoom = Math.min(zoomX, zoomY);
+        // Il centro si sposta di meta' dello sbilanciamento fra i due
+        // pannelli, cosi' il dominio sta al centro della fascia che si vede.
+        const worldPx = 512 * Math.pow(2, zoom);
+        const centreMercatorY = (southY + northY) / 2
+          + ((topPanel - bottomPanel) / 2 / worldPx) * 2 * Math.PI;
         const centreLatitude = Math.atan(Math.sinh(centreMercatorY)) * 180 / Math.PI;
         return {
           center: [
             (MODEL_DOMAIN.west + MODEL_DOMAIN.east) / 2,
             centreLatitude
           ],
-          zoom: Math.min(zoomX, zoomY)
+          zoom: zoom
         };
+      }
+
+      // I limiti di trascinamento vanno allargati quanto basta perche' TUTTO il
+      // dominio sia raggiungibile. Con limiti esattamente uguali al dominio,
+      // MapLibre stringe la vista per farci stare il lato piu' vincolante: su
+      // uno schermo largo entra la longitudine e restano fuori le fasce sud e
+      // nord del modello, che diventano irraggiungibili. Su 1360x900 la vista
+      // si fermava a 36-47 gradi contro un dominio di 33,7-48,9: il canale di
+      // Sicilia e la costa africana non si potevano vedere, e un centro barico
+      // che cadeva li' non era un difetto del rilevatore ma della cornice.
+      function paddedModelBounds(view) {
+        const el = document.getElementById("map");
+        const width = (el && el.clientWidth) || window.innerWidth || 1280;
+        const height = (el && el.clientHeight) || window.innerHeight || 720;
+        const worldPx = 512 * Math.pow(2, view.zoom);
+        const mercatorY = function (lat) {
+          return Math.log(Math.tan(Math.PI / 4 + (lat * Math.PI) / 180 / 2));
+        };
+        const lonSpan = (width / worldPx) * 360;
+        const latSpanMercator = (height / worldPx) * 2 * Math.PI;
+        const centreMercator =
+          (mercatorY(MODEL_DOMAIN.north) + mercatorY(MODEL_DOMAIN.south)) / 2;
+        const northPadded = Math.atan(
+          Math.sinh(centreMercator + latSpanMercator / 2)
+        ) * 180 / Math.PI;
+        const southPadded = Math.atan(
+          Math.sinh(centreMercator - latSpanMercator / 2)
+        ) * 180 / Math.PI;
+        const lonPad = Math.max(
+          0, (lonSpan - (MODEL_DOMAIN.east - MODEL_DOMAIN.west)) / 2
+        );
+        return [
+          [MODEL_DOMAIN.west - lonPad,
+           Math.min(MODEL_DOMAIN.south, southPadded)],
+          [MODEL_DOMAIN.east + lonPad,
+           Math.max(MODEL_DOMAIN.north, northPadded)]
+        ];
       }
 
       function lockMapToModelDomain(resetView) {
         if (!map) return;
         const view = modelDomainView();
-        map.setMaxBounds(MODEL_BOUNDS);
+        map.setMaxBounds(paddedModelBounds(view));
         map.setMinZoom(view.zoom);
         if (resetView) {
           map.jumpTo({ center: view.center, zoom: view.zoom, bearing: 0, pitch: 0 });
@@ -9315,7 +9394,7 @@
           zoom: startView.zoom,
           maxZoom: 12.5,
           minZoom: startView.zoom,
-          maxBounds: MODEL_BOUNDS,
+          maxBounds: paddedModelBounds(startView),
           dragPan: true,
           scrollZoom: true,
           doubleClickZoom: true,

@@ -70,10 +70,26 @@ assert.match(html, /const MODEL_DOMAIN = \{ west: 3\.0, south: 33\.7, east: 22\.
   "i confini della mappa non coincidono con il dominio ICON-2I");
 assert.match(html, /const CLOUD_DOMAIN = MODEL_DOMAIN;/,
   "il satellite non copre esattamente la stessa area del modello");
-assert.match(html, /const zoomX = Math\.log2\(width \/ \(512 \* longitudeFraction\)\);[\s\S]{0,520}?zoom: Math\.min\(zoomX, zoomY\)/,
-  "lo zoom iniziale non adatta tutto il dominio allo schermo");
-assert.match(html, /minZoom: startView\.zoom,\s*\n\s*maxBounds: MODEL_BOUNDS,/,
+// Lo zoom iniziale adatta il dominio alla fascia UTILE, non all'altezza
+// intera: intestazione e timeline sono opachi, e quello che finisce sotto di
+// loro e' come se non ci fosse. Un centro barico sul bordo sud veniva
+// disegnato a 816 pixel su 900, cioe' dietro la timeline.
+assert.match(html, /const usableHeight = Math\.max\(height - topPanel - bottomPanel, 120\);/,
+  "lo zoom iniziale non tiene conto dei pannelli opachi");
+assert.match(html, /const zoomY = Math\.log2\(usableHeight \/ \(512 \* latitudeFraction\)\);/,
+  "lo zoom iniziale non adatta tutto il dominio alla fascia utile");
+assert.match(html, /\(\(topPanel - bottomPanel\) \/ 2 \/ worldPx\) \* 2 \* Math\.PI/,
+  "il centro non si sposta per compensare i pannelli");
+// I limiti di trascinamento sono il dominio ALLARGATO quanto basta perche'
+// tutto il dominio sia raggiungibile: con limiti esattamente uguali al
+// dominio, su uno schermo largo MapLibre stringe la vista per far entrare la
+// longitudine e le fasce sud e nord restano irraggiungibili.
+assert.match(html, /minZoom: startView\.zoom,\s*\n\s*maxBounds: paddedModelBounds\(startView\),/,
   "zoom-out o trascinamento possono ancora uscire dal dominio del modello");
+assert.match(html, /function paddedModelBounds\(/,
+  "i limiti non tengono conto della forma dello schermo");
+assert.match(html, /map\.setMaxBounds\(paddedModelBounds\(view\)\);/,
+  "dopo un ridimensionamento i limiti tornano a tagliare il dominio");
 assert.match(html, /map\.resize\(\);\s*\n\s*lockMapToModelDomain\(false\);/,
   "ruotando il telefono il limite del dominio non viene ricalcolato");
 assert.match(meteogramHtml, /id="weather-strip"/,
@@ -837,17 +853,21 @@ assert.match(html, /<details class="drawer-more">/,
     "e' tornato in prima vista un interruttore raro: " + rare);
 });
 
-// Particelle e frecce sono due disegni dello stesso campo u/v: un solo
-// interruttore, e sul telefono la meta' costosa resta spenta.
-assert.doesNotMatch(html, /data-toggle="flow"/,
-  "e' tornato l'interruttore separato delle particelle");
-assert.doesNotMatch(html, /data-toggle="vectors"/,
-  "e' tornato l'interruttore separato dei vettori");
-assert.match(html, /data-toggle="windanim"/, "manca il vento animato unico");
-const windToggle = html.match(/if \(name === "windanim"\)[\s\S]*?\} else if/);
-assert.ok(windToggle, "il vento animato non e' gestito");
-assert.match(windToggle[0], /showParticles = wanted && !isMobile\(\)/,
-  "sul telefono le particelle si accendono ancora insieme alle frecce");
+// Frecce e particelle sono due disegni dello stesso campo u/v ma rispondono a
+// domande diverse -- dove va il vento, e come scorre -- quindi due
+// interruttori. Le particelle restano la meta' costosa: non si accendono da
+// sole scegliendo il campo vento sul telefono.
+assert.match(html, /data-toggle="vectors"/, "manca l'interruttore dei vettori");
+assert.match(html, /data-toggle="flow"/, "manca l'interruttore delle particelle");
+assert.doesNotMatch(html, /data-toggle="windanim"/,
+  "i due interruttori del vento sono di nuovo uno solo");
+const windToggle = html.match(/if \(name === "vectors"\)[\s\S]*?\} else if \(name === "isotherms"\)/);
+assert.ok(windToggle, "i due interruttori del vento non sono gestiti");
+assert.match(windToggle[0], /name === "flow"/, "le particelle non hanno un ramo proprio");
+const windLayer = html.match(/if \(nextLayer === "wind" && !synopticChart\)[\s\S]*?\n {8}\}/);
+assert.ok(windLayer, "scelta del campo vento assente");
+assert.match(windLayer[0], /if \(!isMobile\(\) && !prefersReducedMotion\)/,
+  "sul telefono le particelle si accendono ancora da sole col campo vento");
 
 // Il bollettino sale dal basso invece di coprire la mappa dall'alto.
 assert.match(html, /@media \(max-width: 959px\) \{[\s\S]{0,400}?#bulletin-card \{[\s\S]{0,300}?border-radius: 20px 20px 0 0;/,
@@ -977,8 +997,16 @@ const pressureProducts = html.match(/function buildPressureProducts\([\s\S]*?\n 
 assert.ok(pressureProducts, "buildPressureProducts assente");
 assert.match(pressureProducts[0], /createIsobarFeatures\(analysis, meta\)/,
   "le isobare sono ancora tracciate sul campo grezzo");
-assert.match(pressureProducts[0], /detectPressureCenters\(analysis, meta\)/,
+// I centri seguono lo stesso campo delle isobare, e devono dichiarare che
+// arriva gia' analizzato: lisciarlo una seconda volta lo appiattisce al punto
+// che nessun contorno chiuso raggiunge un'isobara di prominenza, e sui passi
+// reali sparivano tutti i centri.
+assert.match(pressureProducts[0], /detectPressureCenters\(analysis, meta, true\)/,
   "i centri barici non seguono il campo mostrato dalle isobare");
+const centreDetector = html.match(/function detectPressureCenters\([\s\S]*?\n {6}\}\n/);
+assert.ok(centreDetector, "detectPressureCenters assente");
+assert.match(centreDetector[0], /if \(!presmoothed\) \{/,
+  "il rilevatore liscia di nuovo un campo gia' analizzato");
 assert.match(pressureProducts[0], /_pressureProductKind === productKind/,
   "la cache delle isobare non distingue modello e fusione METAR");
 assert.match(html, /if \(activeLayer === "press" && fieldGrid\)[\s\S]*?pressureAnalysisGrid\(/,
