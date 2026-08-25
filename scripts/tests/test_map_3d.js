@@ -879,6 +879,13 @@ assert.match(html, /function enableSwipeToClose\(/,
 assert.match(html, /\.header-button \{[\s\S]{0,120}?min-width: 44px;\s*\n\s*height: 44px;/,
   "i pulsanti dell'intestazione sono sotto la misura minima da dito");
 
+// Il confine del modello va detto, non subito. Il campo colorato si ferma al
+// bordo del dominio: senza una maschera fuori resta la carta nuda, e si legge
+// come un difetto di disegno invece che come "qui la previsione finisce".
+assert.match(html, /function generateModelMask\(/, "maschera del dominio assente");
+assert.match(html, /id: "model-mask-layer"/, "il fuori dominio non viene velato");
+assert.match(html, /id: "model-edge-layer"/, "il bordo del dominio non e' tracciato");
+
 // --- Carta sinottica -------------------------------------------------------
 assert.ok(html.includes('data-toggle="synoptic"'),
   "manca l'interruttore della carta sinottica");
