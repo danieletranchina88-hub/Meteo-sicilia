@@ -9362,7 +9362,21 @@
         const usableHeight = Math.max(height - topPanel - bottomPanel, 120);
         const zoomX = Math.log2(width / (512 * longitudeFraction));
         const zoomY = Math.log2(usableHeight / (512 * latitudeFraction));
-        const zoom = Math.min(zoomX, zoomY);
+        // Due zoom, e servono a due cose diverse.
+        //
+        // fit: il dominio ci sta tutto, e diventa il limite minimo. Sotto
+        // questo non si scende, cosi' non si arriva mai a vedere il resto del
+        // mondo attorno a un modello ad area limitata.
+        //
+        // fill: la vista di partenza, che RIEMPIE lo schermo. Il dominio e'
+        // quasi quadrato e uno schermo e' largo: aprirsi gia' inquadrati
+        // lascia due fasce vuote ai lati, e una carta che si apre con un terzo
+        // di niente sembra rotta. Si parte pieni, e chi vuole i bordi del
+        // modello allontana di poco -- ora puo' farlo, perche' i limiti di
+        // trascinamento non tagliano piu' il dominio.
+        const fit = Math.min(zoomX, zoomY);
+        const fill = Math.max(zoomX, zoomY);
+        const zoom = fit;
         // Il centro si sposta di meta' dello sbilanciamento fra i due
         // pannelli, cosi' il dominio sta al centro della fascia che si vede.
         const worldPx = 512 * Math.pow(2, zoom);
@@ -9374,7 +9388,8 @@
             (MODEL_DOMAIN.west + MODEL_DOMAIN.east) / 2,
             centreLatitude
           ],
-          zoom: zoom
+          zoom: zoom,
+          fillZoom: fill
         };
       }
 
@@ -9421,7 +9436,9 @@
         map.setMaxBounds(paddedModelBounds(view));
         map.setMinZoom(view.zoom);
         if (resetView) {
-          map.jumpTo({ center: view.center, zoom: view.zoom, bearing: 0, pitch: 0 });
+          map.jumpTo({
+            center: view.center, zoom: view.fillZoom, bearing: 0, pitch: 0
+          });
         } else if (map.getZoom() < view.zoom) {
           map.setZoom(view.zoom);
         }
@@ -9432,7 +9449,9 @@
         map = new maplibregl.Map({
           container: "map",
           center: startView.center,
-          zoom: startView.zoom,
+          // Si parte pieni, ma non si puo' scendere sotto lo zoom che fa
+          // entrare tutto il dominio.
+          zoom: startView.fillZoom,
           maxZoom: 12.5,
           minZoom: startView.zoom,
           maxBounds: paddedModelBounds(startView),
