@@ -285,7 +285,10 @@ def prepare_icon_front_analyzer(run_dt):
     frontal geometry. T/QV and U/V at 925 hPa test whether both the air-mass
     boundary and the cross-front flow survive closer to the surface. T/QV/U/V
     at 700 hPa measure vertical coherence and tilt; omega is a secondary
-    ascent diagnostic. Consecutive 10 m winds supply a temporal WND check.
+    ascent diagnostic. The 700--500 hPa wind supplies a weak steering prior,
+    FI500 describes the parent synoptic wave, true surface pressure masks
+    below-ground 925-hPa samples, and consecutive 10 m winds supply a
+    temporal WND check.
     """
     run_tag = run_dt.strftime("%Y%m%d%H")
     common = f"ICON_2I_SURFACE_PRESSURE_LEVELS_{run_tag}"
@@ -318,6 +321,7 @@ def prepare_icon_front_analyzer(run_dt):
         "v_wind_10": (f"{run_base}/V_10M/{height_file_10}", "v10_ml.grib"),
         "orography": (f"{run_base}/HSURF/{surface_file}", "hsurf.grib"),
         "pressure": (f"{run_base}/PMSL/{mean_sea_file}", "pmsl.grib"),
+        "surface_pressure": (f"{run_base}/PS/{surface_file}", "ps.grib"),
     }
     # Questi campi aggiungono prove indipendenti, ma non definiscono la linea.
     # Sono opzionali per non inventare dati e non bloccare l'analisi primaria.
@@ -326,7 +330,7 @@ def prepare_icon_front_analyzer(run_dt):
         "u_wind_925", "v_wind_925", "omega_700",
         "temperature_700", "humidity_700", "u_wind_700", "v_wind_700",
         "u_wind_500", "v_wind_500",
-        "geopotential_500", "u_wind_10", "v_wind_10",
+        "geopotential_500", "u_wind_10", "v_wind_10", "surface_pressure",
     }
 
     if os.path.exists(FRONT_TEMP_DIR):
@@ -334,7 +338,7 @@ def prepare_icon_front_analyzer(run_dt):
     os.makedirs(FRONT_TEMP_DIR)
     paths = {}
     print(
-        "2a. Scarico ICON-2I 850 hPa e diagnostica opzionale 925/700 hPa…",
+        "2a. Scarico ICON-2I 850 hPa e diagnostica opzionale 925/700/500 hPa + PS…",
         flush=True,
     )
 
@@ -418,10 +422,17 @@ def prepare_icon_front_analyzer(run_dt):
             upper_humidity_path=paths.get("humidity_700"),
             upper_u_wind_path=paths.get("u_wind_700"),
             upper_v_wind_path=paths.get("v_wind_700"),
+            mid_u_wind_path=paths.get("u_wind_500"),
+            mid_v_wind_path=paths.get("v_wind_500"),
+            geopotential_500_path=paths.get("geopotential_500"),
             surface_u_wind_path=paths.get("u_wind_10"),
             surface_v_wind_path=paths.get("v_wind_10"),
+            surface_pressure_path=paths.get("surface_pressure"),
             omega_700_path=paths.get("omega_700"),
-            downsample=4,
+            # 4.4-km analysis grid: the physics still uses 45--100 km
+            # smoothing, while curves and junctions retain twice the spatial
+            # detail of the previous 8.8-km front grid.
+            downsample=2,
             bounds=(3.0, 22.0, 33.7, 48.9),
             method=ICON_FRONT_METHOD,
             source="ICON-2I",

@@ -163,6 +163,18 @@ if untouched_props.get("warmSideReoriented") or not np.allclose(kept, east_to_we
     print("FAIL: una linea gia' orientata bene e' stata invertita")
     ok = False
 
+# --- v18: PS masks an isobaric level below the actual model surface -------
+mask_analyzer = object.__new__(v12.IconSynopticFrontAnalyzer)
+mask_analyzer.terrain = np.array([[0.0, 500.0], [900.0, 1_500.0]])
+mask_analyzer._surface_pressure_pa = lambda hour: np.array(
+    [[101_000.0, 94_000.0], [92_550.0, 88_000.0]]
+)
+level_mask = mask_analyzer._level_valid_mask(0, 92_500.0)
+print("maschera PS 925 hPa:", level_mask.tolist())
+if level_mask.tolist() != [[True, True], [False, False]]:
+    print("FAIL: il livello 925 hPa sotto terra non viene mascherato da PS")
+    ok = False
+
 # --- shared-ridge topology: one trunk, independent branch retained ----------
 owner = np.array([[7.0, 44.0], [17.0, 44.0]])
 branching = np.array([

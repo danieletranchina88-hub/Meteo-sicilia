@@ -1,4 +1,4 @@
-"""Global front tracking, motion classification and uncertainty (v13).
+"""Global front tracking, motion classification and uncertainty (v18).
 
 Tracking is a central part of the algorithm, not a persistence filter.
 Candidates from consecutive hours are linked into tracks by a **global**
@@ -68,6 +68,9 @@ DIAGNOSTIC_KEYS = (
     "profileValidFraction", "profileThermalSupport", "profilePeakGradient",
     "frontWidthKm", "frontOffsetKm", "airMassHomogeneity",
     "verticalCoherence", "frontWidth925Km",
+    "steeringUMs", "steeringVMs", "steeringSpeedMs",
+    "steeringBearingDeg", "deepLayerWindChangeMs",
+    "height500M", "deltaHeight500M",
 )
 
 
@@ -133,6 +136,33 @@ def _symmetric_distance_km(line_a: np.ndarray, line_b: np.ndarray) -> float:
     dba = np.min(np.hypot(b[:, None, 0] - a[None, :, 0],
                           b[:, None, 1] - a[None, :, 1]), axis=1)
     return 0.5 * (float(np.mean(dab)) + float(np.mean(dba)))
+
+
+def _shorter_line_overlap_fraction(
+    line_a: np.ndarray, line_b: np.ndarray, radius_km: float
+) -> float:
+    """Fraction of the shorter line supported by the longer one.
+
+    This deliberately differs from a symmetric distance.  A front may grow
+    or shrink by hundreds of kilometres along its own axis while retaining
+    the same physical core; in that case its centroid moves but the shorter
+    geometry still lies on the longer one.  Conversely, two disjoint pieces
+    of the same long thermal ridge have almost no direct overlap and must not
+    be linked merely because their infinite-axis orientation is similar.
+    """
+    line_a = np.asarray(line_a, dtype=float)
+    line_b = np.asarray(line_b, dtype=float)
+    mean_lat = math_mean_lat(line_a, line_b)
+    a = _project_km(_resample(line_a), mean_lat)
+    b = _project_km(_resample(line_b), mean_lat)
+    shorter, longer = (
+        (a, b) if _length_km(line_a) <= _length_km(line_b) else (b, a)
+    )
+    distances = np.hypot(
+        shorter[:, None, 0] - longer[None, :, 0],
+        shorter[:, None, 1] - longer[None, :, 1],
+    )
+    return float(np.mean(np.min(distances, axis=1) <= radius_km))
 
 
 def math_mean_lat(*lines: np.ndarray) -> float:
@@ -203,9 +233,30 @@ class Track:
 
     def predicted_line(self, hour: int) -> np.ndarray:
         """Predict geometry at ``hour`` by extrapolating the last motion."""
-        last = self.lines[self.hours[-1]]["coordinates"]
+        last_candidate = self.lines[self.hours[-1]]
+        last = last_candidate["coordinates"]
         if len(self.hours) < 2:
-            return last
+            # A first association has no geometric velocity yet.  ICON's
+            # 700--500 hPa steering flow is useful only as a weak prior:
+            # fronts do not move exactly with the mid-level wind, therefore
+            # advect just one quarter of that displacement.  The hard
+            # continuity gates below remain authoritative.
+            try:
+                u = float(last_candidate.get("steeringUMs"))
+                v = float(last_candidate.get("steeringVMs"))
+            except (TypeError, ValueError):
+                return last
+            speed = float(np.hypot(u, v))
+            if not np.isfinite(speed) or speed > 90.0:
+                return last
+            elapsed = max(hour - self.hours[-1], 0)
+            latitude = float(np.mean(last[:, 1]))
+            lon_km = EARTH_KM_PER_DEG * max(np.cos(np.deg2rad(latitude)), 0.25)
+            shift = np.array([
+                0.25 * u * 3.6 * elapsed / lon_km,
+                0.25 * v * 3.6 * elapsed / EARTH_KM_PER_DEG,
+            ])
+            return last + shift
         prev = self.lines[self.hours[-2]]["coordinates"]
         dt_hist = self.hours[-1] - self.hours[-2]
         dt_pred = hour - self.hours[-1]
@@ -225,6 +276,22 @@ def _assignment_cost(track: Track, candidate: dict, hour: int,
     # 6-hour steps while using a physical gate for ICON's hourly sequence.
     physical_gate = min(gate_km, 45.0 + 35.0 * gap_hours)
     if distance > physical_gate:
+        return np.inf
+    # Symmetric nearest-line distance is insufficient for long fronts: two
+    # disjoint fragments can sit on the same axis and look deceptively close
+    # after one fragment grows.  Reject a centroid teleport unless a large
+    # part of the shorter line is still the same boundary.
+    previous_line = np.asarray(
+        track.lines[track.hours[-1]]["coordinates"], dtype=float
+    )
+    mean_lat = math_mean_lat(previous_line, line)
+    previous_centroid = _project_km(previous_line, mean_lat).mean(axis=0)
+    candidate_centroid = _project_km(np.asarray(line, dtype=float), mean_lat).mean(axis=0)
+    centroid_speed = float(np.hypot(*(candidate_centroid - previous_centroid))) / gap_hours
+    direct_overlap = _shorter_line_overlap_fraction(
+        previous_line, line, 55.0 + 20.0 * max(gap_hours - 1, 0)
+    )
+    if centroid_speed > 100.0 and direct_overlap < 0.45:
         return np.inf
     orient = _orientation_diff(predicted, line)
     if orient > 70.0:
@@ -920,6 +987,13 @@ def segment_types_for_track(
             # and stationary stretches survive.
             opposite = "warm" if anchor == "cold" else "cold"
             raw = ["stationary" if label == opposite else label for label in raw]
+        elif anchor == "stationary":
+            # A stationary boundary is one exclusive frontal arc.  Local
+            # nearest-point displacement on a changing line extent is too
+            # noisy to turn its opposite ends into simultaneous cold and
+            # warm fronts; such a transition requires a separate tracked
+            # identity or the dedicated occlusion topology.
+            raw = ["stationary"] * len(raw)
         smoothed = _mode_filter(raw, radius=2)
         segments = _merge_short_runs(smoothed, min_run)
         pieces = []

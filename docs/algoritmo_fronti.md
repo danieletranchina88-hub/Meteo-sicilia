@@ -1,4 +1,4 @@
-# Analisi oggettiva dei fronti ICON-2I (v17-precision)
+# Analisi oggettiva dei fronti ICON-2I (v18-topology)
 
 ## Scopo e limite fondamentale
 
@@ -12,7 +12,7 @@ Meteorologico. `qualityScore` e `uncertaintyIndex` descrivono la coerenza
 interna delle prove in un singolo run deterministico: non sono probabilità
 calibrate e non misurano l'errore previsionale assoluto.
 
-Il metodo operativo è `icon2i-ofa-physics-guided-v17-precision`.
+Il metodo operativo è `icon2i-ofa-physics-guided-v18-topology`.
 
 ## Dati usati
 
@@ -24,10 +24,18 @@ Per ogni run 00/12 UTC e per tutte le 73 scadenze orarie:
   opzionali;
 - T, QV, U e V a 700 hPa: struttura verticale, inclinazione e vento in quota,
   opzionali;
+- U e V e geopotenziale a 500 hPa: steering 700–500 hPa e contesto dell'onda
+  sinottica, opzionali e mai usati come prova autonoma d'esistenza;
 - U e V a 10 m su ore consecutive: controllo temporale del salto di vento,
   opzionali;
 - OMEGA a 700 hPa: attività/ascesa frontale, opzionale;
+- PS: maschera esatta delle superfici isobariche sotto il terreno, opzionale;
 - HSURF: controllo orografico.
+
+L'analisi frontale usa ora la griglia ICON-2I ricampionata a circa **4,4 km**
+(`downsample=2`), anziché circa 8,8 km. Le scale fisiche di smoothing restano
+45–100 km: la maggiore densità non crea dettagli mesoscalari artificiali, ma
+descrive meglio curve, estremi e giunzioni della stessa struttura sinottica.
 
 ## Livelli disponibili nella mappa
 
@@ -39,13 +47,13 @@ del livello e pressione di saturazione di Bolton. I livelli in quota vengono
 esportati su una griglia di ispezione alleggerita (~19 km), sufficiente per la
 lettura sinottica e molto più leggera sul cellulare. Se un run non contiene
 un livello opzionale, l'interfaccia non lo sostituisce né lo interpola: torna
-al suolo e avvisa l'utente. A 925 hPa le celle sopra 650 m di orografia sono
-mascherate: a quella quota la superficie di pressione può trovarsi dentro il
-rilievo, quindi un valore visualizzato sarebbe fisicamente fuorviante.
+al suolo e avvisa l'utente. A 925 hPa il motore frontale confronta **PS** con
+925 hPa e maschera ogni cella in cui la superficie isobarica cade nel terreno;
+solo se PS manca usa il precedente ripiego orografico a 650 m.
 
 Il livello 850 hPa riduce il rumore dello strato limite e i contrasti diurni.
-Il livello 925 hPa interseca il terreno già attorno a 750 m: sopra 650 m i
-campioni vengono esclusi. Dove almeno il 60% del confronto resta valido, la
+Il livello 925 hPa interseca il terreno già attorno a 750 m. Dove almeno il
+60% del confronto resta valido, la
 coerenza termica a 925 hPa diventa una porta obbligatoria; altrove non viene
 inventato un dato sostitutivo. Omega resta una prova morbida: un fronte maturo
 o frontolitico può esistere senza forte ascesa istantanea.
@@ -53,6 +61,38 @@ o frontolitico può esistere senza forte ascesa istantanea.
 La fonte ufficiale descrive ICON-2I come modello deterministico a circa
 2,2 km, dominio 3–22°E / 33–49°N, orizzonte +72 h:
 [MeteoHub — dataset ICON-2I](https://meteohub.agenziaitaliameteo.it/app/datasets).
+
+### Revisione geometrica v18
+
+Il controllo del run operativo ha mostrato che la fisica poteva essere
+corretta mentre la linea finale risultava incoerente. Il problema nasceva
+dopo il tracking: quando due tracce condividevano un lungo tronco, il
+deconflitto conservava ad ogni ora il frammento indipendente più lungo. Quel
+frammento poteva essere l'estremità occidentale a un'ora e quella orientale
+all'ora successiva, producendo un salto di centinaia di chilometri che non
+esisteva nella traccia meteorologica originale.
+
+La v18 tratta quindi l'output come un insieme di **archi frontali esclusivi**:
+
+- il tronco condiviso ha un solo proprietario;
+- un frammento rifilato deve mantenere continuità di centroide, orientamento o
+  sovrapposizione diretta con il frammento precedente;
+- se due frammenti rifilati implicano oltre 110 km/h senza almeno il 45% di
+  nucleo comune, viene soppresso quello meno completo;
+- un arco freddo o caldo può contenere un tratto stazionario, ma non il tipo
+  di moto opposto;
+- se dopo un taglio resta soltanto il tratto stazionario, anche `frontType`
+  diventa `stationary`;
+- un ramo occluso riceve simboli occlusi su tutta la propria estensione e il
+  ramo freddo residuo rimappa le frazioni sul nuovo arco;
+- `publishedMotionQc` misura i salti sulla geometria finale, non sul candidato
+  precedente al raffinamento.
+
+Il vento medio 700–500 hPa entra soltanto come prior debole (25% dello
+spostamento passivo) quando una traccia ha ancora una sola osservazione. Il
+moto geometrico misurato resta prioritario: un fronte non è una particella
+trasportata integralmente dal vento in quota. FI500 descrive l'onda associata
+e viene archiviato nei diagnostici, senza spostare la linea termica.
 
 ## 1. Variabili termiche indipendenti
 
@@ -729,6 +769,11 @@ La workflow blocca la pubblicazione se falliscono i test sintetici:
 - il motore differenziale valuta tutte le ipotesi e sceglie il verdetto;
 - stabilità temporale del tipo (Viterbi): rimozione del flip caldo↔freddo,
   conservazione di una fase reale prolungata;
+- esclusività degli archi: nessun segmento caldo dentro un fronte freddo,
+  nessun doppio segno su uno stazionario e simboli occlusi sull'intero ramo;
+- stabilità post-deconflitto: soppressione del frammento che salta fra due
+  estremità, conservando invece una normale crescita lungo lo stesso asse;
+- maschera 925 hPa basata sulla pressione al suolo reale;
 - estrazione a cresta (`front_ridge`): la linea rifinita segue il crinale del
   supporto staccandosi da una guess storta, una banda larga dà una sola linea,
   il percorso evita una penalità di terreno a parità di supporto, resta sulla

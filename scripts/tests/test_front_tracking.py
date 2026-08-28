@@ -374,5 +374,36 @@ if tr_weakhour:
 else:
     print("R) FAIL: traccia con ora debole assente"); ok = False
 
+# S) A stationary tracked identity cannot display simultaneous cold/warm
+# symbols merely because its two ends changed length in opposite directions.
+stationary_mixed = ft.Track(7, 0, _cand(lambda x: 42.0))
+stationary_mixed.hours.append(1)
+stationary_mixed.lines[1] = _cand(
+    lambda x: 41.7 if x >= 14.0 else 42.3
+)
+stationary_segments = ft.segment_types_for_track(
+    stationary_mixed,
+    {0: {"frontType": "stationary"}, 1: {"frontType": "stationary"}},
+)[0]
+stationary_labels = {item["type"] for item in stationary_segments}
+print(f"S) arco stazionario esclusivo: {stationary_labels}")
+if stationary_labels != {"stationary"}:
+    print("  FAIL: un arco stazionario non puo' essere caldo e freddo insieme")
+    ok = False
+
+# T) Before a second observation exists, the 700--500 hPa flow is only a
+# quarter-strength steering prior, never a full passive advection.
+steered_candidate = _cand(lambda x: 42.0)
+steered_candidate["steeringUMs"] = 20.0
+steered_candidate["steeringVMs"] = 0.0
+steered = ft.Track(8, 0, steered_candidate)
+predicted = steered.predicted_line(1)
+shift_km = float(np.mean(predicted[:, 0] - steered_candidate["coordinates"][:, 0])) \
+    * 111.32 * np.cos(np.deg2rad(42.0))
+print(f"T) prior di steering 500/700: {shift_km:.1f} km/h")
+if not 17.0 <= shift_km <= 19.0:
+    print("  FAIL: lo steering deve valere un quarto del vento di strato")
+    ok = False
+
 print("\nESITO:", "SUPERATO" if ok else "DA RIVEDERE")
 raise SystemExit(0 if ok else 1)

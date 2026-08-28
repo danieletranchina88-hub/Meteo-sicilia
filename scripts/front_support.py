@@ -82,7 +82,11 @@ _DEFAULTS = {
     "vertical_grad_weak": 0.6, "vertical_grad_full": 2.5,  # K/100 km (925 hPa)
     "pressure_lap_weak": 0.0, "pressure_lap_full": 8.0e-4,  # hPa/km^2 trough proxy
     "terrain_soft_m": 900.0, "terrain_hard_m": 1600.0,
-    "edge_soft_km": 70.0, "edge_hard_km": 0.0,
+    # The ICON-2I file already covers the complete model domain.  A 70-km
+    # exclusion created a conspicuous artificial inner frame; retain a
+    # conservative taper for derivative uncertainty without cutting a
+    # synoptic front off far before the published map boundary.
+    "edge_soft_km": 35.0, "edge_hard_km": 0.0,
 }
 
 # Positive-evidence weights for the combined field. Thermodynamic existence

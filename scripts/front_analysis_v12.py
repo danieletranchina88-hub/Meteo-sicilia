@@ -1,4 +1,4 @@
-"""ICON-2I objective synoptic-front analysis, precision physics engine (v17).
+"""ICON-2I objective synoptic-front analysis, system topology engine (v18).
 
 The detector is intentionally conservative.  It identifies the warm-air
 edge of baroclinic zones in wet-bulb potential temperature at 850 hPa, then
@@ -26,12 +26,13 @@ import front_physics as fp
 import front_ridge as fridge
 import front_sections as fsec
 import front_support as fsup
+import front_topology as ftop
 import front_tracking as ftk
 import thermodynamics as thermo
 from front_analysis import SynopticFrontAnalyzer, _blend_lines, _line_length_km, _rdp
 
 
-FRONT_METHOD = "icon2i-ofa-physics-guided-v17-precision"
+FRONT_METHOD = "icon2i-ofa-physics-guided-v18-topology"
 ANALYSIS_PRESSURE_PA = 85_000.0
 LOWER_PRESSURE_PA = 92_500.0
 UPPER_PRESSURE_PA = 70_000.0
@@ -148,6 +149,7 @@ MIN_BRANCH_LENGTH_KM = 100.0
 # peggiore). Un solo interruttore, reversibile: False torna ai contorni.
 REFINE_PUBLISHED_GEOMETRY = True
 GEOMETRY_CORRIDOR_KM = 120.0
+BOUNDARY_MARGIN_KM = 25.0
 
 
 def _finite_median(values, default=np.nan) -> float:
@@ -237,6 +239,7 @@ def _remap_segment_types(
         remapped[0]["start"] = 0.0
         remapped[-1]["end"] = 1.0
         properties["segmentTypes"] = remapped
+        ftop.cohere_feature_type(properties)
     else:
         properties.pop("segmentTypes", None)
 
@@ -339,8 +342,12 @@ class IconSynopticFrontAnalyzer(SynopticFrontAnalyzer):
         upper_humidity_path: str | None = None,
         upper_u_wind_path: str | None = None,
         upper_v_wind_path: str | None = None,
+        mid_u_wind_path: str | None = None,
+        mid_v_wind_path: str | None = None,
+        geopotential_500_path: str | None = None,
         surface_u_wind_path: str | None = None,
         surface_v_wind_path: str | None = None,
+        surface_pressure_path: str | None = None,
         omega_700_path: str | None = None,
         ml_guidance=None,
         **kwargs,
@@ -350,6 +357,8 @@ class IconSynopticFrontAnalyzer(SynopticFrontAnalyzer):
         self.method = str(requested_method or FRONT_METHOD)
         self._thermodynamic_cache: dict[tuple[int, int], dict[str, np.ndarray]] = {}
         self._pressure_cache: dict[int, np.ndarray] = {}
+        self._surface_pressure_cache: dict[int, np.ndarray] = {}
+        self._height_500_cache: dict[int, np.ndarray] = {}
         self._tracks: list[dict] | None = None
         self._by_hour: dict[int, list[tuple[np.ndarray, dict]]] | None = None
         self.analysis_summary: dict | None = None
@@ -464,6 +473,7 @@ class IconSynopticFrontAnalyzer(SynopticFrontAnalyzer):
 
         for paths, keys, level in (
             ((upper_u_wind_path, upper_v_wind_path), ("u700", "v700"), 700.0),
+            ((mid_u_wind_path, mid_v_wind_path), ("u500", "v500"), 500.0),
             ((surface_u_wind_path, surface_v_wind_path), ("u10", "v10"), None),
         ):
             if not all(paths):
@@ -488,6 +498,40 @@ class IconSynopticFrontAnalyzer(SynopticFrontAnalyzer):
                 for key in added:
                     self.datasets.pop(key).close()
                     self.keys.pop(key, None)
+
+        if surface_pressure_path:
+            try:
+                dataset = self._open_field(surface_pressure_path, "ps")
+                self._validate_optional_dataset(dataset, "ps", None)
+                variable = next(iter(dataset.data_vars))
+                values = np.asarray(dataset[variable].values, dtype=float)
+                median = _finite_median(values)
+                if not 75_000.0 < median < 110_000.0:
+                    raise ValueError("pressione al suolo non espressa in Pa")
+                self.datasets["ps"] = dataset
+                self.keys["ps"] = variable
+            except Exception:
+                try:
+                    dataset.close()
+                except Exception:
+                    pass
+
+        if geopotential_500_path:
+            try:
+                dataset = self._open_field(geopotential_500_path, "fi500")
+                self._validate_optional_dataset(dataset, "fi500", 500.0)
+                variable = next(iter(dataset.data_vars))
+                values = np.asarray(dataset[variable].values, dtype=float)
+                median = _finite_median(values)
+                if not (3_000.0 < median < 70_000.0):
+                    raise ValueError("geopotenziale 500 hPa fuori scala")
+                self.datasets["fi500"] = dataset
+                self.keys["fi500"] = variable
+            except Exception:
+                try:
+                    dataset.close()
+                except Exception:
+                    pass
 
         if omega_700_path:
             try:
@@ -553,6 +597,18 @@ class IconSynopticFrontAnalyzer(SynopticFrontAnalyzer):
     @property
     def has_surface_wind(self) -> bool:
         return "u10" in self.datasets and "v10" in self.datasets
+
+    @property
+    def has_mid_wind(self) -> bool:
+        return "u500" in self.datasets and "v500" in self.datasets
+
+    @property
+    def has_surface_pressure(self) -> bool:
+        return "ps" in self.datasets
+
+    @property
+    def has_geopotential_500(self) -> bool:
+        return "fi500" in self.datasets
 
     @staticmethod
     def _offset_points(
@@ -639,6 +695,56 @@ class IconSynopticFrontAnalyzer(SynopticFrontAnalyzer):
         self._pressure_cache[hour] = pressure
         return pressure
 
+    def _surface_pressure_pa(self, hour: int) -> np.ndarray | None:
+        """True model surface pressure in Pa, used for below-ground masks."""
+        if not self.has_surface_pressure:
+            return None
+        cached = self._surface_pressure_cache.get(hour)
+        if cached is not None:
+            return cached
+        pressure = np.asarray(self._field("ps", hour), dtype=float)
+        if _finite_median(pressure) < 2_000.0:
+            pressure = pressure * 100.0
+        pressure = np.where(
+            np.isfinite(pressure) & (pressure > 50_000.0)
+            & (pressure < 115_000.0),
+            pressure,
+            np.nan,
+        )
+        self._surface_pressure_cache[hour] = pressure
+        return pressure
+
+    def _level_valid_mask(self, hour: int, pressure_pa: float) -> np.ndarray:
+        """Where a pressure surface is safely above the model terrain."""
+        surface_pressure = self._surface_pressure_pa(hour)
+        if surface_pressure is not None:
+            # A small buffer avoids treating a level numerically coincident
+            # with the ground as a representative free-atmosphere sample.
+            return np.isfinite(surface_pressure) & (
+                surface_pressure >= float(pressure_pa) + 150.0
+            )
+        if pressure_pa >= LOWER_PRESSURE_PA:
+            return self.terrain <= 650.0
+        return np.ones_like(self.terrain, dtype=bool)
+
+    def _height_500_m(self, hour: int) -> np.ndarray | None:
+        """500-hPa geopotential height in metres, accepting FI or height."""
+        if not self.has_geopotential_500:
+            return None
+        cached = self._height_500_cache.get(hour)
+        if cached is not None:
+            return cached
+        values = np.asarray(self._field("fi500", hour), dtype=float)
+        if _finite_median(values) > 10_000.0:
+            values = values / 9.80665
+        values = np.where(
+            np.isfinite(values) & (values > 3_500.0) & (values < 7_000.0),
+            values,
+            np.nan,
+        )
+        self._height_500_cache[hour] = values
+        return values
+
     def _central_tendency(self, field_getter, hour: int) -> np.ndarray | None:
         window = max(1, int(self.tendency_window_hours))
         previous = [h for h in self.available_hours if h < hour and hour - h <= window]
@@ -664,7 +770,8 @@ class IconSynopticFrontAnalyzer(SynopticFrontAnalyzer):
         # 925 hPa intersects terrain around 750 m.  Mask model values where
         # that pressure surface is not a trustworthy low-level air-mass
         # sample; 850 hPa remains the primary geometry across mountains.
-        lower[(self.terrain > 650.0) | ~np.isfinite(lower)] = np.nan
+        lower[~self._level_valid_mask(hour, LOWER_PRESSURE_PA)] = np.nan
+        lower[~np.isfinite(lower)] = np.nan
         return fd.detect_fronts_two_scale(
             lower,
             self.longitudes,
@@ -676,7 +783,7 @@ class IconSynopticFrontAnalyzer(SynopticFrontAnalyzer):
             min_synoptic_support=0.52,
             synoptic_min_length_km=300.0,
             refine_min_length_km=180.0,
-            boundary_margin_km=70.0,
+            boundary_margin_km=BOUNDARY_MARGIN_KM,
         )
 
     def _detect_hour(self, hour: int) -> list[dict]:
@@ -693,7 +800,7 @@ class IconSynopticFrontAnalyzer(SynopticFrontAnalyzer):
             min_synoptic_support=0.60,
             synoptic_min_length_km=350.0,
             refine_min_length_km=220.0,
-            boundary_margin_km=70.0,
+            boundary_margin_km=BOUNDARY_MARGIN_KM,
             **(self._threshold_climatology or {}),
         )
         # Independent directional ridge geometry.  It confirms position and
@@ -712,7 +819,7 @@ class IconSynopticFrontAnalyzer(SynopticFrontAnalyzer):
             min_synoptic_support=0.60,
             synoptic_min_length_km=350.0,
             refine_min_length_km=220.0,
-            boundary_margin_km=70.0,
+            boundary_margin_km=BOUNDARY_MARGIN_KM,
             locator_method=fl.LOCATOR_HEWSON,
             **(self._threshold_climatology or {}),
         )
@@ -736,7 +843,7 @@ class IconSynopticFrontAnalyzer(SynopticFrontAnalyzer):
             min_synoptic_support=0.60,
             synoptic_min_length_km=350.0,
             refine_min_length_km=220.0,
-            boundary_margin_km=70.0,
+            boundary_margin_km=BOUNDARY_MARGIN_KM,
             **(self._threshold_climatology or {}),
         )
 
@@ -894,9 +1001,10 @@ class IconSynopticFrontAnalyzer(SynopticFrontAnalyzer):
                 self._field("omega700", hour), 80.0, grid_metrics
             )
         theta_w_925 = None
+        lower_level_valid = self._level_valid_mask(hour, LOWER_PRESSURE_PA)
         if self.has_lower_level:
             theta_w_925 = self._theta_w(hour, 925).copy()
-            theta_w_925[self.terrain > 650.0] = np.nan
+            theta_w_925[~lower_level_valid] = np.nan
         theta_w_700 = self._theta_w(hour, 700) if self.has_upper_level else None
         upper_u_wind = upper_v_wind = None
         if self.has_upper_wind:
@@ -906,6 +1014,17 @@ class IconSynopticFrontAnalyzer(SynopticFrontAnalyzer):
             upper_v_wind = fl.smooth_km(
                 self._field("v700", hour), REFINE_SIGMA_KM, grid_metrics
             )
+        mid_u_wind = mid_v_wind = None
+        if self.has_mid_wind:
+            mid_u_wind = fl.smooth_km(
+                self._field("u500", hour), 80.0, grid_metrics
+            )
+            mid_v_wind = fl.smooth_km(
+                self._field("v500", hour), 80.0, grid_metrics
+            )
+        height_500 = self._height_500_m(hour)
+        if height_500 is not None:
+            height_500 = fl.smooth_km(height_500, 160.0, grid_metrics)
 
         # Parfitt-F is evaluated at 925 hPa where valid, otherwise 850 hPa.
         # It remains a sampled confirmation of thermally located candidates.
@@ -915,10 +1034,9 @@ class IconSynopticFrontAnalyzer(SynopticFrontAnalyzer):
                 parfitt_t = self._field("t925", hour).copy()
                 parfitt_u = self._field("u925", hour).copy()
                 parfitt_v = self._field("v925", hour).copy()
-                terrain_mask = self.terrain > 650.0
-                parfitt_t[terrain_mask] = np.nan
-                parfitt_u[terrain_mask] = np.nan
-                parfitt_v[terrain_mask] = np.nan
+                parfitt_t[~lower_level_valid] = np.nan
+                parfitt_u[~lower_level_valid] = np.nan
+                parfitt_v[~lower_level_valid] = np.nan
             else:
                 parfitt_t, parfitt_u, parfitt_v = raw_temperature, raw_u, raw_v
             parfitt = fcon.parfitt_f_field(
@@ -1042,9 +1160,10 @@ class IconSynopticFrontAnalyzer(SynopticFrontAnalyzer):
             center_v = self._sample(v_wind, coordinates)
             lower_wind_fraction = 0.0
             if lower_u_wind is not None and lower_v_wind is not None:
-                terrain_line = self._sample(self.terrain, coordinates)
-                terrain_warm = self._sample(self.terrain, warm)
-                terrain_cold = self._sample(self.terrain, cold)
+                valid_lower_float = lower_level_valid.astype(float)
+                valid_line = self._sample(valid_lower_float, coordinates)
+                valid_warm = self._sample(valid_lower_float, warm)
+                valid_cold = self._sample(valid_lower_float, cold)
                 lower_center_u = self._sample(lower_u_wind, coordinates)
                 lower_center_v = self._sample(lower_v_wind, coordinates)
                 lower_warm_u = self._sample(lower_u_wind, warm)
@@ -1052,15 +1171,15 @@ class IconSynopticFrontAnalyzer(SynopticFrontAnalyzer):
                 lower_cold_u = self._sample(lower_u_wind, cold)
                 lower_cold_v = self._sample(lower_v_wind, cold)
                 usable_center = (
-                    (terrain_line < 650.0)
+                    (valid_line >= 0.80)
                     & np.isfinite(lower_center_u) & np.isfinite(lower_center_v)
                 )
                 usable_warm = (
-                    (terrain_warm < 650.0)
+                    (valid_warm >= 0.80)
                     & np.isfinite(lower_warm_u) & np.isfinite(lower_warm_v)
                 )
                 usable_cold = (
-                    (terrain_cold < 650.0)
+                    (valid_cold >= 0.80)
                     & np.isfinite(lower_cold_u) & np.isfinite(lower_cold_v)
                 )
                 lower_wind_fraction = float(np.mean(
@@ -1143,6 +1262,54 @@ class IconSynopticFrontAnalyzer(SynopticFrontAnalyzer):
                     self._sample(self.terrain, coordinates) > 1_200.0
                 )),
             }
+
+            # Mid-tropospheric steering is a continuity prior, not evidence
+            # that a front exists.  Use the layer mean when both 700 and
+            # 500 hPa are available; the measured line displacement remains
+            # the primary motion signal in front_tracking.
+            steering_u = steering_v = None
+            if (
+                upper_u_wind is not None and upper_v_wind is not None
+                and mid_u_wind is not None and mid_v_wind is not None
+            ):
+                steering_u = 0.60 * upper_u_wind + 0.40 * mid_u_wind
+                steering_v = 0.60 * upper_v_wind + 0.40 * mid_v_wind
+            elif upper_u_wind is not None and upper_v_wind is not None:
+                steering_u, steering_v = upper_u_wind, upper_v_wind
+            if steering_u is not None and steering_v is not None:
+                steering_u_points = self._sample(steering_u, coordinates)
+                steering_v_points = self._sample(steering_v, coordinates)
+                steering_u_ms = _finite_median(steering_u_points)
+                steering_v_ms = _finite_median(steering_v_points)
+                metrics["steeringUMs"] = steering_u_ms
+                metrics["steeringVMs"] = steering_v_ms
+                metrics["steeringSpeedMs"] = float(np.hypot(
+                    steering_u_ms, steering_v_ms
+                ))
+                metrics["steeringBearingDeg"] = float(
+                    np.degrees(np.arctan2(steering_u_ms, steering_v_ms)) % 360.0
+                )
+                if mid_u_wind is not None and mid_v_wind is not None:
+                    mid_u_points = self._sample(mid_u_wind, coordinates)
+                    mid_v_points = self._sample(mid_v_wind, coordinates)
+                    metrics["deepLayerWindChangeMs"] = _finite_median(
+                        np.hypot(
+                            mid_u_points - center_u,
+                            mid_v_points - center_v,
+                        )
+                    )
+
+            # FI500 places the boundary in its parent synoptic wave.  It is
+            # retained as a diagnostic rather than a gate because a strong
+            # surface front can precede or lag the upper trough.
+            if height_500 is not None:
+                line_height = self._sample(height_500, coordinates)
+                warm_height = self._sample(height_500, warm)
+                cold_height = self._sample(height_500, cold)
+                metrics["height500M"] = _finite_median(line_height)
+                metrics["deltaHeight500M"] = _finite_median(
+                    warm_height - cold_height
+                )
             metrics.update(fcon.line_consensus_metrics(
                 coordinates, self.longitudes, self.latitudes,
                 parfitt=parfitt,
@@ -1406,7 +1573,10 @@ class IconSynopticFrontAnalyzer(SynopticFrontAnalyzer):
             "lowerWind925": self.has_lower_wind,
             "upperLevel700": self.has_upper_level,
             "upperWind700": self.has_upper_wind,
+            "steeringWind500": self.has_mid_wind,
+            "geopotential500": self.has_geopotential_500,
             "temporalWind10m": self.has_surface_wind,
+            "surfacePressureMask": self.has_surface_pressure,
             "omega700": "omega700" in self.datasets,
             "pressure": "p" in self.datasets,
             "mlFusion": getattr(self, "ml_guidance", None) is not None,
@@ -1512,8 +1682,19 @@ class IconSynopticFrontAnalyzer(SynopticFrontAnalyzer):
         for hour, entries in by_hour.items():
             by_hour[hour], changed = deconflict_shared_front_trunks(entries)
             deconflicted += changed
+            for _, properties in by_hour[hour]:
+                ftop.cohere_feature_type(properties)
         self.analysis_summary["deconflictedSharedTrunks"] = deconflicted
+        suppressed, unresolved = ftop.stabilize_deconflicted_branches(by_hour)
+        self.analysis_summary["suppressedTeleportingBranches"] = suppressed
+        self.analysis_summary["unresolvedPublishedTransitions"] = unresolved
         self._occlusion_hours = self._apply_occlusions(by_hour)
+        for entries in by_hour.values():
+            for _, properties in entries:
+                ftop.cohere_feature_type(properties)
+        self.analysis_summary["publishedMotionQc"] = (
+            ftop.published_motion_statistics(by_hour)
+        )
         self._by_hour = by_hour
 
     def _orient_published_line(
@@ -1606,16 +1787,35 @@ class IconSynopticFrontAnalyzer(SynopticFrontAnalyzer):
                 coords, props = entries[fi]
                 coords = np.asarray(coords, dtype=float)
                 triple, low_idx = occ["tripleIndex"], occ["lowIndex"]
+                segment_lengths = np.hypot(
+                    np.diff(coords[:, 0])
+                    * 111.32
+                    * np.cos(np.deg2rad(0.5 * (
+                        coords[:-1, 1] + coords[1:, 1]
+                    ))),
+                    np.diff(coords[:, 1]) * 111.32,
+                )
+                cumulative = np.r_[0.0, np.cumsum(segment_lengths)]
+                total = max(float(cumulative[-1]), 1.0e-9)
+                triple_fraction = float(cumulative[triple] / total)
                 if triple <= low_idx:
                     occluded_part = coords[triple:low_idx + 1]
                     cold_part = coords[:triple + 1]
+                    cold_fraction = (0.0, triple_fraction)
                 else:
                     occluded_part = coords[low_idx:triple + 1]
                     cold_part = coords[triple:]
+                    cold_fraction = (triple_fraction, 1.0)
                 if len(occluded_part) < 3:
                     continue
                 occ_props = dict(props)
                 occ_props["frontType"] = "occluded"
+                occ_props["segmentTypes"] = [{
+                    "start": 0.0,
+                    "end": 1.0,
+                    "type": "occluded",
+                    "certainty": 1.0,
+                }]
                 occ_props["occlusion"] = {
                     "lowPressureHpa": round(occ["low"]["pressure"], 1),
                     "triplePoint": occ["triplePoint"],
@@ -1632,7 +1832,14 @@ class IconSynopticFrontAnalyzer(SynopticFrontAnalyzer):
                 # The trailing cold front keeps its identity only if a real
                 # segment survives past the triple point.
                 if len(cold_part) >= 3:
-                    entries[fi] = (np.asarray(cold_part, dtype=float), props)
+                    cold_props = dict(props)
+                    _remap_segment_types(
+                        cold_props, cold_fraction[0], cold_fraction[1]
+                    )
+                    ftop.cohere_feature_type(cold_props)
+                    entries[fi] = (
+                        np.asarray(cold_part, dtype=float), cold_props
+                    )
                     entries.append((occluded_part, occ_props))
                 else:
                     entries[fi] = (occluded_part, occ_props)
@@ -1882,6 +2089,18 @@ class IconSynopticFrontAnalyzer(SynopticFrontAnalyzer):
             "level": "850 hPa",
             "lowerLevelSupport": "925 hPa" if self.has_lower_level else None,
             "upperLevelSupport": "700 hPa" if self.has_upper_level else None,
+            "steeringWind": (
+                "700-500 hPa" if self.has_mid_wind and self.has_upper_wind
+                else "700 hPa" if self.has_upper_wind else None
+            ),
+            "geopotentialContext": (
+                "500 hPa" if self.has_geopotential_500 else None
+            ),
+            "belowGroundMask": (
+                "surface-pressure" if self.has_surface_pressure
+                else "orography-fallback"
+            ),
+            "analysisGridKm": 4.4,
             "classificationWind": "925/850 hPa" if self.has_lower_wind else "850 hPa",
             "temporalWindDiagnostic": "10 m / 6 h" if self.has_surface_wind else None,
             "estimated": True,
