@@ -91,3 +91,13 @@ assert (
     in pipeline_source
 )
 assert '"helicityField": "UH_MAX-updraft-helicity-not-SRH"' in pipeline_source
+
+# Senza coordinate nella query string la pagina deve mantenere il punto
+# predefinito (Palermo): Number(null) vale 0 e non deve trasformare un parametro
+# assente in una coordinata apparentemente valida fuori dominio.
+meteogram_page = (Path(__file__).resolve().parents[2] / "meteograms.html").read_text(
+    encoding="utf-8"
+)
+assert 'params.has("lat") && params.has("lon")' in meteogram_page
+assert 'const lat = hasCoordinates ? Number(params.get("lat")) : null' in meteogram_page
+assert 'if (hasCoordinates && finite(lat) && finite(lon))' in meteogram_page
