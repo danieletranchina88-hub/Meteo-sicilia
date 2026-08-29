@@ -1596,8 +1596,8 @@ def process_data():
                             "vmax_10m", step_hours, lat, lon
                         )
                         convection_message = (
-                            "Ingredienti fisici ICON-2I acquisiti; la probabilità "
-                            "finale viene calcolata dall'algoritmo temporali unico."
+                            "Ingredienti fisici ICON-2I acquisiti; lo score "
+                            "diagnostico viene calcolato dall'algoritmo temporali unico."
                         )
                     except Exception as convection_error:
                         convection_prob = None

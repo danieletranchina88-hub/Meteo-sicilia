@@ -63,6 +63,8 @@ assert.match(radarHtml, /EUMETSAT · radar composito RainViewer/,
   "mancano le fonti visibili di satellite e radar");
 assert.match(radarHtml, /function observationTime\(value\)/,
   "i frame osservativi non espongono data e fuso del timestamp");
+assert.doesNotMatch(html, /radar in tempo reale/i,
+  "la mappa promette tempo reale per un mosaico osservato con latenza");
 
 const meteogramScripts = [...meteogramHtml.matchAll(/<script(?:\s[^>]*)?>([\s\S]*?)<\/script>/gi)]
   .map((match) => match[1]).filter((source) => source.trim());
@@ -471,7 +473,7 @@ assert.match(html, /\.brand-copy \{\s*\n\s*min-width: 0;/,
 assert.match(html, /class="brand-copy"/,
   "il blocco di testo del marchio non ha la classe che lo rende comprimibile");
 
-// Nubi osservate dal satellite in tempo reale: una sola immagine sul dominio,
+// Nubi osservate dal satellite con timestamp dichiarato: una sola immagine sul dominio,
 // resa trasparente sulla canvas perche' MapLibre non sa ricavare l'opacita'
 // dal colore di un raster.
 // Tutti i formati offerti, ognuno con il pixel nativo dello strumento.
