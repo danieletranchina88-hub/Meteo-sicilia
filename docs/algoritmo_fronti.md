@@ -1,4 +1,4 @@
-# Analisi oggettiva dei fronti ICON-2I (v18-topology)
+# Analisi oggettiva dei fronti ICON-2I (v19-auditable)
 
 ## Scopo e limite fondamentale
 
@@ -12,7 +12,7 @@ Meteorologico. `qualityScore` e `uncertaintyIndex` descrivono la coerenza
 interna delle prove in un singolo run deterministico: non sono probabilità
 calibrate e non misurano l'errore previsionale assoluto.
 
-Il metodo operativo è `icon2i-ofa-physics-guided-v18-topology`.
+Il metodo operativo è `icon2i-ofa-physics-guided-v19-auditable`.
 
 ## Dati usati
 
@@ -62,7 +62,7 @@ La fonte ufficiale descrive ICON-2I come modello deterministico a circa
 2,2 km, dominio 3–22°E / 33–49°N, orizzonte +72 h:
 [MeteoHub — dataset ICON-2I](https://meteohub.agenziaitaliameteo.it/app/datasets).
 
-### Revisione geometrica v18
+### Revisione geometrica v18–v19
 
 Il controllo del run operativo ha mostrato che la fisica poteva essere
 corretta mentre la linea finale risultava incoerente. Il problema nasceva
@@ -72,7 +72,8 @@ frammento poteva essere l'estremità occidentale a un'ora e quella orientale
 all'ora successiva, producendo un salto di centinaia di chilometri che non
 esisteva nella traccia meteorologica originale.
 
-La v18 tratta quindi l'output come un insieme di **archi frontali esclusivi**:
+La v18 tratta l'output come un insieme di **archi frontali esclusivi**; la v19
+aggiunge la riparazione conservativa dell'identità temporale:
 
 - il tronco condiviso ha un solo proprietario;
 - un frammento rifilato deve mantenere continuità di centroide, orientamento o
@@ -85,6 +86,13 @@ La v18 tratta quindi l'output come un insieme di **archi frontali esclusivi**:
   diventa `stationary`;
 - un ramo occluso riceve simboli occlusi su tutta la propria estensione e il
   ramo freddo residuo rimappa le frazioni sul nuovo arco;
+- una geometria interpolata viene rimossa se non è coerente con almeno uno dei
+  due rilevamenti che dovrebbe collegare: non si pubblica una linea che il
+  modello non ha mai risolto;
+- se due rilevamenti diretti restano incompatibili, vengono conservati entrambi
+  ma ricevono identità pubbliche distinte; `trackingSourceId` mantiene la
+  precedente associazione per l'audit e il moto non viene stimato attraverso
+  la discontinuità;
 - `publishedMotionQc` misura i salti sulla geometria finale, non sul candidato
   precedente al raffinamento.
 

@@ -26,14 +26,14 @@ La disponibilità e il formato sono verificati sul GRIB prima del calcolo:
 orarie e valori fisicamente plausibili. Nel prodotto MeteoHub ICON-2I il CIN
 è prevalentemente una magnitudine positiva; viene convertito nella convenzione
 firmata negativa. Il sentinel `-999,9` viene trasformato in dato mancante e non
-entra né nella probabilità né nelle statistiche QC.
+entra né nell'indice né nelle statistiche QC.
 
 La classe alta è possibile soltanto con:
 
 `CAPE > 800 J/kg`, `CIN > -50 J/kg`, convergenza `> 1e-4 s-1` e fronte entro
 50 km. Senza questa combinazione il risultato è limitato sotto il 70%. CAPE
 debole, CIN forte o divergenza impongono ulteriori limiti. L'output massimo è
-95%, per ricordare che il prodotto è una regola esperta e non una probabilità
+95/100, per ricordare che il prodotto è una regola esperta e non una probabilità
 ensemble calibrata.
 
 Il file `hazard_qc.json` salva per ogni ora massimo, 95° percentile, celle
@@ -43,7 +43,7 @@ supera il 15% del dominio oppure se un valore fisso all'80% ricopre oltre il
 5%. Il test `test_convection.py` contiene una regressione specifica contro il
 precedente campo nazionale fisso all'80%.
 
-## Probabilità di temporale entro 10 km
+## Indice diagnostico di temporale entro 10 km
 
 Metodo corrente: `icon2i-physical-evidence-fusion-v2`.
 
@@ -63,13 +63,13 @@ coerenza e spiegazioni concorrenti. Le famiglie di evidenza sono:
 - **innesco:** convergenza, brezza di mare o lago, risalita orografica, omega
   a 700 hPa e vicinanza a un fronte fisicamente diagnosticato;
 - **corroborazione:** presenza dell'LPI nell'ora precedente o successiva,
-  shear 0–6 km ed elicità dell'updraft.
+  shear 0–6 km e updraft helicity (UH_MAX, distinta dalla SRH ambientale).
 
 I meccanismi alternativi di sollevamento usano il più forte, non la somma: una
 brezza debole non diventa intensa solo perché cade vicino a un pendio o a un
 fronte. Gli ingredienti necessari interagiscono invece in modo moltiplicativo,
 così CAPE elevata senza umidità o innesco non genera da sola un'alta
-probabilità; lo stesso vale per shear ed elicità.
+score; lo stesso vale per shear e UH.
 
 L'algoritmo prova anche l'ipotesi opposta. Un LPI isolato, non persistente,
 senza updraft e in ambiente ostile riceve una penalità di contraddizione. Una
@@ -78,19 +78,21 @@ per CAPE locale bassa: nel nucleo maturo la CAPE può essere già stata consumat
 e la cold pool può avere stabilizzato il suolo.
 
 L'ambiente favorevole, in assenza di una cella esplicitamente risolta, è
-limitato alla fascia di possibilità d'innesco e non supera il 42%. La fascia
-alta cresce soltanto con supporto indipendente. Insieme alla probabilità sono
+limitato alla fascia di possibilità d'innesco e non supera 42/100. La fascia
+alta cresce soltanto con supporto indipendente. Insieme allo score sono
 pubblicati `directEvidence`, `environmentSupport`, `instabilitySupport`,
 `moistureSupport`, `liftSupport`, `temporalSupport`,
 `organisationSupport`, `contradiction` e `confidence`: il valore finale resta
 quindi spiegabile e controllabile punto per punto.
 
-Questa è una probabilità diagnostica deterministica fisicamente vincolata, non
-una probabilità statisticamente calibrata. La calibrazione assoluta richiede
+Questo è uno score diagnostico deterministico fisicamente vincolato, non una
+probabilità statisticamente calibrata. Il campo di base conserva il significato
+di frequenza spaziale delle celle modellate nel vicinato, ma la successiva
+fusione di evidenze non è una frequenza osservata. La calibrazione assoluta richiede
 un archivio di previsioni storiche e fulminazioni osservate, separato per
 stagione, area geografica e lead time; fino ad allora il metodo dichiara
-esplicitamente la propria confidenza e non attribuisce ai numeri un'affidabilità
-che i dati disponibili non possono dimostrare.
+esplicitamente coerenza, copertura e contraddizioni interne senza attribuire ai
+numeri un'affidabilità che i dati disponibili non possono dimostrare.
 
 ## Bollettino automatico
 
@@ -99,7 +101,7 @@ Metodo corrente: `icon2i-conditional-nlg-v2`.
 Il testo usa soltanto:
 
 - tipi di fronte presenti nel GeoJSON dell'ora;
-- distribuzione spaziale della probabilità convettiva;
+- distribuzione spaziale dell'indice convettivo;
 - copertura delle precipitazioni;
 - percentili di temperatura e vento;
 - tendenza media di temperatura e pressione rispetto a tre ore prima.

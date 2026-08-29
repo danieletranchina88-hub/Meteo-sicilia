@@ -55,6 +55,14 @@ assert.match(radarHtml, /id="product-select"/,
   "manca il selettore dei prodotti satellitari nella pagina radar");
 assert.match(radarHtml, /World_Imagery\/MapServer\/tile/,
   "la pagina osservativa non usa una base fotografica reale");
+assert.doesNotMatch(radarHtml, /Osservazioni sincronizzate · tempo reale/,
+  "la pagina osservativa promette tempo reale senza dichiarare la latenza");
+assert.match(radarHtml, /Radar composito \+ Meteosat MTG/,
+  "le due sorgenti osservate non sono identificate con precisione");
+assert.match(radarHtml, /EUMETSAT · radar composito RainViewer/,
+  "mancano le fonti visibili di satellite e radar");
+assert.match(radarHtml, /function observationTime\(value\)/,
+  "i frame osservativi non espongono data e fuso del timestamp");
 
 const meteogramScripts = [...meteogramHtml.matchAll(/<script(?:\s[^>]*)?>([\s\S]*?)<\/script>/gi)]
   .map((match) => match[1]).filter((source) => source.trim());
@@ -101,10 +109,44 @@ assert.match(html, /map\.resize\(\);\s*\n\s*lockMapToModelDomain\(false\);/,
   "ruotando il telefono il limite del dominio non viene ricalcolato");
 assert.match(meteogramHtml, /id="weather-strip"/,
   "manca la sintesi visuale ogni tre ore");
-assert.match(meteogramHtml, /label:"Confidenza", values:s\.stormConfidence/,
-  "la probabilita' temporalesca e' mostrata senza confidenza");
+assert.match(meteogramHtml, /label:"Coerenza interna", values:s\.stormConfidence/,
+  "lo score temporalesco e' mostrato senza coerenza interna");
 assert.match(meteogramHtml, /label:"Raffica", values:s\.gust10/,
   "il meteogramma del vento ignora le raffiche");
+
+// Il sito deve distinguere variabili, diagnostiche e probabilita' calibrate.
+assert.match(html, /id="field-method-card" class="field-method-card" open/,
+  "manca la scheda scientifica del campo attivo");
+assert.match(html, /const LAYER_SCIENCE = \{/,
+  "i layer non dichiarano natura, metodo, scala e limite d'uso");
+const scienceCatalog = html.match(
+  /const LAYER_SCIENCE = \{([\s\S]*?)\n      \};\n\n      const MODEL_INFO/
+);
+assert.ok(scienceCatalog, "catalogo scientifico non delimitabile");
+[
+  "temp", "feels", "wind", "gust", "rain", "cloud", "rh", "wetbulb",
+  "press", "theta850", "geopot500", "t850", "storm_prob", "visibility",
+  "freezing_rain", "foehn"
+].forEach((key) => {
+  assert.match(scienceCatalog[1], new RegExp(
+    key + ":\\s*\\{[\\s\\S]{0,900}?nature:[\\s\\S]{0,900}?method:"
+      + "[\\s\\S]{0,900}?scale:[\\s\\S]{0,900}?limit:"
+  ), "scheda scientifica incompleta per " + key);
+});
+assert.match(html, /Score diagnostico deterministico non calibrato/,
+  "lo score temporalesco non dichiara la propria semantica");
+assert.doesNotMatch(html, />probabilità fisica · entro 10 km</,
+  "uno score deterministico viene ancora presentato come probabilita' fisica");
+assert.doesNotMatch(html, /Rotazione · elicità/,
+  "UH_MAX viene ancora confusa con la SRH ambientale");
+assert.match(html, /Updraft helicity · UH_MAX/,
+  "il campo UH_MAX non e' identificato in modo scientifico");
+assert.match(html, /const ISOBAR_INTERVAL_HPA = 4;/,
+  "le isobare non rispettano il passo sinottico di 4 hPa");
+assert.match(html, /const ISOBAR_MAJOR_EVERY = 8;/,
+  "le isobare principali non rispettano il passo di 8 hPa");
+assert.match(html, /passo 4 hPa · principali ogni 8/,
+  "l'interfaccia contraddice il passo reale delle isobare");
 
 assert.match(html, /maplibre-gl@5\.24\.0/, "MapLibre v5 stabile non caricata");
 assert.doesNotMatch(html, /map\.transform\b/, "uso di API MapLibre interna e fragile");
@@ -617,12 +659,12 @@ assert.match(html, /!upperActive && !stormActive && fieldGrid/,
   "la fusione con le stazioni si applicherebbe anche ai campi temporaleschi");
 
 // La catena: sette anelli piu' i due rischi, e l'ultimo deve parlare la
-// stessa lingua della probabilita' che sta sopra.
+// stessa lingua dello score di vicinato che sta sopra.
 assert.match(html, /function updateStormChain\(gx, gy\)/, "manca la catena convettiva");
-assert.match(html, /name: "Fulminazione · entro 10 km"/,
-  "l'ultimo anello contraddirebbe la probabilita': LPI e' puntuale, lei no");
+assert.match(html, /name: "Score temporalesco · entro 10 km"/,
+  "l'ultimo anello contraddirebbe lo score: LPI e' puntuale, lo score no");
 assert.match(html, /state: stormLinkState\(probability, 10, 40\)/,
-  "l'ultimo anello non usa la probabilita' di vicinato");
+  "l'ultimo anello non usa lo score di vicinato");
 // La trappola misurata: dentro un nucleo maturo la CAPE e' gia' consumata.
 assert.match(html, /const insideCore = Number\.isFinite\(updraft\) && updraft >= 5\s*\n\s*&& Number\.isFinite\(cape\) && cape < 500;/,
   "manca l'avviso sulla CAPE letta dentro una cella gia' matura");
@@ -951,13 +993,12 @@ assert.equal(
 
 // Il passo delle isobare dichiarato nel cartiglio deve essere quello con cui
 // sono davvero tracciate, non un numero scritto a mano.
-// Due hPa e' il passo di una carta al suolo a scala regionale. A quattro, una
-// giornata normale sull'Italia (1011-1025) produceva tre linee in tutto il
-// dominio: non si vedeva dove stesse il gradiente.
-assert.match(html, /const ISOBAR_INTERVAL_HPA = 2;/,
-  "le isobare non seguono il passo regionale di 2 hPa");
-assert.match(html, /const ISOBAR_MAJOR_EVERY = 4;/,
-  "le isobare principali non sono marcate ogni 4 hPa");
+// Quattro hPa e' il passo operativo sinottico; due produce un eccesso di
+// dettaglio su una griglia convection-permitting senza aggiungere chiarezza.
+assert.match(html, /const ISOBAR_INTERVAL_HPA = 4;/,
+  "le isobare non seguono il passo sinottico di 4 hPa");
+assert.match(html, /const ISOBAR_MAJOR_EVERY = 8;/,
+  "le isobare principali non sono marcate ogni 8 hPa");
 assert.match(html, /createContourFeatures\(\s*\n?\s*pressure, meta, ISOBAR_INTERVAL_HPA, ISOBAR_MAJOR_EVERY\s*\n?\s*\)/,
   "le isobare non usano la costante dichiarata nel cartiglio");
 // ISOBAR_MAJOR_EVERY e' un MODULO sul valore, non un moltiplicatore: sono
@@ -975,7 +1016,7 @@ assert.match(html, /buildDiscreteBands\(\s*\n?\s*PRESS_ANCHORS, 976, 1048, ISOBA
 // Le costanti servono gia' alla costruzione delle fasce: se restassero
 // dichiarate piu' in basso, leggerle da li' sarebbe un errore di zona morta.
 assert.ok(
-  html.indexOf("const ISOBAR_INTERVAL_HPA = 2;") < html.indexOf("const PRESS_ANCHORS"),
+  html.indexOf("const ISOBAR_INTERVAL_HPA = 4;") < html.indexOf("const PRESS_ANCHORS"),
   "il passo delle isobare e' dichiarato dopo le fasce che lo usano"
 );
 // La scala e' fitta dove la pressione vive davvero: senza le ancore ogni 4 hPa

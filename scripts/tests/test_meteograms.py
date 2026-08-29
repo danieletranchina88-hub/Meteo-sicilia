@@ -58,8 +58,13 @@ with tempfile.TemporaryDirectory() as temporary:
         assert all(len(values) == point_count for values in field["values"])
     assert tile["fields"]["rainStep"]["values"][2][0] == 0.5
     assert tile["fields"]["windU10"]["unit"] == "m/s"
-    assert tile["fields"]["stormConfidence"]["unit"] == "%"
-    assert tile["fields"]["convectionProbability"]["label"] == "Algoritmo temporali"
+    assert tile["fields"]["stormConfidence"]["unit"] == "/100"
+    assert tile["fields"]["stormConfidence"]["label"] == (
+        "Coerenza interna algoritmo temporali"
+    )
+    assert tile["fields"]["convectionProbability"]["label"] == (
+        "Indice diagnostico temporali"
+    )
     tile_meta = manifest["tiles"][0]
     assert (
         min(tile["grid"]["latitudes"]) < tile_meta["south"]
@@ -72,8 +77,8 @@ with tempfile.TemporaryDirectory() as temporary:
 
 print("Meteogram archive tests passed")
 
-# Bollettino, file del passo e meteogrammi devono ricevere la probabilità
-# nativa dello stesso algoritmo pubblicato sulla mappa, non il vecchio indice.
+# Bollettino, file del passo e meteogrammi devono ricevere lo score nativo
+# dello stesso algoritmo pubblicato sulla mappa, non il vecchio indice.
 pipeline_source = (Path(__file__).resolve().parents[1] / "process_data.py").read_text(
     encoding="utf-8"
 )
@@ -81,3 +86,8 @@ assert "calculate_convection_probability(" not in pipeline_source
 assert "include_native=True" in pipeline_source
 assert '"convectionProbability": convection_prob' in pipeline_source
 assert '"stormConfidence": storm_native.get("confidence")' in pipeline_source
+assert (
+    '"scoreSemantics": "deterministic-physical-support-not-calibrated-probability"'
+    in pipeline_source
+)
+assert '"helicityField": "UH_MAX-updraft-helicity-not-SRH"' in pipeline_source

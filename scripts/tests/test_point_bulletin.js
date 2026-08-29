@@ -38,13 +38,16 @@ const stormSeries = {
 const storm = buildPointBulletin(stormSeries, "Palermo");
 assert.equal(storm.title, "Bollettino per Palermo");
 assert.equal(storm.confidence, "alta");
+assert.equal(storm.dataCoverage, "alta");
+assert.equal(storm.confidenceSemantics, "data-completeness-only-not-forecast-skill");
 assert.equal(storm.completeness, 100);
 assert.ok(storm.paragraphs.some(text => text.includes("Evoluzione giorno per giorno")));
 assert.ok(storm.paragraphs.some(text => text.includes("15.0 mm")));
-assert.ok(storm.paragraphs.some(text => text.includes("82%")));
-assert.ok(storm.paragraphs.some(text => text.includes("confidenza diagnostica")));
+assert.ok(storm.paragraphs.some(text => text.includes("82/100")));
+assert.ok(storm.paragraphs.some(text => text.includes("coerenza e copertura interne")));
+assert.ok(storm.paragraphs.some(text => text.includes("non è calibrato")));
 assert.ok(storm.paragraphs.some(text => text.includes("1450 J/kg")));
-assert.ok(storm.paragraphs.some(text => text.includes("struttura frontale")));
+assert.ok(storm.paragraphs.some(text => text.includes("linea frontale oggettiva")));
 assert.ok(storm.sections.some(section => section.title === "Temporali"));
 
 const drySeries = {
@@ -56,6 +59,7 @@ const drySeries = {
 };
 const dry = buildPointBulletin(drySeries, "Siracusa");
 assert.equal(dry.confidence, "limitata");
+assert.equal(dry.dataCoverage, "limitata");
 assert.ok(dry.paragraphs.some(text => text.includes("Non emergono accumuli")));
 assert.ok(!dry.paragraphs.some(text => text.includes("0%")));
 assert.ok(!dry.paragraphs.join(" ").includes("NaN"));

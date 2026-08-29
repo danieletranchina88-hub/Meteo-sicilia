@@ -196,8 +196,8 @@
         weekday: "long", day: "2-digit", month: "short"
       }).format(group.date);
       let weather;
-      if (convection && convection.value >= 70) weather = "fase temporalesca probabile";
-      else if (convection && convection.value >= 40) weather = "possibili rovesci o temporali locali";
+      if (convection && convection.value >= 70) weather = "forte segnale diagnostico temporalesco";
+      else if (convection && convection.value >= 40) weather = "segnale diagnostico per rovesci o temporali locali";
       else if (rainfall >= 10) weather = "piogge a tratti diffuse";
       else if (rainfall >= 0.5) weather = "qualche pioggia o rovescio";
       else if (cloudiness !== null && cloudiness >= 75) weather = "molte nubi, ma fenomeni scarsi";
@@ -217,7 +217,7 @@
   function buildHeadline(data) {
     if (data.convectionMax && data.convectionMax.value >= 70) {
       if (data.stormConfidenceAtPeak !== null && data.stormConfidenceAtPeak < 45) {
-        return "Il modello propone una finestra temporalesca importante, ma con conferme fisiche incomplete: è un segnale da verificare nei prossimi aggiornamenti.";
+        return "Il modello propone una finestra temporalesca importante, ma con bassa coerenza interna: è un segnale da verificare nei prossimi aggiornamenti.";
       }
       return "Fase potenzialmente temporalesca, con una finestra di innesco marcata nel corso delle prossime 72 ore.";
     }
@@ -273,9 +273,9 @@
     if (data.convectionMax && finite(data.convectionMax.value) && data.convectionMax.value >= 40) {
       var prob = data.convectionMax.value;
       if (prob >= 70) {
-        lines.push("La diagnostica integrata, che verifica anche LPI, updraft, umidità, innesco e persistenza temporale, raggiunge il " + number(prob, 0) + "%.");
+        lines.push("La diagnostica integrata, che verifica anche LPI, updraft, umidità, innesco e persistenza temporale, raggiunge " + number(prob, 0) + "/100.");
       } else {
-        lines.push("L'algoritmo composito stima una probabilità temporalesca del " + number(prob, 0) + "%, indicativa di un rischio reale ma non generalizzato.");
+        lines.push("L'algoritmo composito raggiunge " + number(prob, 0) + "/100: è uno score deterministico di supporto temporalesco, non una frequenza osservata.");
       }
     }
 
@@ -295,16 +295,16 @@
 
     if (trend12h !== null && Math.abs(trend12h) >= 2) {
       if (trend12h < -4) {
-        lines.push("Campo barico: il barometro è in rapida caduta (" + number(Math.abs(trend12h), 1) + " hPa in 12 ore), si configura un approfondimento ciclonico con possibile peggioramento del tempo e rinforzo della ventilazione.");
+        lines.push("Campo barico: la MSLP cala rapidamente (" + number(Math.abs(trend12h), 1) + " hPa in 12 ore). Il segnale è compatibile con l'avvicinamento o l'approfondimento di una struttura depressionaria, da verificare con vento, fronti e precipitazione.");
       } else if (trend12h < -2) {
-        lines.push("Campo barico: si osserva un calo barometrico progressivo (" + number(Math.abs(trend12h), 1) + " hPa in 12 ore), coerente con l'avvicinamento di un sistema perturbato.");
+        lines.push("Campo barico: la MSLP diminuisce di " + number(Math.abs(trend12h), 1) + " hPa in 12 ore; la sola tendenza barica non identifica il tipo né l'intensità del sistema in avvicinamento.");
       } else if (trend12h > 4) {
-        lines.push("Campo barico: il barometro è in netta risalita (" + number(trend12h, 1) + " hPa in 12 ore), fase di stabilizzazione post-frontale con schiarite progressive.");
+        lines.push("Campo barico: la MSLP risale nettamente (" + number(trend12h, 1) + " hPa in 12 ore). È un segnale di aumento della pressione, ma non dimostra da solo un passaggio frontale o l'arrivo di schiarite.");
       } else {
-        lines.push("Campo barico: si nota un graduale aumento della pressione (" + number(trend12h, 1) + " hPa in 12 ore), con tendenza a condizioni più stabili.");
+        lines.push("Campo barico: la MSLP aumenta gradualmente di " + number(trend12h, 1) + " hPa in 12 ore; l'evoluzione del tempo va letta insieme agli altri campi.");
       }
     } else if (pressMin < 1000) {
-      lines.push("Campo barico: minimo puntuale di " + number(pressMin, 0) + " hPa, valore relativamente basso indicativo di una struttura ciclonica o di un sistema frontale attivo.");
+      lines.push("Campo barico: minimo puntuale di " + number(pressMin, 0) + " hPa. Il valore colloca il punto in un contesto di pressione relativamente bassa, ma non identifica da solo un ciclone o un fronte attivo.");
     }
 
     return lines.length ? lines.join(" ") : null;
@@ -316,11 +316,11 @@
     var lines = [];
 
     if (dist <= 30) {
-      lines.push("La struttura frontale è prevista in prossimità diretta del punto (distanza minima ~" + number(dist, 0) + " km). Il passaggio può accompagnarsi a rotazione del vento, variazione termica e precipitazioni organizzate.");
+      lines.push("La linea frontale oggettiva passa entro circa " + number(dist, 0) + " km dal punto. Rotazione del vento, variazione termica e precipitazioni sono segnali da verificare nei campi dedicati, non conseguenze automatiche della distanza.");
     } else if (dist <= 80) {
-      lines.push("Una struttura frontale si porta a circa " + number(dist, 0) + " km dal punto: il suo influsso è probabile, con nubi in aumento e possibili fenomeni associati al passaggio.");
+      lines.push("La linea frontale oggettiva più vicina si porta a circa " + number(dist, 0) + " km. Il punto può rientrare nella fascia frontale o nella sua incertezza posizionale, ma il coinvolgimento va confermato con vento, θw e precipitazione.");
     } else {
-      lines.push("Si individua una struttura frontale a " + number(dist, 0) + " km: il coinvolgimento del punto è incerto ma non escluso, soprattutto nelle code prefrontali e nelle bande di convezione avanzata.");
+      lines.push("La linea frontale più vicina resta a circa " + number(dist, 0) + " km: è informazione di contesto sinottico e la sola distanza non consente di attribuire fenomeni al punto.");
     }
 
     return lines.join(" ");
@@ -428,7 +428,7 @@
     if (data.convectionMax) {
       if (data.convectionMax.value >= 70) {
         let convectionText =
-          `La probabilità di temporali raggiunge il ${number(data.convectionMax.value, 0)}% attorno a ${timeAt(series, data.convectionMax.index)}.`;
+          `L'indice diagnostico temporalesco raggiunge ${number(data.convectionMax.value, 0)}/100 attorno a ${timeAt(series, data.convectionMax.index)}.`;
         if (data.capeNearConvection) {
           convectionText +=
             ` Nella finestra di ±3 ore il ML-CAPE arriva fino a ${number(data.capeNearConvection.value, 0)} J/kg`;
@@ -438,26 +438,26 @@
           convectionText += ".";
         }
         if (data.stormConfidenceAtPeak !== null) {
-          convectionText += ` La confidenza diagnostica in quell’ora è del ${number(data.stormConfidenceAtPeak, 0)}%`;
+          convectionText += ` La coerenza e copertura interne in quell’ora sono ${number(data.stormConfidenceAtPeak, 0)}/100`;
           if (data.stormContradictionAtPeak !== null && data.stormContradictionAtPeak >= 30) {
-            convectionText += `, con contraddizioni interne al ${number(data.stormContradictionAtPeak, 0)}%`;
+            convectionText += `, con contraddizioni interne ${number(data.stormContradictionAtPeak, 0)}/100`;
           }
           convectionText += ".";
         }
         if (data.stormHighDuration >= 2) {
-          convectionText += ` La soglia del 70% persiste per ${data.stormHighDuration} ore consecutive.`;
+          convectionText += ` La soglia 70/100 persiste per ${data.stormHighDuration} ore consecutive.`;
         }
         convectionText +=
-          " Il segnale indica un innesco credibile, ma non garantisce che una cella colpisca esattamente il punto.";
+          " Lo score non è calibrato su fulmini osservati e non garantisce che una cella colpisca il punto.";
         addSection("Temporali", convectionText);
       } else if (data.convectionMax.value >= 40) {
         addSection("Temporali",
-          `È presente una finestra di instabilità moderata attorno a ${timeAt(series, data.convectionMax.index)}, con probabilità temporalesca massima del ${number(data.convectionMax.value, 0)}%. ` +
-          "Il rischio riguarda soprattutto rovesci o temporali locali, non fenomeni necessariamente diffusi."
+          `È presente una finestra di supporto convettivo moderato attorno a ${timeAt(series, data.convectionMax.index)}, con indice temporalesco massimo ${number(data.convectionMax.value, 0)}/100. ` +
+          "Il valore descrive una diagnostica deterministica, non la frequenza attesa dei temporali."
         );
       } else {
         addSection("Temporali",
-          `Il segnale temporalesco rimane basso: il massimo puntuale è del ${number(data.convectionMax.value, 0)}%, previsto attorno a ${timeAt(series, data.convectionMax.index)}.`
+          `Il segnale temporalesco rimane basso: il massimo puntuale è ${number(data.convectionMax.value, 0)}/100, previsto attorno a ${timeAt(series, data.convectionMax.index)}.`
         );
       }
     }
@@ -516,7 +516,7 @@
         text += `, che potrebbe scendere fino a circa ${number(data.visibilityMin.value / 1000, 1)} km attorno a ${timeAt(series, data.visibilityMin.index)}`;
       }
       if (data.fogMax && data.fogMax.value >= 35) {
-        text += `. La probabilità diagnostica di nebbia raggiunge il ${number(data.fogMax.value, 0)}%`;
+        text += `. L'indice diagnostico di nebbia raggiunge ${number(data.fogMax.value, 0)}/100`;
       }
       addSection("Visibilità", text + ".");
     }
@@ -538,13 +538,15 @@
     const completeness = available.length / REQUIRED_FIELDS.length;
     return {
       schemaVersion: 1,
-      method: "icon2i-point-timeseries-nlg-v2",
+      method: "icon2i-point-timeseries-nlg-v3-scientific",
       title: "Bollettino per " + location,
       validity: rangeLabel(series),
       headline: headline,
       paragraphs,
       sections,
+      dataCoverage: completeness >= 0.9 ? "alta" : completeness >= 0.65 ? "media" : "limitata",
       confidence: completeness >= 0.9 ? "alta" : completeness >= 0.65 ? "media" : "limitata",
+      confidenceSemantics: "data-completeness-only-not-forecast-skill",
       completeness: Math.round(completeness * 100),
       availableFields: available,
       metrics: {
@@ -552,9 +554,9 @@
         temperatureMinimumC: data.temperatureMin && data.temperatureMin.value,
         temperatureMaximumC: data.temperatureMax && data.temperatureMax.value,
         windMaximumKmh: data.windMax && data.windMax.value,
-        convectionMaximumPct: data.convectionMax && data.convectionMax.value
+        convectionMaximumScore: data.convectionMax && data.convectionMax.value
       },
-      disclaimer: "Sintesi automatica puntuale ICON-2I: non è un’allerta né un bollettino ufficiale."
+      disclaimer: "Sintesi automatica di un singolo run ICON-2I. Completezza dei campi e coerenza interna non misurano lo skill previsionale; il prodotto non è un’allerta né un bollettino ufficiale."
     };
   }
 

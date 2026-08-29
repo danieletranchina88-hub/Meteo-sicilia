@@ -1,4 +1,4 @@
-"""Topological consistency for published synoptic-front objects (v18).
+"""Topological consistency for published synoptic-front objects (v19).
 
 Detection and tracking decide whether a physical front exists.  This module
 operates later, on the exact geometry sent to the map, because ridge snapping
@@ -8,6 +8,8 @@ Its job is deliberately narrow:
 * keep one exclusive type on every frontal arc;
 * prevent a trimmed branch from jumping to the opposite end of a shared
   boundary between adjacent hours;
+* remove interpolated geometries whose endpoints are not the same physical
+  object and split the published identity at any remaining discontinuity;
 * expose quantitative post-publication motion checks.
 
 It never creates a front and never overrides the thermodynamic gates.
@@ -238,6 +240,104 @@ def stabilize_deconflicted_branches(
             if (int(hour), index) not in removed
         ]
     return len(removed), unresolved
+
+
+def repair_published_identities(
+    by_hour: dict[int, list[tuple[np.ndarray, dict]]],
+    *,
+    max_centroid_speed_kmh: float = 110.0,
+) -> tuple[int, int]:
+    """Remove invalid interpolation and split identities at discontinuities.
+
+    A tracker may occasionally associate two independently valid fronts that
+    occupy distant parts of the domain. Drawing an interpolated line between
+    those detections invents a boundary that the model never resolved;
+    keeping the same public ``trackId`` then claims an impossible motion. The
+    conservative response is to keep both direct detections, remove the
+    synthetic bridge, and begin a new public identity.
+
+    ``trackingSourceId`` preserves the internal association for audit. The
+    first feature of a split identity has no published motion, because motion
+    cannot be estimated across a declared discontinuity.
+
+    Returns ``(removed_interpolations, identity_splits)``.
+    """
+    records_by_track: dict[int, list[tuple[int, int, np.ndarray, dict]]] = {}
+    maximum_track_id = 0
+    for hour, entries in by_hour.items():
+        for index, (coordinates, properties) in enumerate(entries):
+            track_id = properties.get("trackId")
+            if not isinstance(track_id, (int, np.integer)):
+                continue
+            source_id = int(track_id)
+            maximum_track_id = max(maximum_track_id, source_id)
+            records_by_track.setdefault(source_id, []).append(
+                (int(hour), index, np.asarray(coordinates, dtype=float), properties)
+            )
+
+    removed: set[tuple[int, int]] = set()
+    for records in records_by_track.values():
+        records.sort(key=lambda item: item[0])
+        for position, record in enumerate(records):
+            if not bool(record[3].get("interpolated")):
+                continue
+            neighbours = []
+            if position > 0:
+                neighbours.append(records[position - 1])
+            if position + 1 < len(records):
+                neighbours.append(records[position + 1])
+            if any(
+                not published_transition_is_coherent(
+                    neighbour[2], record[2],
+                    abs(record[0] - neighbour[0]),
+                    max_centroid_speed_kmh=max_centroid_speed_kmh,
+                )
+                for neighbour in neighbours
+            ):
+                removed.add((record[0], record[1]))
+
+    for hour, entries in list(by_hour.items()):
+        by_hour[hour] = [
+            entry for index, entry in enumerate(entries)
+            if (int(hour), index) not in removed
+        ]
+
+    survivors_by_track: dict[int, list[tuple[int, np.ndarray, dict]]] = {}
+    for hour, entries in by_hour.items():
+        for coordinates, properties in entries:
+            track_id = properties.get("trackId")
+            if isinstance(track_id, (int, np.integer)):
+                survivors_by_track.setdefault(int(track_id), []).append(
+                    (int(hour), np.asarray(coordinates, dtype=float), properties)
+                )
+
+    next_track_id = maximum_track_id + 1
+    split_count = 0
+    for source_id, records in survivors_by_track.items():
+        records.sort(key=lambda item: item[0])
+        published_id = source_id
+        previous = None
+        for record in records:
+            if previous is not None and not published_transition_is_coherent(
+                previous[1], record[1], record[0] - previous[0],
+                max_centroid_speed_kmh=max_centroid_speed_kmh,
+            ):
+                published_id = next_track_id
+                next_track_id += 1
+                split_count += 1
+                properties = record[2]
+                properties["publishedIdentityStart"] = True
+                properties["temporalIdentitySplit"] = True
+                properties["motionKmh"] = None
+                properties["geoMotionKmh"] = None
+                properties["motionBearingDeg"] = None
+            properties = record[2]
+            if published_id != source_id:
+                properties["trackingSourceId"] = source_id
+                properties["trackId"] = published_id
+            previous = record
+
+    return len(removed), split_count
 
 
 def published_motion_statistics(

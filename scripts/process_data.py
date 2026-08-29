@@ -685,6 +685,10 @@ def build_storm_payload(
 
     payload = {
         "method": STORM_METHOD,
+        "scoreSemantics": "deterministic-physical-support-not-calibrated-probability",
+        "confidenceSemantics": "input-coverage-and-internal-agreement-not-skill",
+        "helicityField": "UH_MAX-updraft-helicity-not-SRH",
+        "potentialUpdraftMethod": "0.45-sqrt-2cape",
         "eventRadiusKm": STORM_EVENT_RADIUS_KM,
         "smoothingRadiusKm": STORM_SMOOTHING_RADIUS_KM,
         "lpiThreshold": STORM_LPI_THRESHOLD,
@@ -825,7 +829,8 @@ def prepare_icon_hazard_fields(run_dt):
             f"{run_base}/LPI/{surface_file}",
             "lpi.grib",
         ),
-        # Elicita' dell'updraft: updraft che ruota, cioe' mesociclone.
+        # Updraft helicity (UH), non storm-relative helicity (SRH): integra
+        # vorticita' verticale e corrente ascendente della cella modellata.
         "uh_max": (
             f"{run_base}/UH_MAX/{common}_heightAboveSeaLayer-2000.grib",
             "uh_max.grib",
@@ -1754,9 +1759,9 @@ def process_data():
                                 convection_prob, mask=np.isfinite(temp_c)
                             )
                             convection_message = (
-                                "Algoritmo temporali unico: LPI e updraft fusi con "
+                                "Indice temporalesco deterministico: LPI e updraft fusi con "
                                 "CAPE/CIN, umidità, innesco, fronti, shear e "
-                                "coerenza temporale."
+                                "coerenza temporale; non calibrato su osservazioni."
                             )
                 except Exception as storm_error:
                     storm_payload = None

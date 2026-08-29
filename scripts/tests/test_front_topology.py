@@ -107,5 +107,39 @@ if motion["implausibleTransitions"] != 0:
     print("  FAIL: resta un salto impossibile dopo la stabilizzazione")
     ok = False
 
+# G) A synthetic bridge between distant detections is not meteorological data.
+source = {
+    "trackId": 20,
+    "frontType": "cold",
+    "qualityScore": 0.72,
+}
+split_hours = {
+    0: [(line(4.0, 8.0), dict(source))],
+    1: [(line(9.0, 13.0), {**source, "interpolated": True})],
+    2: [(line(14.0, 18.0), dict(source))],
+}
+removed, splits = top.repair_published_identities(split_hours)
+first_id = split_hours[0][0][1]["trackId"]
+last_properties = split_hours[2][0][1]
+last_id = last_properties["trackId"]
+print(
+    "G) identita' pubblica: "
+    f"interpolazioni_rimosse={removed}, split={splits}, id={first_id}->{last_id}"
+)
+if (
+    removed != 1 or splits != 1 or split_hours[1]
+    or first_id == last_id
+    or last_properties.get("trackingSourceId") != 20
+    or not last_properties.get("publishedIdentityStart")
+    or last_properties.get("motionKmh", "missing") is not None
+):
+    print("  FAIL: il ponte sintetico va tolto e la traccia pubblica separata")
+    ok = False
+
+split_motion = top.published_motion_statistics(split_hours)
+if split_motion["implausibleTransitions"] != 0:
+    print("  FAIL: lo split lascia ancora un teletrasporto nella QC")
+    ok = False
+
 print("\nESITO:", "SUPERATO" if ok else "DA RIVEDERE")
 raise SystemExit(0 if ok else 1)

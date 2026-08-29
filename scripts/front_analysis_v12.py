@@ -1,4 +1,4 @@
-"""ICON-2I objective synoptic-front analysis, system topology engine (v18).
+"""ICON-2I objective synoptic-front analysis, auditable topology engine (v19).
 
 The detector is intentionally conservative.  It identifies the warm-air
 edge of baroclinic zones in wet-bulb potential temperature at 850 hPa, then
@@ -32,7 +32,7 @@ import thermodynamics as thermo
 from front_analysis import SynopticFrontAnalyzer, _blend_lines, _line_length_km, _rdp
 
 
-FRONT_METHOD = "icon2i-ofa-physics-guided-v18-topology"
+FRONT_METHOD = "icon2i-ofa-physics-guided-v19-auditable"
 ANALYSIS_PRESSURE_PA = 85_000.0
 LOWER_PRESSURE_PA = 92_500.0
 UPPER_PRESSURE_PA = 70_000.0
@@ -1687,13 +1687,22 @@ class IconSynopticFrontAnalyzer(SynopticFrontAnalyzer):
         self.analysis_summary["deconflictedSharedTrunks"] = deconflicted
         suppressed, unresolved = ftop.stabilize_deconflicted_branches(by_hour)
         self.analysis_summary["suppressedTeleportingBranches"] = suppressed
-        self.analysis_summary["unresolvedPublishedTransitions"] = unresolved
+        self.analysis_summary["preRepairUnresolvedTransitions"] = unresolved
         self._occlusion_hours = self._apply_occlusions(by_hour)
         for entries in by_hour.values():
             for _, properties in entries:
                 ftop.cohere_feature_type(properties)
-        self.analysis_summary["publishedMotionQc"] = (
-            ftop.published_motion_statistics(by_hour)
+        removed_interpolations, identity_splits = (
+            ftop.repair_published_identities(by_hour)
+        )
+        self.analysis_summary["removedInvalidInterpolations"] = (
+            removed_interpolations
+        )
+        self.analysis_summary["splitPublishedIdentities"] = identity_splits
+        motion_qc = ftop.published_motion_statistics(by_hour)
+        self.analysis_summary["publishedMotionQc"] = motion_qc
+        self.analysis_summary["unresolvedPublishedTransitions"] = (
+            motion_qc["implausibleTransitions"]
         )
         self._by_hour = by_hour
 
