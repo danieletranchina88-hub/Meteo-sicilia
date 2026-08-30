@@ -65,6 +65,13 @@ from meteo_analysis.products.synoptic_engine import (
 from meteo_analysis.products.meteograms import MeteogramArchive
 from meteo_analysis.ml.icon2i import Icon2IStore
 from meteo_analysis.ml.model import FrontModel
+from meteo_analysis.verification.archive import (
+    build_run_manifest,
+    source_asset_record,
+    write_run_manifest,
+)
+from meteo_analysis.verification.observations import fetch_metar_observations
+from meteo_analysis.verification.stations import StationForecastArchive
 from ml_fronts import predict_store as predict_ml_fronts
 
 # --- CONFIGURAZIONE ---
@@ -220,70 +227,45 @@ def write_json_gzip_atomic(path, payload, compresslevel=6):
             os.remove(partial)
 
 
-def write_observations(output_dir):
-    """Fetch Italian-domain METAR observations and publish them for the
-    browser-side observed analysis (Cressman fusion). Server-side fetch avoids
-    the browser CORS block on aviationweather.gov. Non-fatal: on any error no
-    file is written and the fusion layer simply reports observations absent.
-    """
-    def _num(mapping, key):
-        try:
-            value = float(mapping.get(key))
-        except (TypeError, ValueError):
-            return None
-        return value if value == value else None  # drop NaN
-
+def collect_observations():
+    """Fetch one METAR snapshot for both the site and verification archive."""
     try:
-        url = (
-            "https://aviationweather.gov/api/data/metar?format=json"
-            f"&bbox={LAT_MIN},{LON_MIN},{LAT_MAX},{LON_MAX}"
+        payload = fetch_metar_observations(
+            domain=(LAT_MIN, LON_MIN, LAT_MAX, LON_MAX)
         )
-        response = requests.get(
-            url, timeout=(15, 45),
-            headers={"User-Agent": "Meteo-Sicilia/1.0"},
-        )
-        response.raise_for_status()
-        raw = response.json()
-        stations = []
-        latest = 0
-        for report in raw if isinstance(raw, list) else []:
-            latitude = _num(report, "lat")
-            longitude = _num(report, "lon")
-            if latitude is None or longitude is None:
-                continue
-            if not (LAT_MIN <= latitude <= LAT_MAX and LON_MIN <= longitude <= LON_MAX):
-                continue
-            wind_kt = _num(report, "wspd")
-            pressure = _num(report, "altim")
-            obs_time = report.get("obsTime")
-            if isinstance(obs_time, (int, float)):
-                latest = max(latest, int(obs_time))
-            stations.append({
-                "id": report.get("icaoId") or "",
-                "name": report.get("name") or "",
-                "lat": round(latitude, 4),
-                "lon": round(longitude, 4),
-                "tempC": _num(report, "temp"),
-                "dewpC": _num(report, "dewp"),
-                "wspdKmh": round(wind_kt * 1.852, 1) if wind_kt is not None else None,
-                "wdir": _num(report, "wdir"),
-                "pressHpa": (
-                    pressure if pressure is not None and 850 < pressure < 1080 else None
-                ),
-            })
-        payload = {
-            "source": "NOAA aviationweather METAR",
-            "obsTime": latest,
-            "count": len(stations),
-            "stations": stations,
-        }
-        write_json_atomic(os.path.join(output_dir, "observations.json"), payload)
-        print(f"   Osservazioni METAR: {len(stations)} stazioni.", flush=True)
+        if not payload.get("stations"):
+            raise ValueError("snapshot senza stazioni valide")
+        return payload
     except Exception as error:
         print(f"   Osservazioni METAR non disponibili: {error}", flush=True)
+        return None
 
 
-def prepare_icon_front_analyzer(run_dt):
+def write_observations(output_dir, payload=None):
+    """Publish a previously captured snapshot without changing its time."""
+    payload = payload if payload is not None else collect_observations()
+    if payload is None:
+        return False
+    write_json_atomic(os.path.join(output_dir, "observations.json"), payload)
+    print(f"   Osservazioni METAR: {payload['count']} stazioni.", flush=True)
+    return True
+
+
+def record_source_asset(inventory, *, name, url, path, role, required):
+    """Record each accepted source once, including its content checksum."""
+    if inventory is None or any(item.get("url") == url for item in inventory):
+        return
+    inventory.append(source_asset_record(
+        name=name,
+        url=url,
+        path=path,
+        role=role,
+        required=required,
+        retained=False,
+    ))
+
+
+def prepare_icon_front_analyzer(run_dt, source_inventory=None):
     """Build the ICON-2I-only, hourly, multilayer frontal analysis.
 
     T/QV/U/V at 850 hPa are mandatory because they define the objective
@@ -365,6 +347,15 @@ def prepare_icon_front_analyzer(run_dt):
                         continue
                     raise
                 paths[name] = destination
+                url = requests_to_make[name][0]
+                record_source_asset(
+                    source_inventory,
+                    name=name,
+                    url=url,
+                    path=destination,
+                    role="front-physics",
+                    required=name not in optional_fields,
+                )
                 print(
                     f"   {name}: {os.path.getsize(destination) / 1048576:.1f} MB",
                     flush=True,
@@ -775,7 +766,7 @@ def build_storm_payload(
     return payload
 
 
-def prepare_icon_hazard_fields(run_dt):
+def prepare_icon_hazard_fields(run_dt, source_inventory=None):
     """Download real convective and 700-hPa hazard fields for the ICON run.
 
     These files replace the former temperature-derived CAPE and constant
@@ -977,6 +968,15 @@ def prepare_icon_hazard_fields(run_dt):
                         continue
                     raise
                 paths[name] = destination
+                url = requests_to_make[name][0]
+                record_source_asset(
+                    source_inventory,
+                    name=name,
+                    url=url,
+                    path=destination,
+                    role="hazard-diagnostics",
+                    required=name not in optional_fields,
+                )
                 print(
                     f"   {name}: {os.path.getsize(destination) / 1048576:.1f} MB",
                     flush=True,
@@ -1257,6 +1257,10 @@ def process_data():
         shutil.rmtree(TEMP_DIR)
     os.makedirs(TEMP_DIR)
 
+    # The snapshot is captured once.  Re-fetching at the end would silently
+    # assign a different valid time to the station set used for sampling.
+    observations = collect_observations()
+    source_inventory = []
     catalog = []
     step_errors = []
     front_qc_hours = []
@@ -1267,13 +1271,18 @@ def process_data():
     synoptic_frames = []
     synoptic_errors = []
     meteogram_archive = None
-    icon_front_analyzer = prepare_icon_front_analyzer(run_dt)
+    station_forecast_archive = None
+    icon_front_analyzer = prepare_icon_front_analyzer(
+        run_dt, source_inventory=source_inventory
+    )
     if icon_front_analyzer is None:
         raise RuntimeError(
             "analisi frontale ICON-2I obbligatoria non disponibile; "
             "mantengo l'ultima pubblicazione valida"
         )
-    icon_hazard_fields = prepare_icon_hazard_fields(run_dt)
+    icon_hazard_fields = prepare_icon_hazard_fields(
+        run_dt, source_inventory=source_inventory
+    )
     for idx, filename in enumerate(file_list):
         print(f"   [{idx+1:02d}] DL {filename}...", end=" ", flush=True)
 
@@ -1306,6 +1315,15 @@ def process_data():
                     time.sleep(attempt * 5)
         if not downloaded:
             continue
+
+        record_source_asset(
+            source_inventory,
+            name=filename,
+            url=f"{API_DOWNLOAD_URL}/{filename}",
+            path=TEMP_FILE,
+            role="surface-run",
+            required=True,
+        )
 
         if os.path.exists(f"{TEMP_FILE}.idx"):
             os.remove(f"{TEMP_FILE}.idx")
@@ -1390,6 +1408,13 @@ def process_data():
                         lon,
                         run_time=iso_z(run_dt),
                     )
+                    if observations is not None:
+                        station_forecast_archive = StationForecastArchive(
+                            lat,
+                            lon,
+                            observations.get("stations") or [],
+                            run_time=iso_z(run_dt),
+                        )
 
                 # 1) TEMP e RH
                 temp_c = np.full_like(u_val, np.nan, dtype=float)
@@ -2108,6 +2133,34 @@ def process_data():
                         print(f" upper-{step_hours}h:{upper_error}", end="", flush=True)
 
                 if not any(x['hour'] == step_hours for x in catalog):
+                    if station_forecast_archive is not None:
+                        dewpoint_2m = None
+                        terrain_height = None
+                        if icon_hazard_fields is not None:
+                            dewpoint_2m = temperature_celsius(
+                                icon_hazard_fields.field(
+                                    "td_2m", step_hours, lat, lon
+                                )
+                            )
+                            terrain_height = icon_hazard_fields.field(
+                                "hsurf", step_hours, lat, lon
+                            )
+                        station_forecast_archive.add(
+                            step_hours,
+                            iso_date,
+                            {
+                                "temperature2m": temp_c,
+                                "dewpoint2m": dewpoint_2m,
+                                "relativeHumidity2m": rh_val,
+                                "pressureMsl": press,
+                                "windU10": u_val,
+                                "windV10": v_val,
+                                "windGust10": wind_gust_10m,
+                                "rainStep": rain,
+                                "cloudCover": cloud,
+                                "terrainHeight": terrain_height,
+                            },
+                        )
                     meteogram_archive.add(
                         step_hours,
                         iso_date,
@@ -2327,7 +2380,47 @@ def process_data():
                 f"{len(meteogram_manifest['hours'])}/{len(catalog)} scadenze"
             )
 
-        write_observations(TEMP_DIR)
+        if station_forecast_archive is not None:
+            station_payload = station_forecast_archive.write(
+                os.path.join(
+                    TEMP_DIR, "verification", "forecast_samples.json.gz"
+                )
+            )
+            if len(station_payload["times"]) != len(catalog):
+                raise RuntimeError(
+                    "campioni di verifica incompleti: "
+                    f"{len(station_payload['times'])}/{len(catalog)} scadenze"
+                )
+
+        write_observations(TEMP_DIR, observations)
+
+        # The manifest is written last so every published product can be
+        # checksummed.  Raw GRIBs are described truthfully as non-retained;
+        # object storage can later turn that capability on without changing
+        # the forecast/observation schema already being collected today.
+        archive_manifest = build_run_manifest(
+            TEMP_DIR,
+            run_time=iso_z(run_dt),
+            catalog=catalog,
+            source_assets=source_inventory,
+            algorithms={
+                "fronts": ICON_FRONT_METHOD,
+                "storms": STORM_METHOD,
+                "convection": CONVECTION_METHOD,
+                "expertBulletin": SYNOPTIC_ENGINE_METHOD,
+                "pointBulletin": NLG_METHOD,
+            },
+            domain={
+                "south": LAT_MIN,
+                "west": LON_MIN,
+                "north": LAT_MAX,
+                "east": LON_MAX,
+            },
+        )
+        write_run_manifest(
+            os.path.join(TEMP_DIR, "archive_manifest.json"),
+            archive_manifest,
+        )
 
         if os.path.exists(FINAL_DIR): shutil.rmtree(FINAL_DIR)
         shutil.move(TEMP_DIR, FINAL_DIR)

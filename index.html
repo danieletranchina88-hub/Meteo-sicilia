@@ -2414,7 +2414,7 @@
                   </select>
                 </div>
                 <button class="toggle-row" type="button" data-toggle="fusion" aria-pressed="false">
-                  <span><b>Analisi osservata</b><small>ICON-2I fuso con stazioni METAR · T, P, UR</small></span><span class="switch"></span>
+                  <span><b>Analisi osservata</b><small>METAR entro ±45 min · T, UR; MSLP solo SLP</small></span><span class="switch"></span>
                 </button>
                 <button class="toggle-row" type="button" data-toggle="terrain" aria-pressed="false">
                   <span><b>Rilievo topografico</b><small>ombreggiatura del terreno</small></span><span class="switch"></span>
@@ -6043,8 +6043,8 @@
         } else if (name === "fusion") {
           if (!showFusion && !fusionSupported(activeLayer)) {
             toast(
-              "Fusione osservata disponibile su Temperatura, Pressione e "
-              + "Umidità: seleziona uno di questi campi"
+              "Fusione osservata disponibile su temperatura, umidità e "
+              + "MSLP quando il METAR contiene vera SLP"
             );
             return;
           }
@@ -6054,6 +6054,15 @@
             fetchObservations().then(function () {
               if (!obsStations.length) {
                 toast("Osservazioni METAR non disponibili al momento");
+                showFusion = false;
+                updateLayerUi();
+                return;
+              }
+              const matchingCount = matchingObservationCount(activeLayer);
+              if (!matchingCount) {
+                toast(
+                  "Nessun METAR compatibile con campo e valid time entro ±45 minuti"
+                );
                 showFusion = false;
                 updateLayerUi();
                 return;
@@ -6069,8 +6078,8 @@
               refreshSelectedPoint();
               updateLayerUi();
               toast(
-                "Analisi osservata attiva · " + obsStations.length
-                + " stazioni METAR fuse con ICON-2I"
+                "Analisi osservata attiva · " + matchingCount
+                + " METAR temporalmente coerenti"
               );
             });
           } else {
@@ -9792,6 +9801,7 @@
       // Client-side: il modello ICON e' il primo tentativo, le stazioni reali
       // lo correggono. Nessun impatto sulla pipeline dati.
       const FUSION_RADIUS_KM = 150;
+      const FUSION_TIME_TOLERANCE_MS = 45 * 60 * 1000;
       const FUSION_FIELDS = { temp: "temp", press: "press", rh: "rh" };
 
       async function fetchObservations() {
@@ -9818,6 +9828,8 @@
               id: s.id || s.name || "",
               lat: lat,
               lon: lon,
+              obsTime: Number.isFinite(Number(s.obsTime))
+                ? Number(s.obsTime) * 1000 : null,
               tempC: s.tempC === null || s.tempC === undefined ? null : Number(s.tempC),
               dewpC: s.dewpC === null || s.dewpC === undefined ? null : Number(s.dewpC),
               wspdKmh: s.wspdKmh === null || s.wspdKmh === undefined ? null : Number(s.wspdKmh),
@@ -9836,7 +9848,16 @@
         return Object.prototype.hasOwnProperty.call(FUSION_FIELDS, layerKey);
       }
 
+      function stationMatchesValidTime(station) {
+        if (!currentData || !currentData.meta || !currentData.meta.validTime) return false;
+        if (!Number.isFinite(station.obsTime)) return false;
+        const validTime = Date.parse(currentData.meta.validTime);
+        return Number.isFinite(validTime)
+          && Math.abs(station.obsTime - validTime) <= FUSION_TIME_TOLERANCE_MS;
+      }
+
       function observationValue(station, layerKey) {
+        if (!stationMatchesValidTime(station)) return null;
         if (layerKey === "temp") return station.tempC;
         if (layerKey === "press") return station.pressHpa;
         if (layerKey === "rh") {
@@ -9848,6 +9869,15 @@
           return clamp(rh, 0, 100);
         }
         return null;
+      }
+
+      function matchingObservationCount(layerKey) {
+        let count = 0;
+        for (let index = 0; index < obsStations.length; index += 1) {
+          const value = observationValue(obsStations[index], layerKey);
+          if (value !== null && Number.isFinite(value)) count += 1;
+        }
+        return count;
       }
 
       // Cressman objective analysis: fused = model + weighted mean of the

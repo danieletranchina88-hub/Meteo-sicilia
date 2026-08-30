@@ -146,3 +146,7 @@ sulla serie locale di 72 ore.
   intensi e alle alluvioni improvvise, DOI
   [10.1175/1520-0434(1996)011<0560:FFFAIB>2.0.CO;2](https://doi.org/10.1175/1520-0434(1996)011%3C0560:FFFAIB%3E2.0.CO;2).
 - [Agenzia ItaliaMeteo – MeteoHub](https://meteohub.agenziaitaliameteo.it/app/datasets): fonte operativa dei campi ICON-2I.
+
+L'architettura di verifica e la distinzione fra diagnosi del run e correzione
+statistica addestrata sono documentate in
+[archivio_verifica_ia.md](archivio_verifica_ia.md).

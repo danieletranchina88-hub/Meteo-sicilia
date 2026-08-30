@@ -65,6 +65,14 @@ assert.match(radarHtml, /function observationTime\(value\)/,
   "i frame osservativi non espongono data e fuso del timestamp");
 assert.doesNotMatch(html, /radar in tempo reale/i,
   "la mappa promette tempo reale per un mosaico osservato con latenza");
+assert.match(html, /const FUSION_TIME_TOLERANCE_MS = 45 \* 60 \* 1000;/,
+  "la fusione METAR non impone una tolleranza temporale dichiarata");
+assert.match(html, /function stationMatchesValidTime\(station\)/,
+  "le stazioni METAR possono ancora correggere scadenze temporalmente lontane");
+assert.match(html, /Math\.abs\(station\.obsTime - validTime\) <= FUSION_TIME_TOLERANCE_MS/,
+  "il valid time ICON non viene confrontato con l'ora della singola stazione");
+assert.match(html, /MSLP solo SLP/,
+  "l'interfaccia confonde ancora altimeter setting e pressione MSLP");
 
 const meteogramScripts = [...meteogramHtml.matchAll(/<script(?:\s[^>]*)?>([\s\S]*?)<\/script>/gi)]
   .map((match) => match[1]).filter((source) => source.trim());
