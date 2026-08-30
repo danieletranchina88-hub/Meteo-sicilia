@@ -57,6 +57,11 @@ from meteo_analysis.products.nlg import (
     build_bulletin_inputs,
     generate_bulletin_details,
 )
+from meteo_analysis.products.synoptic_engine import (
+    ENGINE_METHOD as SYNOPTIC_ENGINE_METHOD,
+    build_synoptic_frame,
+    generate_run_bulletin,
+)
 from meteo_analysis.products.meteograms import MeteogramArchive
 from meteo_analysis.ml.icon2i import Icon2IStore
 from meteo_analysis.ml.model import FrontModel
@@ -756,6 +761,16 @@ def build_storm_payload(
             "contradiction": storm_evidence["contradiction"] * 100.0,
             "direct": storm_evidence["direct"] * 100.0,
             "environment": storm_evidence["environment"] * 100.0,
+            "lpi": lpi,
+            "capeMu": cape_mu,
+            "updraftHelicity": helicity,
+            "hail": hail,
+            "downburst": downburst,
+            "freezingLevel": freezing_level,
+            "trigger": trigger,
+            "bowen": bowen,
+            "upslope": upslope,
+            "seaBreeze": breeze * 1.0e5 if breeze is not None else None,
         }
     return payload
 
@@ -772,6 +787,7 @@ def prepare_icon_hazard_fields(run_dt):
     run_base = f"{NWP_DIRECT_BASE}/{NWP_DIRECTORY_ID}/{run_tag}"
     pressure_file_700 = f"{common}_isobaricInhPa-700.grib"
     pressure_file_500 = f"{common}_isobaricInhPa-500.grib"
+    pressure_file_300 = f"{common}_isobaricInhPa-300.grib"
     surface_file = f"{common}_surface-0.grib"
     height_file_10 = f"{common}_heightAboveGround-10.grib"
     shear_layer_file = f"{common}_heightAboveGroundLayer-6000.grib"
@@ -816,6 +832,25 @@ def prepare_icon_hazard_fields(run_dt):
         "fi500": (
             f"{run_base}/FI/{pressure_file_500}",
             "fi500.grib",
+        ),
+        "t500": (
+            f"{run_base}/T/{pressure_file_500}",
+            "t500.grib",
+        ),
+        "u300": (
+            f"{run_base}/U/{pressure_file_300}",
+            "u300.grib",
+        ),
+        "v300": (
+            f"{run_base}/V/{pressure_file_300}",
+            "v300.grib",
+        ),
+        # Total column water vapour: kg/m2 is numerically equal to mm of
+        # precipitable water. It supports moisture diagnosis, not rainfall by
+        # itself.
+        "tqv": (
+            f"{run_base}/TQV/{surface_file}",
+            "tqv.grib",
         ),
         # --- SEZIONE TEMPORALI ---
         # ICON-2I gira a 2,2 km e risolve esplicitamente le celle convettive:
@@ -909,6 +944,7 @@ def prepare_icon_hazard_fields(run_dt):
     }
     optional_fields = {
         "t700", "u700", "v700", "q700", "u500", "v500", "fi500",
+        "t500", "u300", "v300", "tqv",
         "lpi", "uh_max", "wshear_u", "wshear_v", "cape_con", "td_2m",
         "hzerocl", "graupel", "vmax_10m", "omega500", "omega850",
         "ashfl", "alhfl", "fr_land", "hsurf",
@@ -1228,6 +1264,8 @@ def process_data():
     front_analysis_summary = {}
     front_pipeline_diagnostics = {}
     bulletin_history = {}
+    synoptic_frames = []
+    synoptic_errors = []
     meteogram_archive = None
     icon_front_analyzer = prepare_icon_front_analyzer(run_dt)
     if icon_front_analyzer is None:
@@ -1817,10 +1855,11 @@ def process_data():
                         "convectionSummary": convection_summary,
                         "convectionCAPE": "ML-CAPE",
                         "nlgMethod": NLG_METHOD,
+                        "expertBulletinMethod": SYNOPTIC_ENGINE_METHOD,
                         "hazardAvailability": {
                             "convection": convection_prob is not None,
                             "fogVisibility": True,
-                            "hail": False,
+                            "hail": storm_native.get("hail") is not None,
                             "freezingRain": freezing_rain is not None,
                             "foehn": foehn is not None,
                         },
@@ -1856,6 +1895,128 @@ def process_data():
                             end="",
                             flush=True,
                         )
+
+                # --- MOTORE DI ANALISI SINOTTICA MULTILIVELLO ---
+                # Ogni frame conserva statistiche regionali e prove fisiche,
+                # non matrici pubbliche. Il testo viene composto soltanto dopo
+                # avere l'intera sequenza temporale del run a disposizione.
+                try:
+                    def front_field(name):
+                        return interpolate_native_field(
+                            icon_front_analyzer.diagnostic_field(step_hours, name),
+                            lat,
+                            lon,
+                        )
+
+                    t925_syn = t925 if t925 is not None else front_field("t925")
+                    q925_syn = front_field("q925")
+                    t850_syn = t850 if t850 is not None else front_field("t850")
+                    q850_syn = front_field("q850")
+                    t700_syn = t700 if t700 is not None else front_field("t700")
+                    q700_syn = (
+                        icon_hazard_fields.field("q700", step_hours, lat, lon)
+                        if icon_hazard_fields is not None else None
+                    )
+                    if q700_syn is None:
+                        q700_syn = front_field("q700")
+
+                    def hazard_field(name):
+                        return (
+                            icon_hazard_fields.field(name, step_hours, lat, lon)
+                            if icon_hazard_fields is not None else None
+                        )
+
+                    synoptic_frames.append(build_synoptic_frame(
+                        lead_hours=step_hours,
+                        valid_time=iso_date,
+                        latitudes=lat,
+                        longitudes=lon,
+                        fronts=fronts,
+                        fields={
+                            "pressureMsl": press,
+                            "temperature2m": temp_c,
+                            "relativeHumidity2m": rh_val,
+                            "rainStep": rain,
+                            "cloudCover": cloud,
+                            "u10": u_val,
+                            "v10": v_val,
+                            "gust10": (
+                                np.asarray(wind_gust_10m) * 3.6
+                                if wind_gust_10m is not None else None
+                            ),
+                            "convergence10": convergence_10m,
+                            "frontDistanceKm": nearest_front_km,
+                            "temperature925": t925_syn,
+                            "thetaE925": front_field("thetaE925"),
+                            "relativeHumidity925": (
+                                relative_humidity_from_specific_humidity(
+                                    t925_syn, q925_syn, 925.0
+                                ) if t925_syn is not None and q925_syn is not None
+                                else None
+                            ),
+                            "u925": front_field("u925"),
+                            "v925": front_field("v925"),
+                            "temperature850": t850_syn,
+                            "thetaE850": front_field("thetaE850"),
+                            "thetaW850": front_field("thetaW850"),
+                            "relativeHumidity850": (
+                                relative_humidity_from_specific_humidity(
+                                    t850_syn, q850_syn, 850.0
+                                ) if t850_syn is not None and q850_syn is not None
+                                else None
+                            ),
+                            "u850": front_field("u850"),
+                            "v850": front_field("v850"),
+                            "temperature700": t700_syn,
+                            "relativeHumidity700": (
+                                relative_humidity_from_specific_humidity(
+                                    t700_syn, q700_syn, 700.0
+                                ) if t700_syn is not None and q700_syn is not None
+                                else None
+                            ),
+                            "omega700": omega_700,
+                            "u700": hazard_field("u700"),
+                            "v700": hazard_field("v700"),
+                            "height500": geopot500,
+                            "temperature500": hazard_field("t500"),
+                            "u500": hazard_field("u500"),
+                            "v500": hazard_field("v500"),
+                            "omega500": hazard_field("omega500"),
+                            "u300": hazard_field("u300"),
+                            "v300": hazard_field("v300"),
+                            "capeMl": cape_ml,
+                            "capeMu": storm_native.get("capeMu"),
+                            "cinMl": (
+                                normalize_cin(cin_ml) if cin_ml is not None else None
+                            ),
+                            "shear06": deep_layer_shear,
+                            "updraftHelicity": storm_native.get("updraftHelicity"),
+                            "lpi": storm_native.get("lpi"),
+                            "precipitableWater": hazard_field("tqv"),
+                            "stormScore": convection_prob,
+                            "stormCoherence": storm_native.get("confidence"),
+                            "stormContradiction": storm_native.get("contradiction"),
+                            "hailIndex": storm_native.get("hail"),
+                            "downburstIndex": storm_native.get("downburst"),
+                            "freezingLevel": storm_native.get("freezingLevel"),
+                            "freezingRain": freezing_rain,
+                            "fogIndex": np.asarray(fog_probability) * 100.0,
+                            "visibility": visibility.values,
+                            "foehnIndex": foehn,
+                            "triggerIndex": storm_native.get("trigger"),
+                            "bowenRatio": storm_native.get("bowen"),
+                            "upslopeFlow": storm_native.get("upslope"),
+                            "seaBreezeConvergence": storm_native.get("seaBreeze"),
+                        },
+                    ))
+                except Exception as synoptic_error:
+                    synoptic_errors.append((step_hours, str(synoptic_error)))
+                    print(
+                        f" synoptic-{step_hours}h:{type(synoptic_error).__name__}:"
+                        f"{synoptic_error}",
+                        end="",
+                        flush=True,
+                    )
 
                 step_data = {
                     "meta": header,
@@ -2065,6 +2226,15 @@ def process_data():
 
     if catalog:
         catalog.sort(key=lambda x: x['hour'])
+        # Più file sorgente possono contenere la stessa scadenza; per il
+        # bollettino si conserva un solo frame per forecast hour, esattamente
+        # come avviene nel catalogo pubblico.
+        synoptic_by_hour = {
+            int(frame["leadHours"]): frame for frame in synoptic_frames
+        }
+        synoptic_frames = [
+            synoptic_by_hour[hour] for hour in sorted(synoptic_by_hour)
+        ]
         expected_hours = set(icon_front_analyzer.available_hours)
         actual_hours = {int(item["hour"]) for item in catalog}
         missing_hours = sorted(expected_hours - actual_hours)
@@ -2076,6 +2246,27 @@ def process_data():
                 f"output ICON incompleto: {len(step_errors)} errori, "
                 f"ore mancanti {missing_hours}; {preview}"
             )
+        missing_synoptic = sorted(actual_hours - set(synoptic_by_hour))
+        if missing_synoptic:
+            preview = "; ".join(
+                f"+{hour}h {message}" for hour, message in synoptic_errors[:5]
+            )
+            raise RuntimeError(
+                "analisi sinottica incompleta: ore mancanti "
+                f"{missing_synoptic}; {preview}"
+            )
+        expert_bulletin = generate_run_bulletin(
+            synoptic_frames,
+            run_time=iso_z(run_dt),
+            model="ICON-2I",
+            area="Italia e dominio ICON-2I",
+            spatial_resolution_km=2.2,
+            temporal_resolution_hours=1,
+        )
+        write_json_gzip_atomic(
+            f"{TEMP_DIR}/expert_bulletin.json.gz",
+            expert_bulletin,
+        )
         front_qc_hours.sort(key=lambda item: item["leadHours"])
         write_json_atomic(
             f"{TEMP_DIR}/front_qc.json",
@@ -2120,6 +2311,7 @@ def process_data():
                     "maximumAreaExactly80Pct": MAX_FIXED_80_AREA_PCT,
                 },
                 "nlgMethod": NLG_METHOD,
+                "expertBulletinMethod": SYNOPTIC_ENGINE_METHOD,
                 "hours": hazard_qc_hours,
             },
         )

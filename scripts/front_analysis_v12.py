@@ -2319,16 +2319,47 @@ class IconSynopticFrontAnalyzer(SynopticFrontAnalyzer):
         and other products from reaching into the detector's private dataset
         implementation.
         """
-        dataset_name = {
-            "omega700": "omega700",
-            "t850": "t",
-            "t925": "t925",
-        }.get(name)
-        if dataset_name is None or dataset_name not in self.datasets:
-            return None
         if hour not in self.hour_to_index:
             return None
-        values = np.asarray(self._field(dataset_name, hour), dtype=float)
+        direct = {
+            "t850": "t", "q850": "q", "u850": "u", "v850": "v",
+            "t925": "t925", "q925": "q925", "u925": "u925", "v925": "v925",
+            "t700": "t700", "q700": "q700", "u700": "u700", "v700": "v700",
+            "u500": "u500", "v500": "v500", "fi500": "fi500",
+            "omega700": "omega700",
+        }
+        derived = {
+            "thetaE850": (850, "theta_e"), "thetaW850": (850, "theta_w"),
+            "thetaE925": (925, "theta_e"), "thetaW925": (925, "theta_w"),
+            "thetaE700": (700, "theta_e"), "thetaW700": (700, "theta_w"),
+        }
+        if name in derived:
+            level_hpa, thermodynamic_name = derived[name]
+            try:
+                values = np.asarray(
+                    self._thermodynamics(hour, level_hpa)[thermodynamic_name],
+                    dtype=float,
+                )
+            except KeyError:
+                return None
+        else:
+            dataset_name = direct.get(name)
+            if dataset_name is None or dataset_name not in self.datasets:
+                return None
+            values = np.asarray(self._field(dataset_name, hour), dtype=float)
+
+        level_hpa = (
+            925 if name.endswith("925") else
+            850 if name.endswith("850") else
+            700 if name.endswith("700") else
+            500 if name.endswith("500") else None
+        )
+        if level_hpa is not None:
+            values = np.where(
+                self._level_valid_mask(hour, float(level_hpa) * 100.0),
+                values,
+                np.nan,
+            )
         if values.shape != (len(self.latitudes), len(self.longitudes)):
             return None
         return {

@@ -21,10 +21,14 @@ FIELD_SPECS = {
     # conventions.
     "cin_ml": FieldSpec(-8_000.0, 8_000.0, "J kg-1"),
     "t700": FieldSpec(180.0, 330.0, "K"),
+    "t500": FieldSpec(170.0, 320.0, "K"),
     "u700": FieldSpec(-150.0, 150.0, "m s-1"),
     "v700": FieldSpec(-150.0, 150.0, "m s-1"),
     "u500": FieldSpec(-200.0, 200.0, "m s-1"),
     "v500": FieldSpec(-200.0, 200.0, "m s-1"),
+    "u300": FieldSpec(-250.0, 250.0, "m s-1"),
+    "v300": FieldSpec(-250.0, 250.0, "m s-1"),
+    "tqv": FieldSpec(-1.0, 100.0, "kg m-2"),
     # --- campi della sezione temporali ---
     # MeteoHub li pubblica senza nome ne' unita' nel GRIB, quindi qui si puo'
     # controllare solo l'ordine di grandezza. Sono intervalli larghi: servono a

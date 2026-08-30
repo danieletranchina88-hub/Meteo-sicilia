@@ -150,6 +150,25 @@ assert.match(html, /const ISOBAR_MAJOR_EVERY = 8;/,
 assert.match(html, /passo 4 hPa · principali ogni 8/,
   "l'interfaccia contraddice il passo reale delle isobare");
 
+// Il bollettino generale e quello puntuale sono prodotti distinti. L'analisi
+// esperta deve seguire la timeline e non richiedere la selezione di un punto.
+assert.match(html, /id="bulletin-mode-general"[^>]*class="bulletin-tab active"/,
+  "l'analisi generale non e' la vista predefinita del bollettino");
+assert.match(html, /id="bulletin-mode-point"/,
+  "manca il prodotto puntuale separato");
+assert.match(html, /let bulletinMode = "general";/,
+  "lo stato JavaScript non parte dall'analisi generale");
+assert.match(html, /expert_bulletin\.json\.gz/,
+  "il sito non carica il prodotto sinottico dell'intero run");
+assert.match(html, /candidate\.leadHours\) === lead/,
+  "il bollettino generale non segue il forecast hour della timeline");
+assert.match(html, /function renderExpertSection\(section\)/,
+  "le sezioni tecniche del motore non vengono rappresentate");
+assert.match(html, /Perché\? /,
+  "manca la catena causale verificabile nel bollettino");
+assert.match(html, /docs\/motore_bollettino\.md/,
+  "l'interfaccia non collega la documentazione del motore esperto");
+
 assert.match(html, /maplibre-gl@5\.24\.0/, "MapLibre v5 stabile non caricata");
 assert.doesNotMatch(html, /map\.transform\b/, "uso di API MapLibre interna e fragile");
 assert.match(html, /map\.setSky\(/, "cielo MapLibre nativo assente");
