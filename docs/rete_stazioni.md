@@ -177,11 +177,55 @@ e `coverage.overall` / `coverage.byVariable.<temperature|precipitation|
 windSpeed|relativeHumidity|pressureMsl>` con distanza media/massima dalla
 stazione più vicina e frazione di celle senza copertura entro 20 km.
 
-## 7. Test
+## 7. AI Observation Layer (`meteo_analysis/observations/ai_layer.py`)
+
+Requisito 22: un servizio che fornisca al Meteorologist AI una fotografia
+osservativa coerente e già aggregata di un'area, invece di migliaia di
+osservazioni grezze.
+
+`build_area_briefing(stations, center_lat=..., center_lon=..., radius_km=...)`
+restituisce, per un'area geografica:
+
+- l'elenco delle stazioni entro il raggio richiesto (id, nome, fonte, quota,
+  distanza, station health, quality score, osservazioni realmente presenti);
+- per ogni variabile richiesta, un **aggregato d'area pesato per qualità**
+  (media/min/max, numero stazioni, provenance per-stazione) taggato
+  `dataType = "observation_summary"` — deliberatamente **distinto** da
+  `DATA_TYPE_ANALYSIS` (requisito 6/23): è una statistica su punti osservati
+  reali, non una ricostruzione spaziale su un punto non osservato. Se
+  nessuna stazione vicina misura quella variabile, il campo resta la
+  stringa esplicita `"insufficient_data"` — mai un valore inventato;
+- un **trend** 1h/3h/6h per variabile, calcolato solo dalle stazioni che
+  hanno sia una lettura corrente sia una storica passata (parametro
+  `history`, tipicamente popolato da `observation_archive/`): senza storico
+  disponibile resta `"insufficient_data"`, mai un'estrapolazione;
+- una **confidence** deterministica (`score`/`level`) basata sulla densità
+  di stazioni nell'area e sulla loro qualità osservata media — mai una
+  percentuale inventata da un LLM (requisito 26). La formula
+  (`0.5·densità + 0.5·qualità media`) è un'euristica di primo ordine,
+  esplicitamente documentata come da validare contro le statistiche reali
+  della Verification Engine una volta accumulato più storico.
+
+Non è ancora collegato a un endpoint HTTP pubblico (il progetto non ha un
+backend applicativo): è pensato per essere chiamato direttamente da un
+futuro modulo Python del Meteorologist AI, oppure esposto in futuro come
+funzione servita da una piccola funzione serverless/Action, senza dover
+riscrivere la logica di aggregazione.
+
+## 8. Test
 
 `scripts/tests/test_observation_network.py` copre, con fixture locali
 (nessuna chiamata di rete): isolamento dei provider, deduplicazione con
 confidence score, controllo qualità (bounds fisici, sensore bloccato),
 classificazione dello station health per-provider, diagnostica di rete,
-copertura per parametro, e la disattivazione sicura dei provider senza
-credenziali. Eseguito in CI insieme a `test_verification.py`.
+copertura per parametro, la disattivazione sicura dei provider senza
+credenziali, e la copertura multi-provider dell'elenco stazioni usato per il
+matching ICON-2I.
+
+`scripts/tests/test_ai_observation_layer.py` copre: filtro per raggio,
+aggregato d'area con provenance e `dataType` corretto, gestione esplicita di
+`insufficient_data` per variabili assenti, peso quasi nullo (non
+cancellazione) di una lettura fuori bound, trend con/senza storico, e
+confidence sensibile alla densità di stazioni.
+
+Entrambi eseguiti in CI insieme a `test_verification.py`.
