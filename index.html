@@ -2463,8 +2463,24 @@
                   <span><b>Analisi osservata</b><small>METAR entro ±45 min · T, UR; MSLP solo SLP</small></span><span class="switch"></span>
                 </button>
                 <button class="toggle-row" type="button" data-toggle="stations" aria-pressed="false">
-                  <span><b>Stazioni osservate</b><small>rete METAR Italia · verde live, ambra rit., grigio assente</small></span><span class="switch"></span>
+                  <span><b>Stazioni osservate</b><small>METAR + ItaliaMeteo + MeteoNetwork · colore = stato salute</small></span><span class="switch"></span>
                 </button>
+                <div id="station-filter-picker" class="level-picker" style="display: none">
+                  <label for="station-filter-select">Filtro stazioni
+                    <small>rete e parametro disponibile</small>
+                  </label>
+                  <select id="station-filter-select" aria-label="Filtro delle stazioni osservate">
+                    <option value="all" selected>Tutte le stazioni</option>
+                    <option value="live">Solo LIVE</option>
+                    <option value="institutional">Solo istituzionali (METAR + ItaliaMeteo)</option>
+                    <option value="meteonetwork">Solo MeteoNetwork</option>
+                    <option value="temperature">Con temperatura</option>
+                    <option value="precipitation">Con pioggia</option>
+                    <option value="windSpeed">Con vento</option>
+                    <option value="pressureMsl">Con pressione</option>
+                    <option value="relativeHumidity">Con umidità</option>
+                  </select>
+                </div>
                 <button class="toggle-row" type="button" data-toggle="terrain" aria-pressed="false">
                   <span><b>Rilievo topografico</b><small>ombreggiatura del terreno</small></span><span class="switch"></span>
                 </button>
@@ -3549,6 +3565,8 @@
       let obsStations = [];
       let stationNetwork = [];
       let stationNetworkMeta = null;
+      let stationRegistry = [];
+      let stationFilter = "all";
       let obsFetchedAt = 0;
       let obsFetching = false;
       let showStations = false;
@@ -6147,23 +6165,36 @@
           }
         } else if (name === "stations") {
           showStations = !showStations;
+          const picker = document.getElementById("station-filter-picker");
+          if (picker) picker.style.display = showStations ? "" : "none";
           if (showStations) {
-            toast("Carico la rete METAR italiana…");
+            toast("Carico la rete stazioni italiane…");
             fetchObservations().then(function () {
-              if (!stationNetwork.length) {
+              if (!stationRegistry.length && !stationNetwork.length) {
                 showStations = false;
+                if (picker) picker.style.display = "none";
                 updateLayerUi();
-                toast("Catalogo stazioni METAR non disponibile al momento");
+                toast("Catalogo stazioni non disponibile al momento");
                 return;
               }
               updateStationMarkers();
               updateLayerUi();
-              const reporting = obsStations.length;
-              const total = stationNetwork.length;
-              toast(
-                "Rete METAR Italia: " + reporting + "/" + total
-                + " stazioni con report ricevuto"
-              );
+              if (stationRegistry.length) {
+                const live = stationRegistry.filter(function (s) {
+                  return s.health && s.health.status === "LIVE";
+                }).length;
+                toast(
+                  "Rete stazioni Italia: " + live + "/" + stationRegistry.length
+                  + " LIVE (METAR + ItaliaMeteo + MeteoNetwork)"
+                );
+              } else {
+                const reporting = obsStations.length;
+                const total = stationNetwork.length;
+                toast(
+                  "Rete METAR Italia: " + reporting + "/" + total
+                  + " stazioni con report ricevuto"
+                );
+              }
             });
           } else {
             updateStationMarkers();
@@ -9956,6 +9987,30 @@
           }
           stationNetworkMeta = payload && payload.stationNetwork
             ? payload.stationNetwork : null;
+          // Registro multi-provider (ItaliaMeteo, MeteoNetwork, ...): usato
+          // quando presente per una copertura piu' ampia della sola rete
+          // METAR; se assente (pipeline precedente) la mappa resta
+          // pienamente funzionante con la sola rete METAR.
+          const registry = payload && payload.registry
+            && Array.isArray(payload.registry.stations)
+            ? payload.registry.stations : [];
+          stationRegistry = registry.map(function (station) {
+            const lat = Number(station.lat);
+            const lon = Number(station.lon);
+            if (!Number.isFinite(lat) || !Number.isFinite(lon)) return null;
+            if (station.duplicateOfStationId) return null;
+            return {
+              id: station.internalStationId,
+              name: station.name || station.sourceStationId,
+              source: station.source,
+              networkType: station.networkType,
+              lat: lat,
+              lon: lon,
+              elevationM: numberOrNull(station.elevationM),
+              health: station.health || null,
+              observations: station.observations || {}
+            };
+          }).filter(Boolean);
           obsFetchedAt = now;
         } catch (error) {
           console.warn("Osservazioni non disponibili:", error);
@@ -10090,6 +10145,72 @@
         return features;
       }
 
+      const HEALTH_COLORS = {
+        LIVE: "#0a9f68",
+        DELAYED: "#cf7b10",
+        STALE: "#8a6d1f",
+        OFFLINE: "#6b7785",
+        UNRELIABLE: "#b23b3b"
+      };
+
+      function stationPassesFilter(station) {
+        if (stationFilter === "all") return true;
+        if (stationFilter === "live") {
+          return station.health && station.health.status === "LIVE";
+        }
+        if (stationFilter === "institutional") {
+          return station.networkType === "institutional" || station.networkType === "aviation";
+        }
+        if (stationFilter === "meteonetwork") {
+          return station.source === "meteonetwork";
+        }
+        // Parameter filters: keep only stations that actually measure it.
+        const measurement = station.observations && station.observations[stationFilter];
+        return Boolean(measurement && Number.isFinite(Number(measurement.value)));
+      }
+
+      function buildStationRegistryFeatures() {
+        return stationRegistry.filter(stationPassesFilter).map(function (station) {
+          const health = station.health || {};
+          const status = health.status || "OFFLINE";
+          const observations = station.observations || {};
+          const measure = function (name) {
+            const entry = observations[name];
+            return entry && Number.isFinite(Number(entry.value)) ? Number(entry.value) : null;
+          };
+          return {
+            type: "Feature",
+            properties: {
+              id: station.id,
+              name: station.name,
+              source: station.source,
+              networkType: station.networkType,
+              status: status,
+              color: HEALTH_COLORS[status] || HEALTH_COLORS.OFFLINE,
+              opacity: (status === "OFFLINE" || status === "STALE") ? 0.55 : 1,
+              observedAtAgeMin: health.lastObservationAgeMinutes,
+              tempC: measure("temperature"),
+              dewpC: measure("dewpoint"),
+              humidity: measure("relativeHumidity"),
+              windKmh: measure("windSpeed"),
+              gustKmh: measure("windGust"),
+              windDir: measure("windDirection"),
+              slpHpa: measure("pressureMsl"),
+              precipMm: measure("precipitation"),
+              qualityScore: (function () {
+                const scores = Object.keys(observations)
+                  .map(function (name) { return observations[name].qualityScore; })
+                  .filter(function (value) { return Number.isFinite(value); });
+                if (!scores.length) return null;
+                return scores.reduce(function (a, b) { return a + b; }, 0) / scores.length;
+              })(),
+              elevationM: station.elevationM
+            },
+            geometry: { type: "Point", coordinates: [station.lon, station.lat] }
+          };
+        });
+      }
+
       const STATION_LIVE_MAX_AGE_MS = 95 * 60 * 1000;
 
       function stationStatus(report) {
@@ -10099,6 +10220,11 @@
       }
 
       function buildStationNetworkFeatures() {
+        // Prefer the multi-provider registry (METAR + ItaliaMeteo +
+        // MeteoNetwork, deduplicated, health-classified) when the pipeline
+        // has published one; otherwise fall back to the original
+        // METAR-only snapshot so older archived payloads still render.
+        if (stationRegistry.length) return buildStationRegistryFeatures();
         return stationNetwork.map(function (station) {
           const report = station.report;
           const status = stationStatus(report);
@@ -10151,9 +10277,57 @@
         }) + " UTC";
       }
 
+      const HEALTH_LABELS = {
+        LIVE: "LIVE · report recente",
+        DELAYED: "DELAYED · report in ritardo",
+        STALE: "STALE · dato non aggiornato da tempo",
+        OFFLINE: "OFFLINE · nessun report ricevuto",
+        UNRELIABLE: "UNRELIABLE · valore sospetto (controllo qualità)"
+      };
+      const SOURCE_LABELS = {
+        metar: "NOAA AWC METAR (aeroportuale)",
+        italiameteo: "Agenzia ItaliaMeteo · MeteoHub",
+        meteonetwork: "MeteoNetwork (crowdsourced)"
+      };
+
       function showStationPopup(feature, coordinates) {
         if (!map || !feature || !feature.properties) return;
         const p = feature.properties;
+        if (p.source) {
+          // Multi-provider schema: only rows with a real value are shown,
+          // never a filler "N/D" for a sensor the station does not have.
+          const rows = [];
+          rows.push(["Rete", SOURCE_LABELS[p.source] || p.source]);
+          rows.push(["Stato", HEALTH_LABELS[p.status] || p.status]);
+          if (Number.isFinite(p.observedAtAgeMin)) {
+            rows.push(["Età del dato", Math.round(p.observedAtAgeMin) + " min"]);
+          }
+          if (Number.isFinite(p.tempC)) rows.push(["Temperatura", stationValueText(p.tempC, 1, " °C")]);
+          if (Number.isFinite(p.dewpC)) rows.push(["Rugiada", stationValueText(p.dewpC, 1, " °C")]);
+          if (Number.isFinite(p.humidity)) rows.push(["Umidità", stationValueText(p.humidity, 0, " %")]);
+          if (Number.isFinite(p.windKmh)) {
+            const wind = stationValueText(p.windKmh, 0, " km/h")
+              + (Number.isFinite(p.windDir) ? " da " + Math.round(p.windDir) + "°" : "")
+              + (Number.isFinite(p.gustKmh) ? " · raff. " + Math.round(p.gustKmh) + " km/h" : "");
+            rows.push(["Vento", wind]);
+          }
+          if (Number.isFinite(p.slpHpa)) rows.push(["Pressione", stationValueText(p.slpHpa, 1, " hPa")]);
+          if (Number.isFinite(p.precipMm)) rows.push(["Precipitazione", stationValueText(p.precipMm, 1, " mm")]);
+          if (Number.isFinite(p.elevationM)) rows.push(["Quota", stationValueText(p.elevationM, 0, " m")]);
+          if (Number.isFinite(p.qualityScore)) rows.push(["Quality score", p.qualityScore.toFixed(2)]);
+          const html = rows.map(function (row) {
+            return "<div><span>" + escapeStationText(row[0]) + "</span><b>"
+              + escapeStationText(row[1]) + "</b></div>";
+          }).join("");
+          new maplibregl.Popup({ closeButton: true, maxWidth: "300px" })
+            .setLngLat(coordinates)
+            .setHTML(
+              "<div class=\"station-popup\"><strong>" + escapeStationText(p.name)
+              + "</strong><small>" + escapeStationText(p.id) + "</small>" + html + "</div>"
+            )
+            .addTo(map);
+          return;
+        }
         const statusText = {
           live: "report recente", delayed: "report ritardato", offline: "nessun report ricevuto"
         }[p.status] || "osservazione";
@@ -10959,6 +11133,14 @@
         cloudProduct = ui.satcloudsSelect.value;
         updateSatelliteClouds(true);
       });
+
+      const stationFilterSelect = document.getElementById("station-filter-select");
+      if (stationFilterSelect) {
+        stationFilterSelect.addEventListener("change", function () {
+          stationFilter = stationFilterSelect.value;
+          updateStationMarkers();
+        });
+      }
 
       ui.particleDensitySelect.addEventListener("change", function () {
         particleDensity = ui.particleDensitySelect.value;

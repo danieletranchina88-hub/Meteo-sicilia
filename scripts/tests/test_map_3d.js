@@ -73,7 +73,7 @@ assert.match(html, /Math\.abs\(station\.obsTime - validTime\) <= FUSION_TIME_TOL
   "il valid time ICON non viene confrontato con l'ora della singola stazione");
 assert.match(html, /MSLP solo SLP/,
   "l'interfaccia confonde ancora altimeter setting e pressione MSLP");
-assert.match(html, /data-toggle="stations"[\s\S]{0,220}?rete METAR Italia/,
+assert.match(html, /data-toggle="stations"[\s\S]{0,260}?METAR \+ ItaliaMeteo \+ MeteoNetwork/,
   "manca il controllo della rete nazionale delle stazioni");
 assert.match(html, /let stationNetwork = \[\];/,
   "il client non conserva il catalogo stazioni separato dai report live");

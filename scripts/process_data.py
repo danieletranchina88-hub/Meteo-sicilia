@@ -71,8 +71,8 @@ from meteo_analysis.verification.archive import (
     write_run_manifest,
 )
 from meteo_analysis.verification.object_storage import RawGribArchive
-from meteo_analysis.verification.observations import fetch_italy_metar_observations
 from meteo_analysis.verification.stations import StationForecastArchive
+from meteo_analysis.observations.pipeline import collect_national_observations
 from ml_fronts import predict_store as predict_ml_fronts
 
 # --- CONFIGURAZIONE ---
@@ -229,24 +229,55 @@ def write_json_gzip_atomic(path, payload, compresslevel=6):
 
 
 def collect_observations():
-    """Fetch the Italian METAR network snapshot for site and verification."""
+    """Fetch every configured observation provider (METAR, ItaliaMeteo,
+    MeteoNetwork, ...) and merge them into one deduplicated, QC'd network.
+
+    A single provider outage never empties the whole snapshot: the pipeline
+    isolates each source (see ``meteo_analysis.observations.pipeline``) and
+    keeps whatever stations remain available from the others.
+    """
     try:
-        payload = fetch_italy_metar_observations()
-        if not payload.get("stations"):
-            raise ValueError("snapshot senza stazioni valide")
+        payload = collect_national_observations()
+        if not payload.get("stations") and not payload.get("registry", {}).get("stations"):
+            raise ValueError("snapshot senza stazioni valide da alcun provider")
         return payload
     except Exception as error:
-        print(f"   Osservazioni METAR non disponibili: {error}", flush=True)
+        print(f"   Osservazioni rete stazioni non disponibili: {error}", flush=True)
         return None
 
 
 def write_observations(output_dir, payload=None):
-    """Publish a previously captured snapshot without changing its time."""
+    """Publish a previously captured snapshot without changing its time.
+
+    Requirement (fallback provider, no. 19): if the fresh collection fails
+    entirely, the last good snapshot already published in ``output_dir`` is
+    kept online (clearly stale) instead of being deleted or replaced with an
+    empty payload -- an absent station must never look like "no station
+    exists here".
+    """
+    destination = os.path.join(output_dir, "observations.json")
     payload = payload if payload is not None else collect_observations()
     if payload is None:
+        if os.path.exists(destination):
+            print(
+                "   Mantengo l'ultimo snapshot osservazioni valido "
+                "(nessuna fonte raggiungibile in questo run).",
+                flush=True,
+            )
         return False
-    write_json_atomic(os.path.join(output_dir, "observations.json"), payload)
-    print(f"   Osservazioni METAR: {payload['count']} stazioni.", flush=True)
+    write_json_atomic(destination, payload)
+    station_count = payload.get("registry", {}).get("totalStations", payload.get("count", 0))
+    print(f"   Osservazioni rete stazioni: {station_count} stazioni totali.", flush=True)
+    diagnostics = payload.get("diagnostics") or {}
+    if diagnostics:
+        print(
+            "   Diagnostica stazioni: "
+            f"LIVE={diagnostics.get('byHealth', {}).get('LIVE', 0)} "
+            f"DELAYED={diagnostics.get('byHealth', {}).get('DELAYED', 0)} "
+            f"STALE={diagnostics.get('byHealth', {}).get('STALE', 0)} "
+            f"OFFLINE={diagnostics.get('byHealth', {}).get('OFFLINE', 0)}",
+            flush=True,
+        )
     return True
 
 
