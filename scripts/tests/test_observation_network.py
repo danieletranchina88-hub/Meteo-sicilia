@@ -271,6 +271,48 @@ def test_optional_providers_are_disabled_without_credentials():
     }
 
 
+def test_legacy_station_list_covers_every_provider_for_icon_matching():
+    """``stations``/``count`` (consumed by ``StationForecastArchive`` and
+    ``verify_station_forecasts``) must include every configured provider's
+    live stations, not just METAR, so ICON-2I sampling/verification extends
+    automatically once ItaliaMeteo/MeteoNetwork are populated. METAR keeps
+    its bare id for continuity; other providers are prefixed to avoid id
+    collisions, and duplicate-flagged stations are never double counted."""
+
+    now = datetime(2026, 1, 1, 12, 0, tzinfo=timezone.utc)
+    now_epoch = now.timestamp()
+
+    metar_station = _station("metar", "LICJ", "Palermo Punta Raisi", 38.18, 13.10)
+    metar_station["observations"] = {"temperature": _measurement(24.0, now_epoch - 60)}
+
+    italiameteo_station = _station(
+        "italiameteo", "IM001", "Catania Fontanarossa", 37.47, 15.06,
+    )
+    italiameteo_station["observations"] = {"temperature": _measurement(26.5, now_epoch - 60)}
+
+    meteonetwork_station = _station(
+        "meteonetwork", "MN042", "Trapani centro", 38.02, 12.51,
+    )
+    meteonetwork_station["observations"] = {"temperature": _measurement(25.1, now_epoch - 60)}
+
+    providers = [
+        FakeProvider("metar", [metar_station]),
+        FakeProvider("italiameteo", [italiameteo_station]),
+        FakeProvider("meteonetwork", [meteonetwork_station]),
+    ]
+    payload = collect_national_observations(
+        providers=providers, compute_coverage=False, now=now,
+    )
+
+    ids = {station["id"] for station in payload["stations"]}
+    assert ids == {"LICJ", "italiameteo:IM001", "meteonetwork:MN042"}
+    assert payload["count"] == 3
+    # The METAR-only catalogue used elsewhere as the official ICAO registry
+    # must stay untouched by the other providers.
+    assert {s["id"] for s in payload["stationNetwork"]["stations"]} == {"LICJ"}
+    assert "MeteoHub" in payload["source"] and "MeteoNetwork" in payload["source"]
+
+
 if __name__ == "__main__":
     test_provider_isolation_never_empties_whole_network()
     test_registry_deduplication_confidence_is_conservative()
@@ -280,4 +322,5 @@ if __name__ == "__main__":
     test_network_diagnostics_counts_by_freshness_and_source()
     test_coverage_reports_gap_fraction_and_variable_filter()
     test_optional_providers_are_disabled_without_credentials()
+    test_legacy_station_list_covers_every_provider_for_icon_matching()
     print("Observation network tests passed")

@@ -35,27 +35,39 @@ def default_providers(*, environ: dict[str, str] | None = None) -> list[Observat
 
 
 def _legacy_metar_view(stations: list[dict[str, Any]]) -> dict[str, Any]:
-    """Rebuild the pre-existing METAR-only schema for zero-risk compatibility.
+    """Rebuild the pre-existing METAR-based schema, now covering every
+    configured provider, for backward-compatible ICON matching.
 
-    The client-side fusion/analysis code (``index.html``) and the ICON
-    station-forecast archive (``meteo_analysis/verification/stations.py``)
-    both expect this exact shape; they keep working unmodified.
+    The client-side fusion/analysis code (``index.html``) reads
+    ``stationNetwork`` for its METAR-only catalogue fallback, kept unchanged.
+    ``stations``/``count`` feed ``StationForecastArchive`` and
+    ``verify_station_forecasts`` (``meteo_analysis/verification/``), which
+    only require ``id``/``lat``/``lon``/``elevationM``/``obsTime`` and a
+    handful of measurement fields and are otherwise source-agnostic: by
+    including every provider's live stations here (not just METAR), ICON-2I
+    sampling and forecast verification automatically extend to ItaliaMeteo
+    and MeteoNetwork stations as soon as those providers are configured,
+    with no further code changes required. METAR keeps its bare ICAO ``id``
+    for continuity with existing archives; other providers use a
+    ``source:sourceStationId`` id to avoid collisions.
     """
 
     live: list[dict[str, Any]] = []
     network: list[dict[str, Any]] = []
     for station in stations:
-        if station.get("source") != "metar":
+        if station.get("duplicateOfStationId"):
             continue
-        network.append({
-            "id": station["sourceStationId"],
-            "name": station["name"],
-            "lat": station["lat"],
-            "lon": station["lon"],
-            "elevationM": station.get("elevationM"),
-            "stationTypes": ["METAR"],
-            "country": "IT",
-        })
+        is_metar = station.get("source") == "metar"
+        if is_metar:
+            network.append({
+                "id": station["sourceStationId"],
+                "name": station["name"],
+                "lat": station["lat"],
+                "lon": station["lon"],
+                "elevationM": station.get("elevationM"),
+                "stationTypes": ["METAR"],
+                "country": "IT",
+            })
         observations = station.get("observations") or {}
         if not observations:
             continue
@@ -70,8 +82,12 @@ def _legacy_metar_view(stations: list[dict[str, Any]]) -> dict[str, Any]:
         temp = observations.get("temperature", {})
         dewp = observations.get("dewpoint", {})
         pressure = observations.get("pressureMsl", {})
+        station_id = (
+            station["sourceStationId"] if is_metar
+            else f"{station['source']}:{station['sourceStationId']}"
+        )
         live.append({
-            "id": station["sourceStationId"],
+            "id": station_id,
             "name": station["name"],
             "lat": station["lat"],
             "lon": station["lon"],
@@ -86,6 +102,7 @@ def _legacy_metar_view(stations: list[dict[str, Any]]) -> dict[str, Any]:
             "pressHpa": pressure.get("value") if isinstance(pressure, dict) else None,
             "altimeterHpa": None,
             "rawReport": station.get("rawReport"),
+            "source": station.get("source"),
         })
     return {
         "count": len(live),

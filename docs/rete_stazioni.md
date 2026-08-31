@@ -144,13 +144,23 @@ continua a funzionare esattamente come prima (solo METAR), riportando
    sandbox. Il payload prodotto da `pipeline.py` è già nella forma tabellare
    (`stations`/`observations` per variabile) più adatta a una futura
    migrazione, senza dover riscrivere i provider.
-6. Matching ICON↔osservazioni multi-provider e Verification Engine
-   (BIAS/MAE/RMSE per lead time/regione/quota): oggi `StationForecastArchive`
-   e `verify_station_forecasts` operano solo sulle stazioni METAR (le uniche
-   con un ID stabile usato anche dal campionamento ICON). Estendere il
-   campionamento ICON a tutte le stazioni del registro è il prossimo passo
-   naturale una volta che ItaliaMeteo/MeteoNetwork saranno popolati da
-   credenziali reali.
+6. **[FATTO in questo intervento successivo]** Matching ICON↔osservazioni
+   multi-provider: `pipeline._legacy_metar_view()` ora costruisce l'elenco
+   `stations`/`count` (consumato da `StationForecastArchive` e
+   `verify_station_forecasts`) a partire da **tutte** le stazioni con
+   un'osservazione corrente e non marcate `duplicateOfStationId`, non solo
+   METAR. Le stazioni METAR mantengono l'id ICAO nudo (continuità con gli
+   archivi storici); le altre usano un id `source:sourceStationId` per
+   evitare collisioni. Il catalogo ufficiale `stationNetwork` (usato dal
+   frontend come fallback legacy) resta invece solo METAR, poiché rappresenta
+   specificamente il registro ICAO, non un catalogo generico. **Effetto
+   pratico**: oggi (solo METAR configurato) nessun cambiamento nei numeri;
+   non appena ItaliaMeteo/MeteoNetwork saranno configurati con credenziali
+   reali, il campionamento ICON-2I e le metriche BIAS/MAE/RMSE della
+   Verification Engine si estenderanno automaticamente a quelle stazioni,
+   senza ulteriori modifiche al codice. Copertura di test:
+   `test_legacy_station_list_covers_every_provider_for_icon_matching` in
+   `scripts/tests/test_observation_network.py`.
 
 ## 6. Metriche diagnostiche disponibili
 
