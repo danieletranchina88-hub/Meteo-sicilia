@@ -13,10 +13,7 @@ import sys
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
-from meteo_analysis.verification.observations import fetch_metar_observations
-
-
-DEFAULT_DOMAIN = (33.7, 3.0, 48.9, 22.0)
+from meteo_analysis.verification.observations import fetch_italy_metar_observations
 
 
 def write_json_atomic(path: Path, payload) -> None:
@@ -37,7 +34,7 @@ def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--output-dir", default="observation_archive")
     arguments = parser.parse_args()
-    payload = fetch_metar_observations(domain=DEFAULT_DOMAIN)
+    payload = fetch_italy_metar_observations()
     if not payload.get("stations"):
         raise RuntimeError("snapshot METAR vuoto: non archivio un falso successo")
     stamp = payload["capturedAt"].replace("-", "").replace(":", "")

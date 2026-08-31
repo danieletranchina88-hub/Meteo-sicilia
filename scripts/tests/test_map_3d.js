@@ -73,6 +73,18 @@ assert.match(html, /Math\.abs\(station\.obsTime - validTime\) <= FUSION_TIME_TOL
   "il valid time ICON non viene confrontato con l'ora della singola stazione");
 assert.match(html, /MSLP solo SLP/,
   "l'interfaccia confonde ancora altimeter setting e pressione MSLP");
+assert.match(html, /data-toggle="stations"[\s\S]{0,220}?rete METAR Italia/,
+  "manca il controllo della rete nazionale delle stazioni");
+assert.match(html, /let stationNetwork = \[\];/,
+  "il client non conserva il catalogo stazioni separato dai report live");
+assert.match(html, /payload\.stationNetwork[\s\S]{0,180}?stationNetwork\.stations/,
+  "il sito non legge il catalogo nazionale pubblicato dalla pipeline");
+assert.match(html, /cluster: true,[\s\S]{0,100}?clusterMaxZoom: 8/,
+  "la rete nazionale non viene raggruppata alle piccole scale");
+assert.match(html, /report recente[\s\S]{0,100}?report ritardato[\s\S]{0,120}?nessun report ricevuto/,
+  "gli stati delle stazioni non sono dichiarati in modo scientificamente chiaro");
+assert.match(html, /SLP e QNH sono grandezze distinte/,
+  "il dettaglio stazione non distingue SLP e QNH");
 
 const meteogramScripts = [...meteogramHtml.matchAll(/<script(?:\s[^>]*)?>([\s\S]*?)<\/script>/gi)]
   .map((match) => match[1]).filter((source) => source.trim());

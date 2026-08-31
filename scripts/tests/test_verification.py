@@ -22,7 +22,15 @@ from meteo_analysis.verification.archive import (  # noqa: E402
     source_asset_record,
 )
 from meteo_analysis.verification.metrics import verify_station_forecasts  # noqa: E402
-from meteo_analysis.verification.observations import normalize_metar_reports  # noqa: E402
+from meteo_analysis.verification.object_storage import (  # noqa: E402
+    ObjectStoreConfigurationError,
+    RawGribArchive,
+)
+from meteo_analysis.verification.observations import (  # noqa: E402
+    fetch_italy_metar_observations,
+    normalize_italian_station_network,
+    normalize_metar_reports,
+)
 from meteo_analysis.verification.stations import (  # noqa: E402
     StationForecastArchive,
     bilinear_sample,
@@ -64,6 +72,77 @@ def test_observation_semantics():
     )["stations"][0]
     assert no_slp["pressHpa"] is None
     assert no_slp["altimeterHpa"] is not None
+
+
+def test_italian_network_and_live_subset_are_distinct():
+    catalogue = normalize_italian_station_network([
+        {
+            "icaoId": "LICJ", "site": "Palermo Arpt", "lat": 38.176,
+            "lon": 13.091, "elev": 20, "country": "IT",
+            "siteType": ["METAR", "TAF"],
+        },
+        {
+            "icaoId": "LIVP", "site": "Monte Paganella", "lat": 46.143,
+            "lon": 11.038, "elev": 2125, "country": "IT",
+            "siteType": ["METAR"],
+        },
+        {
+            "icaoId": "LFMN", "site": "Nice", "lat": 43.658,
+            "lon": 7.216, "elev": 4, "country": "FR",
+            "siteType": ["METAR"],
+        },
+        {
+            "icaoId": "LIEE", "site": "Cagliari", "lat": 39.243,
+            "lon": 9.06, "elev": 1, "country": "IT",
+            "siteType": ["TAF"],
+        },
+    ])
+    assert catalogue["count"] == 2
+    assert [item["id"] for item in catalogue["stations"]] == ["LICJ", "LIVP"]
+
+    class Response:
+        def __init__(self, payload):
+            self.payload = payload
+
+        def raise_for_status(self):
+            return None
+
+        def json(self):
+            return self.payload
+
+    class Session:
+        def __init__(self):
+            self.calls = []
+
+        def get(self, url, **kwargs):
+            self.calls.append((url, kwargs))
+            if "stationinfo" in url:
+                return Response([
+                    {
+                        "icaoId": "LICJ", "site": "Palermo Arpt",
+                        "lat": 38.176, "lon": 13.091, "elev": 20,
+                        "country": "IT", "siteType": ["METAR", "TAF"],
+                    },
+                    {
+                        "icaoId": "LIVP", "site": "Monte Paganella",
+                        "lat": 46.143, "lon": 11.038, "elev": 2125,
+                        "country": "IT", "siteType": ["METAR"],
+                    },
+                ])
+            return Response([{
+                "icaoId": "LICJ", "obsTime": "2026-08-30T00:20:00Z",
+                "temp": 24, "dewp": 18, "wspd": 10, "wdir": 270,
+                "altim": 1013, "lat": 38.176, "lon": 13.091,
+            }])
+
+    session = Session()
+    payload = fetch_italy_metar_observations(session=session)
+    assert payload["stationNetwork"]["count"] == 2
+    assert payload["coverage"]["registeredMetarStations"] == 2
+    assert payload["coverage"]["reportingMetarStations"] == 1
+    assert payload["stations"][0]["name"] == "Palermo Arpt"
+    assert len(session.calls) == 2
+    assert session.calls[1][1]["params"]["bbox"] == "35.0,6.0,48.0,19.0"
 
 
 def test_native_bilinear_sampling_and_archive():
@@ -192,9 +271,77 @@ def test_checksum_manifest_is_truthful():
         assert bundle["rawGribIncluded"] is False
 
 
+def test_immutable_s3_raw_archive_contract():
+    class NotFound(Exception):
+        response = {"Error": {"Code": "404"}}
+
+    class MemoryS3:
+        def __init__(self):
+            self.objects = {}
+            self.uploads = 0
+
+        def head_object(self, *, Bucket, Key):
+            if (Bucket, Key) not in self.objects:
+                raise NotFound()
+            return self.objects[(Bucket, Key)]
+
+        def upload_file(self, filename, bucket, key, ExtraArgs):
+            self.uploads += 1
+            self.objects[(bucket, key)] = {
+                "ContentLength": Path(filename).stat().st_size,
+                "Metadata": {
+                    str(name).lower(): str(value)
+                    for name, value in ExtraArgs["Metadata"].items()
+                },
+                "ETag": "memory-etag",
+                "VersionId": "1",
+            }
+
+    environment = {
+        "ICON_ARCHIVE_MODE": "raw",
+        "ICON_ARCHIVE_S3_BUCKET": "private-icon-history",
+        "ICON_ARCHIVE_S3_ENDPOINT": "https://example.invalid",
+        "ICON_ARCHIVE_S3_ACCESS_KEY_ID": "test-key",
+        "ICON_ARCHIVE_S3_SECRET_ACCESS_KEY": "test-secret",
+        "ICON_ARCHIVE_S3_PREFIX": "meteo/icon2i",
+    }
+    with tempfile.TemporaryDirectory() as temporary:
+        source = Path(temporary) / "surface.grib"
+        source.write_bytes(b"GRIB-data-7777")
+        client = MemoryS3()
+        archive = RawGribArchive.from_environment(
+            run_time="2026-08-30T00:00:00Z", environ=environment, client=client
+        )
+        record = archive.retain_source(
+            path=source, name="surface", role="surface-run",
+            source_url="https://example.invalid/surface.grib",
+        )
+        assert record["key"].startswith("meteo/icon2i/20260830T000000Z/raw/surface-run/")
+        assert record["sha256"]
+        assert client.uploads == 1
+        assert archive.retain_source(
+            path=source, name="surface", role="surface-run",
+            source_url="https://example.invalid/surface.grib",
+        )["key"] == record["key"]
+        assert client.uploads == 1
+        assert archive.public_status()["kind"] == "private-s3-compatible-raw-grib"
+
+    try:
+        RawGribArchive.from_environment(
+            run_time="2026-08-30T00:00:00Z",
+            environ={"ICON_ARCHIVE_MODE": "raw"},
+        )
+    except ObjectStoreConfigurationError:
+        pass
+    else:
+        raise AssertionError("configurazione raw incompleta accettata")
+
+
 if __name__ == "__main__":
     test_observation_semantics()
+    test_italian_network_and_live_subset_are_distinct()
     test_native_bilinear_sampling_and_archive()
     test_time_matching_metrics_and_pressure_exclusion()
     test_checksum_manifest_is_truthful()
+    test_immutable_s3_raw_archive_contract()
     print("Forecast-observation verification tests passed")

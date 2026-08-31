@@ -70,7 +70,8 @@ from meteo_analysis.verification.archive import (
     source_asset_record,
     write_run_manifest,
 )
-from meteo_analysis.verification.observations import fetch_metar_observations
+from meteo_analysis.verification.object_storage import RawGribArchive
+from meteo_analysis.verification.observations import fetch_italy_metar_observations
 from meteo_analysis.verification.stations import StationForecastArchive
 from ml_fronts import predict_store as predict_ml_fronts
 
@@ -228,11 +229,9 @@ def write_json_gzip_atomic(path, payload, compresslevel=6):
 
 
 def collect_observations():
-    """Fetch one METAR snapshot for both the site and verification archive."""
+    """Fetch the Italian METAR network snapshot for site and verification."""
     try:
-        payload = fetch_metar_observations(
-            domain=(LAT_MIN, LON_MIN, LAT_MAX, LON_MAX)
-        )
+        payload = fetch_italy_metar_observations()
         if not payload.get("stations"):
             raise ValueError("snapshot senza stazioni valide")
         return payload
@@ -251,21 +250,36 @@ def write_observations(output_dir, payload=None):
     return True
 
 
-def record_source_asset(inventory, *, name, url, path, role, required):
-    """Record each accepted source once, including its content checksum."""
+def record_source_asset(
+    inventory, *, name, url, path, role, required, raw_archive=None
+):
+    """Record and, when enabled, immediately retain each accepted GRIB."""
     if inventory is None or any(item.get("url") == url for item in inventory):
         return
-    inventory.append(source_asset_record(
+    record = source_asset_record(
         name=name,
         url=url,
         path=path,
         role=role,
         required=required,
         retained=False,
-    ))
+    )
+    if raw_archive is not None and raw_archive.enabled:
+        archive_object = raw_archive.retain_source(
+            path=path,
+            name=name,
+            role=role,
+            source_url=url,
+            expected_sha256=record["sha256"],
+        )
+        if archive_object is None:
+            raise RuntimeError("storage raw dichiarato attivo ma upload assente")
+        record["retainedInArchive"] = True
+        record["archiveObject"] = archive_object
+    inventory.append(record)
 
 
-def prepare_icon_front_analyzer(run_dt, source_inventory=None):
+def prepare_icon_front_analyzer(run_dt, source_inventory=None, raw_archive=None):
     """Build the ICON-2I-only, hourly, multilayer frontal analysis.
 
     T/QV/U/V at 850 hPa are mandatory because they define the objective
@@ -355,6 +369,7 @@ def prepare_icon_front_analyzer(run_dt, source_inventory=None):
                     path=destination,
                     role="front-physics",
                     required=name not in optional_fields,
+                    raw_archive=raw_archive,
                 )
                 print(
                     f"   {name}: {os.path.getsize(destination) / 1048576:.1f} MB",
@@ -458,6 +473,10 @@ def prepare_icon_front_analyzer(run_dt, source_inventory=None):
         )
         return analyzer
     except Exception as error:
+        if raw_archive is not None and raw_archive.enabled:
+            raise RuntimeError(
+                "archivio raw non completo durante l'analisi frontale"
+            ) from error
         print(f"   Analisi frontale ICON-2I non disponibile: {error}", flush=True)
         return None
 
@@ -766,7 +785,7 @@ def build_storm_payload(
     return payload
 
 
-def prepare_icon_hazard_fields(run_dt, source_inventory=None):
+def prepare_icon_hazard_fields(run_dt, source_inventory=None, raw_archive=None):
     """Download real convective and 700-hPa hazard fields for the ICON run.
 
     These files replace the former temperature-derived CAPE and constant
@@ -976,6 +995,7 @@ def prepare_icon_hazard_fields(run_dt, source_inventory=None):
                     path=destination,
                     role="hazard-diagnostics",
                     required=name not in optional_fields,
+                    raw_archive=raw_archive,
                 )
                 print(
                     f"   {name}: {os.path.getsize(destination) / 1048576:.1f} MB",
@@ -997,6 +1017,10 @@ def prepare_icon_hazard_fields(run_dt, source_inventory=None):
         )
         return fields
     except Exception as error:
+        if raw_archive is not None and raw_archive.enabled:
+            raise RuntimeError(
+                "archivio raw non completo durante la diagnostica convettiva"
+            ) from error
         print(
             "   Diagnostica convettiva non disponibile; "
             f"pubblico il layer come assente: {error}",
@@ -1253,6 +1277,21 @@ def process_data():
 
     print(f"2. Elaboro Run: {run_dt} ({len(file_list)} files)", flush=True)
 
+    # The raw archive is opt-in: a missing or malformed configuration fails
+    # before the first download when raw retention was explicitly requested.
+    # In normal public-site mode it remains off and the manifest says so.
+    raw_archive = RawGribArchive.from_environment(run_time=iso_z(run_dt))
+    if raw_archive.enabled:
+        print(
+            "2*. Archivio raw S3 attivo: ogni GRIB verra verificato con SHA-256.",
+            flush=True,
+        )
+    else:
+        print(
+            "2*. Archivio raw S3 non configurato: mantengo manifest e campioni di verifica.",
+            flush=True,
+        )
+
     if os.path.exists(TEMP_DIR):
         shutil.rmtree(TEMP_DIR)
     os.makedirs(TEMP_DIR)
@@ -1273,7 +1312,7 @@ def process_data():
     meteogram_archive = None
     station_forecast_archive = None
     icon_front_analyzer = prepare_icon_front_analyzer(
-        run_dt, source_inventory=source_inventory
+        run_dt, source_inventory=source_inventory, raw_archive=raw_archive
     )
     if icon_front_analyzer is None:
         raise RuntimeError(
@@ -1281,7 +1320,7 @@ def process_data():
             "mantengo l'ultima pubblicazione valida"
         )
     icon_hazard_fields = prepare_icon_hazard_fields(
-        run_dt, source_inventory=source_inventory
+        run_dt, source_inventory=source_inventory, raw_archive=raw_archive
     )
     for idx, filename in enumerate(file_list):
         print(f"   [{idx+1:02d}] DL {filename}...", end=" ", flush=True)
@@ -1323,6 +1362,7 @@ def process_data():
             path=TEMP_FILE,
             role="surface-run",
             required=True,
+            raw_archive=raw_archive,
         )
 
         if os.path.exists(f"{TEMP_FILE}.idx"):
@@ -2416,6 +2456,7 @@ def process_data():
                 "north": LAT_MAX,
                 "east": LON_MAX,
             },
+            object_storage=raw_archive.public_status(),
         )
         write_run_manifest(
             os.path.join(TEMP_DIR, "archive_manifest.json"),

@@ -32,11 +32,12 @@ def source_asset_record(
     role: str,
     required: bool,
     retained: bool = False,
+    archive_object: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Describe the exact GRIB that was accepted by the processor."""
 
     path = Path(path)
-    return {
+    record = {
         "name": str(name),
         "role": str(role),
         "url": str(url),
@@ -45,6 +46,9 @@ def source_asset_record(
         "sha256": sha256_file(path),
         "retainedInArchive": bool(retained),
     }
+    if archive_object is not None:
+        record["archiveObject"] = dict(archive_object)
+    return record
 
 
 def _output_role(relative_path: str) -> str:
@@ -90,6 +94,7 @@ def build_run_manifest(
     source_assets: Iterable[dict[str, Any]] = (),
     algorithms: dict[str, str | None] | None = None,
     domain: dict[str, float] | None = None,
+    object_storage: dict[str, Any] | None = None,
     created_at: datetime | None = None,
 ) -> dict[str, Any]:
     """Build a checksum inventory without claiming unretained GRIBs exist."""
@@ -129,6 +134,14 @@ def build_run_manifest(
         "algorithms": algorithms or {},
         "sourceAssets": sources,
         "publishedAssets": _inventory(directory),
+        "objectStorage": object_storage or {
+            "schemaVersion": 1,
+            "mode": "off",
+            "kind": None,
+            "immutability": None,
+            "retention": None,
+            "runPrefix": None,
+        },
         "archiveCapability": {
             "verificationSamplesIncluded": (
                 directory / "verification" / "forecast_samples.json.gz"

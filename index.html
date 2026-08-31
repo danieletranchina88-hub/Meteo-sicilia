@@ -89,6 +89,52 @@
         overscroll-behavior: none;
       }
 
+      .maplibregl-popup-content {
+        padding: 0;
+        border-radius: 12px;
+        color: #132c3e;
+        box-shadow: 0 12px 32px rgba(3, 17, 28, 0.3);
+      }
+
+      .station-popup {
+        min-width: 248px;
+        padding: 12px 13px 11px;
+        font-size: 12px;
+        line-height: 1.35;
+      }
+
+      .station-popup strong,
+      .station-popup small,
+      .station-popup em {
+        display: block;
+      }
+
+      .station-popup strong {
+        padding-right: 18px;
+        color: #0a2e48;
+        font-size: 13px;
+      }
+
+      .station-popup small,
+      .station-popup em {
+        color: #577083;
+        font-size: 10px;
+      }
+
+      .station-popup em {
+        margin-top: 8px;
+      }
+
+      .station-popup div {
+        display: flex;
+        justify-content: space-between;
+        gap: 16px;
+        margin-top: 4px;
+      }
+
+      .station-popup span { color: #567083; }
+      .station-popup b { color: #132c3e; text-align: right; }
+
       #particle-canvas,
       #vector-canvas,
       #map-vignette {
@@ -2416,6 +2462,9 @@
                 <button class="toggle-row" type="button" data-toggle="fusion" aria-pressed="false">
                   <span><b>Analisi osservata</b><small>METAR entro ±45 min · T, UR; MSLP solo SLP</small></span><span class="switch"></span>
                 </button>
+                <button class="toggle-row" type="button" data-toggle="stations" aria-pressed="false">
+                  <span><b>Stazioni osservate</b><small>rete METAR Italia · verde live, ambra rit., grigio assente</small></span><span class="switch"></span>
+                </button>
                 <button class="toggle-row" type="button" data-toggle="terrain" aria-pressed="false">
                   <span><b>Rilievo topografico</b><small>ombreggiatura del terreno</small></span><span class="switch"></span>
                 </button>
@@ -3498,8 +3547,11 @@
       let radarHost = "";
       let showFusion = false;
       let obsStations = [];
+      let stationNetwork = [];
+      let stationNetworkMeta = null;
       let obsFetchedAt = 0;
       let obsFetching = false;
+      let showStations = false;
       let showFronts = false;
       let showTerrain = false;
       let show3D = false;
@@ -5705,6 +5757,7 @@
           radar: showRadar,
           satclouds: showSatelliteClouds,
           fusion: showFusion,
+          stations: showStations,
           fronts: showFronts,
           terrain: showTerrain,
           satellite: showSatellite,
@@ -5761,6 +5814,7 @@
         showIsohypses = false;
         showRadar = false;
         showFusion = false;
+        showStations = false;
         showFronts = false;
         showSatelliteClouds = false;
         showTerrain = false;
@@ -5803,6 +5857,7 @@
             isobars: showIsobars, isotherms: showIsotherms,
             isohypses: showIsohypses, radar: showRadar,
             satclouds: showSatelliteClouds, fusion: showFusion,
+            stations: showStations,
             fronts: showFronts, terrain: showTerrain,
             satellite: showSatellite,
             threed: show3D, graticule: showGraticule,
@@ -5818,6 +5873,7 @@
           showRadar = false;
           showSatelliteClouds = false;
           showFusion = false;
+          showStations = false;
           showTerrain = false;
           showSatellite = false;
           show3D = false;
@@ -5848,6 +5904,7 @@
           showRadar = Boolean(previous.radar);
           showSatelliteClouds = Boolean(previous.satclouds);
           showFusion = Boolean(previous.fusion);
+          showStations = Boolean(previous.stations);
           showFronts = Boolean(previous.fronts);
           showTerrain = Boolean(previous.terrain);
           showSatellite = Boolean(previous.satellite);
@@ -5954,7 +6011,7 @@
         updateLegend();
         renderWeather();
         updateIsobars();
-        if (showFusion) updateStationMarkers();
+        if (showFusion || showStations) updateStationMarkers();
         updateMapPresentation();
         requestVectorRender();
         refreshSelectedPoint();
@@ -6087,6 +6144,30 @@
             renderWeather();
             requestVectorRender();
             refreshSelectedPoint();
+          }
+        } else if (name === "stations") {
+          showStations = !showStations;
+          if (showStations) {
+            toast("Carico la rete METAR italiana…");
+            fetchObservations().then(function () {
+              if (!stationNetwork.length) {
+                showStations = false;
+                updateLayerUi();
+                toast("Catalogo stazioni METAR non disponibile al momento");
+                return;
+              }
+              updateStationMarkers();
+              updateLayerUi();
+              const reporting = obsStations.length;
+              const total = stationNetwork.length;
+              toast(
+                "Rete METAR Italia: " + reporting + "/" + total
+                + " stazioni con report ricevuto"
+              );
+            });
+          } else {
+            updateStationMarkers();
+            updateLayerUi();
           }
         } else if (name === "fronts") {
           if (
@@ -9807,7 +9888,7 @@
       async function fetchObservations() {
         const now = Date.now();
         if (obsFetching) return;
-        if (obsStations.length && now - obsFetchedAt < 10 * 60 * 1000) return;
+        if (stationNetwork.length && now - obsFetchedAt < 10 * 60 * 1000) return;
         obsFetching = true;
         try {
           // Read the pipeline-published METAR snapshot from the same origin.
@@ -9819,6 +9900,10 @@
             if (!r.ok) throw new Error("observations.json non disponibile");
             return r.json();
           });
+          const numberOrNull = function (value) {
+            const number = Number(value);
+            return Number.isFinite(number) ? number : null;
+          };
           const list = (payload && payload.stations) ? payload.stations : [];
           obsStations = list.map(function (s) {
             const lat = Number(s.lat);
@@ -9826,16 +9911,51 @@
             if (!Number.isFinite(lat) || !Number.isFinite(lon)) return null;
             return {
               id: s.id || s.name || "",
+              name: s.name || s.id || "",
               lat: lat,
               lon: lon,
               obsTime: Number.isFinite(Number(s.obsTime))
                 ? Number(s.obsTime) * 1000 : null,
-              tempC: s.tempC === null || s.tempC === undefined ? null : Number(s.tempC),
-              dewpC: s.dewpC === null || s.dewpC === undefined ? null : Number(s.dewpC),
-              wspdKmh: s.wspdKmh === null || s.wspdKmh === undefined ? null : Number(s.wspdKmh),
-              pressHpa: s.pressHpa === null || s.pressHpa === undefined ? null : Number(s.pressHpa)
+              elevationM: numberOrNull(s.elevationM),
+              tempC: numberOrNull(s.tempC),
+              dewpC: numberOrNull(s.dewpC),
+              wspdKmh: numberOrNull(s.wspdKmh),
+              windGustKmh: numberOrNull(s.windGustKmh),
+              wdir: numberOrNull(s.wdir),
+              pressHpa: numberOrNull(s.pressHpa),
+              altimeterHpa: numberOrNull(s.altimeterHpa)
             };
           }).filter(Boolean);
+          const observationsById = new Map(obsStations.map(function (station) {
+            return [station.id, station];
+          }));
+          const network = payload && payload.stationNetwork
+            && Array.isArray(payload.stationNetwork.stations)
+            ? payload.stationNetwork.stations : [];
+          stationNetwork = network.map(function (station) {
+            const lat = Number(station.lat);
+            const lon = Number(station.lon);
+            if (!Number.isFinite(lat) || !Number.isFinite(lon)) return null;
+            const id = station.id || station.name || "";
+            const report = observationsById.get(id) || null;
+            return {
+              id: id,
+              name: station.name || (report && report.name) || id,
+              lat: lat,
+              lon: lon,
+              elevationM: numberOrNull(station.elevationM),
+              report: report
+            };
+          }).filter(Boolean);
+          // Compatibility with the older snapshot schema: the live subset is
+          // still useful, but the interface never calls it a full network.
+          if (!stationNetwork.length) {
+            stationNetwork = obsStations.map(function (station) {
+              return { ...station, report: station };
+            });
+          }
+          stationNetworkMeta = payload && payload.stationNetwork
+            ? payload.stationNetwork : null;
           obsFetchedAt = now;
         } catch (error) {
           console.warn("Osservazioni non disponibili:", error);
@@ -9950,7 +10070,19 @@
               color: "rgb(" + Math.round(color[0]) + ","
                 + Math.round(color[1]) + "," + Math.round(color[2]) + ")",
               value: value,
-              id: station.id
+              id: station.id,
+              name: station.name || station.id,
+              status: "fusion",
+              observedAt: station.obsTime,
+              tempC: station.tempC,
+              dewpC: station.dewpC,
+              windKmh: station.wspdKmh,
+              gustKmh: station.windGustKmh,
+              windDir: station.wdir,
+              slpHpa: station.pressHpa,
+              altimeterHpa: station.altimeterHpa,
+              elevationM: station.elevationM,
+              opacity: 1
             },
             geometry: { type: "Point", coordinates: [station.lon, station.lat] }
           });
@@ -9958,16 +10090,114 @@
         return features;
       }
 
+      const STATION_LIVE_MAX_AGE_MS = 95 * 60 * 1000;
+
+      function stationStatus(report) {
+        if (!report || !Number.isFinite(report.obsTime)) return "offline";
+        return Date.now() - report.obsTime <= STATION_LIVE_MAX_AGE_MS
+          ? "live" : "delayed";
+      }
+
+      function buildStationNetworkFeatures() {
+        return stationNetwork.map(function (station) {
+          const report = station.report;
+          const status = stationStatus(report);
+          const colors = {
+            live: "#0a9f68",
+            delayed: "#cf7b10",
+            offline: "#6b7785"
+          };
+          return {
+            type: "Feature",
+            properties: {
+              id: station.id,
+              name: station.name || station.id,
+              status: status,
+              color: colors[status],
+              opacity: status === "offline" ? 0.55 : 1,
+              observedAt: report ? report.obsTime : null,
+              tempC: report ? report.tempC : null,
+              dewpC: report ? report.dewpC : null,
+              windKmh: report ? report.wspdKmh : null,
+              gustKmh: report ? report.windGustKmh : null,
+              windDir: report ? report.wdir : null,
+              slpHpa: report ? report.pressHpa : null,
+              altimeterHpa: report ? report.altimeterHpa : null,
+              elevationM: station.elevationM
+            },
+            geometry: { type: "Point", coordinates: [station.lon, station.lat] }
+          };
+        });
+      }
+
+      function stationValueText(value, digits, suffix) {
+        return Number.isFinite(value) ? value.toFixed(digits) + suffix : "—";
+      }
+
+      function escapeStationText(value) {
+        return String(value === null || value === undefined ? "" : value)
+          .replace(/&/g, "&amp;")
+          .replace(/</g, "&lt;")
+          .replace(/>/g, "&gt;")
+          .replace(/\"/g, "&quot;")
+          .replace(/'/g, "&#39;");
+      }
+
+      function stationObservationTime(value) {
+        if (!Number.isFinite(value)) return "nessun METAR corrente";
+        return new Date(value).toLocaleString("it-IT", {
+          timeZone: "UTC", day: "2-digit", month: "2-digit",
+          hour: "2-digit", minute: "2-digit", hour12: false
+        }) + " UTC";
+      }
+
+      function showStationPopup(feature, coordinates) {
+        if (!map || !feature || !feature.properties) return;
+        const p = feature.properties;
+        const statusText = {
+          live: "report recente", delayed: "report ritardato", offline: "nessun report ricevuto"
+        }[p.status] || "osservazione";
+        const wind = Number.isFinite(p.windKmh)
+          ? stationValueText(p.windKmh, 0, " km/h")
+            + (Number.isFinite(p.windDir) ? " da " + Math.round(p.windDir) + "°" : "")
+            + (Number.isFinite(p.gustKmh) ? " · raff. " + Math.round(p.gustKmh) + " km/h" : "")
+          : "—";
+        const rows = [
+          ["Stato", statusText],
+          ["Osservato", stationObservationTime(p.observedAt)],
+          ["Temperatura", stationValueText(p.tempC, 1, " °C")],
+          ["Rugiada", stationValueText(p.dewpC, 1, " °C")],
+          ["Vento", wind],
+          ["SLP METAR", stationValueText(p.slpHpa, 1, " hPa")],
+          ["QNH", stationValueText(p.altimeterHpa, 1, " hPa")],
+          ["Quota", stationValueText(p.elevationM, 0, " m")]
+        ].map(function (row) {
+          return "<div><span>" + escapeStationText(row[0]) + "</span><b>"
+            + escapeStationText(row[1]) + "</b></div>";
+        }).join("");
+        new maplibregl.Popup({ closeButton: true, maxWidth: "300px" })
+          .setLngLat(coordinates)
+          .setHTML(
+            "<div class=\"station-popup\"><strong>" + escapeStationText(p.name)
+            + "</strong><small>" + escapeStationText(p.id)
+            + " · NOAA AWC METAR</small>" + rows
+            + "<em>SLP e QNH sono grandezze distinte.</em></div>"
+          )
+          .addTo(map);
+      }
+
       function updateStationMarkers() {
         if (!map || !map.getSource("obs-stations")) return;
         const info = activeLayerInfo(activeLayer);
-        const features = (showFusion && fusionSupported(activeLayer))
-          ? buildStationFeatures(activeLayer, info) : [];
+        const features = showStations
+          ? buildStationNetworkFeatures()
+          : (showFusion && fusionSupported(activeLayer)
+            ? buildStationFeatures(activeLayer, info) : []);
         map.getSource("obs-stations").setData({
           type: "FeatureCollection", features: features
         });
         const visibility = features.length ? "visible" : "none";
-        ["obs-stations-halo", "obs-stations-core"].forEach(function (id) {
+        ["obs-stations-cluster", "obs-stations-cluster-count", "obs-stations-halo", "obs-stations-core", "obs-stations-label"].forEach(function (id) {
           if (map.getLayer(id)) map.setLayoutProperty(id, "visibility", visibility);
         });
       }
@@ -10478,29 +10708,87 @@
 
           map.addSource("obs-stations", {
             type: "geojson",
-            data: { type: "FeatureCollection", features: [] }
+            data: { type: "FeatureCollection", features: [] },
+            cluster: true,
+            clusterMaxZoom: 8,
+            clusterRadius: 42
+          });
+          map.addLayer({
+            id: "obs-stations-cluster",
+            type: "circle",
+            source: "obs-stations",
+            filter: ["has", "point_count"],
+            layout: { visibility: "none" },
+            paint: {
+              "circle-radius": ["interpolate", ["linear"], ["get", "point_count"], 2, 13, 20, 17, 80, 21],
+              "circle-color": "#124e78",
+              "circle-stroke-width": 1.5,
+              "circle-stroke-color": "rgba(255,255,255,0.95)"
+            }
+          });
+          map.addLayer({
+            id: "obs-stations-cluster-count",
+            type: "symbol",
+            source: "obs-stations",
+            filter: ["has", "point_count"],
+            layout: {
+              visibility: "none",
+              "text-field": ["get", "point_count_abbreviated"],
+              "text-font": ["Open Sans Bold", "Arial Unicode MS Bold"],
+              "text-size": 11,
+              "text-allow-overlap": true
+            },
+            paint: { "text-color": "#ffffff" }
           });
           map.addLayer({
             id: "obs-stations-halo",
             type: "circle",
             source: "obs-stations",
+            filter: ["!", ["has", "point_count"]],
             layout: { visibility: "none" },
             paint: {
               "circle-radius": 6.5,
               "circle-color": "#ffffff",
-              "circle-opacity": 0.92
+              "circle-opacity": ["get", "opacity"]
             }
           });
           map.addLayer({
             id: "obs-stations-core",
             type: "circle",
             source: "obs-stations",
+            filter: ["!", ["has", "point_count"]],
             layout: { visibility: "none" },
             paint: {
               "circle-radius": 4.2,
               "circle-color": ["get", "color"],
+              "circle-opacity": ["get", "opacity"],
               "circle-stroke-width": 1,
               "circle-stroke-color": "rgba(10,20,30,0.6)"
+            }
+          });
+          map.addLayer({
+            id: "obs-stations-label",
+            type: "symbol",
+            source: "obs-stations",
+            filter: ["!", ["has", "point_count"]],
+            minzoom: 7.4,
+            layout: {
+              visibility: "none",
+              "text-field": [
+                "case", ["all", ["has", "tempC"], ["!=", ["get", "tempC"], null]],
+                ["concat", ["get", "id"], "  ", ["to-string", ["round", ["get", "tempC"]]], "°"],
+                ["get", "id"]
+              ],
+              "text-font": ["Open Sans SemiBold", "Arial Unicode MS Regular"],
+              "text-size": ["interpolate", ["linear"], ["zoom"], 7.4, 9, 10, 11],
+              "text-offset": [0, 1.15],
+              "text-anchor": "top",
+              "text-allow-overlap": false
+            },
+            paint: {
+              "text-color": "#102b3d",
+              "text-halo-color": "rgba(255,255,255,0.94)",
+              "text-halo-width": 1.25
             }
           });
 
@@ -10533,11 +10821,53 @@
             }
           });
 
+          const stationPointerLayers = ["obs-stations-core", "obs-stations-label"];
+          stationPointerLayers.forEach(function (layerId) {
+            map.on("click", layerId, function (event) {
+              const feature = event.features && event.features[0];
+              if (!feature) return;
+              if (event.originalEvent) event.originalEvent.cancelBubble = true;
+              showStationPopup(feature, feature.geometry.coordinates.slice());
+            });
+            map.on("mouseenter", layerId, function () {
+              map.getCanvas().style.cursor = "pointer";
+            });
+            map.on("mouseleave", layerId, function () {
+              map.getCanvas().style.cursor = "";
+            });
+          });
+          map.on("click", "obs-stations-cluster", function (event) {
+            const feature = event.features && event.features[0];
+            if (!feature) return;
+            if (event.originalEvent) event.originalEvent.cancelBubble = true;
+            const source = map.getSource("obs-stations");
+            const clusterId = feature.properties && feature.properties.cluster_id;
+            if (!source || !Number.isFinite(Number(clusterId))) return;
+            source.getClusterExpansionZoom(Number(clusterId), function (error, zoom) {
+              if (error || !Number.isFinite(zoom)) return;
+              map.easeTo({ center: feature.geometry.coordinates, zoom: zoom });
+            });
+          });
+          map.on("mouseenter", "obs-stations-cluster", function () {
+            map.getCanvas().style.cursor = "pointer";
+          });
+          map.on("mouseleave", "obs-stations-cluster", function () {
+            map.getCanvas().style.cursor = "";
+          });
+
           map.on("click", function (event) {
+            if (event.originalEvent && event.originalEvent.cancelBubble) return;
             showPoint(event.lngLat.lng, event.lngLat.lat, "Punto selezionato");
           });
 
           map.on("mousemove", function (event) {
+            const stationHit = map.queryRenderedFeatures(event.point, {
+              layers: ["obs-stations-cluster", "obs-stations-core", "obs-stations-label"]
+            });
+            if (stationHit.length) {
+              map.getCanvas().style.cursor = "pointer";
+              return;
+            }
             const point = pointFromCoordinates(event.lngLat.lng, event.lngLat.lat);
             map.getCanvas().style.cursor = point ? "crosshair" : "";
           });

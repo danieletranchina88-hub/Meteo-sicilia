@@ -85,18 +85,69 @@ python scripts/verify_archive.py forecast_samples.json.gz osservazioni/ \
   --output scorecard.json
 ```
 
-## Conservazione e limite attuale
+## Rete nazionale delle stazioni
+
+Il file `data_weather/observations.json` contiene due insiemi volutamente
+separati, entrambi provenienti dal NOAA Aviation Weather Center:
+
+- `stationNetwork`: il catalogo delle stazioni METAR italiane registrate
+  dall'AWC, incluse stazioni costiere, montane e aeroportuali;
+- `stations`: il solo sottoinsieme che ha un METAR ricevuto dal servizio al
+  momento dell'acquisizione.
+
+La mappa mostra la rete completa soltanto su richiesta dell'utente. Verde
+significa report recente, ambra report ritardato e grigio assenza di report
+corrente. La stazione non osservata resta visibile: non si sostituisce con un
+valore ICON, non si interpola e non si presenta un dato vecchio come corrente.
+Le osservazioni del sottoinsieme `stations` restano le uniche ammesse nella
+fusione con il modello, e solo entro la finestra temporale dichiarata.
+
+La rete METAR non equivale a una rete pluviometrica o ARPA ad alta densità. È
+una rete nazionale coerente e con metadati verificabili, ma le correzioni locali
+di precipitazione, suolo e microclima richiederanno in seguito fonti regionali
+aperte con licenze e controlli di qualità espliciti.
+
+## Conservazione a oggetti dei GRIB
+
+La pipeline può ora archiviare tutti i GRIB ICON-2I realmente accettati —
+superficie, livelli barici, campi frontali e diagnostiche convettive — in uno
+storage privato compatibile S3. L'upload avviene immediatamente dopo ogni
+download, prima della lettura e della rimozione dei file temporanei.
+
+Ogni oggetto usa una chiave contenente run, ruolo e SHA-256 del contenuto. Se
+la chiave esiste, dimensione e SHA-256 devono coincidere; in caso contrario la
+workflow si interrompe senza sovrascrivere lo storico. Il manifest pubblico
+espone soltanto modalità, chiave e checksum, mai endpoint, bucket o credenziali.
+
+Per attivarlo in GitHub Actions servono questi *Repository secrets*:
+
+| Secret | Significato |
+| --- | --- |
+| `ICON_ARCHIVE_S3_BUCKET` | nome del bucket privato |
+| `ICON_ARCHIVE_S3_ENDPOINT` | endpoint S3 del provider |
+| `ICON_ARCHIVE_S3_ACCESS_KEY_ID` | chiave privata per `PutObject` e `GetObject`/HEAD; se il provider separa le azioni multipart, anche quelle di upload multipart sul solo prefisso dedicato |
+| `ICON_ARCHIVE_S3_SECRET_ACCESS_KEY` | segreto della chiave |
+| `ICON_ARCHIVE_S3_REGION` | opzionale; per R2 normalmente `auto` |
+| `ICON_ARCHIVE_S3_SESSION_TOKEN` | opzionale, solo credenziali temporanee |
+| `ICON_ARCHIVE_S3_PREFIX` | opzionale; predefinito `runs/icon2i` |
+
+La presenza del bucket attiva `ICON_ARCHIVE_MODE=raw`; se una credenziale o un
+upload non funziona, il run fallisce invece di dichiarare falsamente i GRIB
+come conservati. Lo stesso contratto funziona con AWS S3, Cloudflare R2 e
+Backblaze B2. Il bucket deve restare privato, con versioning e una lifecycle
+policy decisa in base a costo e periodo storico desiderato.
+
+## Conservazione e stato operativo
 
 La pipeline crea per ogni run un artifact `icon2i-verification-*`, con manifest,
 campioni e controlli qualità, e conserva gli snapshot osservativi separati per
 90 giorni. È sufficiente per avviare scorecard e primo MOS residuo superficiale.
 
-Non è ancora un archivio storico completo di tutti i GRIB: i manifesti
-dichiarano esplicitamente `retainedInArchive: false` per le sorgenti non
-conservate. Per reti spazio-temporali, correzione di precipitazioni e
-segmentazione frontale servirà uno storage a oggetti esterno. Il codice non
-presenta la sola presenza di URL e checksum come se i file grezzi fossero già
-archiviati.
+Finché i secret S3 non sono configurati, l'archivio resta in modalità `off`: i
+manifesti dichiarano `retainedInArchive: false` e nessun URL viene presentato
+come se equivalesse al possesso del GRIB. Con storage attivo, il manifest
+dichiara `rawGribAssetsRetained` e abilita onestamente la preparazione di
+dataset storici a campo completo.
 
 ## Passo ML successivo
 
