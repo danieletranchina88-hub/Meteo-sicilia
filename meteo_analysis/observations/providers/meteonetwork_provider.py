@@ -29,24 +29,9 @@ from typing import Any
 
 from meteo_analysis.observations.model import DATA_TYPE_OBSERVATION, empty_station
 from meteo_analysis.observations.providers.base import ObservationProvider, ProviderResult
+from meteo_analysis.observations.providers._utils import as_float, as_list, first
 
 API_BASE = "https://api.meteonetwork.it/v3"
-
-
-def _first(mapping: dict[str, Any], *keys: str) -> Any:
-    for key in keys:
-        if key in mapping and mapping[key] is not None:
-            return mapping[key]
-    return None
-
-
-def _float(mapping: dict[str, Any], *keys: str) -> float | None:
-    value = _first(mapping, *keys)
-    try:
-        number = float(value)
-    except (TypeError, ValueError):
-        return None
-    return number if number == number else None
 
 
 class MeteoNetworkProvider(ObservationProvider):
@@ -77,7 +62,7 @@ class MeteoNetworkProvider(ObservationProvider):
         )
         response.raise_for_status()
         payload = response.json()
-        issued_token = _first(payload, "token", "access_token", "jwt")
+        issued_token = first(payload, "token", "access_token", "jwt")
         if not issued_token:
             raise ValueError("login MeteoNetwork riuscito ma senza token in risposta")
         return str(issued_token)
@@ -97,18 +82,18 @@ class MeteoNetworkProvider(ObservationProvider):
             f"{API_BASE}/stations", headers=headers, timeout=timeout
         )
         stations_response.raise_for_status()
-        stations_raw = _as_list(stations_response.json())
+        stations_raw = as_list(stations_response.json())
 
         realtime_response = session.get(
             f"{API_BASE}/realtime", headers=headers, timeout=timeout
         )
         realtime_by_id: dict[str, dict[str, Any]] = {}
         if realtime_response.ok:
-            for record in _as_list(realtime_response.json()):
+            for record in as_list(realtime_response.json()):
                 if not isinstance(record, dict):
                     continue
                 station_id = str(
-                    _first(record, "idstation", "stationId", "id", "code") or ""
+                    first(record, "idstation", "stationId", "id", "code") or ""
                 ).strip()
                 if station_id:
                     realtime_by_id[station_id] = record
@@ -118,39 +103,29 @@ class MeteoNetworkProvider(ObservationProvider):
             if not isinstance(record, dict):
                 continue
             station_id = str(
-                _first(record, "idstation", "stationId", "id", "code") or ""
+                first(record, "idstation", "stationId", "id", "code") or ""
             ).strip()
-            lat = _float(record, "lat", "latitude")
-            lon = _float(record, "lon", "lng", "longitude")
+            lat = as_float(record, "lat", "latitude")
+            lon = as_float(record, "lon", "lng", "longitude")
             if not station_id or lat is None or lon is None:
                 continue
             station = empty_station(
                 source=self.source,
                 source_station_id=station_id,
-                name=str(_first(record, "name", "nickname", "city") or station_id),
+                name=str(first(record, "name", "nickname", "city") or station_id),
                 lat=lat,
                 lon=lon,
-                elevation_m=_float(record, "elevation", "alt", "quota"),
+                elevation_m=as_float(record, "elevation", "alt", "quota"),
                 station_type="meteonetwork-crowdsourced",
             )
-            station["region"] = _first(record, "region", "regione")
-            station["province"] = _first(record, "province", "provincia")
+            station["region"] = first(record, "region", "regione")
+            station["province"] = first(record, "province", "provincia")
             realtime = realtime_by_id.get(station_id)
             if realtime:
                 station["observations"] = _normalize_observation(realtime)
             stations.append(station)
 
         return ProviderResult(source=self.source, ok=True, stations=stations)
-
-
-def _as_list(payload: Any) -> list[Any]:
-    if isinstance(payload, list):
-        return payload
-    if isinstance(payload, dict):
-        for key in ("data", "items", "results", "stations"):
-            if isinstance(payload.get(key), list):
-                return payload[key]
-    return []
 
 
 _FIELD_ALIASES: dict[str, tuple[str, ...]] = {
@@ -168,10 +143,10 @@ _FIELD_ALIASES: dict[str, tuple[str, ...]] = {
 
 
 def _normalize_observation(record: dict[str, Any]) -> dict[str, Any]:
-    observed_at = _first(record, "date", "timestamp", "obsTime", "time")
+    observed_at = first(record, "date", "timestamp", "obsTime", "time")
     result: dict[str, Any] = {}
     for canonical, aliases in _FIELD_ALIASES.items():
-        raw_value = _first(record, *aliases)
+        raw_value = first(record, *aliases)
         if raw_value is None:
             continue
         try:
@@ -181,10 +156,10 @@ def _normalize_observation(record: dict[str, Any]) -> dict[str, Any]:
         result[canonical] = {
             "value": value,
             "rawValue": raw_value,
-            "rawUnit": _first(record, canonical + "Unit", "unit") or "unknown",
+            "rawUnit": first(record, canonical + "Unit", "unit") or "unknown",
             "canonicalUnit": None,
             "observedAt": observed_at,
             "dataType": DATA_TYPE_OBSERVATION,
-            "qualityFlag": _first(record, "qcFlag", "qualityFlag"),
+            "qualityFlag": first(record, "qcFlag", "qualityFlag"),
         }
     return result

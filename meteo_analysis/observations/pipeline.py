@@ -138,11 +138,20 @@ def collect_national_observations(
     diagnostics["duplicatesFlagged"] = registry["duplicatesFlagged"]
     diagnostics["providerStatus"] = provider_status
 
+    active_sources = sorted(
+        source for source, status in provider_status.items() if status["ok"]
+    )
+    source_labels = {
+        "metar": "NOAA AWC METAR",
+        "italiameteo": "Agenzia ItaliaMeteo / MeteoHub",
+        "meteonetwork": "MeteoNetwork",
+    }
     payload: dict[str, Any] = {
         "schemaVersion": PIPELINE_SCHEMA_VERSION,
         "capturedAt": now.strftime("%Y-%m-%dT%H:%M:%SZ"),
-        "source": "NOAA Aviation Weather Center METAR",
-        "sourceUrl": "https://aviationweather.gov/api/data/metar",
+        "source": " + ".join(source_labels.get(source, source) for source in active_sources)
+            or "nessuna fonte disponibile in questo run",
+        "sourceUrl": None,
         "providerStatus": provider_status,
         "diagnostics": diagnostics,
         "registry": {
