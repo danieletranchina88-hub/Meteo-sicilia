@@ -1302,6 +1302,53 @@ assert.match(html, /const T850_STOPS = buildDiscreteBands\(T850_ANCHORS, -30, 35
 assert.match(html, /t850:\s*\{[\s\S]{0,180}?stops:\s*T850_STOPS,/,
   "la temperatura a 850 hPa e' tornata sulla palette al suolo");
 
+// Vento medio: fasce ogni 5 km/h e grammatica cromatica della carta di
+// riferimento. La fascia estrema resta colorata: un valore oltre scala non
+// deve diventare bianco e sembrare calma.
+{
+  const windSource = html.match(/const WIND_STOPS = \[([\s\S]*?)\n {6}\];/);
+  assert.ok(windSource, "scala esplicita del vento assente");
+  const edges = [...windSource[1].matchAll(/\{ v: (\d+), c:/g)]
+    .map((match) => Number(match[1]));
+  assert.deepEqual(edges, Array.from({ length: 28 }, (_, index) => index * 5),
+    "le fasce del vento non avanzano piu' ogni 5 km/h fino a 135");
+  assert.match(windSource[1], /\{ v: 0, c: \[250, 250, 249\] \}/,
+    "la calma non e' quasi bianca");
+  assert.match(windSource[1], /\{ v: 15, c: \[63, 154, 245\] \}/,
+    "la brezza non raggiunge il blu della carta di riferimento");
+  assert.match(windSource[1], /\{ v: 20, c: \[113, 248, 163\] \}/,
+    "manca il passaggio netto blu-verde a 20 km/h");
+  assert.match(windSource[1], /\{ v: 85, c: \[232, 54, 42\] \}/,
+    "il vento molto forte non raggiunge il rosso operativo");
+  assert.match(windSource[1], /\{ v: 135, c: \[246, 194, 247\] \}/,
+    "l'estremo oltre scala torna bianco e diventa invisibile");
+
+  const paletteGenerator = fs.readFileSync(
+    path.join(root, "scripts", "generate_palettes.py"), "utf8"
+  );
+  assert.match(paletteGenerator, /out\["WIND_STOPS"\] = \[/,
+    "il generatore puo' ancora ripristinare la vecchia rampa del vento");
+  assert.doesNotMatch(paletteGenerator, /out\["WIND_ANCHORS"\]/,
+    "il generatore conserva ancora gli ancoraggi obsoleti");
+}
+
+// Resa Meteociel: integrazione piu' fitta, linee uniformi e alone appena
+// percettibile. La velocita' e' gia' nel colore e non deve gonfiare il tratto.
+assert.match(html, /screenStepPx: 3\.6,/,
+  "il passo delle streamline e' troppo largo per curve regolari");
+assert.match(html, /seedSpacingMobile: 14,/,
+  "le streamline sono ancora troppo rade sul telefono");
+assert.match(html, /occupancyMobile: 8,/,
+  "il controllo di occupazione impedisce la densita' della carta di riferimento");
+assert.match(html, /maxStepsMobile: 128,/,
+  "le linee mobili restano troppo corte");
+assert.match(html, /strokeStreamline\(line, "rgba\(4,10,13,0\.84\)", 0\.62\)/,
+  "il tratto del vento non e' piu' sottile e uniforme");
+assert.match(html, /strokeStreamline\(line, "rgba\(255,255,255,0\.30\)", 1\.08\)/,
+  "l'alone discreto delle streamline e' assente");
+assert.doesNotMatch(html, /widthBySpeed/,
+  "la velocita' viene codificata di nuovo nello spessore delle linee");
+
 // I campi senza fenomeno devono lasciare visibile la carta geografica.
 assert.match(html, /const RAIN_STOPS = \[\s*\{ v: 0, c: \[0, 0, 0\], a: 0 \}/,
   "assenza di pioggia non trasparente");

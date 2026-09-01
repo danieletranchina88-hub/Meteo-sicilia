@@ -2755,17 +2755,41 @@
       ];
       const TEMP_BANDS = buildDiscreteBands(TEMP_ANCHORS, -76, 46, 2, 1, true);
 
-      const WIND_ANCHORS = [
-        { v: 0, c: [232, 241, 242] },
-        { v: 10, c: [205, 237, 232] },
-        { v: 20, c: [132, 216, 201] },
-        { v: 40, c: [49, 183, 165] },
-        { v: 60, c: [242, 213, 92] },
-        { v: 80, c: [242, 142, 43] },
-        { v: 100, c: [214, 69, 98] },
-        { v: 130, c: [111, 42, 142] }
+      // Vento medio: fasce operative di 5 km/h, con la grammatica cromatica
+      // delle carte Meteociel usate come riferimento visuale. La calma resta
+      // quasi bianca; ciano/blu descrivono la brezza, verde e giallo il vento
+      // sostenuto, rosso/viola soltanto gli estremi. L'ultima fascia non torna
+      // bianca: oltre scala deve restare evidente, non sparire dalla carta.
+      const WIND_STOPS = [
+        { v: 0, c: [250, 250, 249] },
+        { v: 5, c: [174, 229, 252] },
+        { v: 10, c: [101, 201, 251] },
+        { v: 15, c: [63, 154, 245] },
+        { v: 20, c: [113, 248, 163] },
+        { v: 25, c: [101, 203, 112] },
+        { v: 30, c: [126, 203, 80] },
+        { v: 35, c: [144, 249, 76] },
+        { v: 40, c: [184, 238, 88] },
+        { v: 45, c: [190, 207, 69] },
+        { v: 50, c: [220, 239, 80] },
+        { v: 55, c: [201, 158, 50] },
+        { v: 60, c: [239, 159, 58] },
+        { v: 65, c: [242, 159, 112] },
+        { v: 70, c: [196, 155, 154] },
+        { v: 75, c: [194, 105, 64] },
+        { v: 80, c: [191, 62, 58] },
+        { v: 85, c: [232, 54, 42] },
+        { v: 90, c: [184, 36, 25] },
+        { v: 95, c: [118, 20, 13] },
+        { v: 100, c: [118, 20, 80] },
+        { v: 105, c: [145, 29, 113] },
+        { v: 110, c: [188, 38, 198] },
+        { v: 115, c: [234, 52, 243] },
+        { v: 120, c: [236, 80, 251] },
+        { v: 125, c: [238, 135, 252] },
+        { v: 130, c: [242, 164, 249] },
+        { v: 135, c: [246, 194, 247] }
       ];
-      const WIND_STOPS = buildDiscreteBands(WIND_ANCHORS, 0, 130, 5, 1);
 
       // Raffiche. Non una rampa uniforme: i valori che contano sono soglie, non
       // gradienti, e i bordi delle fasce sono i gradi Beaufort in km/h. Un
@@ -3422,19 +3446,19 @@
       // in pixel ma viene convertito in metri alla latitudine della linea: la
       // geometria non cambia artificialmente fra nord e sud o cambiando zoom.
       const STREAMLINE_CONFIG = {
-        screenStepPx: 4.8,
-        minStepMetres: 650,
+        screenStepPx: 3.6,
+        minStepMetres: 500,
         maxStepMetres: 30000,
         minSpeedMps: 0.22,
-        maxStepsMobile: 72,
-        maxStepsDesktop: 96,
-        seedSpacingMobile: 19,
-        seedSpacingDesktop: 22,
-        occupancyMobile: 11,
-        occupancyDesktop: 12,
-        minimumLengthPx: 34,
-        arrowSpacingMobile: 72,
-        arrowSpacingDesktop: 88
+        maxStepsMobile: 128,
+        maxStepsDesktop: 160,
+        seedSpacingMobile: 14,
+        seedSpacingDesktop: 16,
+        occupancyMobile: 8,
+        occupancyDesktop: 9,
+        minimumLengthPx: 46,
+        arrowSpacingMobile: 54,
+        arrowSpacingDesktop: 64
       };
 
       const RASTER_CONFIG = {
@@ -9253,8 +9277,8 @@
       function strokeStreamlineHeads(line, color, width, spacing) {
         if (!line || line.length < 3 || line.totalLength < 52) return;
         let travelled = 0;
-        let target = 30 + (line.seedHash % Math.max(18, spacing - 34));
-        const headSize = 3.7;
+        let target = 22 + (line.seedHash % Math.max(14, spacing - 28));
+        const headSize = 2.7;
         for (let index = 1; index < line.length; index += 1) {
           const previous = line[index - 1];
           const point = line[index];
@@ -9295,7 +9319,7 @@
         const elevated = Boolean(terrain) && show3D;
         const seedSpacing = (mobile
           ? STREAMLINE_CONFIG.seedSpacingMobile
-          : STREAMLINE_CONFIG.seedSpacingDesktop) * (elevated ? 1.3 : 1);
+          : STREAMLINE_CONFIG.seedSpacingDesktop) * (elevated ? 1.4 : 1);
         const occupancySize = mobile
           ? STREAMLINE_CONFIG.occupancyMobile
           : STREAMLINE_CONFIG.occupancyDesktop;
@@ -9393,9 +9417,7 @@
           ], forward);
           if (points.length < 6) return;
           let totalLength = 0;
-          let speedSum = 0;
           points.forEach(function (point, index) {
-            speedSum += point.speedKmh;
             if (index) {
               totalLength += Math.hypot(
                 point.x - points[index - 1].x,
@@ -9409,7 +9431,6 @@
             if (cell >= 0) occupied[cell] = 1;
           });
           points.totalLength = totalLength;
-          points.meanSpeed = speedSum / points.length;
           points.seedHash = seed.hash;
           lines.push(points);
         });
@@ -9417,25 +9438,23 @@
         vectorContext.save();
         vectorContext.lineCap = "round";
         vectorContext.lineJoin = "round";
-        // Alone chiaro molto sottile e inchiostro scuro: resta leggibile sia
-        // sui blu del vento debole sia sui verdi/gialli di quello forte.
+        // Tratto cartografico quasi nero, sottile e uniforme come nella carta
+        // di riferimento. L'alone e' appena percettibile: serve soltanto sui
+        // rossi/viola scuri e non deve trasformare le linee in nastri chiari.
         lines.forEach(function (line) {
-          const widthBySpeed = clamp(0.7 + line.meanSpeed * 0.0045, 0.72, 1.12);
-          strokeStreamline(line, "rgba(255,255,255,0.72)", widthBySpeed + 1.65);
+          strokeStreamline(line, "rgba(255,255,255,0.30)", 1.08);
         });
         lines.forEach(function (line) {
-          const widthBySpeed = clamp(0.7 + line.meanSpeed * 0.0045, 0.72, 1.12);
-          const alpha = clamp(0.64 + line.meanSpeed * 0.0035, 0.66, 0.9);
-          strokeStreamline(line, "rgba(3,15,24," + alpha.toFixed(3) + ")", widthBySpeed);
+          strokeStreamline(line, "rgba(4,10,13,0.84)", 0.62);
         });
         const arrowSpacing = mobile
           ? STREAMLINE_CONFIG.arrowSpacingMobile
           : STREAMLINE_CONFIG.arrowSpacingDesktop;
         lines.forEach(function (line) {
-          strokeStreamlineHeads(line, "rgba(255,255,255,0.76)", 2.45, arrowSpacing);
+          strokeStreamlineHeads(line, "rgba(255,255,255,0.34)", 1.20, arrowSpacing);
         });
         lines.forEach(function (line) {
-          strokeStreamlineHeads(line, "rgba(3,15,24,0.90)", 0.9, arrowSpacing);
+          strokeStreamlineHeads(line, "rgba(4,10,13,0.90)", 0.64, arrowSpacing);
         });
         vectorContext.restore();
       }
