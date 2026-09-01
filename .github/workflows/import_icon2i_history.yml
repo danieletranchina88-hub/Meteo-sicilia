@@ -1,0 +1,112 @@
+name: Import Historical ICON-2I
+
+on:
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: "Plan only, or submit/download/archive"
+        required: true
+        default: plan
+        type: choice
+        options:
+          - plan
+          - ingest
+      dataset:
+        description: "Official MeteoHub historical dataset"
+        required: true
+        default: ICON-2I_ita2km
+        type: choice
+        options:
+          - ICON-2I_ita2km
+          - ICON-2I_all2km
+          - ICON-2I_ASSIM_ita2km
+          - ICON-2I_ASSIM_all2km
+          - ICON-2I_FCENS
+      start:
+        description: "First reference date, YYYY-MM-DD"
+        required: true
+        default: "2024-09-29"
+        type: string
+      end:
+        description: "Last reference date, YYYY-MM-DD (maximum 5 requests per run)"
+        required: true
+        default: "2024-09-29"
+        type: string
+      max_requests:
+        description: "Maximum requests submitted in this workflow (1-5 recommended)"
+        required: true
+        default: "5"
+        type: string
+
+concurrency:
+  group: icon2i-historical-import
+  cancel-in-progress: false
+
+jobs:
+  import:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    permissions:
+      contents: read
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install importer dependencies
+        run: python -m pip install "requests>=2.31,<3" "boto3>=1.35,<2"
+
+      - name: Validate historical importer
+        run: python scripts/tests/test_historical_archive.py
+
+      - name: Build safe import plan
+        if: inputs.mode == 'plan'
+        env:
+          METEOHUB_REQUEST_TEMPLATE_JSON: ${{ secrets.METEOHUB_REQUEST_TEMPLATE_JSON }}
+        run: >-
+          python scripts/import_icon2i_history.py plan
+          --dataset "${{ inputs.dataset }}"
+          --start "${{ inputs.start }}"
+          --end "${{ inputs.end }}"
+          --state historical_import/state.json
+
+      - name: Submit, verify and retain historical extracts
+        if: inputs.mode == 'ingest'
+        env:
+          METEOHUB_TOKEN: ${{ secrets.METEOHUB_TOKEN }}
+          METEOHUB_USERNAME: ${{ secrets.METEOHUB_USERNAME }}
+          METEOHUB_PASSWORD: ${{ secrets.METEOHUB_PASSWORD }}
+          METEOHUB_REQUEST_TEMPLATE_JSON: ${{ secrets.METEOHUB_REQUEST_TEMPLATE_JSON }}
+          ICON_ARCHIVE_MODE: raw
+          ICON_ARCHIVE_S3_BUCKET: ${{ secrets.ICON_ARCHIVE_S3_BUCKET }}
+          ICON_ARCHIVE_S3_ENDPOINT: ${{ secrets.ICON_ARCHIVE_S3_ENDPOINT }}
+          ICON_ARCHIVE_S3_REGION: ${{ secrets.ICON_ARCHIVE_S3_REGION }}
+          ICON_ARCHIVE_S3_ACCESS_KEY_ID: ${{ secrets.ICON_ARCHIVE_S3_ACCESS_KEY_ID }}
+          ICON_ARCHIVE_S3_SECRET_ACCESS_KEY: ${{ secrets.ICON_ARCHIVE_S3_SECRET_ACCESS_KEY }}
+          ICON_ARCHIVE_S3_SESSION_TOKEN: ${{ secrets.ICON_ARCHIVE_S3_SESSION_TOKEN }}
+          ICON_ARCHIVE_S3_PREFIX: ${{ secrets.ICON_ARCHIVE_S3_PREFIX }}
+        run: >-
+          python scripts/import_icon2i_history.py ingest
+          --dataset "${{ inputs.dataset }}"
+          --start "${{ inputs.start }}"
+          --end "${{ inputs.end }}"
+          --max-requests "${{ inputs.max_requests }}"
+          --state historical_import/state.json
+          --download-dir "${{ runner.temp }}/icon2i-history"
+          --poll-seconds 30
+          --timeout-seconds 3000
+
+      - name: Preserve provenance manifest
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: icon2i-history-${{ inputs.dataset }}-${{ github.run_id }}
+          path: historical_import/state.json
+          if-no-files-found: warn
+          retention-days: 90

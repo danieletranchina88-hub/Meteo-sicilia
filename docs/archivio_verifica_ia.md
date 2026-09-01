@@ -161,3 +161,95 @@ con suddivisione temporale rigorosa train/validation/test, confronto contro la
 baseline ICON non corretta, metriche per anticipo e stazione, controllo dei casi
 fuori distribuzione e fallback automatico a ICON. Nessun modello verrà promosso
 se il vantaggio non è stabile su dati mai usati nell'addestramento.
+
+## Importazione degli archivi storici ufficiali ICON-2I
+
+Non è necessario attendere che l'archivio operativo accumuli da solo tutti i
+casi iniziali. MeteoHub cataloga cinque serie storiche ItaliaMeteo-Arpae-CINECA,
+tutte con licenza CC BY 4.0:
+
+| Dataset | Copertura | Dominio e contenuto | Ruolo corretto |
+| --- | --- | --- | --- |
+| `ICON-2I_ita2km` | 29/09/2024–26/05/2025 | Italia, superficie e livelli modello | addestramento deterministico principale |
+| `ICON-2I_all2km` | 29/09/2024–26/05/2025 | dominio completo, superficie e livelli isobarici | contesto sinottico |
+| `ICON-2I_ASSIM_ita2km` | 04/02/2025–26/05/2025 | Italia, background di assimilazione | stato modellistico iniziale, non verità osservativa |
+| `ICON-2I_ASSIM_all2km` | 04/02/2025–26/05/2025 | dominio completo, background di assimilazione | diagnostica sinottica, non target osservativo |
+| `ICON-2I_FCENS` | 18/06/2024–26/05/2025 | dominio completo, ensemble | incertezza e calibrazione probabilistica |
+
+Il catalogo ufficiale e le attribuzioni sono pubblicati nella pagina
+[MeteoHub — licenze](https://meteohub.agenziaitaliameteo.it/app/license). I
+dataset marcati `NOT OPERATIONAL` sono serie storiche finite: non sostituiscono
+la raccolta dei nuovi run.
+
+Dal 17 giugno 2026 la catena ICON-2I usa inoltre una nuova configurazione del
+ciclo di analisi del suolo. Ogni esempio storico importato viene pertanto
+marcato come
+`legacy-before-2026-06-17-soil-analysis-change`: mescolare silenziosamente
+questi casi con i run correnti introdurrebbe un cambio di distribuzione, in
+particolare per temperatura e umidità prossime al suolo.
+
+### Importatore riprendibile
+
+`scripts/import_icon2i_history.py` implementa il flusso API documentato da
+MeteoHub:
+
+1. crea una richiesta distinta per ciascun giorno/run;
+2. conserva nel manifest il corpo esatto della richiesta e la sua impronta;
+3. non reinvia richieste già registrate;
+4. controlla lo stato asincrono del servizio;
+5. scarica in streaming in un file `.part`;
+6. verifica dimensione, formato contenitore e SHA-256;
+7. archivia l'estratto nello storage S3 immutabile;
+8. elimina il file temporaneo soltanto dopo la conferma dello storage.
+
+Per vedere il catalogo incorporato e generare un piano senza effettuare
+download:
+
+```bash
+python scripts/import_icon2i_history.py catalog
+python scripts/import_icon2i_history.py plan \
+  --dataset ICON-2I_ita2km \
+  --start 2024-09-29 --end 2024-10-05
+```
+
+MeteoHub applica normalmente un limite di 1 GB per estrazione. Per questo
+l'importatore rifiuta l'invio non filtrato. Dall'interfaccia MeteoHub si crea
+una prima richiesta selezionando variabili, livelli e scadenze, quindi si usa
+`Copy to clipboard` e si conserva quel JSON nel secret
+`METEOHUB_REQUEST_TEMPLATE_JSON`. Per acquisire tutti i campi senza superare
+la quota, il secret può contenere una lista JSON di richieste distinte, per
+esempio superficie, dinamica/fronti, livelli modello e convezione. Il nome
+della richiesta diventa l'identificatore del gruppo. L'importatore sostituisce
+sempre dataset, data e nome operativo e rimuove qualunque pianificazione
+contenuta nel template; i filtri scientifici restano identici per tutti i
+giorni. Qualsiasi campo simile a password, token o autorizzazione viene
+rifiutato prima della creazione del manifest.
+
+La suddivisione prevista, senza riduzione della griglia orizzontale, è:
+
+| Gruppo | Campi da includere |
+| --- | --- |
+| superficie | MSLP, T/Td/RH 2 m, U/V 10 m, precipitazioni, neve, nubi, visibilità e raffiche |
+| fronti e bassa troposfera | T, QV/RH, U/V e geopotenziale a 925, 850 e 700 hPa |
+| dinamica verticale | T, U/V, geopotenziale, omega e vorticità ai livelli isobarici disponibili |
+| livelli modello | T, QV, U/V, pressione, geopotenziale e idrometeore sui livelli nativi disponibili |
+| convezione e severità | CAPE/CIN, LPI, updraft helicity, shear, graupel, acqua integrata e raffica massima disponibili |
+
+I nomi effettivi dei prodotti devono provenire dai filtri mostrati dal dataset
+MeteoHub: non vengono inventati campi che l'archivio storico non contiene. La
+separazione serve solo a rispettare le quote di estrazione; tutti i file
+mantengono la risoluzione nativa e vengono ricongiunti mediante dataset, run,
+gruppo e checksum.
+
+L'autenticazione accetta `METEOHUB_TOKEN` oppure la coppia
+`METEOHUB_USERNAME`/`METEOHUB_PASSWORD`. La workflow manuale
+`Import Historical ICON-2I` ha due modalità:
+
+- `plan`: convalida intervallo e manifest senza credenziali;
+- `ingest`: invia al massimo il numero dichiarato di richieste, attende gli
+  output, ne verifica i checksum e li conserva nello storage configurato.
+
+Una singola esecuzione non invia più di dieci richieste e il valore consigliato
+è cinque, coerentemente con il limite orario standard del servizio. Il manifest
+della workflow rimane un artifact di provenienza; i file meteorologici non
+vengono inseriti in `main`, `gh-pages` o nella cronologia Git.
