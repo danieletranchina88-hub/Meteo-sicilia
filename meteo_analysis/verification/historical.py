@@ -36,6 +36,7 @@ class HistoricalArchiveError(RuntimeError):
 @dataclass(frozen=True)
 class HistoricalDataset:
     name: str
+    display_name: str
     first_day: str
     last_day: str
     run_utc: int
@@ -58,8 +59,9 @@ class HistoricalDataset:
 
 
 HISTORICAL_DATASETS: dict[str, HistoricalDataset] = {
-    "ICON-2I_ita2km": HistoricalDataset(
-        name="ICON-2I_ita2km",
+    "ICON_2I_ita2km": HistoricalDataset(
+        name="ICON_2I_ita2km",
+        display_name="ICON-2I_ita2km [NOT OPERATIONAL]",
         first_day="2024-09-29",
         last_day="2025-05-26",
         run_utc=0,
@@ -68,8 +70,9 @@ HISTORICAL_DATASETS: dict[str, HistoricalDataset] = {
         vertical_content="surface and model levels",
         kind="deterministic-forecast",
     ),
-    "ICON-2I_all2km": HistoricalDataset(
-        name="ICON-2I_all2km",
+    "ICON_2I_all2km": HistoricalDataset(
+        name="ICON_2I_all2km",
+        display_name="ICON-2I_all2km [NOT OPERATIONAL]",
         first_day="2024-09-29",
         last_day="2025-05-26",
         run_utc=0,
@@ -78,8 +81,9 @@ HISTORICAL_DATASETS: dict[str, HistoricalDataset] = {
         vertical_content="surface and pressure levels",
         kind="deterministic-forecast",
     ),
-    "ICON-2I_ASSIM_ita2km": HistoricalDataset(
-        name="ICON-2I_ASSIM_ita2km",
+    "ICON_2I_ASSIM_ita2km": HistoricalDataset(
+        name="ICON_2I_ASSIM_ita2km",
+        display_name="ICON-2I_ASSIM_ita2km [NOT OPERATIONAL]",
         first_day="2025-02-04",
         last_day="2025-05-26",
         run_utc=0,
@@ -88,8 +92,9 @@ HISTORICAL_DATASETS: dict[str, HistoricalDataset] = {
         vertical_content="surface and model levels",
         kind="assimilation-background-not-observational-truth",
     ),
-    "ICON-2I_ASSIM_all2km": HistoricalDataset(
-        name="ICON-2I_ASSIM_all2km",
+    "ICON_2I_ASSIM_all2km": HistoricalDataset(
+        name="ICON_2I_ASSIM_all2km",
+        display_name="ICON-2I_ASSIM_all2km [NOT OPERATIONAL]",
         first_day="2025-02-04",
         last_day="2025-05-26",
         run_utc=0,
@@ -98,8 +103,9 @@ HISTORICAL_DATASETS: dict[str, HistoricalDataset] = {
         vertical_content="surface and pressure levels",
         kind="assimilation-background-not-observational-truth",
     ),
-    "ICON-2I_FCENS": HistoricalDataset(
-        name="ICON-2I_FCENS",
+    "ICON_2I_FCENS": HistoricalDataset(
+        name="ICON_2I_FCENS",
+        display_name="ICON-2I_FCENS [NOT OPERATIONAL]",
         first_day="2024-06-18",
         last_day="2025-05-26",
         run_utc=0,
@@ -478,6 +484,27 @@ class MeteoHubClient:
             "Accept-Encoding": "identity",
         }
 
+    def dataset(self, dataset_id: str) -> dict[str, Any]:
+        """Resolve an exact public catalogue ID before submitting extracts."""
+
+        response = self.session.get(
+            f"{self.base_url}/api/datasets",
+            timeout=self.timeout,
+        )
+        response.raise_for_status()
+        payload = response.json()
+        records = payload if isinstance(payload, list) else _records(payload)
+        for record in records:
+            if str(record.get("id") or "") == dataset_id:
+                if str(record.get("category") or "").upper() != "FOR":
+                    raise HistoricalArchiveError(
+                        f"{dataset_id} non e catalogato come previsione MeteoHub"
+                    )
+                return record
+        raise HistoricalArchiveError(
+            f"dataset ID {dataset_id!r} assente dal catalogo MeteoHub corrente"
+        )
+
     def submit(self, payload: dict[str, Any]) -> tuple[str, dict[str, Any]]:
         response = self.session.post(
             f"{self.base_url}/api/data",
@@ -575,12 +602,18 @@ def submit_planned(
             "estrazione non filtrata bloccata: l'output MeteoHub puo superare 1 GB; "
             "usa il JSON di una richiesta filtrata oppure --allow-unfiltered"
         )
+    planned_entries = [
+        entry for entry in state["requests"] if entry.get("status") == "PLANNED"
+    ][:limit]
+    if not planned_entries:
+        return 0
+    dataset_id = str(state.get("dataset", {}).get("name") or "")
+    catalogue_record = client.dataset(dataset_id)
+    state["dataset"]["catalogVerifiedAt"] = utc_now()
+    state["dataset"]["catalogDisplayName"] = catalogue_record.get("name")
+    state["dataset"]["catalogIsPublic"] = bool(catalogue_record.get("is_public"))
     submitted = 0
-    for entry in state["requests"]:
-        if submitted >= limit:
-            break
-        if entry.get("status") != "PLANNED":
-            continue
+    for entry in planned_entries:
         request_id, _ = client.submit(entry["payload"])
         entry.update({
             "requestId": request_id,

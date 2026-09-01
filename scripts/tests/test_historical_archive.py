@@ -74,6 +74,13 @@ class FakeSession:
         return FakeResponse({"request_id": f"request-{self.submissions}"})
 
     def get(self, url, **kwargs):
+        if url.endswith("/api/datasets"):
+            return FakeResponse([{
+                "id": "ICON_2I_ita2km",
+                "name": "ICON-2I_ita2km [NOT OPERATIONAL]",
+                "category": "FOR",
+                "is_public": True,
+            }])
         if url.endswith("/api/requests"):
             return FakeResponse({"requests": [{
                 "request_id": "request-1",
@@ -101,12 +108,14 @@ class MemoryArchive:
 
 
 def test_catalog_and_date_boundaries():
-    specification = HISTORICAL_DATASETS["ICON-2I_ita2km"]
+    specification = HISTORICAL_DATASETS["ICON_2I_ita2km"]
+    assert specification.name == "ICON_2I_ita2km"
+    assert specification.display_name.startswith("ICON-2I_ita2km")
     assert specification.first_day == "2024-09-29"
     assert specification.last_day == "2025-05-26"
     assert specification.vertical_content == "surface and model levels"
     try:
-        build_plan("ICON-2I_ita2km", "2024-09-28", "2024-09-29")
+        build_plan("ICON_2I_ita2km", "2024-09-28", "2024-09-29")
     except HistoricalArchiveError:
         pass
     else:
@@ -116,11 +125,11 @@ def test_catalog_and_date_boundaries():
 def test_plan_is_deterministic_and_removes_scheduling():
     fixed = "2026-09-01T08:00:00Z"
     first = build_plan(
-        "ICON-2I_ita2km", "2024-09-29", "2024-09-30",
+        "ICON_2I_ita2km", "2024-09-29", "2024-09-30",
         template=FILTER_TEMPLATE, created_at=fixed,
     )
     second = build_plan(
-        "ICON-2I_ita2km", "2024-09-29", "2024-09-30",
+        "ICON_2I_ita2km", "2024-09-29", "2024-09-30",
         template=FILTER_TEMPLATE, created_at=fixed,
     )
     assert first == second
@@ -128,14 +137,14 @@ def test_plan_is_deterministic_and_removes_scheduling():
     assert first["selection"]["days"] == 2
     assert first["selection"]["requests"] == 2
     payload = first["requests"][0]["payload"]
-    assert payload["dataset_names"] == ["ICON-2I_ita2km"]
+    assert payload["dataset_names"] == ["ICON_2I_ita2km"]
     assert payload["reftime"]["from"] == "2024-09-29T00:00:00.000Z"
     assert "on-data-ready" not in payload
     assert "crontab-settings" not in payload
     assert first["model"]["historicalArchiveComparableToCurrentWithoutVersionFeature"] is False
 
     sharded = build_plan(
-        "ICON-2I_ita2km", "2024-09-29", "2024-09-30",
+        "ICON_2I_ita2km", "2024-09-29", "2024-09-30",
         template=[
             FILTER_TEMPLATE,
             {**FILTER_TEMPLATE, "request_name": "upper-air"},
@@ -148,7 +157,7 @@ def test_plan_is_deterministic_and_removes_scheduling():
 
 
 def test_unfiltered_submission_fails_closed():
-    state = build_plan("ICON-2I_ita2km", "2024-09-29", "2024-09-29")
+    state = build_plan("ICON_2I_ita2km", "2024-09-29", "2024-09-29")
     client = MeteoHubClient(token="token", session=FakeSession())
     try:
         submit_planned(state, client)
@@ -159,7 +168,7 @@ def test_unfiltered_submission_fails_closed():
 
     try:
         build_plan(
-            "ICON-2I_ita2km", "2024-09-29", "2024-09-29",
+            "ICON_2I_ita2km", "2024-09-29", "2024-09-29",
             template={
                 "filters": {"quantity": [{"name": "temperature"}]},
                 "authorizationToken": "must-never-enter-the-manifest",
@@ -173,7 +182,7 @@ def test_unfiltered_submission_fails_closed():
 
 def test_submit_download_archive_and_resume_state():
     state = build_plan(
-        "ICON-2I_ita2km", "2024-09-29", "2024-09-29",
+        "ICON_2I_ita2km", "2024-09-29", "2024-09-29",
         template=FILTER_TEMPLATE,
     )
     session = FakeSession()
@@ -182,6 +191,8 @@ def test_submit_download_archive_and_resume_state():
     )
     assert submit_planned(state, client, limit=1) == 1
     assert submit_planned(state, client, limit=1) == 0
+    assert state["dataset"]["catalogIsPublic"] is True
+    assert state["dataset"]["catalogDisplayName"].endswith("[NOT OPERATIONAL]")
     assert state["requests"][0]["requestId"] == "request-1"
     with tempfile.TemporaryDirectory() as temporary:
         counts = sync_submitted(
@@ -204,7 +215,7 @@ def test_submit_download_archive_and_resume_state():
 def test_payload_date_guard():
     try:
         build_request_payload(
-            HISTORICAL_DATASETS["ICON-2I_ita2km"],
+            HISTORICAL_DATASETS["ICON_2I_ita2km"],
             datetime(2026, 1, 1, tzinfo=timezone.utc).date(),
         )
     except HistoricalArchiveError:

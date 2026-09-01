@@ -65,7 +65,7 @@ def main() -> None:
     )
     parser.add_argument(
         "--dataset", choices=sorted(HISTORICAL_DATASETS),
-        default="ICON-2I_ita2km",
+        default="ICON_2I_ita2km",
     )
     parser.add_argument("--start")
     parser.add_argument("--end")

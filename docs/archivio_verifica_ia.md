@@ -170,11 +170,11 @@ tutte con licenza CC BY 4.0:
 
 | Dataset | Copertura | Dominio e contenuto | Ruolo corretto |
 | --- | --- | --- | --- |
-| `ICON-2I_ita2km` | 29/09/2024–26/05/2025 | Italia, superficie e livelli modello | addestramento deterministico principale |
-| `ICON-2I_all2km` | 29/09/2024–26/05/2025 | dominio completo, superficie e livelli isobarici | contesto sinottico |
-| `ICON-2I_ASSIM_ita2km` | 04/02/2025–26/05/2025 | Italia, background di assimilazione | stato modellistico iniziale, non verità osservativa |
-| `ICON-2I_ASSIM_all2km` | 04/02/2025–26/05/2025 | dominio completo, background di assimilazione | diagnostica sinottica, non target osservativo |
-| `ICON-2I_FCENS` | 18/06/2024–26/05/2025 | dominio completo, ensemble | incertezza e calibrazione probabilistica |
+| `ICON_2I_ita2km` | 29/09/2024–26/05/2025 | Italia, superficie e livelli modello | addestramento deterministico principale |
+| `ICON_2I_all2km` | 29/09/2024–26/05/2025 | dominio completo, superficie e livelli isobarici | contesto sinottico |
+| `ICON_2I_ASSIM_ita2km` | 04/02/2025–26/05/2025 | Italia, background di assimilazione | stato modellistico iniziale, non verità osservativa |
+| `ICON_2I_ASSIM_all2km` | 04/02/2025–26/05/2025 | dominio completo, background di assimilazione | diagnostica sinottica, non target osservativo |
+| `ICON_2I_FCENS` | 18/06/2024–26/05/2025 | dominio completo, ensemble | incertezza e calibrazione probabilistica |
 
 Il catalogo ufficiale e le attribuzioni sono pubblicati nella pagina
 [MeteoHub — licenze](https://meteohub.agenziaitaliameteo.it/app/license). I
@@ -208,7 +208,7 @@ download:
 ```bash
 python scripts/import_icon2i_history.py catalog
 python scripts/import_icon2i_history.py plan \
-  --dataset ICON-2I_ita2km \
+  --dataset ICON_2I_ita2km \
   --start 2024-09-29 --end 2024-10-05
 ```
 
