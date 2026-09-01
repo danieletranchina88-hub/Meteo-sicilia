@@ -408,39 +408,17 @@ assert.ok(drawVectors, "drawVectors assente");
 assert.match(drawVectors[0], /syncProjectionViewport\(\)/,
   "senza particelle attive le isolinee userebbero un viewport non aggiornato");
 
-// Frecce del vento: colorate con la stessa scala del campo vento, quindi
-// leggibili con la legenda gia' presente, e proiettate senza interrogare il
-// DEM a ogni chiamata.
-assert.match(html, /const shade = colorFor\(speed, LAYER_INFO\.wind\);/,
-  "le frecce non usano la scala di colore del campo vento");
-assert.match(html, /const centerPoint = projectParticle\(location\.lng, location\.lat, groundHeight\);/,
-  "le frecce usano ancora una proiezione che interroga il DEM");
-assert.doesNotMatch(html, /const centerPoint = map\.project\(location\);/,
-  "proiezione costosa delle frecce ancora presente");
-
-// Campo di frecce fitto e regolare, leggibile come un flusso continuo anche
-// sullo schermo stretto di un telefono.
-assert.match(html, /const denseSpacing = \(mobile \? 20 : 23\)/,
-  "il campo di frecce non e' fitto");
-assert.match(html, /vectorElevated \? 1\.55 : 1/,
-  "in 3D il passo delle frecce non si allarga: ricavare la posizione costa di piu'");
-// La lunghezza deve variare molto: cortissima con la calma, oltre il passo
-// della griglia con vento forte, cosi' le frecce si fondono in linee continue
-// lungo il flusso. E' quello a dare l'aspetto di corrente.
-assert.match(html, /const length = clamp\(5 \+ speed \* 0\.46/,
-  "la lunghezza delle frecce non segue abbastanza la velocita'");
-assert.match(html, /function strokeArrowPath\(/,
-  "la freccia non usa il tratto a punta aperta");
-// Il controllo deve guardare il corpo di drawArrow e basta. Prima leggeva
-// tutto il testo fino a drawVectors, e li' in mezzo e' finito il corredo della
-// carta: la rosa dei venti chiude legittimamente il suo ago con closePath, e
-// il controllo scattava su quello invece che sulla punta della freccia.
-const arrowStart = html.indexOf("function drawArrow(");
-assert.ok(arrowStart > 0, "drawArrow non trovata");
-const arrowEnd = html.indexOf("\n      }", arrowStart);
-assert.ok(arrowEnd > arrowStart, "fine di drawArrow non trovata");
-assert.doesNotMatch(html.slice(arrowStart, arrowEnd), /closePath\(\)/,
-  "la punta dei vettori e' tornata a triangolo pieno");
+// Le linee di corrente vengono proiettate con la stessa matrice economica
+// usata dalle particelle e restano sotto isobare, fronti e toponimi.
+assert.match(html, /const seedPoint = projectParticle\(location\.lng, location\.lat, altitude\);/,
+  "le streamline non usano la proiezione vettoriale ottimizzata");
+assert.doesNotMatch(html, /const seedPoint = map\.project/,
+  "le streamline interrogano ancora il DEM attraverso map.project");
+assert.ok(
+  drawVectors[0].indexOf("drawWindStreamlines(wind)")
+    < drawVectors[0].indexOf("drawSynopticCanvas()"),
+  "le streamline coprono l'inchiostro dell'analisi sinottica"
+);
 
 // La carta chiara e' il fondo, e basta. Rilievo e terreno reale sono due
 // scelte esplicite, spente all'avvio.
@@ -481,12 +459,10 @@ assert.match(html, /#map\s*\{[\s\S]*?background: #9dc0de;/,
 
 // Interfaccia: i pannelli galleggiano sulla mappa, quindi il campo di vento
 // arriva ai bordi dello schermo invece di lasciare fasce vuote.
-assert.match(html, /const edgeInset = 2;/,
-  "le frecce non arrivano ai bordi dello schermo");
 assert.match(
   html,
-  /for \(let y = edgeInset; y < window\.innerHeight - edgeInset; y \+= spacing\) \{\s*\n\s*for \(let x = edgeInset; x < window\.innerWidth - edgeInset; x \+= spacing\) \{/,
-  "la griglia delle frecce non copre tutto il riquadro"
+  /for \(let row = 0, y = seedSpacing \* 0\.5; y < height;/,
+  "i semi delle streamline non coprono tutto il riquadro"
 );
 assert.doesNotMatch(html, /const topInset =|const bottomInset =/,
   "i vecchi margini che lasciavano i lati scoperti sono tornati");
@@ -943,10 +919,10 @@ assert.match(html, /<details class="drawer-more">/,
     "e' tornato in prima vista un interruttore raro: " + rare);
 });
 
-// Frecce e particelle sono due disegni dello stesso campo u/v ma rispondono a
-// domande diverse -- dove va il vento, e come scorre -- quindi due
-// interruttori. Le particelle restano la meta' costosa: non si accendono da
-// sole scegliendo il campo vento sul telefono.
+// Streamline e particelle sono due disegni dello stesso campo u/v ma
+// rispondono a domande diverse -- geometria istantanea e animazione -- quindi
+// restano due interruttori indipendenti. Le particelle non si accendono da
+// sole: sopra le streamline ridurrebbero chiarezza e prestazioni.
 assert.match(html, /data-toggle="vectors"/, "manca l'interruttore dei vettori");
 assert.match(html, /data-toggle="flow"/, "manca l'interruttore delle particelle");
 assert.doesNotMatch(html, /data-toggle="windanim"/,
@@ -956,8 +932,126 @@ assert.ok(windToggle, "i due interruttori del vento non sono gestiti");
 assert.match(windToggle[0], /name === "flow"/, "le particelle non hanno un ramo proprio");
 const windLayer = html.match(/if \(nextLayer === "wind" && !synopticChart\)[\s\S]*?\n {8}\}/);
 assert.ok(windLayer, "scelta del campo vento assente");
-assert.match(windLayer[0], /if \(!isMobile\(\) && !prefersReducedMotion\)/,
-  "sul telefono le particelle si accendono ancora da sole col campo vento");
+assert.match(windLayer[0], /showVectors = true/,
+  "il campo vento non attiva le linee di corrente");
+assert.doesNotMatch(windLayer[0], /showParticles = true/,
+  "il campo vento accende ancora automaticamente le particelle");
+
+// Le linee non sono segmenti indipendenti: vengono integrate in entrambe le
+// direzioni con RK2 e passo metrico dipendente dalla risoluzione della vista.
+assert.match(html, /<b>Linee di corrente<\/b>/,
+  "il controllo del vento continua a promettere semplici vettori");
+assert.match(html, /const STREAMLINE_CONFIG = \{/,
+  "configurazione delle linee di corrente assente");
+const streamlineStep = html.match(/function advanceWindStreamline\([\s\S]*?\n {6}\}/);
+assert.ok(streamlineStep, "integratore delle linee di corrente assente");
+assert.match(streamlineStep[0], /stepMetres \* 0\.5/,
+  "l'integratore non valuta il vento al punto medio");
+assert.match(streamlineStep[0], /const middle = sampleWindVector/,
+  "l'integratore e' tornato al passo di Eulero");
+const streamlineRenderer = html.match(/function drawWindStreamlines\([\s\S]*?\n {6}\}/);
+assert.ok(streamlineRenderer, "renderer delle linee di corrente assente");
+assert.match(streamlineRenderer[0], /const backward = trace\(-1\)\.reverse\(\)/,
+  "le linee non vengono integrate controvento");
+assert.match(streamlineRenderer[0], /const forward = trace\(1\)/,
+  "le linee non vengono integrate sottovento");
+assert.match(streamlineRenderer[0], /new Uint8Array\(occupancyColumns \* occupancyRows\)/,
+  "manca il controllo di densita' e sovrapposizione");
+assert.match(streamlineRenderer[0], /strokeStreamlineHeads/,
+  "le linee non mostrano il verso del moto");
+assert.doesNotMatch(streamlineRenderer[0], /colorFor\(/,
+  "la velocita' viene codificata due volte anche sulle linee");
+
+// Verifica numerica dell'integratore su campi noti. In un vento uniforme il
+// passo deve avere verso e distanza corretti; in un vortice il punto medio RK2
+// deve iniziare a curvare gia' nel primo passo, cosa che Eulero non farebbe.
+{
+  function functionSource(name) {
+    const start = html.indexOf("function " + name + "(");
+    assert.ok(start >= 0, "funzione non trovata: " + name);
+    const open = html.indexOf("{", start);
+    let depth = 0;
+    for (let index = open; index < html.length; index += 1) {
+      if (html[index] === "{") depth += 1;
+      if (html[index] === "}") depth -= 1;
+      if (depth === 0) return html.slice(start, index + 1);
+    }
+    throw new Error("funzione non delimitabile: " + name);
+  }
+
+  const numerical = new Function(
+    "const STREAMLINE_CONFIG={minSpeedMps:0.22,screenStepPx:4.8," +
+      "minStepMetres:650,maxStepMetres:30000};\n" +
+    "function clamp(v,a,b){return Math.max(a,Math.min(b,v));}\n" +
+    "function sampleBilinear(array,gx,gy,nx,ny){" +
+      "const x=Math.max(0,Math.min(nx-1,gx));" +
+      "const y=Math.max(0,Math.min(ny-1,gy));" +
+      "const x0=Math.max(0,Math.min(nx-2,Math.floor(x)));" +
+      "const y0=Math.max(0,Math.min(ny-2,Math.floor(y)));" +
+      "const fx=x-x0,fy=y-y0,i=y0*nx+x0;" +
+      "return array[i]*(1-fx)*(1-fy)+array[i+1]*fx*(1-fy)+" +
+        "array[i+nx]*(1-fx)*fy+array[i+nx+1]*fx*fy;}\n" +
+    functionSource("sampleWindVector") + "\n" +
+    functionSource("offsetWindLocation") + "\n" +
+    functionSource("advanceWindStreamline") + "\n" +
+    functionSource("streamlineStepMetres") + "\n" +
+    "return {advanceWindStreamline,streamlineStepMetres};"
+  )();
+
+  const uniformMeta = { lo1: 0, la1: 10, dx: 1, dy: 1, nx: 11, ny: 11 };
+  const east = {
+    meta: uniformMeta,
+    u: new Float32Array(121).fill(10),
+    v: new Float32Array(121)
+  };
+  const forward = numerical.advanceWindStreamline(
+    east, { lng: 5, lat: 5 }, 1, 10000
+  );
+  const backward = numerical.advanceWindStreamline(
+    east, { lng: 5, lat: 5 }, -1, 10000
+  );
+  assert.ok(forward.lng > 5 && backward.lng < 5,
+    "il verso della streamline uniforme e' errato");
+  assert.ok(Math.abs(forward.lat - 5) < 1e-10,
+    "un vento zonale produce uno spostamento meridionale spurio");
+  assert.ok(Math.abs(forward.speedKmh - 36) < 1e-6,
+    "la velocita' della streamline non conserva la conversione m/s-km/h");
+
+  const calm = {
+    meta: uniformMeta,
+    u: new Float32Array(121).fill(0.1),
+    v: new Float32Array(121)
+  };
+  assert.equal(
+    numerical.advanceWindStreamline(calm, { lng: 5, lat: 5 }, 1, 10000),
+    null,
+    "la calma numerica genera linee senza direzione definita"
+  );
+
+  const vortexMeta = { lo1: 0, la1: 10, dx: 0.05, dy: 0.05, nx: 201, ny: 201 };
+  const vortexU = new Float32Array(vortexMeta.nx * vortexMeta.ny);
+  const vortexV = new Float32Array(vortexU.length);
+  for (let row = 0; row < vortexMeta.ny; row += 1) {
+    const latitude = vortexMeta.la1 - row * vortexMeta.dy;
+    for (let column = 0; column < vortexMeta.nx; column += 1) {
+      const longitude = vortexMeta.lo1 + column * vortexMeta.dx;
+      const index = row * vortexMeta.nx + column;
+      vortexU[index] = -(latitude - 5);
+      vortexV[index] = longitude - 5;
+    }
+  }
+  const curved = numerical.advanceWindStreamline(
+    { meta: vortexMeta, u: vortexU, v: vortexV },
+    { lng: 6, lat: 5 }, 1, 20000
+  );
+  assert.ok(curved.lat > 5.16 && curved.lng < 5.995,
+    "RK2 non segue la curvatura del vortice sintetico");
+
+  const lowLatitudeStep = numerical.streamlineStepMetres(35, 6);
+  const highLatitudeStep = numerical.streamlineStepMetres(50, 6);
+  assert.ok(highLatitudeStep < lowLatitudeStep,
+    "il passo metrico non corregge la risoluzione zonale con la latitudine");
+}
 
 // Il bollettino sale dal basso invece di coprire la mappa dall'alto.
 assert.match(html, /@media \(max-width: 959px\) \{[\s\S]{0,400}?#bulletin-card \{[\s\S]{0,300}?border-radius: 20px 20px 0 0;/,

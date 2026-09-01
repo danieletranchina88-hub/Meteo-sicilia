@@ -2403,15 +2403,14 @@
                 <span><b>Isobare e A/B</b><small>passo 4 hPa · principali ogni 8</small></span><span class="switch"></span>
               </button>
               <!-- Due modi di disegnare lo stesso campo u/v, separati perche'
-                   servono a cose diverse: le frecce dicono la direzione in un
-                   colpo d'occhio, le particelle fanno vedere il flusso. Accesi
-                   insieme sono due tele intere ridisegnate a ogni fotogramma,
-                   quindi le particelle avvisano di quanto pesano. -->
+                   servono a cose diverse: le linee di corrente descrivono la
+                   geometria istantanea del flusso, le particelle ne rendono
+                   evidente l'animazione. -->
               <button class="toggle-row" type="button" data-toggle="vectors" aria-pressed="false">
-                <span><b>Vettori di vento</b><small>direzione · colore e lunghezza = velocità</small></span><span class="switch"></span>
+                <span><b>Linee di corrente</b><small>streamline u/v · frecce lungo il moto</small></span><span class="switch"></span>
               </button>
               <button class="toggle-row" type="button" data-toggle="flow" aria-pressed="false">
-                <span><b>Particelle di vento</b><small>flusso animato da u/v · pesa sul telefono</small></span><span class="switch"></span>
+                <span><b>Flusso animato</b><small>particelle u/v · opzionale e più pesante</small></span><span class="switch"></span>
               </button>
               <button class="toggle-row" type="button" data-toggle="radar" aria-pressed="false">
                 <span><b>Radar precipitazioni</b><small>RainViewer HD · osservato</small></span><span class="switch"></span>
@@ -3097,7 +3096,7 @@
           discrete: true,
           decimals: 0,
           ticks: [0, 20, 40, 60, 80, 100, 130],
-          note: "Fasce nette ogni 5 km/h, ricavate dalle componenti u e v.",
+          note: "Fasce ogni 5 km/h; linee di corrente istantanee integrate dalle componenti u/v.",
           opacity: 0.93,
           terrainOpacity: 0.29
         },
@@ -3268,9 +3267,9 @@
         },
         wind: {
           nature: "Campo vettoriale prognostico ICON-2I",
-          method: "|V| = √(U²+V²); componenti U/V al livello selezionato",
-          scale: "Griglia nativa ≈2,2 km; direzione meteorologica ricavata da U/V",
-          limit: "Raffiche, turbolenza e canalizzazioni più strette della griglia richiedono prodotti dedicati."
+          method: "|V| = √(U²+V²); streamline bidirezionali RK2 sul versore U/V",
+          scale: "Griglia nativa ≈2,2 km; passo grafico metrico adattivo a latitudine e zoom",
+          limit: "Le streamline descrivono il flusso istantaneo, non traiettorie nel tempo; raffiche e canalizzazioni sub-griglia richiedono prodotti dedicati."
         },
         gust: {
           nature: "Massimo prognostico nell'intervallo",
@@ -3416,6 +3415,26 @@
         minLife: 46,
         maxLife: 112,
         minimumSpeed: 0.3
+      };
+
+      // Le streamline sono un'analisi statica del campo vettoriale all'istante
+      // selezionato, non traiettorie lagrangiane. Il passo resta circa costante
+      // in pixel ma viene convertito in metri alla latitudine della linea: la
+      // geometria non cambia artificialmente fra nord e sud o cambiando zoom.
+      const STREAMLINE_CONFIG = {
+        screenStepPx: 4.8,
+        minStepMetres: 650,
+        maxStepMetres: 30000,
+        minSpeedMps: 0.22,
+        maxStepsMobile: 72,
+        maxStepsDesktop: 96,
+        seedSpacingMobile: 19,
+        seedSpacingDesktop: 22,
+        occupancyMobile: 11,
+        occupancyDesktop: 12,
+        minimumLengthPx: 34,
+        arrowSpacingMobile: 72,
+        arrowSpacingDesktop: 88
       };
 
       const RASTER_CONFIG = {
@@ -5836,7 +5855,7 @@
       }
 
       // Una carta si legge perche' ogni cosa che c'e' sopra ha un motivo per
-      // esserci. Il fondo fotografico, le particelle, il radar e le frecce
+      // esserci. Il fondo fotografico, le particelle, il radar e le streamline
       // sono tutti utili, e tutti in competizione con le tre cose che una
       // carta al suolo deve dire: dove sta la pressione, dove sono i suoi
       // centri e dove passano i fronti. Questa modalita' li toglie di mezzo e
@@ -5993,16 +6012,12 @@
           map.setLayoutProperty("weather-layer", "visibility", "visible");
         }
 
-        // Particelle e frecce sono animazione: sul foglio non hanno posto, e
-        // il vento si legge dal colore e dalla spaziatura delle isobare. Sul
-        // telefono le particelle restano spente anche scegliendo il vento:
-        // sono la meta' costosa del disegno e le frecce dicono gia' il flusso.
+        // Le linee di corrente sono il disegno principale del vento e sono
+        // abbastanza leggere da essere attive anche sul telefono. Le
+        // particelle restano un livello animato facoltativo: sovrapporle in
+        // automatico renderebbe il campo meno leggibile e consumerebbe di piu'.
         if (nextLayer === "wind" && !synopticChart) {
           showVectors = true;
-          if (!isMobile() && !prefersReducedMotion) {
-            showParticles = true;
-            startParticles();
-          }
         }
 
         if (nextLayer === "press") showIsobars = true;
@@ -8665,43 +8680,6 @@
         vectorContext.restore();
       }
 
-      function strokeArrowPath(
-        startX, startY, endX, endY, leftX, leftY, rightX, rightY, color, lineWidth
-      ) {
-        vectorContext.strokeStyle = color;
-        vectorContext.lineWidth = lineWidth;
-        vectorContext.beginPath();
-        vectorContext.moveTo(startX, startY);
-        vectorContext.lineTo(endX, endY);
-        vectorContext.stroke();
-        // Punta a V aperta: a questa densita' rimane nitida e non forma le
-        // macchie triangolari delle vecchie punte piene.
-        vectorContext.beginPath();
-        vectorContext.moveTo(leftX, leftY);
-        vectorContext.lineTo(endX, endY);
-        vectorContext.lineTo(rightX, rightY);
-        vectorContext.stroke();
-      }
-
-      function drawArrow(startX, startY, endX, endY, width, headSize, fill) {
-        const angle = Math.atan2(endY - startY, endX - startX);
-        const leftX = endX - Math.cos(angle - Math.PI / 6) * headSize;
-        const leftY = endY - Math.sin(angle - Math.PI / 6) * headSize;
-        const rightX = endX - Math.cos(angle + Math.PI / 6) * headSize;
-        const rightY = endY - Math.sin(angle + Math.PI / 6) * headSize;
-
-        // Un bordo scuro molto sottile separa la freccia sia dal campo vento
-        // colorato sia dalla cartografia, senza scolorire blu e ciano.
-        strokeArrowPath(
-          startX, startY, endX, endY, leftX, leftY, rightX, rightY,
-          "rgba(1,7,18,0.72)", width + 1.05
-        );
-        strokeArrowPath(
-          startX, startY, endX, endY, leftX, leftY, rightX, rightY,
-          fill || "rgba(80,190,255,0.96)", width
-        );
-      }
-
       // Il corredo della carta: quello che su un foglio stampato sta attorno
       // al disegno e senza cui il disegno non si sa leggere. Chi guarda deve
       // poter dire, senza uscire dalla carta, che analisi e', a che ora vale,
@@ -9197,117 +9175,286 @@
         vectorContext.restore();
       }
 
+      function sampleWindVector(wind, longitude, latitude) {
+        const meta = wind && wind.meta;
+        if (!meta || !wind.u || !wind.v) return null;
+        const gx = (longitude - meta.lo1) / meta.dx;
+        const gy = (meta.la1 - latitude) / meta.dy;
+        if (gx < 0 || gy < 0 || gx >= meta.nx - 1 || gy >= meta.ny - 1) return null;
+        const u = sampleBilinear(wind.u, gx, gy, meta.nx, meta.ny);
+        const v = sampleBilinear(wind.v, gx, gy, meta.nx, meta.ny);
+        const speedMps = Math.hypot(u, v);
+        if (!Number.isFinite(speedMps) || speedMps < STREAMLINE_CONFIG.minSpeedMps) {
+          return null;
+        }
+        return { u: u, v: v, speedMps: speedMps, speedKmh: speedMps * 3.6 };
+      }
+
+      function offsetWindLocation(point, eastMetres, northMetres) {
+        const cosineLatitude = Math.max(
+          Math.cos(point.lat * Math.PI / 180), 0.2
+        );
+        return {
+          lng: point.lng + eastMetres / (111320 * cosineLatitude),
+          lat: point.lat + northMetres / 111320
+        };
+      }
+
+      // Passo RK2 sul versore del vento. Usare il punto medio riduce la
+      // tendenza delle integrazioni di Eulero a tagliare le curvature strette
+      // attorno ai minimi barici; normalizzare il vettore separa la geometria
+      // della linea dalla velocita', gia' rappresentata dal campo colorato.
+      function advanceWindStreamline(wind, point, direction, stepMetres) {
+        const first = sampleWindVector(wind, point.lng, point.lat);
+        if (!first) return null;
+        const half = offsetWindLocation(
+          point,
+          direction * first.u / first.speedMps * stepMetres * 0.5,
+          direction * first.v / first.speedMps * stepMetres * 0.5
+        );
+        const middle = sampleWindVector(wind, half.lng, half.lat);
+        if (!middle) return null;
+        const location = offsetWindLocation(
+          point,
+          direction * middle.u / middle.speedMps * stepMetres,
+          direction * middle.v / middle.speedMps * stepMetres
+        );
+        return {
+          lng: location.lng,
+          lat: location.lat,
+          speedKmh: middle.speedKmh
+        };
+      }
+
+      function streamlineStepMetres(latitude, zoom) {
+        const circumference = 40075016.686;
+        const metresPerPixel = circumference * Math.max(
+          Math.cos(latitude * Math.PI / 180), 0.2
+        ) / (512 * Math.pow(2, zoom));
+        return clamp(
+          metresPerPixel * STREAMLINE_CONFIG.screenStepPx,
+          STREAMLINE_CONFIG.minStepMetres,
+          STREAMLINE_CONFIG.maxStepMetres
+        );
+      }
+
+      function strokeStreamline(points, color, width) {
+        if (!points || points.length < 2) return;
+        vectorContext.beginPath();
+        vectorContext.moveTo(points[0].x, points[0].y);
+        for (let index = 1; index < points.length; index += 1) {
+          vectorContext.lineTo(points[index].x, points[index].y);
+        }
+        vectorContext.strokeStyle = color;
+        vectorContext.lineWidth = width;
+        vectorContext.stroke();
+      }
+
+      function strokeStreamlineHeads(line, color, width, spacing) {
+        if (!line || line.length < 3 || line.totalLength < 52) return;
+        let travelled = 0;
+        let target = 30 + (line.seedHash % Math.max(18, spacing - 34));
+        const headSize = 3.7;
+        for (let index = 1; index < line.length; index += 1) {
+          const previous = line[index - 1];
+          const point = line[index];
+          const dx = point.x - previous.x;
+          const dy = point.y - previous.y;
+          const segmentLength = Math.hypot(dx, dy);
+          if (!(segmentLength > 0)) continue;
+          while (travelled + segmentLength >= target && target < line.totalLength - 18) {
+            const fraction = (target - travelled) / segmentLength;
+            const x = previous.x + dx * fraction;
+            const y = previous.y + dy * fraction;
+            const ux = dx / segmentLength;
+            const uy = dy / segmentLength;
+            const cosine = Math.cos(Math.PI / 6);
+            const sine = Math.sin(Math.PI / 6);
+            const leftX = x - (ux * cosine - uy * sine) * headSize;
+            const leftY = y - (uy * cosine + ux * sine) * headSize;
+            const rightX = x - (ux * cosine + uy * sine) * headSize;
+            const rightY = y - (uy * cosine - ux * sine) * headSize;
+            vectorContext.beginPath();
+            vectorContext.moveTo(leftX, leftY);
+            vectorContext.lineTo(x, y);
+            vectorContext.lineTo(rightX, rightY);
+            vectorContext.strokeStyle = color;
+            vectorContext.lineWidth = width;
+            vectorContext.stroke();
+            target += spacing;
+          }
+          travelled += segmentLength;
+        }
+      }
+
+      function drawWindStreamlines(wind) {
+        const width = window.innerWidth;
+        const height = window.innerHeight;
+        const mobile = isMobile();
+        const terrain = map.getTerrain && map.getTerrain();
+        const elevated = Boolean(terrain) && show3D;
+        const seedSpacing = (mobile
+          ? STREAMLINE_CONFIG.seedSpacingMobile
+          : STREAMLINE_CONFIG.seedSpacingDesktop) * (elevated ? 1.3 : 1);
+        const occupancySize = mobile
+          ? STREAMLINE_CONFIG.occupancyMobile
+          : STREAMLINE_CONFIG.occupancyDesktop;
+        const occupancyColumns = Math.ceil(width / occupancySize);
+        const occupancyRows = Math.ceil(height / occupancySize);
+        const occupied = new Uint8Array(occupancyColumns * occupancyRows);
+        const maxSteps = mobile
+          ? STREAMLINE_CONFIG.maxStepsMobile
+          : STREAMLINE_CONFIG.maxStepsDesktop;
+        const zoom = map.getZoom();
+        const viewportMargin = 24;
+        const lines = [];
+        const seeds = [];
+
+        function cellFor(point) {
+          const column = Math.floor(point.x / occupancySize);
+          const row = Math.floor(point.y / occupancySize);
+          if (column < 0 || row < 0 || column >= occupancyColumns || row >= occupancyRows) {
+            return -1;
+          }
+          return row * occupancyColumns + column;
+        }
+
+        // Jitter deterministico: evita l'aspetto a reticolo senza far
+        // tremolare tutte le linee a ogni ridisegno della stessa vista.
+        for (let row = 0, y = seedSpacing * 0.5; y < height; row += 1, y += seedSpacing) {
+          for (let column = 0, x = seedSpacing * 0.5; x < width;
+            column += 1, x += seedSpacing) {
+            const hash = ((column + 1) * 73856093 ^ (row + 1) * 19349663) >>> 0;
+            const jitterX = ((hash & 255) / 255 - 0.5) * seedSpacing * 0.58;
+            const jitterY = (((hash >>> 8) & 255) / 255 - 0.5) * seedSpacing * 0.58;
+            seeds.push({ x: x + jitterX, y: y + jitterY, hash: hash });
+          }
+        }
+        // L'ordine pseudo-casuale impedisce alla scansione alto-sinistra di
+        // conquistare tutto il campo di occupazione prima delle altre zone.
+        seeds.sort(function (a, b) { return a.hash - b.hash; });
+
+        seeds.forEach(function (seed) {
+          const screenSeedCell = cellFor(seed);
+          if (screenSeedCell < 0 || occupied[screenSeedCell]) return;
+          const location = map.unproject([seed.x, seed.y]);
+          const sampled = sampleWindVector(wind, location.lng, location.lat);
+          if (!sampled) return;
+          const stepMetres = streamlineStepMetres(location.lat, zoom);
+          const levelAltitude = particleLevelAltitude();
+          const groundAltitude = elevated && !levelAltitude && map.queryTerrainElevation
+            ? (map.queryTerrainElevation([location.lng, location.lat]) || 0)
+            : 0;
+          const altitude = levelAltitude || groundAltitude;
+          const seedPoint = projectParticle(location.lng, location.lat, altitude);
+          if (!seedPoint) return;
+          // Con pitch e rilievo la quota sposta il punto rispetto al seme sul
+          // piano dello schermo: l'occupazione deve seguire la posizione
+          // realmente disegnata, non quella usata soltanto per l'unproject.
+          const seedCell = cellFor(seedPoint);
+          if (seedCell < 0 || occupied[seedCell]) return;
+          const localCells = new Set([seedCell]);
+
+          function trace(direction) {
+            const result = [];
+            let geographical = { lng: location.lng, lat: location.lat };
+            let previousScreen = seedPoint;
+            let previousCell = seedCell;
+            for (let step = 0; step < maxSteps; step += 1) {
+              const next = advanceWindStreamline(
+                wind, geographical, direction, stepMetres
+              );
+              if (!next) break;
+              const screen = projectParticle(next.lng, next.lat, altitude);
+              if (!screen || screen.x < -viewportMargin || screen.x > width + viewportMargin
+                || screen.y < -viewportMargin || screen.y > height + viewportMargin) break;
+              const jump = Math.hypot(
+                screen.x - previousScreen.x, screen.y - previousScreen.y
+              );
+              // Un salto proiettato eccessivo segnala orizzonte 3D, discontinuita'
+              // della matrice o uscita dal dominio, non una corrente reale.
+              if (!Number.isFinite(jump) || jump < 0.35 || jump > 18) break;
+              const cell = cellFor(screen);
+              if (cell < 0 || (occupied[cell] && cell !== seedCell)) break;
+              if (cell !== previousCell && localCells.has(cell)) break;
+              localCells.add(cell);
+              result.push({ x: screen.x, y: screen.y, speedKmh: next.speedKmh });
+              geographical = { lng: next.lng, lat: next.lat };
+              previousScreen = screen;
+              previousCell = cell;
+            }
+            return result;
+          }
+
+          const backward = trace(-1).reverse();
+          const forward = trace(1);
+          const points = backward.concat([
+            { x: seedPoint.x, y: seedPoint.y, speedKmh: sampled.speedKmh }
+          ], forward);
+          if (points.length < 6) return;
+          let totalLength = 0;
+          let speedSum = 0;
+          points.forEach(function (point, index) {
+            speedSum += point.speedKmh;
+            if (index) {
+              totalLength += Math.hypot(
+                point.x - points[index - 1].x,
+                point.y - points[index - 1].y
+              );
+            }
+          });
+          if (totalLength < STREAMLINE_CONFIG.minimumLengthPx) return;
+          points.forEach(function (point) {
+            const cell = cellFor(point);
+            if (cell >= 0) occupied[cell] = 1;
+          });
+          points.totalLength = totalLength;
+          points.meanSpeed = speedSum / points.length;
+          points.seedHash = seed.hash;
+          lines.push(points);
+        });
+
+        vectorContext.save();
+        vectorContext.lineCap = "round";
+        vectorContext.lineJoin = "round";
+        // Alone chiaro molto sottile e inchiostro scuro: resta leggibile sia
+        // sui blu del vento debole sia sui verdi/gialli di quello forte.
+        lines.forEach(function (line) {
+          const widthBySpeed = clamp(0.7 + line.meanSpeed * 0.0045, 0.72, 1.12);
+          strokeStreamline(line, "rgba(255,255,255,0.72)", widthBySpeed + 1.65);
+        });
+        lines.forEach(function (line) {
+          const widthBySpeed = clamp(0.7 + line.meanSpeed * 0.0045, 0.72, 1.12);
+          const alpha = clamp(0.64 + line.meanSpeed * 0.0035, 0.66, 0.9);
+          strokeStreamline(line, "rgba(3,15,24," + alpha.toFixed(3) + ")", widthBySpeed);
+        });
+        const arrowSpacing = mobile
+          ? STREAMLINE_CONFIG.arrowSpacingMobile
+          : STREAMLINE_CONFIG.arrowSpacingDesktop;
+        lines.forEach(function (line) {
+          strokeStreamlineHeads(line, "rgba(255,255,255,0.76)", 2.45, arrowSpacing);
+        });
+        lines.forEach(function (line) {
+          strokeStreamlineHeads(line, "rgba(3,15,24,0.90)", 0.9, arrowSpacing);
+        });
+        vectorContext.restore();
+      }
+
       function drawVectors() {
         clearVectors();
         if (!currentData || !map || isMapMoving) return;
         syncProjectionViewport();
 
-        drawPlaceNames();
+        // Prima il vento, poi l'inchiostro analitico: isobare, fronti e nomi
+        // devono restare gerarchicamente sopra le streamline.
+        if (showVectors) {
+          const wind = windField();
+          if (wind && wind.u && wind.v) drawWindStreamlines(wind);
+        }
         drawSynopticCanvas();
         drawFrontsCanvas();
+        drawPlaceNames();
         if (synopticChart) drawChartFurniture();
-        if (!showVectors) return;
-
-        const wind = windField();
-        if (!wind || !wind.u || !wind.v) return;
-        const meta = wind.meta;
-        const mobile = isMobile();
-        const vectorTerrain = map.getTerrain && map.getTerrain();
-        const vectorElevated = Boolean(vectorTerrain) && show3D;
-        // Campo fitto e regolare, come nelle mappe vettoriali dei modelli: le
-        // frecce coprono la mappa invece di essere sparse, e il flusso si legge
-        // come un disegno continuo. In 3D il passo si allarga, perche' li'
-        // ricavare la posizione geografica di ogni punto costa molto di piu'.
-        const denseSpacing = (mobile ? 20 : 23) * (vectorElevated ? 1.55 : 1);
-        const spacing = clamp(denseSpacing + (6 - map.getZoom()) * 0.9,
-          mobile ? 17 : 19, mobile ? 44 : 50);
-        // I pannelli sono traslucidi e galleggiano sulla mappa: il campo di
-        // vento viene disegnato fino al bordo dello schermo, come nelle mappe
-        // vettoriali dei modelli, invece di lasciare fasce vuote sotto
-        // l'header, la timeline e i lati.
-        const edgeInset = 2;
-
-        vectorContext.save();
-        vectorContext.lineCap = "round";
-        vectorContext.lineJoin = "round";
-
-        for (let y = edgeInset; y < window.innerHeight - edgeInset; y += spacing) {
-          for (let x = edgeInset; x < window.innerWidth - edgeInset; x += spacing) {
-            const location = map.unproject([x, y]);
-            const gx = (location.lng - meta.lo1) / meta.dx;
-            const gy = (meta.la1 - location.lat) / meta.dy;
-
-            if (gx < 0 || gy < 0 || gx >= meta.nx - 1 || gy >= meta.ny - 1) continue;
-
-            const u = sampleBilinear(wind.u, gx, gy, meta.nx, meta.ny);
-            const v = sampleBilinear(wind.v, gx, gy, meta.nx, meta.ny);
-            const speed = Math.hypot(u, v) * 3.6;
-            // Anche la calma e' un'informazione: nel campo fitto le zone
-            // deboli restano disegnate in blu invece di lasciare buchi.
-            if (!Number.isFinite(speed) || speed < 0.8) continue;
-
-            // Scala piu' espressiva: a colpo d'occhio si distingue una brezza
-            // da una burrasca anche senza leggere la legenda.
-            // Lunghezza fortemente legata alla velocita': cortissima con la
-            // calma, oltre il passo della griglia con vento forte. La
-            // sovrapposizione che ne segue non impasta il disegno, perche'
-            // avviene lungo la direzione del flusso: le frecce vicine puntano
-            // dalla stessa parte e si fondono in linee continue. E' quello a
-            // dare l'aspetto di corrente delle mappe vettoriali dei modelli.
-            const length = clamp(5 + speed * 0.46, 7, mobile ? 44 : 56);
-            const norm = Math.hypot(u, v) || 1;
-            // Ricavo la direzione sullo schermo proiettando un breve segmento
-            // geografico. Così la freccia resta corretta con bearing, pitch e
-            // terreno; il vecchio (u, -v) valeva solo con nord in alto e vista
-            // perfettamente zenitale.
-            const probeMetres = 10000;
-            const cosineLatitude = Math.max(
-              Math.cos(location.lat * Math.PI / 180), 0.25
-            );
-            // In 3D map.project interroga il modello di elevazione a ogni
-            // chiamata: con due chiamate per freccia il costo si somma a quello
-            // gia' tolto alle isolinee. Uso la proiezione con matrice, con la
-            // quota del suolo letta una sola volta per freccia; le frecce sono
-            // decine, non migliaia, quindi qui una lettura ciascuna va bene.
-            const groundHeight = vectorElevated && map.queryTerrainElevation
-              ? (map.queryTerrainElevation([location.lng, location.lat]) || 0)
-              : 0;
-            const directionPoint = projectParticle(
-              location.lng + (u / norm) * probeMetres / (111320 * cosineLatitude),
-              location.lat + (v / norm) * probeMetres / 111320,
-              groundHeight
-            );
-            const centerPoint = projectParticle(location.lng, location.lat, groundHeight);
-            if (!directionPoint || !centerPoint) continue;
-            const projectedLength = Math.hypot(
-              directionPoint.x - centerPoint.x,
-              directionPoint.y - centerPoint.y
-            );
-            if (!Number.isFinite(projectedLength) || projectedLength < 0.2) continue;
-            const dx = (directionPoint.x - centerPoint.x) / projectedLength;
-            const dy = (directionPoint.y - centerPoint.y) / projectedLength;
-            const lineWidth = clamp(0.72 + speed * 0.008, 0.78, mobile ? 1.5 : 1.7);
-            const head = clamp(3.1 + speed * 0.022, 3.2, mobile ? 6.2 : 6.8);
-            // Stesso colore che il campo vento userebbe per quella velocita':
-            // la freccia si legge con la legenda gia' presente, invece di
-            // introdurre una scala inventata.
-            const shade = colorFor(speed, LAYER_INFO.wind);
-            const body = "rgba(" + Math.round(shade[0]) + "," + Math.round(shade[1]) +
-              "," + Math.round(shade[2]) + ",0.96)";
-
-            drawArrow(
-              centerPoint.x - dx * length * 0.42,
-              centerPoint.y - dy * length * 0.42,
-              centerPoint.x + dx * length * 0.58,
-              centerPoint.y + dy * length * 0.58,
-              lineWidth,
-              head,
-              body
-            );
-          }
-        }
-
-        vectorContext.restore();
       }
 
       function requestVectorRender() {
