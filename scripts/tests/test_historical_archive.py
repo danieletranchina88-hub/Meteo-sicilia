@@ -107,6 +107,13 @@ class MemoryArchive:
         }
 
 
+class DisabledArchive:
+    enabled = False
+
+    def retain_source(self, **kwargs):
+        raise AssertionError("source-reference non deve invocare lo storage")
+
+
 def test_catalog_and_date_boundaries():
     specification = HISTORICAL_DATASETS["ICON_2I_ita2km"]
     assert specification.name == "ICON_2I_ita2km"
@@ -212,6 +219,39 @@ def test_submit_download_archive_and_resume_state():
         json.dumps(restored, allow_nan=False)
 
 
+def test_source_reference_probe_is_honest_and_ephemeral():
+    state = build_plan(
+        "ICON_2I_ita2km", "2024-09-29", "2024-09-29",
+        template=FILTER_TEMPLATE,
+    )
+    session = FakeSession()
+    client = MeteoHubClient(token="test-token", session=session)
+    assert submit_planned(state, client, limit=1) == 1
+    with tempfile.TemporaryDirectory() as temporary:
+        counts = sync_submitted(
+            state,
+            client,
+            lambda _run: DisabledArchive(),
+            download_dir=temporary,
+            retention_mode="source-reference",
+        )
+        assert counts["sourceVerified"] == 1
+        assert counts["completed"] == 0
+        entry = state["requests"][0]
+        assert entry["status"] == "SOURCE_VERIFIED"
+        assert entry["rawRetained"] is False
+        assert entry["derivedProductCreated"] is False
+        assert entry["trainingReady"] is False
+        assert entry["download"]["retainedInArchive"] is False
+        assert entry["download"]["localPathRetained"] is False
+        assert entry["download"]["retentionMode"] == "source-reference"
+        reference = entry["download"]["sourceReference"]
+        assert reference["datasetId"] == "ICON_2I_ita2km"
+        assert reference["requestKey"] == entry["requestKey"]
+        assert reference["regenerationPayloadSha256"] == entry["requestKey"]
+        assert not list(Path(temporary).iterdir())
+
+
 def test_payload_date_guard():
     try:
         build_request_payload(
@@ -229,5 +269,6 @@ if __name__ == "__main__":
     test_plan_is_deterministic_and_removes_scheduling()
     test_unfiltered_submission_fails_closed()
     test_submit_download_archive_and_resume_state()
+    test_source_reference_probe_is_honest_and_ephemeral()
     test_payload_date_guard()
     print("Historical ICON-2I archive tests passed")

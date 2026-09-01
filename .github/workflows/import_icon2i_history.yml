@@ -4,12 +4,13 @@ on:
   workflow_dispatch:
     inputs:
       mode:
-        description: "Plan only, or submit/download/archive"
+        description: "Plan, verify one extract without S3, or archive to S3"
         required: true
         default: plan
         type: choice
         options:
           - plan
+          - probe
           - ingest
       dataset:
         description: "Official MeteoHub historical dataset"
@@ -97,6 +98,26 @@ jobs:
           --start "${{ inputs.start }}"
           --end "${{ inputs.end }}"
           --max-requests "${{ inputs.max_requests }}"
+          --state historical_import/state.json
+          --download-dir "${{ runner.temp }}/icon2i-history"
+          --poll-seconds 30
+          --timeout-seconds 3000
+
+      - name: Verify one source extract without S3 retention
+        if: inputs.mode == 'probe'
+        env:
+          METEOHUB_TOKEN: ${{ secrets.METEOHUB_TOKEN }}
+          METEOHUB_USERNAME: ${{ secrets.METEOHUB_USERNAME }}
+          METEOHUB_PASSWORD: ${{ secrets.METEOHUB_PASSWORD }}
+          METEOHUB_REQUEST_TEMPLATE_JSON: ${{ secrets.METEOHUB_REQUEST_TEMPLATE_JSON }}
+          ICON_ARCHIVE_MODE: off
+        run: >-
+          python scripts/import_icon2i_history.py ingest
+          --dataset "${{ inputs.dataset }}"
+          --start "${{ inputs.start }}"
+          --end "${{ inputs.end }}"
+          --max-requests 1
+          --retention-mode source-reference
           --state historical_import/state.json
           --download-dir "${{ runner.temp }}/icon2i-history"
           --poll-seconds 30

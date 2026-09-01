@@ -27,6 +27,9 @@ SCHEMA_VERSION = 1
 DEFAULT_BASE_URL = "https://meteohub.agenziaitaliameteo.it"
 SUCCESS_STATES = {"SUCCESS", "SUCCEEDED", "COMPLETED", "COMPLETE", "DONE"}
 FAILURE_STATES = {"FAILURE", "FAILED", "ERROR", "CANCELLED", "CANCELED"}
+RETENTION_ARCHIVE = "archive"
+RETENTION_SOURCE_REFERENCE = "source-reference"
+RETENTION_MODES = {RETENTION_ARCHIVE, RETENTION_SOURCE_REFERENCE}
 
 
 class HistoricalArchiveError(RuntimeError):
@@ -631,13 +634,28 @@ def sync_submitted(
     *,
     download_dir: str | Path,
     keep_local: bool = False,
+    retention_mode: str = RETENTION_ARCHIVE,
 ) -> dict[str, int]:
+    if retention_mode not in RETENTION_MODES:
+        raise HistoricalArchiveError(
+            "retention_mode deve essere 'archive' o 'source-reference'"
+        )
+    if retention_mode == RETENTION_SOURCE_REFERENCE and keep_local:
+        raise HistoricalArchiveError(
+            "source-reference elimina sempre l'estratto; --keep-local non e ammesso"
+        )
     remote = {
         request_id: record
         for record in client.list_requests()
         if (request_id := _record_id(record))
     }
-    counts = {"completed": 0, "failed": 0, "pending": 0, "missing": 0}
+    counts = {
+        "completed": 0,
+        "sourceVerified": 0,
+        "failed": 0,
+        "pending": 0,
+        "missing": 0,
+    }
     destination = Path(download_dir)
     destination.mkdir(parents=True, exist_ok=True)
     for entry in state["requests"]:
@@ -666,7 +684,11 @@ def sync_submitted(
             counts["pending"] += 1
             continue
         archive = archive_factory(entry["runTime"])
-        if not archive.enabled and not keep_local:
+        if (
+            retention_mode == RETENTION_ARCHIVE
+            and not archive.enabled
+            and not keep_local
+        ):
             raise HistoricalArchiveError(
                 "storage raw non attivo: download storico bloccato prima del trasferimento"
             )
@@ -676,23 +698,45 @@ def sync_submitted(
         )
         local_path = destination / local_name
         download = client.download(filename, local_path)
-        archive_object = archive.retain_source(
-            path=local_path,
-            name=filename,
-            role=f"historical-{state['dataset']['name']}",
-            source_url=download["sourceUrl"],
-            expected_sha256=download["sha256"],
-        )
+        archive_object = None
+        if retention_mode == RETENTION_ARCHIVE:
+            archive_object = archive.retain_source(
+                path=local_path,
+                name=filename,
+                role=f"historical-{state['dataset']['name']}",
+                source_url=download["sourceUrl"],
+                expected_sha256=download["sha256"],
+            )
         download["archiveObject"] = archive_object
         download["retainedInArchive"] = archive_object is not None
-        download["localPathRetained"] = bool(keep_local)
+        download["localPathRetained"] = bool(
+            keep_local and retention_mode == RETENTION_ARCHIVE
+        )
+        download["retentionMode"] = retention_mode
+        download["sourceReference"] = {
+            "provider": state["provider"]["name"],
+            "datasetId": state["dataset"]["name"],
+            "requestId": request_id,
+            "requestKey": entry["requestKey"],
+            "regenerationPayloadSha256": canonical_sha256(entry["payload"]),
+        }
+        source_only = retention_mode == RETENTION_SOURCE_REFERENCE
         entry.update({
-            "status": "COMPLETED",
-            "completedAt": utc_now(),
+            "status": "SOURCE_VERIFIED" if source_only else "COMPLETED",
+            "completedAt": None if source_only else utc_now(),
+            "sourceVerifiedAt": utc_now() if source_only else None,
             "fileOutput": filename,
             "download": download,
+            "rawRetained": not source_only and bool(
+                archive_object is not None or keep_local
+            ),
+            "derivedProductCreated": False,
+            "trainingReady": False,
         })
-        if not keep_local:
+        if source_only or not keep_local:
             local_path.unlink()
-        counts["completed"] += 1
+        if source_only:
+            counts["sourceVerified"] += 1
+        else:
+            counts["completed"] += 1
     return counts

@@ -17,6 +17,9 @@ from meteo_analysis.verification.historical import (
     HISTORICAL_DATASETS,
     HistoricalArchiveError,
     MeteoHubClient,
+    RETENTION_ARCHIVE,
+    RETENTION_MODES,
+    RETENTION_SOURCE_REFERENCE,
     build_plan,
     load_request_template,
     read_state,
@@ -74,6 +77,15 @@ def main() -> None:
     parser.add_argument("--max-requests", type=int, default=5)
     parser.add_argument("--download-dir", default="historical_import/downloads")
     parser.add_argument("--keep-local", action="store_true")
+    parser.add_argument(
+        "--retention-mode",
+        choices=sorted(RETENTION_MODES),
+        default=RETENTION_ARCHIVE,
+        help=(
+            "archive conserva i byte in S3/locale; source-reference verifica "
+            "un estratto e lo elimina, senza dichiararlo archiviato"
+        ),
+    )
     parser.add_argument("--allow-unfiltered", action="store_true")
     parser.add_argument("--poll-seconds", type=int, default=30)
     parser.add_argument("--timeout-seconds", type=int, default=3000)
@@ -111,7 +123,17 @@ def main() -> None:
         raise HistoricalArchiveError(
             "estrazione non filtrata bloccata: configura il template MeteoHub"
         )
-    if arguments.action == "ingest" and not arguments.keep_local:
+    if (
+        arguments.action == "ingest"
+        and arguments.retention_mode == RETENTION_SOURCE_REFERENCE
+        and arguments.keep_local
+    ):
+        parser.error("--keep-local non e compatibile con source-reference")
+    if (
+        arguments.action == "ingest"
+        and arguments.retention_mode == RETENTION_ARCHIVE
+        and not arguments.keep_local
+    ):
         try:
             storage = ObjectStoreSettings.from_environment()
         except ObjectStoreConfigurationError as error:
@@ -139,6 +161,7 @@ def main() -> None:
             state, client, _archive_factory,
             download_dir=arguments.download_dir,
             keep_local=arguments.keep_local,
+            retention_mode=arguments.retention_mode,
         )
         write_state(state_path, state)
         print(json.dumps(counts, sort_keys=True))
@@ -150,6 +173,7 @@ def main() -> None:
             state, client, _archive_factory,
             download_dir=arguments.download_dir,
             keep_local=arguments.keep_local,
+            retention_mode=arguments.retention_mode,
         )
         write_state(state_path, state)
         print(json.dumps(counts, sort_keys=True), flush=True)

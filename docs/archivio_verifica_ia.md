@@ -243,11 +243,27 @@ gruppo e checksum.
 
 L'autenticazione accetta `METEOHUB_TOKEN` oppure la coppia
 `METEOHUB_USERNAME`/`METEOHUB_PASSWORD`. La workflow manuale
-`Import Historical ICON-2I` ha due modalità:
+`Import Historical ICON-2I` ha tre modalità:
 
 - `plan`: convalida intervallo e manifest senza credenziali;
+- `probe`: usa l'account MeteoHub per una sola estrazione filtrata, verifica
+  dimensione, contenitore e SHA-256 e poi elimina i byte dal runner. Conserva
+  soltanto la provenienza riproducibile e dichiara esplicitamente
+  `rawRetained: false`, `derivedProductCreated: false` e
+  `trainingReady: false`; non richiede S3 e non finge di avere un archivio;
 - `ingest`: invia al massimo il numero dichiarato di richieste, attende gli
   output, ne verifica i checksum e li conserva nello storage configurato.
+
+Senza un bucket si usa prima `probe`. Il catalogo MeteoHub rimane la sorgente
+storica dei GRIB; GitHub orchestra richieste e controlli ma non duplica i file
+meteorologici. Dopo avere verificato l'inventario reale dei gruppi richiesti,
+la fase successiva elabora ogni estratto nello stesso job, conserva soltanto
+feature, campioni osservazione-previsione, label e metriche compatti e scarta
+il GRIB temporaneo dopo il checksum del prodotto derivato. Un manifest di
+provenienza non sostituisce la conservazione raw: se il provider ritira il
+dataset, il file non e piu ricostruibile. Per questo il supporto S3 resta
+disponibile come opzione futura per esperimenti che richiedano
+riproducibilita completa dei byte sorgente.
 
 Una singola esecuzione non invia più di dieci richieste e il valore consigliato
 è cinque, coerentemente con il limite orario standard del servizio. Il manifest
