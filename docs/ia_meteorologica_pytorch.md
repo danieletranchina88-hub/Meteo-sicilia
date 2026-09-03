@@ -112,7 +112,8 @@ python scripts/train_front_unet.py \
 ```
 
 Il workflow `Train Front U-Net Pilot` esegue automaticamente una prova reale
-CPU su 120 analisi distribuite nel 2015–2019. Serve a verificare download,
+CPU su un massimo di 120 analisi distribuite nel 2015–2019. Serve a verificare
+download,
 costruzione dei 40 canali, training, calibrazione e checkpoint in un ambiente
 riproducibile. Il risultato rimane `candidate-only` e l'artefatto GitHub scade
 dopo 30 giorni: non sostituisce il training completo su GPU né uno storage
