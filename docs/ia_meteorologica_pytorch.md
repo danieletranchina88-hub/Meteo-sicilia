@@ -16,7 +16,7 @@ rigorosa e confronto contro baseline fisiche.
 
 ### Verità a terra
 
-Il target è multiclasse:
+La tassonomia operativa è multiclasse:
 
 0. fondo;
 1. fronte freddo;
@@ -25,7 +25,18 @@ Il target è multiclasse:
 4. fronte stazionario.
 
 Il preparatore usa le polilinee manuali DWD (CC BY 4.0, DOI
-`10.5281/zenodo.5785816`) e predittori ERA5. Le linee vengono rasterizzate con
+`10.5281/zenodo.5785816`) e predittori ERA5. L'archivio europeo supervisiona
+solo fondo, freddo, caldo e occluso. Le carte DWD rappresentano infatti i
+fronti stazionari come tratti alternati caldo/freddo e l'estrazione pubblicata
+non permette di separarli in modo autorevole; il manifest e il checkpoint
+dichiarano quindi `stationary` tra le classi non supportate. Non vengono creati
+esempi fittizi né pesi di classe artificiali. La limitazione è documentata
+nell'articolo metodologico DOI `10.5194/wcd-3-113-2022`.
+
+La classe stazionaria rimane affidata alla diagnosi di moto, alla fisica e al
+tracking temporale v19. Un futuro modello a cinque classi richiederà etichette
+NWS/NOAA, che includono esplicitamente gli stazionari, seguite da verifica del
+trasferimento di dominio sull'Europa. Le linee DWD vengono rasterizzate con
 distanza geodetica; il bordo artificiale del buffer riceve peso minore. Tutte
 le celle e patch della stessa data restano nello stesso split cronologico
 70/15/15. Non è ammesso uno split casuale per pixel.
@@ -101,7 +112,7 @@ python scripts/train_front_unet.py \
 ```
 
 Il workflow `Train Front U-Net Pilot` esegue automaticamente una prova reale
-CPU su 120 analisi distribuite nel 2015–2020. Serve a verificare download,
+CPU su 120 analisi distribuite nel 2015–2019. Serve a verificare download,
 costruzione dei 40 canali, training, calibrazione e checkpoint in un ambiente
 riproducibile. Il risultato rimane `candidate-only` e l'artefatto GitHub scade
 dopo 30 giorni: non sostituisce il training completo su GPU né uno storage

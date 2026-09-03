@@ -19,7 +19,7 @@ sys.path.insert(0, str(ROOT))
 
 from meteo_analysis.deep_learning.front_inputs import build_front_tensor
 from meteo_analysis.deep_learning.schemas import (
-    FRONT_CLASSES,
+    DWD_SUPERVISED_FRONT_CLASSES,
     FRONT_FEATURES,
     SCHEMA_VERSION,
     schema_hash,
@@ -103,8 +103,23 @@ def main():
     shard_dir.mkdir(parents=True, exist_ok=True)
     era5 = EarthmoverERA5()
     records = []
+    class_counts_by_split = {
+        split: np.zeros(len(DWD_SUPERVISED_FRONT_CLASSES), dtype=np.int64)
+        for split in ("train", "validation", "test")
+    }
     try:
         for index, (valid_time, fronts) in enumerate(analyses):
+            unsupported = sorted({
+                str(front.get("tipo", front.get("type", ""))).lower()
+                for front in fronts
+                if str(front.get("tipo", front.get("type", ""))).lower()
+                not in DWD_SUPERVISED_FRONT_CLASSES
+            })
+            if unsupported:
+                raise ValueError(
+                    "l'archivio contiene classi non supervisionabili: "
+                    + ", ".join(unsupported)
+                )
             fields = era5.fields(valid_time)
             fields.update({
                 f"{variable}{level}": era5.pressure_field(
@@ -137,6 +152,15 @@ def main():
             target = labels.y.to_numpy(dtype=np.int64).reshape(shape)
             weights = labels.labelWeight.to_numpy(dtype=np.float32).reshape(shape)
             valid = np.mean(np.isfinite(inputs), axis=0) >= 0.80
+            split = _split(index, len(analyses))
+            labelled = target[valid]
+            if labelled.size == 0 or np.max(labelled) >= len(
+                DWD_SUPERVISED_FRONT_CLASSES
+            ):
+                raise ValueError("target DWD incompatibile con la tassonomia dichiarata")
+            class_counts_by_split[split] += np.bincount(
+                labelled, minlength=len(DWD_SUPERVISED_FRONT_CLASSES)
+            )
             name = valid_time.strftime("%Y%m%d%H.npz")
             shard_path = shard_dir / name
             _write_npz(
@@ -147,8 +171,12 @@ def main():
                 "path": f"samples/{name}",
                 "sha256": hashlib.sha256(shard_path.read_bytes()).hexdigest(),
                 "validTime": valid_time.isoformat().replace("+00:00", "Z"),
-                "split": _split(index, len(analyses)),
+                "split": split,
                 "frontCount": len(fronts),
+                "frontCountByClass": {
+                    name: sum(front["tipo"] == name for front in fronts)
+                    for name in DWD_SUPERVISED_FRONT_CLASSES[1:]
+                },
             })
             print(
                 f"[{index + 1}/{len(analyses)}] {valid_time:%Y-%m-%d}: "
@@ -157,12 +185,25 @@ def main():
     finally:
         era5.close()
 
+    missing = [
+        DWD_SUPERVISED_FRONT_CLASSES[index]
+        for index, count in enumerate(class_counts_by_split["train"])
+        if count == 0
+    ]
+    if missing:
+        raise ValueError(
+            "classi supervisionate assenti dal training set: " + ", ".join(missing)
+        )
+
     manifest = {
         "schemaVersion": SCHEMA_VERSION,
         "task": "front-segmentation",
         "channels": list(FRONT_FEATURES),
-        "classes": list(FRONT_CLASSES),
-        "schemaHash": schema_hash(FRONT_FEATURES, FRONT_CLASSES),
+        "classes": list(DWD_SUPERVISED_FRONT_CLASSES),
+        "unsupportedClasses": ["stationary"],
+        "schemaHash": schema_hash(
+            FRONT_FEATURES, DWD_SUPERVISED_FRONT_CLASSES
+        ),
         "predictorSource": "ERA5",
         "operationalPredictor": "ICON-2I",
         "grid": {
@@ -174,8 +215,22 @@ def main():
             "doi": "10.5281/zenodo.5785816",
             "license": "CC BY 4.0",
             "rasterBufferKm": 40.0,
+            "supervisedClasses": ["cold", "warm", "occluded"],
+            "unsupportedClasses": ["stationary"],
+            "knownLimitation": (
+                "DWD stationary fronts are drawn as alternating cold/warm "
+                "segments and cannot be separated reliably in this archive"
+            ),
+            "methodReference": "https://doi.org/10.5194/wcd-3-113-2022",
         },
         "splitPolicy": "chronological-70-15-15-by-complete-valid-time",
+        "classPixelCountsBySplit": {
+            split: {
+                name: int(counts[index])
+                for index, name in enumerate(DWD_SUPERVISED_FRONT_CLASSES)
+            }
+            for split, counts in class_counts_by_split.items()
+        },
         "samples": records,
     }
     target = output / "manifest.json"

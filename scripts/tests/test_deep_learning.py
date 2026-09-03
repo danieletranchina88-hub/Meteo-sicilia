@@ -40,7 +40,28 @@ torch.manual_seed(7)
 
 # The front tensor includes the full 925-850-700 hPa structure and preserves
 # the versioned order expected by checkpoints.
-from meteo_analysis.deep_learning.schemas import FRONT_FEATURES
+from meteo_analysis.deep_learning.schemas import (
+    DWD_SUPERVISED_FRONT_CLASSES,
+    FRONT_CLASSES,
+    FRONT_FEATURES,
+    validate_front_class_schema,
+)
+
+assert DWD_SUPERVISED_FRONT_CLASSES == FRONT_CLASSES[:-1]
+assert validate_front_class_schema(DWD_SUPERVISED_FRONT_CLASSES) == (
+    "background", "cold", "warm", "occluded"
+)
+for invalid_classes in (
+    ("cold", "warm"),
+    ("background", "warm", "cold"),
+    ("background", "cold", "unknown"),
+):
+    try:
+        validate_front_class_schema(invalid_classes)
+    except ValueError:
+        pass
+    else:
+        raise AssertionError(f"schema classi invalido accettato: {invalid_classes}")
 
 grid_lat = np.linspace(38.0, 42.0, 8)
 grid_lon = np.linspace(8.0, 15.0, 12)

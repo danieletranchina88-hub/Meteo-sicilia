@@ -23,6 +23,7 @@ from meteo_analysis.deep_learning.schemas import (
     FRONT_CLASSES,
     FRONT_FEATURES,
     schema_hash,
+    validate_front_class_schema,
 )
 from meteo_analysis.deep_learning.training import load_checkpoint
 from meteo_analysis.ml.features import theta_gradient_50_from_store
@@ -55,17 +56,17 @@ def main():
     state, metadata = load_checkpoint(
         args.checkpoint, require_accepted=not args.allow_candidate
     )
+    classes = validate_front_class_schema(metadata.get("classes"))
     if (
         tuple(metadata.get("channels") or ()) != FRONT_FEATURES
-        or tuple(metadata.get("classes") or ()) != FRONT_CLASSES
-        or metadata.get("schemaHash") != schema_hash(FRONT_FEATURES, FRONT_CLASSES)
+        or metadata.get("schemaHash") != schema_hash(FRONT_FEATURES, classes)
     ):
         raise ValueError("checkpoint frontale con schema incompatibile")
     normal = metadata["normalization"]
     model = FrontUNet(
         input_mean=normal["mean"],
         input_standard_deviation=normal["standardDeviation"],
-        class_count=len(FRONT_CLASSES),
+        class_count=len(classes),
         base_channels=int(metadata["modelConfig"]["baseChannels"]),
     )
     model.load_state_dict(state, strict=True)
@@ -137,16 +138,25 @@ def main():
                     tile_size=256, overlap=64,
                 )
                 temperature = float(metadata["calibration"]["temperature"])
-                classes = torch.softmax(
+                class_probabilities = torch.softmax(
                     logits["class_logits"] / temperature, dim=1
                 )[0]
                 # The calibrated multi-class distribution is authoritative;
                 # the binary head is an auxiliary training constraint.
-                frontness = 1.0 - classes[0]
+                frontness = 1.0 - class_probabilities[0]
             _write_npz(
                 output_dir / f"front_unet_{hour:03d}.npz",
-                class_probability=classes.cpu().numpy().astype(np.float32),
+                class_probability=(
+                    class_probabilities.cpu().numpy().astype(np.float32)
+                ),
                 front_probability=frontness.cpu().numpy().astype(np.float32),
+                class_names=np.asarray(
+                    metadata["classes"], dtype="U16"
+                ),
+                unsupported_class_names=np.asarray(
+                    [name for name in FRONT_CLASSES if name not in metadata["classes"]],
+                    dtype="U16",
+                ),
                 latitude=store.target_latitudes.astype(np.float32),
                 longitude=store.target_longitudes.astype(np.float32),
             )

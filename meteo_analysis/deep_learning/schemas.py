@@ -17,6 +17,13 @@ FRONT_CLASSES = (
     "stationary",
 )
 
+# DWD analysis-chart polylines can supervise these classes only.  The source
+# renders stationary boundaries as alternating cold/warm symbols, so the
+# extracted polylines cannot distinguish them from ordinary moving fronts.
+# Keeping that limitation in the tensor contract prevents an apparently
+# complete five-class model from being trained without stationary examples.
+DWD_SUPERVISED_FRONT_CLASSES = FRONT_CLASSES[:-1]
+
 # These are physically derived, unit-explicit fields already produced by the
 # common ERA5/ICON feature code.  Latitude and longitude are excluded to make
 # climatological location shortcuts harder to learn.
@@ -83,3 +90,16 @@ def schema_hash(*parts) -> str:
     """Return a stable identifier for ordered channels and model settings."""
     encoded = json.dumps(parts, sort_keys=True, separators=(",", ":")).encode()
     return hashlib.sha256(encoded).hexdigest()
+
+
+def validate_front_class_schema(classes) -> tuple[str, ...]:
+    """Validate an ordered, explicitly supervised subset of front classes."""
+    values = tuple(classes or ())
+    if len(values) < 2 or values[0] != "background":
+        raise ValueError("schema frontale privo di background/classi supervisionate")
+    if len(set(values)) != len(values):
+        raise ValueError("schema frontale con classi duplicate")
+    expected_order = tuple(name for name in FRONT_CLASSES if name in values)
+    if expected_order != values:
+        raise ValueError("schema frontale sconosciuto o con ordine non canonico")
+    return values

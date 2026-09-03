@@ -25,6 +25,7 @@ from meteo_analysis.deep_learning.schemas import (
     FRONT_CLASSES,
     FRONT_FEATURES,
     schema_hash,
+    validate_front_class_schema,
 )
 from meteo_analysis.deep_learning.training import (
     atomic_torch_checkpoint,
@@ -203,9 +204,9 @@ def main():
         args.manifest, task="front-segmentation", split="test"
     )
     channels = tuple(train.manifest.get("channels") or ())
-    classes = tuple(train.manifest.get("classes") or ())
-    if channels != FRONT_FEATURES or classes != FRONT_CLASSES:
-        raise ValueError("schema canali/classi non compatibile con FrontUNet")
+    classes = validate_front_class_schema(train.manifest.get("classes"))
+    if channels != FRONT_FEATURES:
+        raise ValueError("schema canali non compatibile con FrontUNet")
     if not isinstance(train.manifest.get("targetAuthority"), dict):
         raise TypeError("provenienza delle etichette frontali non documentata")
     stats = estimate_channel_statistics(
@@ -306,6 +307,9 @@ def main():
             "explicit-independent-held-out-gates" if gates else "candidate-only"
         ),
         "classes": list(classes),
+        "unsupportedClasses": [
+            name for name in FRONT_CLASSES if name not in classes
+        ],
         "channels": list(channels),
         "schemaHash": schema_hash(channels, classes),
         "normalization": stats.as_dict(),
