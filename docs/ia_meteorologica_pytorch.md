@@ -100,6 +100,13 @@ python scripts/train_front_unet.py \
   --output models/candidates/front_unet.pt
 ```
 
+Il workflow `Train Front U-Net Pilot` esegue automaticamente una prova reale
+CPU su 120 analisi distribuite nel 2015–2020. Serve a verificare download,
+costruzione dei 40 canali, training, calibrazione e checkpoint in un ambiente
+riproducibile. Il risultato rimane `candidate-only` e l'artefatto GitHub scade
+dopo 30 giorni: non sostituisce il training completo su GPU né uno storage
+scientifico permanente.
+
 La promozione richiede un file di criteri indipendenti passato con
 `--acceptance-config`. Oltre a IoU e Dice per classe, la revisione operativa
 deve misurare distanza media/95° percentile dalla linea manuale, continuità,
@@ -171,8 +178,10 @@ Il manifest JSON ha `task: "orographic-downscaling"` e tre split temporali.
 Ogni record punta a un NPZ numerico, caricato con `allow_pickle=False`, con:
 
 - `coarse`: `[C, H, W]` in unità fisiche;
-- `static`: `[5, 4H, 4W]` nell'ordine descritto sopra;
-- `cell_area_m2`: `[4H, 4W]`, usata per la riaggregazione area-pesata;
+- `static`: `[5, 4H, 4W]` nell'ordine descritto sopra, oppure un riferimento
+  `sharedStatic` e una `fineWindow` esplicita nel record;
+- `cell_area_m2`: `[4H, 4W]`, locale oppure nello stesso file statico
+  condiviso, usata per la riaggregazione area-pesata;
 - `target`: `[4, 4H, 4W]`;
 - `valid_mask`: `[4, 4H, 4W]`, facoltativa.
 
@@ -184,6 +193,22 @@ di cella da DEM,
 maschera terra-mare e coordinate regolari, senza fingere un allineamento tra
 griglie sorgenti diverse: radar, DEM e ICON devono essere riproiettati a monte
 con CRS, timestamp e metodo di interpolazione documentati.
+
+`prepare_downscaling_data.py` riceve un manifest di sorgenti già allineate,
+calcola una sola volta DEM derivato, distanza dalla costa e aree geodetiche,
+crea patch sovrapposte e assegna tutti i campioni dello stesso `validTime` allo
+stesso split. Non effettua deliberatamente una riproiezione implicita di radar
+o stazioni. Gli shard e lo statico condiviso sono accompagnati da SHA-256 e
+possono essere verificati prima del training:
+
+```bash
+python scripts/prepare_downscaling_data.py aligned_sources.json \
+  --output training_data/downscale \
+  --patch-size-coarse 64 --stride-coarse 48
+
+python scripts/validate_deep_learning_data.py \
+  training_data/downscale/manifest.json
+```
 
 ```bash
 python scripts/validate_deep_learning_data.py training_data/downscale/manifest.json

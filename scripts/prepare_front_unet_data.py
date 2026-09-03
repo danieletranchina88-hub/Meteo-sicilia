@@ -138,12 +138,14 @@ def main():
             weights = labels.labelWeight.to_numpy(dtype=np.float32).reshape(shape)
             valid = np.mean(np.isfinite(inputs), axis=0) >= 0.80
             name = valid_time.strftime("%Y%m%d%H.npz")
+            shard_path = shard_dir / name
             _write_npz(
-                shard_dir / name, inputs=inputs, target=target,
+                shard_path, inputs=inputs, target=target,
                 label_weight=weights, valid_mask=valid,
             )
             records.append({
                 "path": f"samples/{name}",
+                "sha256": hashlib.sha256(shard_path.read_bytes()).hexdigest(),
                 "validTime": valid_time.isoformat().replace("+00:00", "Z"),
                 "split": _split(index, len(analyses)),
                 "frontCount": len(fronts),

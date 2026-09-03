@@ -247,4 +247,48 @@ with tempfile.TemporaryDirectory() as directory:
     )
     assert down_dataset[0]["cell_area_m2"].shape == (8, 12)
 
+    # Static terrain is large but time-invariant.  A shared full-domain file
+    # plus an explicit fine-grid window must produce the same sample contract.
+    shared_path = root / "shared_static.npz"
+    np.savez(
+        shared_path,
+        static=np.zeros((5, 16, 20), dtype=np.float32),
+        cell_area_m2=np.full((16, 20), 250_000.0, dtype=np.float32),
+    )
+    shared_sample = root / "shared_sample.npz"
+    np.savez(
+        shared_sample,
+        coarse=np.zeros((5, 2, 3), dtype=np.float32),
+        target=np.stack((
+            np.full((8, 12), 285.0), np.zeros((8, 12)),
+            np.zeros((8, 12)), np.zeros((8, 12)),
+        )).astype(np.float32),
+    )
+    shared_manifest = root / "shared.json"
+    shared_manifest.write_text(json.dumps({
+        "schemaVersion": 1,
+        "task": "orographic-downscaling",
+        "coarseChannels": ["t", "rain", "u", "v", "pmsl"],
+        "staticChannels": [
+            "elevation_m", "slope_east_m_per_m", "slope_north_m_per_m",
+            "land_fraction", "distance_to_coast_km",
+        ],
+        "outputChannels": [
+            "temperature_2m_k", "precipitation_rate_mm_h",
+            "wind_u10_m_s", "wind_v10_m_s",
+        ],
+        "sharedStatic": {"path": "shared_static.npz"},
+        "samples": [
+            {"path": "shared_sample.npz", "validTime": "2024-01-01T00:00:00Z", "split": "train", "fineWindow": [4, 12, 4, 16]},
+            {"path": "shared_sample.npz", "validTime": "2024-02-01T00:00:00Z", "split": "validation", "fineWindow": [4, 12, 4, 16]},
+            {"path": "shared_sample.npz", "validTime": "2024-03-01T00:00:00Z", "split": "test", "fineWindow": [4, 12, 4, 16]},
+        ],
+    }), encoding="utf-8")
+    shared_dataset = TensorManifestDataset(
+        shared_manifest, task="orographic-downscaling", split="test"
+    )
+    shared_item = shared_dataset[0]
+    assert shared_item["static"].shape == (5, 8, 12)
+    assert shared_item["cell_area_m2"].shape == (8, 12)
+
 print("OK: U-Net, downscaling conservativo e split temporali verificati.")

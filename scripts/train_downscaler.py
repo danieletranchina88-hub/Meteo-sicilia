@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import argparse
 import hashlib
+import os
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
@@ -235,6 +236,7 @@ def main():
     amp = device.type == "cuda" and bool(config.get("automaticMixedPrecision", True))
     scaler = torch.amp.GradScaler("cuda", enabled=True) if amp else None
     best_loss, best_state = float("inf"), None
+    history = []
     patience = int(config.get("earlyStoppingPatience", 12))
     remaining = patience
     for epoch in range(1, int(config.get("epochs", 80)) + 1):
@@ -250,6 +252,11 @@ def main():
             f"validation={validation_metrics['loss']:.5f} "
             f"mae={validation_metrics['maeByChannel']}", flush=True,
         )
+        history.append({
+            "epoch": epoch,
+            "trainMetrics": train_metrics,
+            "validationMetrics": validation_metrics,
+        })
         if validation_metrics["loss"] < best_loss - 1.0e-5:
             best_loss = validation_metrics["loss"]
             best_state = {
@@ -313,6 +320,15 @@ def main():
         "validationLoss": best_loss,
         "testMetrics": test_metrics,
         "acceptanceCriteria": gates,
+        "sampleCounts": {
+            "train": len(train),
+            "validation": len(validation),
+            "test": len(test),
+        },
+        "parameterCount": sum(parameter.numel() for parameter in model.parameters()),
+        "trainingHistory": history,
+        "sourceCommit": os.environ.get("GITHUB_SHA"),
+        "trainingDevice": device.type,
         "seed": seed,
         "torchVersion": str(torch.__version__),
     }

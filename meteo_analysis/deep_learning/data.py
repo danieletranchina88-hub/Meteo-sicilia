@@ -13,9 +13,7 @@ import numpy as np
 MANIFEST_VERSION = 1
 TASK_KEYS = {
     "front-segmentation": ("inputs", "target"),
-    "orographic-downscaling": (
-        "coarse", "static", "target", "cell_area_m2",
-    ),
+    "orographic-downscaling": ("coarse", "target"),
 }
 
 
@@ -63,6 +61,17 @@ def load_manifest(path, *, expected_task: str | None = None) -> dict:
             raise ValueError("path campione esterno alla directory manifest") from error
         sample["_resolvedPath"] = str(sample_path)
 
+    shared_static = payload.get("sharedStatic")
+    if shared_static is not None:
+        if not isinstance(shared_static, dict) or not shared_static.get("path"):
+            raise TypeError("sharedStatic deve dichiarare un path")
+        shared_path = (root / str(shared_static["path"])).resolve()
+        try:
+            shared_path.relative_to(root)
+        except ValueError as error:
+            raise ValueError("path statico esterno alla directory manifest") from error
+        payload["_resolvedSharedStatic"] = str(shared_path)
+
     split_names = sorted(by_split)
     for index, first in enumerate(split_names):
         for second in split_names[index + 1:]:
@@ -105,6 +114,28 @@ class TensorManifestDataset:
         ]
         if not self.samples:
             raise ValueError(f"nessun campione nello split {split!r}")
+        self.shared_static = None
+        shared_path = self.manifest.get("_resolvedSharedStatic")
+        if shared_path:
+            with np.load(shared_path, allow_pickle=False) as archive:
+                missing = {"static", "cell_area_m2"} - set(archive.files)
+                if missing:
+                    raise ValueError(
+                        f"statico condiviso privo di array {sorted(missing)}"
+                    )
+                static = np.asarray(archive["static"], dtype=np.float32)
+                cell_area = np.asarray(archive["cell_area_m2"], dtype=np.float32)
+            if static.ndim != 3 or cell_area.shape != static.shape[1:]:
+                raise ValueError("forme dello statico condiviso incoerenti")
+            expected = len(self.manifest.get("staticChannels") or ())
+            if static.shape[0] != expected:
+                raise ValueError("canali dello statico condiviso incoerenti")
+            if not (
+                np.all(np.isfinite(static))
+                and np.all(np.isfinite(cell_area) & (cell_area > 0))
+            ):
+                raise ValueError("statico condiviso non finito o area non positiva")
+            self.shared_static = (static, cell_area)
 
     def __len__(self):
         return len(self.samples)
@@ -160,9 +191,30 @@ class TensorManifestDataset:
                 }
 
             coarse = np.asarray(archive["coarse"], dtype=np.float32)
-            static = np.asarray(archive["static"], dtype=np.float32)
             target = np.asarray(archive["target"], dtype=np.float32)
-            cell_area = np.asarray(archive["cell_area_m2"], dtype=np.float32)
+            has_local_static = {"static", "cell_area_m2"} <= set(archive.files)
+            if has_local_static:
+                static = np.asarray(archive["static"], dtype=np.float32)
+                cell_area = np.asarray(archive["cell_area_m2"], dtype=np.float32)
+            elif self.shared_static is not None:
+                window = record.get("fineWindow")
+                if not (
+                    isinstance(window, list) and len(window) == 4
+                    and all(isinstance(value, int) for value in window)
+                ):
+                    raise ValueError(
+                        f"{record['path']}: fineWindow mancante per statico condiviso"
+                    )
+                y0, y1, x0, x1 = window
+                shared, shared_area = self.shared_static
+                if not (0 <= y0 < y1 <= shared.shape[1] and 0 <= x0 < x1 <= shared.shape[2]):
+                    raise ValueError(f"{record['path']}: fineWindow fuori dominio")
+                static = shared[:, y0:y1, x0:x1].copy()
+                cell_area = shared_area[y0:y1, x0:x1].copy()
+            else:
+                raise ValueError(
+                    f"{record['path']}: static/cell_area_m2 assenti e nessuno statico condiviso"
+                )
             if coarse.ndim != 3 or static.ndim != 3 or target.ndim != 3:
                 raise ValueError(f"{record['path']}: tensori downscaling non 3-D")
             if not np.all(np.isfinite(coarse)) or not np.all(np.isfinite(static)):

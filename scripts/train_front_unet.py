@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import argparse
 import hashlib
+import os
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
@@ -240,6 +241,7 @@ def main():
     scaler = torch.amp.GradScaler("cuda", enabled=True) if amp else None
     best_loss = float("inf")
     best_state = None
+    history = []
     patience = int(config.get("earlyStoppingPatience", 12))
     remaining = patience
     for epoch in range(1, int(config.get("epochs", 80)) + 1):
@@ -255,6 +257,12 @@ def main():
             f"validation={validation_loss:.5f} "
             f"frontIoU={validation_metrics['meanFrontalIoU']:.4f}", flush=True,
         )
+        history.append({
+            "epoch": epoch,
+            "trainLoss": train_loss,
+            "validationLoss": validation_loss,
+            "validationMetrics": validation_metrics,
+        })
         if validation_loss < best_loss - 1.0e-5:
             best_loss = validation_loss
             best_state = {
@@ -318,6 +326,15 @@ def main():
         "testLoss": test_loss,
         "testMetrics": test_metrics,
         "acceptanceCriteria": gates,
+        "sampleCounts": {
+            "train": len(train),
+            "validation": len(validation),
+            "test": len(test),
+        },
+        "parameterCount": sum(parameter.numel() for parameter in model.parameters()),
+        "trainingHistory": history,
+        "sourceCommit": os.environ.get("GITHUB_SHA"),
+        "trainingDevice": device.type,
         "seed": seed,
         "torchVersion": str(torch.__version__),
     }
