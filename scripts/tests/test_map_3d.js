@@ -188,6 +188,18 @@ assert.match(html, /Perché\? /,
   "manca la catena causale verificabile nel bollettino");
 assert.match(html, /docs\/motore_bollettino\.md/,
   "l'interfaccia non collega la documentazione del motore esperto");
+assert.match(html, /ai_expert_bulletin\.json\.gz/,
+  "il sito non tenta di caricare la sintesi IA verificata");
+assert.match(html, /aiBulletin\.runTime === bulletin\.runTime/,
+  "una sintesi IA di un altro run potrebbe essere mostrata");
+assert.match(html, /function renderAiAgentBrief\(aiBulletin, leadHours\)/,
+  "la sintesi IA non viene rappresentata con il proprio periodo");
+assert.match(html, /Prove utilizzate · /,
+  "i claim IA non espongono le prove citate");
+assert.match(html, /docs\/agente_meteorologico\.md/,
+  "l'interfaccia non collega il protocollo verificabile dell'agente");
+assert.doesNotMatch(html, /GEMINI_API_KEY|GROQ_API_KEY/,
+  "un nome di segreto API è comparso nel frontend pubblico");
 
 assert.match(html, /maplibre-gl@5\.24\.0/, "MapLibre v5 stabile non caricata");
 assert.doesNotMatch(html, /map\.transform\b/, "uso di API MapLibre interna e fragile");

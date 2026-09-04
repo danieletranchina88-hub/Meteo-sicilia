@@ -1392,6 +1392,82 @@
         background: rgba(53, 179, 197, 0.1);
       }
 
+      .ai-agent-block {
+        margin-bottom: 14px;
+        padding: 11px;
+        border: 1px solid rgba(116, 225, 203, 0.25);
+        border-radius: 11px;
+        background: linear-gradient(145deg, rgba(25, 91, 91, 0.18), rgba(13, 36, 51, 0.42));
+      }
+
+      .ai-agent-label,
+      .ai-period-label {
+        margin: 0 0 7px;
+        color: #8aeee0;
+        font-size: 9px;
+        font-weight: 920;
+        letter-spacing: 0.07em;
+        text-transform: uppercase;
+      }
+
+      .ai-agent-block h3 {
+        margin: 0 0 9px;
+        color: #f5ffff;
+        font-size: 14px;
+        line-height: 1.25;
+      }
+
+      .ai-period-label {
+        margin-top: 12px;
+        padding-top: 10px;
+        border-top: 1px solid rgba(140, 228, 215, 0.16);
+      }
+
+      #nlg-bulletin-content .ai-claim {
+        margin-bottom: 8px;
+        color: #dceff1;
+      }
+
+      .ai-claim-confidence {
+        display: inline-flex;
+        margin: 0 5px 2px 0;
+        padding: 2px 5px;
+        border: 1px solid rgba(140, 228, 215, 0.22);
+        border-radius: 999px;
+        color: #9ceadf;
+        font-size: 8px;
+        font-weight: 850;
+        letter-spacing: 0.02em;
+        vertical-align: 1px;
+      }
+
+      .ai-evidence {
+        margin: -3px 0 8px;
+        color: #9cb6c3;
+        font-size: 9px;
+      }
+
+      .ai-evidence summary {
+        color: #80cfc9;
+        cursor: pointer;
+        font-weight: 800;
+      }
+
+      .ai-evidence ul {
+        margin: 6px 0 0;
+        padding-left: 18px;
+        line-height: 1.4;
+      }
+
+      .deterministic-analysis-label {
+        margin: 15px 0 3px;
+        color: #75e1eb;
+        font-size: 9px;
+        font-weight: 900;
+        letter-spacing: 0.07em;
+        text-transform: uppercase;
+      }
+
       #nlg-bulletin-content .expert-section {
         margin-top: 13px;
         padding-top: 11px;
@@ -2567,6 +2643,7 @@
             <a href="https://github.com/danieletranchina88-hub/Meteo-sicilia/blob/main/docs/algoritmo_fronti.md" target="_blank" rel="noopener">Metodo fronti e bibliografia</a>
             <a href="https://github.com/danieletranchina88-hub/Meteo-sicilia/blob/main/docs/algoritmi_pericoli.md" target="_blank" rel="noopener">Metodi delle diagnostiche</a>
             <a href="https://github.com/danieletranchina88-hub/Meteo-sicilia/blob/main/docs/motore_bollettino.md" target="_blank" rel="noopener">Metodo del bollettino esperto</a>
+            <a href="https://github.com/danieletranchina88-hub/Meteo-sicilia/blob/main/docs/agente_meteorologico.md" target="_blank" rel="noopener">Protocollo dell’agente IA</a>
             <a href="https://meteohub.agenziaitaliameteo.it/app/datasets" target="_blank" rel="noopener">Dataset ufficiale ICON-2I</a>
           </nav>
         </div>
@@ -3650,6 +3727,7 @@
       let toastTimer = null;
       let pointBulletinManifestPromise = null;
       let expertBulletinPromise = null;
+      let aiExpertBulletinPromise = null;
       let bulletinMode = "general";
       let bulletinRequestToken = 0;
 
@@ -5494,6 +5572,18 @@
         return expertBulletinPromise;
       }
 
+      async function loadAiExpertBulletin() {
+        if (!aiExpertBulletinPromise) {
+          aiExpertBulletinPromise = fetchJsonResource(
+            MODEL_INFO[activeModel].directory + "/ai_expert_bulletin.json.gz"
+          ).catch(function (error) {
+            aiExpertBulletinPromise = null;
+            throw error;
+          });
+        }
+        return aiExpertBulletinPromise;
+      }
+
       function appendBulletinParagraph(parent, text, className) {
         const paragraph = document.createElement("p");
         if (className) paragraph.className = className;
@@ -5541,6 +5631,76 @@
         return container;
       }
 
+      function appendAiClaim(parent, claim, evidenceById) {
+        const paragraph = document.createElement("p");
+        paragraph.className = "ai-claim";
+        const confidence = document.createElement("span");
+        confidence.className = "ai-claim-confidence";
+        confidence.textContent = claim.confidence;
+        paragraph.appendChild(confidence);
+        paragraph.appendChild(document.createTextNode(claim.text));
+        parent.appendChild(paragraph);
+
+        const evidence = (claim.evidenceIds || []).map(function (id) {
+          return evidenceById.get(id);
+        }).filter(Boolean);
+        if (!evidence.length) return;
+        const details = document.createElement("details");
+        details.className = "ai-evidence";
+        const summary = document.createElement("summary");
+        summary.textContent = "Prove utilizzate · " + evidence.length;
+        details.appendChild(summary);
+        const list = document.createElement("ul");
+        evidence.forEach(function (item) {
+          const row = document.createElement("li");
+          row.textContent = "+" + item.leadHours + " h · " + item.section + " · " + item.text;
+          list.appendChild(row);
+        });
+        details.appendChild(list);
+        parent.appendChild(details);
+      }
+
+      function renderAiAgentBrief(aiBulletin, leadHours) {
+        const container = document.createElement("section");
+        container.className = "ai-agent-block";
+        const evidenceById = new Map((aiBulletin.evidenceCatalog || []).map(function (item) {
+          return [item.id, item];
+        }));
+        const label = document.createElement("p");
+        label.className = "ai-agent-label";
+        label.textContent = "Sintesi IA · doppia verifica completata";
+        container.appendChild(label);
+        const heading = document.createElement("h3");
+        heading.textContent = aiBulletin.overview.headline;
+        container.appendChild(heading);
+        (aiBulletin.overview.claims || []).forEach(function (claim) {
+          appendAiClaim(container, claim, evidenceById);
+        });
+
+        const period = (aiBulletin.periods || []).find(function (candidate) {
+          return leadHours >= Number(candidate.fromHour) && leadHours <= Number(candidate.toHour);
+        });
+        if (period) {
+          const periodLabel = document.createElement("p");
+          periodLabel.className = "ai-period-label";
+          periodLabel.textContent = "Periodo +" + period.fromHour + " → +" + period.toHour + " h";
+          container.appendChild(periodLabel);
+          const periodHeading = document.createElement("h3");
+          periodHeading.textContent = period.headline;
+          container.appendChild(periodHeading);
+          (period.sections || []).forEach(function (section) {
+            const sectionLabel = document.createElement("p");
+            sectionLabel.className = "ai-agent-label";
+            sectionLabel.textContent = section.title;
+            container.appendChild(sectionLabel);
+            (section.claims || []).forEach(function (claim) {
+              appendAiClaim(container, claim, evidenceById);
+            });
+          });
+        }
+        return container;
+      }
+
       async function updateExpertBulletinUi(token) {
         ui.bulletinKicker.textContent = "Motore sinottico multi-livello ICON-2I";
         ui.bulletinTitle.textContent = "Analisi meteorologica tecnica";
@@ -5552,6 +5712,12 @@
         );
         try {
           const bulletin = await loadExpertBulletin();
+          let aiBulletin = null;
+          try {
+            aiBulletin = await loadAiExpertBulletin();
+          } catch (aiError) {
+            console.info("Sintesi IA non disponibile: uso il motore deterministico", aiError);
+          }
           if (token !== bulletinRequestToken) return;
           const item = catalog[currentIndex] || {};
           const lead = Number(item.leadHours === undefined ? item.hour : item.leadHours);
@@ -5565,11 +5731,29 @@
           ui.bulletinValidity.textContent =
             "Run " + formatDateTime(runDate) + " · validità " +
             formatDateTime(validDate) + " · +" + analysis.leadHours + " h";
-          ui.bulletinStatus.textContent =
-            bulletin.model + " · " + bulletin.spatialResolutionKm + " km · passo " +
-            bulletin.temporalResolutionHours + " h · " + analysis.signalConfidence;
-          ui.bulletinDisclaimer.textContent = bulletin.disclaimer;
+          const aiValidated = Boolean(
+            aiBulletin && aiBulletin.status === "validated" &&
+            aiBulletin.runTime === bulletin.runTime
+          );
+          ui.bulletinKicker.textContent = aiValidated
+            ? "Agente meteorologico verificato · ICON-2I"
+            : "Motore sinottico multi-livello ICON-2I";
+          ui.bulletinStatus.textContent = aiValidated
+            ? "Gemini 3.8 Flash · revisione GPT-OSS 120B · prove verificabili"
+            : bulletin.model + " · " + bulletin.spatialResolutionKm + " km · passo " +
+              bulletin.temporalResolutionHours + " h · " + analysis.signalConfidence;
+          ui.bulletinDisclaimer.textContent = aiValidated
+            ? aiBulletin.disclaimer + " " + bulletin.disclaimer
+            : bulletin.disclaimer;
           ui.bulletinContent.replaceChildren();
+
+          if (aiValidated) {
+            ui.bulletinContent.appendChild(renderAiAgentBrief(aiBulletin, lead));
+            const deterministicLabel = document.createElement("p");
+            deterministicLabel.className = "deterministic-analysis-label";
+            deterministicLabel.textContent = "Diagnostica numerica della scadenza";
+            ui.bulletinContent.appendChild(deterministicLabel);
+          }
 
           (analysis.operationalSummary || []).forEach(function (text) {
             appendBulletinParagraph(ui.bulletinContent, text, "expert-summary");
