@@ -20,7 +20,7 @@ from typing import Any, Callable
 from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 
-AGENT_METHOD = "icon2i-evidence-grounded-dual-llm-v3"
+AGENT_METHOD = "icon2i-evidence-grounded-dual-llm-v4"
 PACKET_METHOD = "icon2i-synoptic-evidence-packet-v1"
 GEMINI_MODEL = "gemini-3.5-flash"
 GROQ_MODEL = "openai/gpt-oss-120b"
@@ -565,18 +565,33 @@ def _gemini_scope(
                 "responseMimeType": "application/json",
                 "responseJsonSchema": schema,
                 "temperature": 0.1,
-                "maxOutputTokens": 4096,
-                "thinkingConfig": {"thinkingLevel": "HIGH"},
+                "maxOutputTokens": 8192,
+                "thinkingConfig": {"thinkingLevel": "MEDIUM"},
             },
         },
     )
+    finish_reason = "UNKNOWN"
+    final_text = ""
     try:
         candidate = response["candidates"][0]
+        finish_reason = str(candidate.get("finishReason") or "UNKNOWN")
         parts = candidate["content"]["parts"]
-        text = "".join(str(part.get("text") or "") for part in parts)
-        result = json.loads(text)
+        # Gemini thinking models may expose reasoning parts alongside the final
+        # answer. Reasoning is never data and must not be concatenated to JSON.
+        final_text = "".join(
+            str(part.get("text") or "")
+            for part in parts
+            if isinstance(part, dict) and not part.get("thought")
+        ).strip()
+        if final_text.startswith("```"):
+            final_text = re.sub(r"^```(?:json)?\s*", "", final_text, count=1)
+            final_text = re.sub(r"\s*```$", "", final_text, count=1).strip()
+        result = json.loads(final_text)
     except (KeyError, IndexError, TypeError, json.JSONDecodeError) as error:
-        raise AgentError("Gemini non ha restituito JSON utilizzabile") from error
+        raise AgentError(
+            "Gemini non ha restituito JSON utilizzabile "
+            f"(finishReason={finish_reason}, finalTextChars={len(final_text)})"
+        ) from error
     usage = response.get("usageMetadata") or {}
     return result, {
         "promptTokens": usage.get("promptTokenCount"),

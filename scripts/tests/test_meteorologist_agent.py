@@ -162,7 +162,13 @@ def fake_post_factory(packet, primary, *, approve=True):
                     ],
                 }
             return {
-                "candidates": [{"content": {"parts": [{"text": json.dumps(generated)}]}}],
+                "candidates": [{
+                    "finishReason": "STOP",
+                    "content": {"parts": [
+                        {"thought": True, "text": "ragionamento non pubblicabile"},
+                        {"text": json.dumps(generated)},
+                    ]},
+                }],
                 "usageMetadata": {"promptTokenCount": 1200, "candidatesTokenCount": 500},
             }
         review_input = json.loads(payload["messages"][1]["content"])

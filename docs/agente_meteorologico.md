@@ -33,7 +33,9 @@ Per evitare timeout e rispettare le quote gratuite, Gemini elabora prima la
 sintesi generale e poi i periodi a coppie. Gli identificatori dei claim sono
 assegnati localmente dopo la ricomposizione, così due risposte indipendenti non
 possono creare collisioni. Il prodotto completo viene validato soltanto dopo
-che tutti i blocchi sono presenti.
+che tutti i blocchi sono presenti. Le eventuali parti interne di reasoning del
+provider vengono escluse esplicitamente: soltanto il testo JSON finale entra
+nel validatore e nel prodotto pubblico.
 
 ## Regole di pubblicazione
 
