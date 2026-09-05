@@ -183,8 +183,8 @@ REVIEW_SCHEMA = _object_schema(
 )
 
 PRIMARY_SYSTEM_PROMPT = """Sei un meteorologo sinottico e mesoscalare esperto.
-Devi sintetizzare esclusivamente il catalogo di prove deterministiche ICON-2I
-fornito dall'utente. Non usare il web, climatologia, memoria esterna o valori
+Devi sintetizzare esclusivamente il catalogo di prove ICON-2I e le eventuali
+osservazioni METAR esplicitamente identificate e temporalmente abbinate nel catalogo. Non usare il web, climatologia, memoria esterna o valori
 non presenti. Non chiamare osservato un campo prognostico. Non trasformare
 score diagnostici in probabilità calibrate o allerte.
 
@@ -202,7 +202,10 @@ Regole inderogabili:
    da soli una previsione. Distingui ingrediente, segnale favorevole ed
    evidenza dinamica robusta.
 6. I titoli devono essere sobri, tecnici, senza numeri e senza sensazionalismo.
-7. Rispondi soltanto con il JSON conforme allo schema richiesto, in italiano.
+7. Le prove della famiglia observations descrivono misure contemporanee, non il futuro.
+   Non estendere gli scarti osservati ad altre scadenze. Il downscaling è calcolato
+   da strumenti fisici: non inventare correzioni, griglie o miglioramenti validati.
+8. Rispondi soltanto con il JSON conforme allo schema richiesto, in italiano.
 """
 
 REVIEW_SYSTEM_PROMPT = """Sei il revisore indipendente di un bollettino NWP.
@@ -247,6 +250,8 @@ def _selected_analyses(analyses: list[dict[str, Any]]) -> list[dict[str, Any]]:
         raise AgentError("bollettino deterministico privo di analisi")
     maximum = max(by_hour)
     targets = set(range(0, maximum + 1, 6)) | {maximum}
+    targets.update(hour for hour, item in by_hour.items()
+                   if any(section.get("id") == "observations" for section in item.get("sections", [])))
     return [by_hour[hour] for hour in sorted(targets) if hour in by_hour]
 
 
@@ -932,3 +937,4 @@ def generate_verified_bulletin(
             "un’allerta, non corregge i campi numerici e non misura un ensemble."
         ),
     }
+

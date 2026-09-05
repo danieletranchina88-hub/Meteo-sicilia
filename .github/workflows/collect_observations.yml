@@ -14,7 +14,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     permissions:
-      contents: read
+      contents: write
 
     steps:
       - name: Checkout repo
@@ -39,3 +39,35 @@ jobs:
           path: observations/
           if-no-files-found: error
           retention-days: 90
+
+
+      # Keep the original per-run snapshot immutable. Live products have their
+      # own timestamps, run binding and a separate namespace.
+      - name: Checkout current public native-grid samples
+        uses: actions/checkout@v4
+        with:
+          ref: gh-pages
+          path: public-site
+          fetch-depth: 1
+          sparse-checkout-cone-mode: false
+          sparse-checkout: |
+            /data_weather/verification/forecast_samples.json.gz
+            /data_weather/live/
+
+      - name: Publish fresh observations and local downscaling
+        shell: bash
+        run: |
+          git -C public-site config user.name "MeteoBot"
+          git -C public-site config user.email "bot@meteo.local"
+          git -C public-site config http.lowSpeedLimit 1000
+          git -C public-site config http.lowSpeedTime 60
+          for attempt in 1 2 3; do
+            git -C public-site fetch --depth=1 origin gh-pages
+            git -C public-site reset --hard origin/gh-pages
+            python scripts/publish_live_downscaling.py --site-dir public-site --observations-dir observations
+            git -C public-site add --sparse data_weather/live
+            if git -C public-site diff --cached --quiet; then exit 0; fi
+            git -C public-site commit -m "Aggiorna osservazioni e downscaling locale"
+            if git -C public-site push origin HEAD:gh-pages; then exit 0; fi
+          done
+          exit 1

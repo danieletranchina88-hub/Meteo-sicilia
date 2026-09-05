@@ -94,6 +94,50 @@ def _refresh_manifest(data_dir: Path, status: dict) -> None:
     write_run_manifest(path, refreshed)
 
 
+def attach_local_evidence(deterministic: dict, data_dir: Path) -> None:
+    """Only contemporaneous, QC-paired observations enter the LLM catalogue.
+
+    The LLM explains evidence; it cannot override the numerical correction
+    policy, invent a corrected grid, or persist current residuals into the run.
+    """
+    from datetime import datetime
+    try:
+        local = json.loads((data_dir / "downscaling.json").read_text())
+    except (OSError, ValueError):
+        return
+    if local.get("runTime") != deterministic.get("runTime"):
+        return
+    for analysis in deterministic.get("analyses", []):
+        try:
+            valid = datetime.fromisoformat(analysis["validTime"].replace("Z", "+00:00")).timestamp()
+        except (KeyError, TypeError, ValueError):
+            continue
+        stations = [s for s in local.get("stations", [])
+                    if isinstance(s.get("obsTime"), (int, float))
+                    and abs(s["obsTime"] - valid) <= 45 * 60]
+        if not stations:
+            continue
+        paragraphs = [
+            "Osservazioni NOAA AWC METAR contemporanee alla scadenza; non sono previsioni. "
+            "Downscaling locale sperimentale tramite strumenti fisici: " + local.get("reason", "stato non disponibile")
+            + " Gli scarti osservati non vanno estesi alle scadenze successive."
+        ]
+        # Bounded verified examples, chosen deterministically, never raw reports.
+        for station in sorted(stations, key=lambda item: item['id'])[:2]:
+            paragraphs.append(
+                f"METAR {station['id']} a latitudine {station['lat']} e longitudine {station['lon']}, "
+                f"ora {datetime.fromtimestamp(station['obsTime'], timezone.utc).isoformat()}: "
+                f"temperatura osservata {station['observedC']} °C, ICON interpolato alla stessa ora "
+                f"{station['modelC']} °C. Quota stazione {station['elevationM']} m, "
+                f"quota ICON {station['terrainM']} m; scarto dopo normalizzazione con gradiente "
+                f"standard assunto {station['residualC']} °C. Il gradiente non misura le inversioni."
+            )
+        analysis.setdefault("sections", []).append({
+            "id": "observations", "title": "Osservazioni e strumento di downscaling locale",
+            "paragraphs": paragraphs,
+        })
+
+
 def run(data_dir: Path) -> dict:
     deterministic_path = data_dir / "expert_bulletin.json.gz"
     output_path = data_dir / "ai_expert_bulletin.json.gz"
@@ -130,6 +174,7 @@ def run(data_dir: Path) -> dict:
 
     try:
         deterministic = _read_gzip_json(deterministic_path)
+        attach_local_evidence(deterministic, data_dir)
         product = generate_verified_bulletin(
             deterministic,
             gemini_api_key=gemini_key,
@@ -162,4 +207,5 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
+
 

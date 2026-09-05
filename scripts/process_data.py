@@ -1452,7 +1452,7 @@ def process_data():
                         station_forecast_archive = StationForecastArchive(
                             lat,
                             lon,
-                            observations.get("stations") or [],
+                            (observations.get("stationNetwork") or {}).get("stations") or observations.get("stations") or [],
                             run_time=iso_z(run_dt),
                         )
 
@@ -2083,6 +2083,15 @@ def process_data():
                         flush=True,
                     )
 
+                if step_hours == 0 and icon_hazard_fields is not None:
+                    local_terrain = icon_hazard_fields.field("hsurf", step_hours, lat, lon)
+                    if local_terrain is not None:
+                        write_json_gzip_atomic(f"{TEMP_DIR}/downscaling_terrain.json.gz", {
+                            "runTime": iso_z(run_dt), "meta": header,
+                            "terrainHeight": clean_for_json(local_terrain, 1),
+                            "source": "ICON-2I HSURF; quota della griglia, non DEM locale",
+                        })
+
                 step_data = {
                     "meta": header,
                     "wind_u": { "header": {**header, "parameterCategory": 2, "parameterNumber": 2}, "data": np.round(u_val, 1).flatten().tolist() },
@@ -2472,3 +2481,4 @@ def process_data():
 
 if __name__ == "__main__":
     process_data()
+

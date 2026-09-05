@@ -2700,6 +2700,13 @@
       <button id="readout-expand" class="readout-expand" type="button" aria-expanded="false" aria-controls="readout-details">Dettagli</button>
       <div id="readout-details">
       <div id="point-sampling">--</div>
+      <details id="local-downscaling-card" class="front-guide">
+        <summary>AI Downscaling · temperatura locale</summary>
+        <p>Correzione sperimentale tramite osservazioni e strumenti fisici. ICON originale resta il riferimento.</p>
+        <label for="local-elevation">Quota locale verificata (m, opzionale con rilievo 3D)</label>
+        <input id="local-elevation" type="number" min="-500" max="5000" step="1" placeholder="Es. 120" style="width:100%;box-sizing:border-box;min-height:44px">
+        <div id="local-downscaling-result" aria-live="polite">Seleziona un punto.</div>
+      </details>
       <div class="point-grid">
         <div class="point-detail"><b>Temperatura 2 m</b><span id="detail-temp">--</span></div>
         <div class="point-detail"><b>Percepita</b><span id="detail-feels">--</span></div>
@@ -2783,6 +2790,7 @@
     <div id="toast" role="status" aria-live="polite"></div>
 
     <script src="point_bulletin.js"></script>
+    <script src="local_downscaling.js"></script>
     <script>
       function interpolateScale(anchors, value) {
         if (value <= anchors[0].v) return anchors[0];
@@ -3775,7 +3783,7 @@
       async function fetchJsonResource(url) {
         const response = await fetch(url);
         if (!response.ok) throw new Error("Risorsa dati non disponibile");
-        if (!url.endsWith(".gz")) return response.json();
+        if (!url.split("?")[0].endsWith(".gz")) return response.json();
         // Alcuni CDN marcano il file come Content-Encoding: gzip e fetch lo
         // restituisce già decompresso. GitHub Pages normalmente lo serve come
         // application/gzip e richiede invece la decompressione esplicita.
@@ -5587,6 +5595,14 @@
         } finally { clearTimeout(timer); }
       }
 
+      async function loadDownscalingProduct(directory, runTime) {
+        try {
+          const live = await loadAgentResource("live/downscaling.json", directory);
+          if (!runTime || live.runTime === runTime) return live;
+        } catch (error) { /* The run snapshot remains available. */ }
+        return loadAgentResource("downscaling.json", directory);
+      }
+
       function agentCard(parent, title, state, detail) {
         const card = document.createElement("article");
         const heading = document.createElement("h3");
@@ -5606,7 +5622,8 @@
         const directory = MODEL_INFO[activeModel].directory;
         const results = await Promise.allSettled([
           loadAgentResource("ai_agent_status.json", directory),
-          loadAgentResource("front_qc.json", directory)
+          loadAgentResource("front_qc.json", directory),
+          loadDownscalingProduct(directory, currentData && currentData.meta.runTime)
         ]);
         content.replaceChildren();
         const ai = results[0].status === "fulfilled" ? results[0].value : null;
@@ -5619,8 +5636,9 @@
         const summary = front && front.analysisSummary;
         agentCard(content, "AI Fronti · supporto ML alla diagnosi fisica", summary ? (summary.mlFusion === true ? "Fusione ML presente nel run" : "Contributo ML non confermato") : "Stato non disponibile",
           summary ? "Run " + front.runTime + ". " + (summary.analysisMessage || "") + " Il modello ML supporta l’analisi fisica e il tracciamento temporale; non è il modello neurale U-Net." : "Diagnostica del run non raggiungibile.");
-        agentCard(content, "AI Downscaling · dettaglio orografico", "Ricerca · non operativo",
-          "Pipeline neurale predisposta, senza modello promosso integrato nella pubblicazione. Non modifica ancora i campi ICON-2I: l’interpolazione della mappa non è downscaling AI.");
+        const local = results[2].status === "fulfilled" ? results[2].value : null;
+        agentCard(content, "AI Downscaling · osservazioni e strumenti fisici", local && local.status === "active-experimental" ? "Sperimentale · disponibilità verificata nel punto" : "Correzioni sospese o dati insufficienti",
+          "Temperatura locale: confronto METAR–ICON alla stessa ora, quota e scarti delle stazioni. Apri un punto sulla mappa e la scheda AI Downscaling. " + (local && local.reason || "Prodotto non disponibile.") + " Calcolo fisico deterministico; non richiede una rete neurale addestrata.");
         agentCard(content, "AI Fronti U-Net · segmentazione neurale", "Ricerca · non operativo",
           "Architettura addestrabile separata dal supporto ML operativo. Richiede un checkpoint validato e il collegamento alla produzione.");
         if (ai && ai.runTime) appendBulletinParagraph(content, "Run bollettino: " + ai.runTime);
@@ -9780,6 +9798,7 @@
           return;
         }
 
+        elevationInput.value = "";
         selectedPoint = {
           lng: lng,
           lat: lat,
@@ -10038,6 +10057,79 @@
         container.hidden = false;
       }
 
+      let localDownscalingRequest = 0;
+      let localDownscalingCache = null;
+      let localDownscalingPromise = null;
+      const elevationInput = document.getElementById("local-elevation");
+      elevationInput.addEventListener("input", function () { updateLocalDownscaling(); });
+      document.getElementById("local-downscaling-card").addEventListener("toggle", function (event) {
+        if (event.target.open) updateLocalDownscaling();
+      });
+
+      setInterval(function () {
+        if (!document.hidden && document.getElementById("local-downscaling-card").open) updateLocalDownscaling();
+      }, 60000);
+
+      async function loadLocalDownscaling() {
+        const directory = MODEL_INFO[activeModel].directory;
+        if (localDownscalingCache && localDownscalingCache.directory === directory && localDownscalingCache.product.runTime === (currentData && currentData.meta.runTime) && Date.now()-localDownscalingCache.at < 60000) return localDownscalingCache;
+        if (!localDownscalingPromise) {
+          localDownscalingPromise = Promise.all([
+            loadDownscalingProduct(directory, currentData && currentData.meta.runTime),
+            fetchJsonResource(directory + "/downscaling_terrain.json.gz?t=" + Date.now())
+          ]).then(function (values) {
+            localDownscalingCache = {directory:directory, at:Date.now(), product:values[0], terrain:values[1]};
+            return localDownscalingCache;
+          }).finally(function () { localDownscalingPromise = null; });
+        }
+        return localDownscalingPromise;
+      }
+
+      async function updateLocalDownscaling() {
+        const token = ++localDownscalingRequest;
+        const output = document.getElementById("local-downscaling-result");
+        if (!selectedPoint || !currentData || !document.getElementById("local-downscaling-card").open) return;
+        const position = {...selectedPoint};
+        const data = currentData;
+        output.textContent = "Confronto con osservazioni e quota del modello…";
+        try {
+          const loaded = await loadLocalDownscaling();
+          if (token !== localDownscalingRequest || currentData !== data || !selectedPoint) return;
+          const meta = loaded.terrain.meta;
+          if (loaded.directory !== MODEL_INFO[activeModel].directory || loaded.terrain.runTime !== data.meta.runTime) throw new Error("Quota del modello appartenente a un altro run.");
+          const gx = (position.lng-meta.lo1)/meta.dx;
+          const gy = (meta.la1-position.lat)/meta.dy;
+          if (gx<0 || gy<0 || gx>meta.nx-1 || gy>meta.ny-1) throw new Error("Punto fuori griglia.");
+          const terrain = sampleBilinear(getGrid(loaded.terrain.terrainHeight),gx,gy,meta.nx,meta.ny);
+          let elevation = null;
+          if (elevationInput.value.trim() !== "" && elevationInput.checkValidity()) elevation = Number(elevationInput.value);
+          else if (elevationInput.value.trim() === "") {
+            const text = terrainElevationText(position);
+            if (/^-?\d+ m$/.test(text)) elevation = Number(text.split(" ")[0]);
+          }
+          const modelPoint = pointFromCoordinates(position.lng,position.lat);
+          const base = sampleBilinear(getGrid(data.temp),modelPoint.gx,modelPoint.gy,data.meta.nx,data.meta.ny);
+          const result = MeteoLocalDownscaling.evaluate(loaded.product, {
+            lat:position.lat,lon:position.lng,elevationM:elevation,terrainM:terrain,
+            temperatureC:base,runTime:data.meta.runTime,validTime:data.meta.validTime
+          });
+          output.replaceChildren();
+          appendBulletinParagraph(output,"ICON originale: "+formatValue(base,1,"°C"));
+          if (result.status === "experimental" || result.status === "physical-only") {
+            appendBulletinParagraph(output,(result.status === "experimental" ? "Stima locale sperimentale: " : "Stima con solo gradiente standard: ")+formatValue(result.correctedC,1,"°C"),"ai-agent-label");
+            appendBulletinParagraph(output,"Quota: "+formatValue(result.altitudeCorrectionC,2,"°C")+" · contributo osservazioni: "+formatValue(result.residualCorrectionC,2,"°C"));
+            if (result.status === "experimental") appendBulletinParagraph(output,"Dispersione degli scarti: "+formatValue(result.spreadC,2,"°C")+"; non è un intervallo di confidenza.");
+            result.stations.forEach(function (station) {
+              appendBulletinParagraph(output,station.id+" · "+station.distanceKm.toFixed(1)+" km · osservata "+formatValue(station.observedC,1,"°C")+" · ICON "+formatValue(station.modelC,1,"°C")+" · "+new Date(station.obsTime*1000).toISOString());
+            });
+          } else appendBulletinParagraph(output,"Correzione sospesa.","ai-agent-label");
+          appendBulletinParagraph(output,result.reason);
+          appendBulletinParagraph(output,"Gradiente assunto −6,5 °C/km: può essere inadeguato durante inversioni, brezze o forti contrasti locali. Nessuna accuratezza aggiuntiva garantita.");
+        } catch (error) {
+          if (token === localDownscalingRequest) output.textContent = "Downscaling non disponibile. "+error.message;
+        }
+      }
+
       function refreshSelectedPoint() {
         if (!selectedPoint || !currentData) return;
         const point = pointFromCoordinates(selectedPoint.lng, selectedPoint.lat);
@@ -10080,6 +10172,7 @@
         );
         ui.detailWetbulb.textContent = formatValue(fieldValue("wetbulb", point.gx, point.gy), 1, "°C");
         ui.detailElevation.textContent = terrainElevationText(selectedPoint);
+        updateLocalDownscaling();
         updateStormChain(point.gx, point.gy);
 
         // La sintesi: temperatura, vento con la sua direzione, pioggia se
@@ -10319,13 +10412,10 @@
           // Read the pipeline-published METAR snapshot from the same origin.
           // Fetching aviationweather.gov directly is blocked by CORS, so the
           // GitHub Action fetches it server-side into data_weather/.
-          const payload = await fetch(
-            "data_weather/observations.json?t=" + Date.now()
-          ).then(function (r) {
-            if (!r.ok) throw new Error("observations.json non disponibile");
-            return r.json();
-          });
+          const payload = await loadAgentResource("live/observations.json", "data_weather")
+            .catch(function () { return loadAgentResource("observations.json", "data_weather"); });
           const numberOrNull = function (value) {
+            if (value === null || value === undefined || value === "") return null;
             const number = Number(value);
             return Number.isFinite(number) ? number : null;
           };
@@ -11587,4 +11677,5 @@
     </script>
   </body>
 </html>
+
 
