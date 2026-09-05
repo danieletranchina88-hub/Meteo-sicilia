@@ -20,7 +20,7 @@ from typing import Any, Callable
 from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 
-AGENT_METHOD = "icon2i-evidence-grounded-dual-llm-v6"
+AGENT_METHOD = "icon2i-evidence-grounded-dual-llm-v7"
 PACKET_METHOD = "icon2i-synoptic-evidence-packet-v1"
 GEMINI_MODEL = "gemini-3.5-flash"
 GROQ_MODEL = "openai/gpt-oss-120b"
@@ -190,10 +190,12 @@ score diagnostici in probabilità calibrate o allerte.
 
 Regole inderogabili:
 1. Ogni claim cita da 2 a 5 evidenceIds esistenti, provenienti da almeno due
-   famiglie diagnostiche differenti. Nessun fenomeno deriva da un solo indice.
+   section distinte elencate in independentEvidenceFamilies. Operational e causal
+   non sono famiglie indipendenti. Due prove synoptic restano una sola famiglia. Nessun fenomeno deriva da un solo indice.
 2. Copia qualsiasi numero esattamente dalle prove citate; se non serve, usa
    linguaggio qualitativo. Non inventare soglie, località o orari.
-3. Produci soltanto lo scope richiesto. Riproduci esattamente periodId,
+3. Per scope claim-repair restituisci solo il singolo claim richiesto, senza sezioni.
+   Negli altri casi produci soltanto lo scope richiesto. Riproduci esattamente periodId,
    fromHour e toHour indicati e crea una sola sezione per ciascuno dei sei id.
 4. Se le prove sono contraddittorie o mancanti, scrivilo e abbassa la
    confidence. 'Segnale molto robusto' è ammesso soltanto con più livelli,
@@ -391,6 +393,47 @@ def _iter_claims(primary: dict[str, Any]):
                 yield claim, period
 
 
+def _validate_claim_content(claim, period, evidence):
+    if not isinstance(claim, dict):
+        raise AgentError("claim IA non strutturato")
+    _require_exact_keys(claim, {"id", "text", "confidence", "evidenceIds"}, "claim IA")
+    claim_id = str(claim.get("id") or "")
+    text = _clean_text(claim.get("text"), 421)
+    if not text or len(text) > 420 or text != claim.get("text"):
+        raise AgentError(f"testo claim {claim_id} assente, eccessivo o non normalizzato")
+    if claim.get("confidence") not in CONFIDENCE_LEVELS:
+        raise AgentError(f"confidence non valida nel claim {claim_id}")
+    refs = list(dict.fromkeys(claim.get("evidenceIds") or []))
+    if not 2 <= len(refs) <= 5 or len(refs) != len(claim.get("evidenceIds") or []):
+        raise AgentError(f"prove insufficienti o duplicate nel claim {claim_id}")
+    if any(ref not in evidence for ref in refs):
+        raise AgentError(f"prova inesistente nel claim {claim_id}")
+    categories = {
+        str(evidence[ref].get("section"))
+        for ref in refs
+        if str(evidence[ref].get("section")) in INDEPENDENT_EVIDENCE_FAMILIES
+    }
+    if len(categories) < 2:
+        raise AgentError(f"claim {claim_id} basato su una sola famiglia diagnostica")
+    if period is not None:
+        lower = int(period["fromHour"])
+        upper = int(period["toHour"])
+        if any(
+            not lower <= int(evidence[ref].get("leadHours", -1)) <= upper
+            for ref in refs
+        ):
+            raise AgentError(f"claim {claim_id} usa prove fuori dal proprio periodo")
+    claim_numbers = _numbers(text)
+    if claim_numbers:
+        allowed = set()
+        for ref in refs:
+            allowed |= _numbers(str(evidence[ref].get("text") or ""))
+        if not claim_numbers <= allowed:
+            missing = ", ".join(sorted(claim_numbers - allowed))
+            raise AgentError(f"numeri non documentati nel claim {claim_id}: {missing}")
+    return refs, bool(claim_numbers)
+
+
 def validate_primary_analysis(
     primary: dict[str, Any], packet: dict[str, Any]
 ) -> dict[str, Any]:
@@ -445,40 +488,8 @@ def validate_primary_analysis(
         if not claim_id or claim_id in seen_claims:
             raise AgentError("identificatore claim IA assente o duplicato")
         seen_claims.add(claim_id)
-        text = _clean_text(claim.get("text"), 421)
-        if not text or len(text) > 420 or text != claim.get("text"):
-            raise AgentError(f"testo claim {claim_id} assente, eccessivo o non normalizzato")
-        if claim.get("confidence") not in CONFIDENCE_LEVELS:
-            raise AgentError(f"confidence non valida nel claim {claim_id}")
-        refs = list(dict.fromkeys(claim.get("evidenceIds") or []))
-        if not 2 <= len(refs) <= 5 or len(refs) != len(claim.get("evidenceIds") or []):
-            raise AgentError(f"prove insufficienti o duplicate nel claim {claim_id}")
-        if any(ref not in evidence for ref in refs):
-            raise AgentError(f"prova inesistente nel claim {claim_id}")
-        categories = {
-            str(evidence[ref].get("section"))
-            for ref in refs
-            if str(evidence[ref].get("section")) in INDEPENDENT_EVIDENCE_FAMILIES
-        }
-        if len(categories) < 2:
-            raise AgentError(f"claim {claim_id} basato su una sola famiglia diagnostica")
-        if period is not None:
-            lower = int(period["fromHour"])
-            upper = int(period["toHour"])
-            if any(
-                not lower <= int(evidence[ref].get("leadHours", -1)) <= upper
-                for ref in refs
-            ):
-                raise AgentError(f"claim {claim_id} usa prove fuori dal proprio periodo")
-        claim_numbers = _numbers(text)
-        if claim_numbers:
-            numeric_claims += 1
-            allowed = set()
-            for ref in refs:
-                allowed |= _numbers(str(evidence[ref].get("text") or ""))
-            if not claim_numbers <= allowed:
-                missing = ", ".join(sorted(claim_numbers - allowed))
-                raise AgentError(f"numeri non documentati nel claim {claim_id}: {missing}")
+        refs, has_numbers = _validate_claim_content(claim, period, evidence)
+        numeric_claims += int(has_numbers)
         referenced.update(refs)
     return {
         "claimCount": len(seen_claims),
@@ -535,9 +546,9 @@ def _post_json(
             if error.code == 429 or error.code >= 500:
                 retry_after = error.headers.get("retry-after")
                 try:
-                    retry_seconds = float(retry_after) if retry_after else float(2 ** (attempt + 1))
+                    retry_seconds = float(retry_after) if retry_after else float(10 * 2 ** attempt)
                 except (TypeError, ValueError):
-                    retry_seconds = float(2 ** (attempt + 1))
+                    retry_seconds = float(10 * 2 ** attempt)
                 wait = min(
                     30.0,
                     max(0.0, retry_seconds),
@@ -582,7 +593,7 @@ def _gemini_scope(
                 "responseMimeType": "application/json",
                 "responseJsonSchema": schema,
                 "temperature": 0.1,
-                "maxOutputTokens": 8192,
+                "maxOutputTokens": 2048 if request_packet.get("scope") == "claim-repair" else 8192,
                 # The task is extraction and synthesis under a strict schema,
                 # followed by an independent reasoner. LOW preserves enough
                 # deliberation while reserving the output budget for valid JSON.
@@ -636,6 +647,8 @@ def _gemini_request_packet(
         ]
     return {
         "scope": scope,
+        "independentEvidenceFamilies": sorted(INDEPENDENT_EVIDENCE_FAMILIES),
+        "evidenceRule": "Almeno due section distinte presenti in independentEvidenceFamilies; operational e causal non contano come famiglie indipendenti.",
         "model": packet["model"],
         "runTime": packet["runTime"],
         "area": packet["area"],
@@ -711,6 +724,57 @@ def _gemini_analysis(
         "promptTokens": _usage_total(usages, "promptTokens"),
         "outputTokens": _usage_total(usages, "outputTokens"),
     }
+
+
+def _repair_invalid_claims(primary, packet, api_key, post_json):
+    """One bounded rewrite per invalid claim; never fabricate supporting refs.
+
+    Valid claims are preserved. Each replacement passes the same checks as a
+    published claim, then the whole product still goes to the independent reviewer.
+    """
+    evidence = {item["id"]: item for item in packet["evidence"]}
+    usages = []
+    for claim, period in _iter_claims(primary):
+        try:
+            _validate_claim_content(claim, period, evidence)
+            continue
+        except AgentError as error:
+            feedback = str(error)
+        if len(usages) >= 8:
+            raise AgentError("limite di otto riscritture raggiunto; prodotto non pubblicato")
+        candidates = [item for item in packet["evidence"] if period is None or
+                      period["fromHour"] <= item["leadHours"] <= period["toHour"]]
+        # Prefer the originally referenced hours without selecting evidence on
+        # behalf of the model or attaching any reference automatically.
+        original_refs = set(claim.get("evidenceIds") or [])
+        original_hours = {evidence[ref]["leadHours"] for ref in original_refs if ref in evidence}
+        candidates.sort(key=lambda item: (item['id'] not in original_refs,
+                                         item['leadHours'] not in original_hours, item['id']))
+        counts = {}
+        selected = []
+        for item in candidates:
+            family = item['section']
+            if family not in INDEPENDENT_EVIDENCE_FAMILIES or counts.get(family, 0) >= 3:
+                continue
+            selected.append(item)
+            counts[family] = counts.get(family, 0)+1
+        if len(counts) < 2:
+            raise AgentError("prove indipendenti insufficienti per riscrivere il claim")
+        replacement, usage = _gemini_scope({
+            "scope": "claim-repair", "runTime": packet["runTime"],
+            "originalClaim": claim, "validationError": feedback,
+            "instruction": "Riscrivi il claim basandoti solo sulle prove fornite. Mantieni id. Non aggiungere riferimenti non pertinenti per superare i controlli; se la tesi non è sostenuta, cambiala o esplicita i limiti.",
+            "independentEvidenceFamilies": sorted(INDEPENDENT_EVIDENCE_FAMILIES),
+            "period": period and {key: period[key] for key in ('periodId','fromHour','toHour')},
+            "evidence": selected,
+        }, CLAIM_SCHEMA, api_key, post_json)
+        usages.append(usage)
+        if not isinstance(replacement, dict) or replacement.get('id') != claim.get('id'):
+            raise AgentError("la riscrittura ha alterato l'identificatore del claim")
+        _validate_claim_content(replacement, period, {item['id']: item for item in selected})
+        claim.clear()
+        claim.update(replacement)
+    return usages
 
 
 def _review_payload(
@@ -883,6 +947,12 @@ def generate_verified_bulletin(
         raise AgentError("chiavi API non disponibili")
     packet = build_evidence_packet(deterministic_bulletin)
     primary, primary_usage = _gemini_analysis(packet, gemini_api_key, post_json)
+    repairs = _repair_invalid_claims(primary, packet, gemini_api_key, post_json)
+    primary_usage["repairRequestCount"] = len(repairs)
+    if repairs:
+        primary_usage["requestCount"] += len(repairs)
+        for key in ("promptTokens", "outputTokens"):
+            primary_usage[key] = _usage_total([primary_usage] + repairs, key)
     validation = validate_primary_analysis(primary, packet)
     review, reviewer_usage = _groq_review(
         primary, packet, groq_api_key, post_json

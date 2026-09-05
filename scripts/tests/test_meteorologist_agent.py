@@ -24,6 +24,7 @@ from meteo_analysis.agents.meteorologist import (  # noqa: E402
     SECTION_IDS,
     SECTION_TITLES,
     _post_json,
+    _repair_invalid_claims,
     build_evidence_packet,
     generate_verified_bulletin,
     validate_primary_analysis,
@@ -294,6 +295,61 @@ def test_provider_http_failure_is_identifiable_without_error_body_leak():
             raise AssertionError("errore HTTP del provider non propagato")
 
 
+def test_claim_repair_preserves_validation_and_review():
+    source = deterministic_bulletin()
+    packet = build_evidence_packet(source)
+    primary = primary_for(packet)
+    original = copy.deepcopy(primary)
+    # This reproduces the live failure: two references, only one family.
+    primary["overview"]["claims"][0]["evidenceIds"] = [
+        item["id"] for item in packet["evidence"] if item["section"] == "synoptic"
+    ][:2]
+    base_post, calls = fake_post_factory(packet, primary)
+    repairs = []
+
+    def repaired_post(url, **kwargs):
+        if "googleapis.com" in url:
+            request = json.loads(kwargs["payload"]["contents"][0]["parts"][0]["text"])
+            if request["scope"] == "claim-repair":
+                repairs.append(request)
+                return {"candidates": [{"content": {"parts": [{"text": json.dumps(
+                    original["overview"]["claims"][0]
+                )}]}}]}
+        return base_post(url, **kwargs)
+
+    product = generate_verified_bulletin(source, gemini_api_key="gemini-secret",
+                                       groq_api_key="groq-secret", post_json=repaired_post)
+    assert product["status"] == "validated"
+    assert len(repairs) == 1
+    assert product["providers"]["primary"]["repairRequestCount"] == 1
+    assert any("groq.com" in call[0] for call in calls)
+    assert _repair_invalid_claims(original, packet, "unused", None) == []
+
+
+def test_invalid_repair_still_fails_closed_and_stays_in_period():
+    packet = build_evidence_packet(deterministic_bulletin())
+    primary = primary_for(packet)
+    period = primary["periods"][-1]
+    claim = period["sections"][0]["claims"][0]
+    claim["text"] = "Temperatura prevista 9999 gradi."
+    requests = []
+
+    def invalid_post(url, **kwargs):
+        request = json.loads(kwargs["payload"]["contents"][0]["parts"][0]["text"])
+        requests.append(request)
+        assert all(period["fromHour"] <= item["leadHours"] <= period["toHour"]
+                   for item in request["evidence"])
+        return {"candidates": [{"content": {"parts": [{"text": json.dumps(claim)}]}}]}
+
+    try:
+        _repair_invalid_claims(primary, packet, "unused", invalid_post)
+    except AgentError:
+        pass
+    else:
+        raise AssertionError("una riscrittura non supportata deve restare bloccata")
+    assert len(requests) == 1
+
+
 def test_missing_secrets_preserve_deterministic_fallback():
     with tempfile.TemporaryDirectory() as temporary:
         directory = Path(temporary)
@@ -329,4 +385,6 @@ if __name__ == "__main__":
     test_reviewer_rejection_fails_closed()
     test_provider_http_failure_is_identifiable_without_error_body_leak()
     test_missing_secrets_preserve_deterministic_fallback()
+    test_claim_repair_preserves_validation_and_review()
+    test_invalid_repair_still_fails_closed_and_stays_in_period()
     print("Meteorological agent tests passed")
