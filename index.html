@@ -2246,6 +2246,15 @@
           animation-iteration-count: 1 !important;
         }
       }
+    
+      #meteorological-agents { width: min(680px, calc(100vw - 32px)); max-height: 85vh; overflow: auto; box-sizing: border-box; border: 1px solid #aebdbb; border-radius: 18px; padding: 24px; background: #f8faf7; color: #193b3b; }
+      #meteorological-agents::backdrop { background: #102b36aa; }
+      #meteorological-agents h2 { margin: 0 0 12px; }
+      #meteorological-agents article { border-top: 1px solid #cbd5d0; padding: 14px 0; }
+      #meteorological-agents h3 { margin: 0 0 8px; }
+      #meteorological-agents p { line-height: 1.5; overflow-wrap: anywhere; }
+      #meteorological-agents button { min-height: 44px; padding: 8px 14px; cursor: pointer; }
+      .agent-presence-button { cursor: pointer; border: 0; background: transparent; color: inherit; padding: 4px 0; min-height: 32px; font: inherit; font-weight: 700; text-decoration: underline; }
     </style>
   </head>
   <body>
@@ -2257,6 +2266,13 @@
     <div id="paper-grain" aria-hidden="true"></div>
     <div id="map-vignette" aria-hidden="true"></div>
 
+    <dialog id="meteorological-agents" aria-labelledby="agents-title">
+      <form method="dialog"><button type="submit" style="float:right">Chiudi</button></form>
+      <h2 id="agents-title">Agenti meteorologici AI</h2>
+      <p>Ruoli meteorologici, contributi al run e stato effettivo dei modelli.</p>
+      <div id="agents-content" aria-live="polite"></div>
+      <p>I moduli di ricerca diventano operativi solo dopo addestramento, validazione e integrazione nei prodotti.</p>
+    </dialog>
     <header id="app-header">
       <div class="brand-panel surface">
         <div class="brand-mark" aria-hidden="true">
@@ -2270,6 +2286,7 @@
         <div class="brand-copy">
           <div class="eyebrow">Italia · dominio ICON-2I completo</div>
           <h1>METEOHUB</h1>
+          <button type="button" class="agent-presence-button" id="agents-open" aria-haspopup="dialog" aria-controls="meteorological-agents">Agenti meteorologici AI</button>
           <p id="brand-subtitle" class="brand-subtitle">ICON-2I · deterministico · ≈2,2 km</p>
           <!-- Corsa e validita' in una riga sola, dentro l'intestazione. Sul
                telefono la scheda dei metadati era un secondo blocco sotto il
@@ -5560,6 +5577,56 @@
         updateBulletinUi(true);
       }
 
+      async function loadAgentResource(filename, directory) {
+        const controller = new AbortController();
+        const timer = setTimeout(function () { controller.abort(); }, 12000);
+        try {
+          const response = await fetch(directory + "/" + filename + "?t=" + Date.now(), { signal: controller.signal, cache: "no-store" });
+          if (!response.ok) throw new Error("Stato non disponibile");
+          return await response.json();
+        } finally { clearTimeout(timer); }
+      }
+
+      function agentCard(parent, title, state, detail) {
+        const card = document.createElement("article");
+        const heading = document.createElement("h3");
+        heading.textContent = title;
+        card.appendChild(heading);
+        appendBulletinParagraph(card, state, "ai-agent-label");
+        appendBulletinParagraph(card, detail);
+        parent.appendChild(card);
+      }
+
+      document.getElementById("agents-open").addEventListener("click", async function () {
+        const dialog = document.getElementById("meteorological-agents");
+        const content = document.getElementById("agents-content");
+        if (dialog.open) return;
+        dialog.showModal();
+        content.textContent = "Verifica dello stato del run…";
+        const directory = MODEL_INFO[activeModel].directory;
+        const results = await Promise.allSettled([
+          loadAgentResource("ai_agent_status.json", directory),
+          loadAgentResource("front_qc.json", directory)
+        ]);
+        content.replaceChildren();
+        const ai = results[0].status === "fulfilled" ? results[0].value : null;
+        const front = results[1].status === "fulfilled" ? results[1].value : null;
+        const validated = ai && ai.status === "validated";
+        agentCard(content, "AI Bollettini · analista sinottico", validated ? "Sintesi validata" : ai ? "Fallback deterministico" : "Stato non disponibile",
+          "Interpreta le evidenze ICON-2I. " + (ai ? (ai.primaryModel || "Generatore") + " · " + (ai.reason || "Esito non specificato") : "Impossibile verificare l’ultima esecuzione: nessuna attività AI è confermata."));
+        agentCard(content, "AI Revisore · controllo delle evidenze", validated ? "Revisione completata" : "Revisione non confermata",
+          (ai && ai.reviewerModel || "Revisore indipendente") + ": controlla i claim e le prove meteorologiche. La pubblicazione AI richiede anche i controlli deterministici.");
+        const summary = front && front.analysisSummary;
+        agentCard(content, "AI Fronti · supporto ML alla diagnosi fisica", summary ? (summary.mlFusion === true ? "Fusione ML presente nel run" : "Contributo ML non confermato") : "Stato non disponibile",
+          summary ? "Run " + front.runTime + ". " + (summary.analysisMessage || "") + " Il modello ML supporta l’analisi fisica e il tracciamento temporale; non è il modello neurale U-Net." : "Diagnostica del run non raggiungibile.");
+        agentCard(content, "AI Downscaling · dettaglio orografico", "Ricerca · non operativo",
+          "Pipeline neurale predisposta, senza modello promosso integrato nella pubblicazione. Non modifica ancora i campi ICON-2I: l’interpolazione della mappa non è downscaling AI.");
+        agentCard(content, "AI Fronti U-Net · segmentazione neurale", "Ricerca · non operativo",
+          "Architettura addestrabile separata dal supporto ML operativo. Richiede un checkpoint validato e il collegamento alla produzione.");
+        if (ai && ai.runTime) appendBulletinParagraph(content, "Run bollettino: " + ai.runTime);
+        if (ai && ai.generatedAt) appendBulletinParagraph(content, "Stato aggiornato: " + ai.generatedAt);
+      });
+
       async function loadExpertBulletin() {
         if (!expertBulletinPromise) {
           expertBulletinPromise = fetchJsonResource(
@@ -5712,6 +5779,7 @@
         );
         try {
           const bulletin = await loadExpertBulletin();
+          const agentStatus = await loadAgentResource("ai_agent_status.json", MODEL_INFO[activeModel].directory).catch(function () { return null; });
           let aiBulletin = null;
           try {
             aiBulletin = await loadAiExpertBulletin();
@@ -5732,6 +5800,8 @@
             "Run " + formatDateTime(runDate) + " · validità " +
             formatDateTime(validDate) + " · +" + analysis.leadHours + " h";
           const aiValidated = Boolean(
+            agentStatus && agentStatus.status === "validated" &&
+            (!agentStatus.runTime || agentStatus.runTime === bulletin.runTime) &&
             aiBulletin && aiBulletin.status === "validated" &&
             aiBulletin.runTime === bulletin.runTime
           );
@@ -5747,6 +5817,11 @@
             : bulletin.disclaimer;
           ui.bulletinContent.replaceChildren();
 
+          if (!aiValidated) {
+            appendBulletinParagraph(ui.bulletinContent,
+              "AI Bollettini · fallback deterministico. " + (agentStatus && agentStatus.status !== "validated" ? agentStatus.reason || "Sintesi non validata." : "Sintesi AI non disponibile o non coerente con questo run."),
+              "ai-agent-block");
+          }
           if (aiValidated) {
             ui.bulletinContent.appendChild(renderAiAgentBrief(aiBulletin, lead));
             const deterministicLabel = document.createElement("p");
@@ -11512,3 +11587,4 @@
     </script>
   </body>
 </html>
+

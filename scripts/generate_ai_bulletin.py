@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+from datetime import datetime, timezone
 import gzip
 import json
 import os
@@ -104,7 +105,14 @@ def run(data_dir: Path) -> dict:
         "primaryModel": GEMINI_MODEL,
         "reviewerModel": GROQ_MODEL,
         "reason": None,
+        "generatedAt": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
     }
+    # Record the source run even when credentials or a provider are unavailable.
+    if deterministic_path.exists():
+        try:
+            status["runTime"] = _read_gzip_json(deterministic_path).get("runTime")
+        except (OSError, ValueError):
+            pass
     gemini_key = os.environ.get("GEMINI_API_KEY", "").strip()
     groq_key = os.environ.get("GROQ_API_KEY", "").strip()
     if not gemini_key or not groq_key:
@@ -154,3 +162,4 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
+
