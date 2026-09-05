@@ -5,12 +5,14 @@ from __future__ import annotations
 
 import copy
 import gzip
+from io import BytesIO
 import json
 import os
 from pathlib import Path
 import sys
 import tempfile
 from unittest.mock import patch
+from urllib.error import HTTPError
 
 
 ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
@@ -21,6 +23,7 @@ from meteo_analysis.agents.meteorologist import (  # noqa: E402
     AgentError,
     SECTION_IDS,
     SECTION_TITLES,
+    _post_json,
     build_evidence_packet,
     generate_verified_bulletin,
     validate_primary_analysis,
@@ -230,6 +233,35 @@ def test_reviewer_rejection_fails_closed():
         raise AssertionError("prodotto respinto pubblicato")
 
 
+def test_provider_http_failure_is_identifiable_without_error_body_leak():
+    url = "https://generativelanguage.googleapis.com/v1beta/models/test:generateContent"
+    response = BytesIO(json.dumps({
+        "error": {
+            "code": 429,
+            "message": "quota detail that must not be copied",
+            "status": "RESOURCE_EXHAUSTED",
+        }
+    }).encode("utf-8"))
+    error = HTTPError(
+        url,
+        429,
+        "quota",
+        {"retry-after": "not-a-number"},
+        response,
+    )
+    with patch("meteo_analysis.agents.meteorologist.urlopen", side_effect=error):
+        try:
+            _post_json(url, headers={}, payload={}, attempts=1)
+        except AgentError as caught:
+            message = str(caught)
+            assert "Gemini API" in message
+            assert "HTTP 429" in message
+            assert "RESOURCE_EXHAUSTED" in message
+            assert "quota detail" not in message
+        else:
+            raise AssertionError("errore HTTP del provider non propagato")
+
+
 def test_missing_secrets_preserve_deterministic_fallback():
     with tempfile.TemporaryDirectory() as temporary:
         directory = Path(temporary)
@@ -263,5 +295,6 @@ if __name__ == "__main__":
     test_packet_and_verified_product()
     test_hallucinated_reference_and_number_are_rejected()
     test_reviewer_rejection_fails_closed()
+    test_provider_http_failure_is_identifiable_without_error_body_leak()
     test_missing_secrets_preserve_deterministic_fallback()
     print("Meteorological agent tests passed")

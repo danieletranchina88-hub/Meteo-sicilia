@@ -20,9 +20,9 @@ from typing import Any, Callable
 from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 
-AGENT_METHOD = "icon2i-evidence-grounded-dual-llm-v1"
+AGENT_METHOD = "icon2i-evidence-grounded-dual-llm-v2"
 PACKET_METHOD = "icon2i-synoptic-evidence-packet-v1"
-GEMINI_MODEL = "gemini-3.8-flash"
+GEMINI_MODEL = "gemini-3.5-flash"
 GROQ_MODEL = "openai/gpt-oss-120b"
 GEMINI_ENDPOINT = (
     "https://generativelanguage.googleapis.com/v1beta/models/"
@@ -458,6 +458,7 @@ def _post_json(
     payload: dict[str, Any],
     attempts: int = 3,
 ) -> dict[str, Any]:
+    provider = "Gemini" if "googleapis.com" in url else "Groq"
     last_error: Exception | None = None
     for attempt in range(attempts):
         try:
@@ -473,11 +474,35 @@ def _post_json(
                 raise AgentError("risposta API non strutturata")
             return body
         except HTTPError as error:
-            last_error = AgentError(f"API HTTP {error.code}")
+            detail = ""
+            try:
+                error_body = json.loads(error.read().decode("utf-8", errors="replace"))
+                api_error = error_body.get("error") if isinstance(error_body, dict) else None
+                if isinstance(api_error, dict):
+                    identifiers = [
+                        api_error.get("status"),
+                        api_error.get("type"),
+                        api_error.get("code"),
+                    ]
+                    safe_identifiers = []
+                    for identifier in identifiers:
+                        normalized = re.sub(r"[^0-9A-Za-z_.-]", "", str(identifier or ""))
+                        if normalized and normalized not in safe_identifiers:
+                            safe_identifiers.append(normalized[:80])
+                    if safe_identifiers:
+                        detail = " (" + ", ".join(safe_identifiers) + ")"
+            except (OSError, UnicodeDecodeError, json.JSONDecodeError):
+                pass
+            last_error = AgentError(f"HTTP {error.code}{detail}")
             if error.code == 429 or error.code >= 500:
+                retry_after = error.headers.get("retry-after")
+                try:
+                    retry_seconds = float(retry_after) if retry_after else float(2 ** (attempt + 1))
+                except (TypeError, ValueError):
+                    retry_seconds = float(2 ** (attempt + 1))
                 wait = min(
                     30.0,
-                    float(error.headers.get("retry-after") or 2 ** (attempt + 1)),
+                    max(0.0, retry_seconds),
                 )
                 if attempt + 1 < attempts:
                     time.sleep(wait)
@@ -487,7 +512,11 @@ def _post_json(
             last_error = error
             if attempt + 1 < attempts:
                 time.sleep(min(8, 2 ** attempt))
-    raise AgentError(f"chiamata API fallita: {type(last_error).__name__}")
+    if last_error is None:
+        raise AgentError(f"{provider} API fallita senza risposta")
+    if isinstance(last_error, AgentError):
+        raise AgentError(f"{provider} API fallita: {last_error}")
+    raise AgentError(f"{provider} API fallita: {type(last_error).__name__}")
 
 
 def _gemini_analysis(

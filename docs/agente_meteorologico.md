@@ -7,7 +7,7 @@ Non sostituisce il motore numerico, non modifica griglie, fronti, probabilità o
 downscaling e non costituisce un sistema di assimilazione dati. Il prodotto è
 pubblicato soltanto quando supera tre controlli indipendenti:
 
-1. schema strutturato di Gemini 3.8 Flash;
+1. schema strutturato di Gemini 3.5 Flash;
 2. validazione deterministica locale;
 3. revisione dei claim con GPT-OSS 120B su Groq.
 
