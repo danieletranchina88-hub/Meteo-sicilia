@@ -79,7 +79,7 @@ def fetch_meteohub_stations(session=None, now=None):
     query = (f"reftime:>={start:%Y-%m-%d %H:%M},<={now:%Y-%m-%d %H:%M};"
              "product:B12101;license:CCBY_COMPLIANT")
     response = session.post(URL, params={
-        "q": query, "networks": NETWORK, "output_format": "json",
+        "q": query, "networks": NETWORK, "output_format": "JSON",
         "reliabilityCheck": "true", "lonmin": 11, "lonmax": 16,
         "latmin": 35, "latmax": 39,
     }, timeout=(15, 60), stream=True)
@@ -122,7 +122,11 @@ def fetch_site_observations():
         ])
         statuses.append(dict(source=SOURCE, status="ok", count=len(stations)))
     except Exception as error:
-        statuses.append(dict(source=SOURCE, status="unavailable", reason=type(error).__name__))
+        response = getattr(error, "response", None)
+        reason = type(error).__name__
+        if response is not None:
+            reason += f" HTTP {response.status_code}"
+        statuses.append(dict(source=SOURCE, status="unavailable", reason=reason))
     if not payload["stations"]:
         raise ValueError("nessuna fonte osservativa disponibile")
     payload.update(source="NOAA AWC METAR + MeteoHub Sicilia", sourceUrl=URL,

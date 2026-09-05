@@ -7,7 +7,7 @@ Non serve trasferire il login dell'utente al sito né pubblicare chiavi API.
 Contratto verificato sul codice ufficiale MeteoHub (`maps_observed.py`,
 `services/dballe.py`) e su un export reale JSONL del 5 settembre 2026:
 POST `/api/observations`, parametri query `networks=dpcn-sicilia`,
-`output_format=json`, `reliabilityCheck=true` e `q` con `reftime`,
+`output_format=JSON` (maiuscolo), `reliabilityCheck=true` e `q` con `reftime`,
 `product:B12101`, `license:CCBY_COMPLIANT`. La richiesta riguarda solo le
 ultime due ore e il dominio Sicilia. È un download pubblico, non una
 richiesta di estrazione persistente dell'account.

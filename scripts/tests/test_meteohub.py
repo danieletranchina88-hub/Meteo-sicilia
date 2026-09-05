@@ -4,9 +4,9 @@ from datetime import datetime, timezone
 import json
 from pathlib import Path
 import sys
-from unittest.mock import patch
+from unittest.mock import patch, Mock
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
-from meteo_analysis.verification.meteohub import normalize_jsonl, fetch_site_observations
+from meteo_analysis.verification.meteohub import normalize_jsonl, fetch_site_observations, fetch_meteohub_stations
 
 NOW = datetime(2026, 9, 5, 1, tzinfo=timezone.utc)
 ROW = {"version":"0.1","network":"dpcn-sicilia","ident":None,
@@ -18,6 +18,11 @@ ROW = {"version":"0.1","network":"dpcn-sicilia","ident":None,
 
 
 def test_real_contract():
+    session = Mock()
+    session.post.return_value.iter_lines.return_value = [json.dumps(ROW).encode()]
+    assert len(fetch_meteohub_stations(session, NOW)) == 1
+    assert session.post.call_args.kwargs["params"]["output_format"] == "JSON"
+    session.post.return_value.close.assert_called_once()
     result = normalize_jsonl([json.dumps(ROW)], NOW)
     assert len(result) == 1 and result[0]["tempC"] == 22.94
     assert result[0]["elevationM"] is None
