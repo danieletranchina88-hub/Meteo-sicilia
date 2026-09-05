@@ -1,4 +1,4 @@
-"""Public MeteoHub Sicily temperature export, normalized for the site.
+"""Public MeteoHub Sicily surface observations, normalized for the site.
 
 Contract checked against MeteoHub maps_observed.py and a real JSONL export.
 No account credentials are required for this recent public dataset.
@@ -10,6 +10,17 @@ import math
 URL = "https://meteohub.agenziaitaliameteo.it/api/observations"
 SOURCE = "MeteoHub · Regione Siciliana · Agenzia ItaliaMeteo / CINECA"
 NETWORK = "dpcn-sicilia"
+PRODUCTS = (
+    "B12101",  # air temperature at 2 m
+    "B12103",  # dew-point temperature at 2 m
+    "B13003",  # relative humidity
+    "B11001",  # wind direction
+    "B11002",  # wind speed
+    "B11041",  # maximum wind gust
+    "B11042",  # maximum wind gust (alternate descriptor)
+    "B10051",  # pressure reduced to mean sea level
+    "B10004",  # station pressure (published separately, never as MSLP)
+)
 
 
 def number(value):
@@ -32,16 +43,28 @@ def normalize_jsonl(lines, now=None):
         if not isinstance(record, dict) or record.get("network") != NETWORK:
             continue
         metadata = {}
-        temperatures = []
+        observed_values = {}
         for group in record.get("data", []):
             values = group.get("vars", {})
             if "level" not in group:
                 metadata.update(values)
-            elif (group.get("level", [])[:2] == [103, 2000]
-                  and group.get("timerange") == [254, 0, 0]):
-                value = number((values.get("B12101") or {}).get("v"))
-                if value is not None:
-                    temperatures.append(value - 273.15)
+            else:
+                level = group.get("level", [])
+                timerange = group.get("timerange")
+                for code in PRODUCTS:
+                    if code in {"B12101", "B12103", "B13003"} and not (
+                        level[:2] == [103, 2000] and timerange == [254, 0, 0]
+                    ):
+                        continue
+                    if code in {"B11001", "B11002", "B11041", "B11042"} and not (
+                        level[:2] in ([103, 10000], [1, 0])
+                    ):
+                        continue
+                    if code in {"B10051", "B10004"} and level[:2] != [1, 0]:
+                        continue
+                    value = number((values.get(code) or {}).get("v"))
+                    if value is not None:
+                        observed_values[code] = value
         def value(key):
             return (metadata.get(key) or {}).get("v")
         lat, lon = number(value("B05001")), number(value("B06001"))
@@ -53,7 +76,38 @@ def normalize_jsonl(lines, now=None):
             continue
         if observed.tzinfo is None or not 0 <= (now - observed).total_seconds() <= 7200:
             continue
-        if len(temperatures) != 1 or not -50 <= temperatures[0] <= 55:
+        temperature = observed_values.get("B12101")
+        if temperature is not None and temperature > 120:
+            temperature -= 273.15
+        if temperature is not None and not -50 <= temperature <= 55:
+            temperature = None
+        dewpoint = observed_values.get("B12103")
+        if dewpoint is not None and dewpoint > 120:
+            dewpoint -= 273.15
+        if dewpoint is not None and not -70 <= dewpoint <= 45:
+            dewpoint = None
+        humidity = observed_values.get("B13003")
+        if humidity is not None and not 0 <= humidity <= 100:
+            humidity = None
+        wind_speed = observed_values.get("B11002")
+        wind_direction = observed_values.get("B11001")
+        gust = observed_values.get("B11041", observed_values.get("B11042"))
+        wind_speed = wind_speed * 3.6 if wind_speed is not None and 0 <= wind_speed <= 70 else None
+        gust = gust * 3.6 if gust is not None and 0 <= gust <= 100 else None
+        if wind_direction is not None and not 0 <= wind_direction <= 360:
+            wind_direction = None
+        def pressure_hpa(code):
+            value = observed_values.get(code)
+            if value is None:
+                return None
+            value = value / 100 if value > 2000 else value
+            return value if 800 <= value <= 1100 else None
+        sea_level_pressure = pressure_hpa("B10051")
+        station_pressure = pressure_hpa("B10004")
+        if all(value is None for value in (
+            temperature, dewpoint, humidity, wind_speed, gust,
+            wind_direction, sea_level_pressure, station_pressure,
+        )):
             continue
         sid = f"MH:SICILIA:{lat:.5f}:{lon:.5f}"
         elevation = number(value("B07030"))
@@ -63,8 +117,15 @@ def normalize_jsonl(lines, now=None):
             elevation = None
         station = dict(id=sid, name=str(value("B01019") or sid), lat=lat, lon=lon,
                        elevationM=elevation, obsTime=int(observed.timestamp()),
-                       tempC=round(temperatures[0], 2), source=SOURCE,
-                       quality="provisional", network=NETWORK)
+                       source=SOURCE, quality="provisional", network=NETWORK)
+        optional = {
+            "tempC": temperature, "dewpC": dewpoint, "rhPct": humidity,
+            "wspdKmh": wind_speed, "windGustKmh": gust,
+            "wdir": wind_direction, "pressHpa": sea_level_pressure,
+            "stationPressureHpa": station_pressure,
+        }
+        station.update({key: round(value, 2) for key, value in optional.items()
+                        if value is not None})
         if sid not in latest or station["obsTime"] > latest[sid]["obsTime"]:
             latest[sid] = station
     return sorted(latest.values(), key=lambda s: s["id"])
@@ -76,10 +137,12 @@ def fetch_meteohub_stations(session=None, now=None):
         session = requests
     now = now or datetime.now(timezone.utc)
     start = now - timedelta(hours=2)
+    products = " or ".join(PRODUCTS)
     query = (f"reftime:>={start:%Y-%m-%d %H:%M},<={now:%Y-%m-%d %H:%M};"
-             "product:B12101;license:CCBY_COMPLIANT")
+             f"product:{products};license:CCBY_COMPLIANT")
     response = session.post(URL, params={
         "q": query, "networks": NETWORK, "output_format": "JSON",
+        "stationDetails": "true", "allStationProducts": "false",
         "reliabilityCheck": "true", "lonmin": 11, "lonmax": 16,
         "latmin": 35, "latmax": 39,
     }, timeout=(15, 60), stream=True)
@@ -90,12 +153,12 @@ def fetch_meteohub_stations(session=None, now=None):
             nonlocal size
             for line in response.iter_lines():
                 size += len(line)
-                if size > 20_000_000:
+                if size > 80_000_000:
                     raise ValueError("export MeteoHub troppo grande")
                 yield line
         stations = normalize_jsonl(lines(), now)
         if not stations:
-            raise ValueError("nessuna temperatura MeteoHub recente e utilizzabile")
+            raise ValueError("nessuna osservazione MeteoHub recente e utilizzabile")
         return stations
     finally:
         response.close()
@@ -135,5 +198,5 @@ def fetch_site_observations():
                    obsTime=max(s.get("obsTime") or 0 for s in payload["stations"]))
     payload["stationNetwork"]["count"] = len(payload["stationNetwork"]["stations"])
     payload["stationNetwork"]["source"] = payload["source"]
-    payload["stationNetwork"]["coverageNote"] = "Catalogo METAR; MeteoHub: stazioni con temperatura ricevuta nelle ultime due ore, non catalogo completo."
+    payload["stationNetwork"]["coverageNote"] = "Catalogo METAR; MeteoHub: stazioni siciliane con almeno un parametro ricevuto nelle ultime due ore, non catalogo completo."
     return payload

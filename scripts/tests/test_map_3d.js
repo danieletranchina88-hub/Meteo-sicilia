@@ -924,12 +924,15 @@ assert.match(html, /<h3>Analisi<\/h3>/, "manca la sezione Analisi");
 assert.match(html, /<h3>Punto e strumenti<\/h3>/, "manca la sezione Punto e strumenti");
 assert.match(html, /<details class="drawer-more">/,
   "gli interruttori rari non sono raccolti in Altro");
-["isotherms", "isohypses", "satclouds", "fusion", "terrain", "satellite",
+["isotherms", "isohypses", "satclouds", "terrain", "satellite",
  "threed", "graticule", "raw"].forEach((rare) => {
   const more = html.match(/<details class="drawer-more">[\s\S]*?<\/details>/);
   assert.ok(more[0].includes('data-toggle="' + rare + '"'),
     "e' tornato in prima vista un interruttore raro: " + rare);
 });
+const analysisSection = html.match(/<h3>Analisi<\/h3>[\s\S]*?<details class="drawer-more">/);
+assert.ok(analysisSection && analysisSection[0].includes('data-toggle="fusion"'),
+  "il downscaling richiesto non e' visibile nella sezione Analisi");
 
 // Streamline e particelle sono due disegni dello stesso campo u/v ma
 // rispondono a domande diverse -- geometria istantanea e animazione -- quindi

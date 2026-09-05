@@ -20,9 +20,10 @@ from typing import Any, Callable
 from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 
-AGENT_METHOD = "icon2i-evidence-grounded-dual-llm-v9"
+AGENT_METHOD = "icon2i-evidence-grounded-dual-llm-v10"
 PACKET_METHOD = "icon2i-synoptic-evidence-packet-v1"
-GEMINI_MODEL = "gemini-3.8-flash"
+GEMINI_MODEL = "gemini-3.5-flash"
+GEMINI_REVIEW_MODEL = "gemini-3.5-flash-lite"
 PRIMARY_MODEL = "openai/gpt-oss-120b"
 GROQ_MODEL = "openai/gpt-oss-20b"
 GEMINI_ENDPOINT = (
@@ -708,10 +709,12 @@ def _primary_analysis(
     packet: dict[str, Any],
     api_key: str,
     post_json: Callable[..., dict[str, Any]],
+    provider: str = "groq",
 ) -> tuple[dict[str, Any], dict[str, Any]]:
     """Generate bounded chunks so free-tier requests cannot time out as one monolith."""
+    scope_call = _gemini_scope if provider == "gemini" else _groq_generation_scope
     usages: list[dict[str, Any]] = []
-    overview_response, usage = _groq_generation_scope(
+    overview_response, usage = scope_call(
         _gemini_request_packet(
             packet,
             scope="overview",
@@ -727,7 +730,7 @@ def _primary_analysis(
     generated_periods: list[dict[str, Any]] = []
     for offset in range(0, len(packet["periods"]), 2):
         requested = packet["periods"][offset:offset + 2]
-        chunk, usage = _groq_generation_scope(
+        chunk, usage = scope_call(
             _gemini_request_packet(packet, scope="periods", periods=requested),
             PERIODS_RESPONSE_SCHEMA,
             api_key,
@@ -752,15 +755,15 @@ def _primary_analysis(
     for index, (claim, _) in enumerate(_iter_claims(primary), start=1):
         claim["id"] = f"C{index:03d}"
     return primary, {
-        "provider": "groq-cloud",
-        "model": PRIMARY_MODEL,
+        "provider": "google-gemini-api" if provider == "gemini" else "groq-cloud",
+        "model": GEMINI_MODEL if provider == "gemini" else PRIMARY_MODEL,
         "requestCount": len(usages),
         "promptTokens": _usage_total(usages, "promptTokens"),
         "outputTokens": _usage_total(usages, "outputTokens"),
     }
 
 
-def _repair_invalid_claims(primary, packet, api_key, post_json):
+def _repair_invalid_claims(primary, packet, api_key, post_json, provider="groq"):
     """One bounded rewrite per invalid claim; never fabricate supporting refs.
 
     Valid claims are preserved. Each replacement passes the same checks as a
@@ -794,7 +797,8 @@ def _repair_invalid_claims(primary, packet, api_key, post_json):
             counts[family] = counts.get(family, 0)+1
         if len(counts) < 2:
             raise AgentError("prove indipendenti insufficienti per riscrivere il claim")
-        replacement, usage = _groq_generation_scope({
+        scope_call = _gemini_scope if provider == "gemini" else _groq_generation_scope
+        replacement, usage = scope_call({
             "scope": "claim-repair", "runTime": packet["runTime"],
             "originalClaim": claim, "validationError": feedback,
             "instruction": "Riscrivi il claim basandoti solo sulle prove fornite. Mantieni id. Non aggiungere riferimenti non pertinenti per superare i controlli; se la tesi non è sostenuta, cambiala o esplicita i limiti.",
@@ -943,6 +947,77 @@ def _groq_review(
     }
 
 
+def _gemini_review_scope(
+    review_input: dict[str, Any],
+    api_key: str,
+    post_json: Callable[..., dict[str, Any]],
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    endpoint = (
+        "https://generativelanguage.googleapis.com/v1beta/models/"
+        f"{GEMINI_REVIEW_MODEL}:generateContent"
+    )
+    response = post_json(
+        endpoint,
+        headers={"Content-Type": "application/json", "x-goog-api-key": api_key},
+        payload={
+            "systemInstruction": {"parts": [{"text": REVIEW_SYSTEM_PROMPT}]},
+            "contents": [{"role": "user", "parts": [{"text": json.dumps(
+                review_input, ensure_ascii=False, separators=(",", ":")
+            )}]}],
+            "generationConfig": {
+                "responseMimeType": "application/json",
+                "responseJsonSchema": REVIEW_SCHEMA,
+                "maxOutputTokens": 2048,
+            },
+        },
+    )
+    try:
+        parts = response["candidates"][0]["content"]["parts"]
+        text = "".join(str(part.get("text") or "") for part in parts
+                       if isinstance(part, dict) and not part.get("thought")).strip()
+        result = json.loads(text)
+    except (KeyError, IndexError, TypeError, json.JSONDecodeError) as error:
+        raise AgentError("Gemini non ha restituito una revisione JSON utilizzabile") from error
+    usage = response.get("usageMetadata") or {}
+    return result, {"promptTokens": usage.get("promptTokenCount"),
+                    "outputTokens": usage.get("candidatesTokenCount")}
+
+
+def _gemini_review(primary, packet, api_key, post_json):
+    scopes = [("overview", {item["id"] for item in primary["overview"]["claims"]})]
+    scopes.extend((period["periodId"], {
+        claim["id"] for section in period["sections"] for claim in section["claims"]
+    }) for period in primary["periods"])
+    aggregate = {"approved": True, "rejectedClaimIds": [],
+                 "downgradeClaimIds": [], "issues": []}
+    usages = []
+    for scope, claim_ids in scopes:
+        result, usage = _gemini_review_scope(
+            _review_payload(primary, packet, claim_ids, scope), api_key, post_json
+        )
+        usages.append(usage)
+        returned = set(result.get("rejectedClaimIds") or []) | set(
+            result.get("downgradeClaimIds") or []
+        )
+        if returned - claim_ids:
+            raise AgentError(f"revisione {scope} riferita a claim fuori ambito")
+        aggregate["approved"] = bool(aggregate["approved"] and result.get("approved"))
+        aggregate["rejectedClaimIds"].extend(result.get("rejectedClaimIds") or [])
+        aggregate["downgradeClaimIds"].extend(result.get("downgradeClaimIds") or [])
+        aggregate["issues"].extend(
+            f"{scope}: {_clean_text(item, 200)}" for item in result.get("issues") or []
+        )
+    aggregate["rejectedClaimIds"] = sorted(set(aggregate["rejectedClaimIds"]))
+    aggregate["downgradeClaimIds"] = sorted(set(aggregate["downgradeClaimIds"]))
+    aggregate["issues"] = aggregate["issues"][:8]
+    return aggregate, {
+        "provider": "google-gemini-api", "model": GEMINI_REVIEW_MODEL,
+        "requestCount": len(usages),
+        "promptTokens": _usage_total(usages, "promptTokens"),
+        "outputTokens": _usage_total(usages, "outputTokens"),
+    }
+
+
 def _apply_review(primary: dict[str, Any], review: dict[str, Any]) -> dict[str, Any]:
     _require_exact_keys(
         review,
@@ -977,20 +1052,42 @@ def generate_verified_bulletin(
     post_json: Callable[..., dict[str, Any]] = _post_json,
 ) -> dict[str, Any]:
     """Generate, independently review, and package an AI run synopsis."""
-    if not gemini_api_key or not groq_api_key:
+    if not gemini_api_key and not groq_api_key:
         raise AgentError("chiavi API non disponibili")
     packet = build_evidence_packet(deterministic_bulletin)
-    primary, primary_usage = _primary_analysis(packet, groq_api_key, post_json)
-    repairs = _repair_invalid_claims(primary, packet, groq_api_key, post_json)
+    try:
+        if not groq_api_key:
+            raise AgentError("chiave Groq non disponibile")
+        primary, primary_usage = _primary_analysis(packet, groq_api_key, post_json)
+        primary_provider, primary_key = "groq", groq_api_key
+    except AgentError as groq_error:
+        if not gemini_api_key:
+            raise
+        primary, primary_usage = _primary_analysis(
+            packet, gemini_api_key, post_json, provider="gemini"
+        )
+        primary_usage["fallbackFrom"] = _clean_text(str(groq_error), 120)
+        primary_provider, primary_key = "gemini", gemini_api_key
+    repairs = _repair_invalid_claims(
+        primary, packet, primary_key, post_json, provider=primary_provider
+    )
     primary_usage["repairRequestCount"] = len(repairs)
     if repairs:
         primary_usage["requestCount"] += len(repairs)
         for key in ("promptTokens", "outputTokens"):
             primary_usage[key] = _usage_total([primary_usage] + repairs, key)
     validation = validate_primary_analysis(primary, packet)
-    review, reviewer_usage = _groq_review(
-        primary, packet, groq_api_key, post_json
-    )
+    try:
+        if not groq_api_key:
+            raise AgentError("chiave Groq non disponibile")
+        review, reviewer_usage = _groq_review(primary, packet, groq_api_key, post_json)
+    except AgentError as groq_error:
+        if not gemini_api_key:
+            raise
+        review, reviewer_usage = _gemini_review(
+            primary, packet, gemini_api_key, post_json
+        )
+        reviewer_usage["fallbackFrom"] = _clean_text(str(groq_error), 120)
     primary = _apply_review(primary, review)
     validation = validate_primary_analysis(primary, packet)
     referenced = {

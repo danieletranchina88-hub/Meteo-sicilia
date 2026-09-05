@@ -2511,6 +2511,9 @@
               <button class="toggle-row" type="button" data-toggle="synoptic" aria-pressed="false">
                 <span><b>Modalità carta</b><small>analisi al suolo su carta, campo velato sotto</small></span><span class="switch"></span>
               </button>
+              <button class="toggle-row" type="button" data-toggle="fusion" aria-pressed="false">
+                <span><b>Ricalcola mappa · Downscaling</b><small id="map-downscaling-status" aria-live="polite">T · vento · UR · MSLP solo SLP · osservazioni MeteoHub</small></span><span class="switch"></span>
+              </button>
             </div>
 
             <details class="drawer-more">
@@ -2551,9 +2554,6 @@
                     </optgroup>
                   </select>
                 </div>
-                <button class="toggle-row" type="button" data-toggle="fusion" aria-pressed="false">
-                  <span><b>Ricalcola mappa · Downscaling</b><small id="map-downscaling-status" aria-live="polite">T · vento · UR · MSLP solo SLP · sperimentale</small></span><span class="switch"></span>
-                </button>
                 <button class="toggle-row" type="button" data-toggle="stations" aria-pressed="false">
                   <span><b>Stazioni osservate</b><small>rete METAR Italia + MeteoHub Sicilia · stato e fonte</small></span><span class="switch"></span>
                 </button>
@@ -3696,6 +3696,7 @@
       let stationNetworkMeta = null;
       let obsFetchedAt = 0;
       let obsFetching = false;
+      let obsFetchPromise = null;
       let showStations = false;
       let showFronts = false;
       let showTerrain = false;
@@ -5627,7 +5628,8 @@
         const results = await Promise.allSettled([
           loadAgentResource("ai_agent_status.json", directory),
           loadAgentResource("front_qc.json", directory),
-          loadDownscalingProduct(directory, currentData && currentData.meta.runTime)
+          loadDownscalingProduct(directory, currentData && currentData.meta.runTime),
+          loadAgentResource("live/observations.json", "data_weather")
         ]);
         content.replaceChildren();
         const ai = results[0].status === "fulfilled" ? results[0].value : null;
@@ -5638,13 +5640,14 @@
         agentCard(content, "AI Revisore · controllo delle evidenze", validated ? "Revisione completata" : "Revisione non confermata",
           (ai && ai.reviewerModel || "Revisore indipendente") + ": controlla i claim e le prove meteorologiche. La pubblicazione AI richiede anche i controlli deterministici.");
         const summary = front && front.analysisSummary;
-        agentCard(content, "AI Fronti · supporto ML alla diagnosi fisica", summary ? (summary.mlFusion === true ? "Fusione ML presente nel run" : "Contributo ML non confermato") : "Stato non disponibile",
+        agentCard(content, "Agente Fronti · diagnosi fisica e supporto ML", summary ? (summary.mlFusion === true ? "Fusione ML presente nel run" : "Diagnosi fisica operativa") : "Stato non disponibile",
           summary ? "Run " + front.runTime + ". " + (summary.analysisMessage || "") + " Il modello ML supporta l’analisi fisica e il tracciamento temporale; non è il modello neurale U-Net." : "Diagnostica del run non raggiungibile.");
         const local = results[2].status === "fulfilled" ? results[2].value : null;
-        agentCard(content, "AI Downscaling · osservazioni e strumenti fisici", local && local.status === "active-experimental" ? "Sperimentale · disponibilità verificata nel punto" : "Correzioni sospese o dati insufficienti",
-          "Temperatura locale: confronto stazioni–ICON alla stessa ora, quota e scarti delle stazioni. Usa Ricalcola mappa per temperatura, vento, pressione e umidità al suolo: analisi sperimentale entro ±45 minuti dalle osservazioni, con almeno tre stazioni vicine. La griglia resta quella ICON; non simula nuovi dettagli atmosferici. Per la stima locale di temperatura apri un punto e la scheda AI Downscaling. " + (local && local.reason || "Prodotto non disponibile.") + " Calcolo fisico deterministico; non richiede una rete neurale addestrata.");
-        agentCard(content, "AI Fronti U-Net · segmentazione neurale", "Ricerca · non operativo",
-          "Architettura addestrabile separata dal supporto ML operativo. Richiede un checkpoint validato e il collegamento alla produzione.");
+        const observed = results[3].status === "fulfilled" ? results[3].value : null;
+        const mh = observed && Array.isArray(observed.sourceStatus)
+          ? observed.sourceStatus.find(function (item) { return String(item.source).indexOf("MeteoHub") >= 0; }) : null;
+        agentCard(content, "Agente Downscaling · analisi oggettiva osservazioni–ICON", local && local.status === "active-experimental" ? "Operativo · correzione prudenziale" : "Correzioni sospese o dati insufficienti",
+          "Rete corrente: " + (mh && mh.count || 0) + " stazioni MeteoHub siciliane, più METAR. Temperatura, vento, umidità e MSLP vengono corretti solo alla scadenza osservata e soltanto dove almeno tre stazioni vicine sono coerenti; altrove resta ICON. " + (local && local.reason || "Prodotto non disponibile.") + " Non richiede una rete neurale addestrata né anni di archivio.");
         if (ai && ai.runTime) appendBulletinParagraph(content, "Run bollettino: " + ai.runTime);
         if (ai && ai.generatedAt) appendBulletinParagraph(content, "Stato aggiornato: " + ai.generatedAt);
       });
@@ -5831,7 +5834,8 @@
             ? "Agente meteorologico verificato · ICON-2I"
             : "Motore sinottico multi-livello ICON-2I";
           ui.bulletinStatus.textContent = aiValidated
-            ? "Gemini 3.5 Flash · revisione GPT-OSS 120B · prove verificabili"
+            ? (agentStatus.primaryModel || "modello autore") + " · revisione "
+              + (agentStatus.reviewerModel || "secondo modello") + " · prove verificabili"
             : bulletin.model + " · " + bulletin.spatialResolutionKm + " km · passo " +
               bulletin.temporalResolutionHours + " h · " + analysis.signalConfidence;
           ui.bulletinDisclaimer.textContent = aiValidated
@@ -10408,10 +10412,10 @@
 
       async function fetchObservations() {
         const now = Date.now();
-        if (obsFetching) return;
+        if (obsFetching) return obsFetchPromise;
         if (stationNetwork.length && now - obsFetchedAt < 10 * 60 * 1000) return;
         obsFetching = true;
-        try {
+        obsFetchPromise = (async function () { try {
           // Read the pipeline-published METAR snapshot from the same origin.
           // Fetching aviationweather.gov directly is blocked by CORS, so the
           // GitHub Action fetches it server-side into data_weather/.
@@ -10438,11 +10442,13 @@
               elevationM: numberOrNull(s.elevationM),
               tempC: numberOrNull(s.tempC),
               dewpC: numberOrNull(s.dewpC),
+              rhPct: numberOrNull(s.rhPct),
               wspdKmh: numberOrNull(s.wspdKmh),
               windGustKmh: numberOrNull(s.windGustKmh),
               wdir: numberOrNull(s.wdir),
               pressHpa: numberOrNull(s.pressHpa),
-              altimeterHpa: numberOrNull(s.altimeterHpa)
+              altimeterHpa: numberOrNull(s.altimeterHpa),
+              stationPressureHpa: numberOrNull(s.stationPressureHpa)
             };
           }).filter(Boolean);
           const observationsById = new Map(obsStations.map(function (station) {
@@ -10483,7 +10489,9 @@
           console.warn("Osservazioni non disponibili:", error);
         } finally {
           obsFetching = false;
-        }
+          obsFetchPromise = null;
+        }})();
+        return obsFetchPromise;
       }
 
       function fusionSupported(layerKey) {
@@ -10510,6 +10518,7 @@
         if (layerKey === "temp") return station.tempC;
         if (layerKey === "press") return station.pressHpa;
         if (layerKey === "rh") {
+          if (Number.isFinite(station.rhPct)) return clamp(station.rhPct, 0, 100);
           if (station.tempC === null || station.dewpC === null) return null;
           const t = station.tempC;
           const td = station.dewpC;
@@ -11710,5 +11719,3 @@
     </script>
   </body>
 </html>
-
-

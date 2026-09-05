@@ -161,8 +161,10 @@ def run(data_dir: Path, cache_dir: Path | None = None) -> dict:
             pass
     gemini_key = os.environ.get("GEMINI_API_KEY", "").strip()
     groq_key = os.environ.get("GROQ_API_KEY", "").strip()
-    if not groq_key:
+    if not gemini_key and not groq_key:
         missing = []
+        if not gemini_key:
+            missing.append("GEMINI_API_KEY")
         if not groq_key:
             missing.append("GROQ_API_KEY")
         status["reason"] = "segreti non disponibili: " + ", ".join(missing)
@@ -216,6 +218,8 @@ def run(data_dir: Path, cache_dir: Path | None = None) -> dict:
             "status": "validated",
             "runTime": product["runTime"],
             "generatedAt": product["generatedAt"],
+            "primaryModel": product["providers"]["primary"]["model"],
+            "reviewerModel": product["providers"]["reviewer"]["model"],
             "reason": "analisi primaria, revisione indipendente e controlli deterministici superati",
             "claimCount": product["validation"]["claimCount"],
         })
