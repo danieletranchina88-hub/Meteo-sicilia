@@ -30,6 +30,8 @@ l'orario di ciascuna stazione, scarta tempi futuri e dati più vecchi di due
 ore e conserva l'ultima misura per coordinate. La pressione di stazione resta
 separata e non viene mai usata come MSLP. Quote zero o mancanti restano nulle:
 la stazione è visibile ma non entra nella correzione termica.
+Per la pressione sono ammessi il livello medio del mare DB-All.e 101 per
+`B10051` e i livelli di superficie/quota/altezza 1, 102 e 103 per `B10004`.
 Il catalogo MeteoHub visualizzato è il sottoinsieme delle stazioni ricevute,
 non l'intera rete. I dati restano provvisori; il filtro del fornitore non è
 una validazione climatologica. `sourceStatus` registra ogni fonte anche

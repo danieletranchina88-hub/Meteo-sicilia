@@ -19,8 +19,10 @@ ROW = {"version":"0.1","network":"dpcn-sicilia","ident":None,
                {"timerange":[254,0,0],"level":[103,10000,None,None],
                 "vars":{"B11001":{"v":245.0},"B11002":{"v":5.0},
                         "B11041":{"v":8.0}}},
-               {"timerange":[254,0,0],"level":[1,0,None,None],
-                "vars":{"B10051":{"v":101325.0},"B10004":{"v":100800.0}}}]}
+               {"timerange":[254,0,0],"level":[101,0,None,None],
+                "vars":{"B10051":{"v":101325.0}}},
+               {"timerange":[254,0,0],"level":[102,700000,None,None],
+                "vars":{"B10004":{"v":100800.0}}}]}
 
 
 def test_real_contract():
@@ -64,7 +66,8 @@ def test_real_contract():
     bad = copy.deepcopy(ROW); bad["data"][1]["timerange"]=[0,0,3600]
     assert "tempC" not in normalize_jsonl([json.dumps(bad)], NOW)[0]
     pressure_at_two_metres = copy.deepcopy(ROW)
-    pressure_at_two_metres["data"][3]["level"] = [103,2000,None,None]
+    pressure_at_two_metres["data"][4]["level"] = [103,2000,None,None]
+    pressure_at_two_metres["data"].pop(3)
     reduced = normalize_jsonl([json.dumps(pressure_at_two_metres)], NOW)[0]
     assert reduced["stationPressureHpa"] == 1008.0 and "pressHpa" not in reduced
 

@@ -61,10 +61,20 @@ def normalize_jsonl(lines, now=None):
                         level[:2] in ([103, 10000], [1, 0])
                     ):
                         continue
-                    if code == "B10051" and level[:2] != [1, 0]:
+                    if code == "B10051" and level[:2] not in ([1, 0], [101, 0]):
                         continue
-                    if code == "B10004" and level[:2] not in ([1, 0], [103, 2000]):
-                        continue
+                    if code == "B10004":
+                        level_type = number(level[0]) if level else None
+                        level_value = number(level[1]) if len(level) > 1 else None
+                        station_level = (
+                            (level_type == 1 and level_value == 0)
+                            or (level_type == 102 and level_value is not None
+                                and -500_000 <= level_value <= 4_000_000)
+                            or (level_type == 103 and level_value is not None
+                                and 0 <= level_value <= 10_000)
+                        )
+                        if not station_level:
+                            continue
                     value = number((values.get(code) or {}).get("v"))
                     if value is not None:
                         observed_values[code] = value
