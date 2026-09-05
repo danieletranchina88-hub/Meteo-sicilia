@@ -7,7 +7,7 @@ Non sostituisce il motore numerico, non modifica griglie, fronti, probabilità o
 downscaling e non costituisce un sistema di assimilazione dati. Il prodotto è
 pubblicato soltanto quando supera tre controlli indipendenti:
 
-1. schema strutturato di Gemini 3.5 Flash;
+1. quattro risposte strutturate e limitate di Gemini 3.5 Flash;
 2. validazione deterministica locale;
 3. revisione dei claim con GPT-OSS 120B su Groq.
 
@@ -28,6 +28,12 @@ Il catalogo trasmesso contiene soltanto:
 - disponibilità e assenza esplicita delle grandezze;
 - catene causali e limiti del motore deterministico;
 - identificatore, forecast hour e famiglia fisica di ogni prova.
+
+Per evitare timeout e rispettare le quote gratuite, Gemini elabora prima la
+sintesi generale e poi i periodi a coppie. Gli identificatori dei claim sono
+assegnati localmente dopo la ricomposizione, così due risposte indipendenti non
+possono creare collisioni. Il prodotto completo viene validato soltanto dopo
+che tutti i blocchi sono presenti.
 
 ## Regole di pubblicazione
 
@@ -73,6 +79,11 @@ validato.
 L'assenza delle chiavi, il superamento di una quota o un errore dei provider
 non interrompono l'elaborazione ICON-2I e non cancellano il bollettino
 deterministico.
+
+Le modifiche al codice dell'agente attivano inoltre una workflow rapida che
+prova Gemini, Groq e l'arbitro sull'ultimo bollettino deterministico già
+pubblicato. Questa verifica non modifica il sito: serve a individuare errori di
+integrazione senza attendere nuovamente l'intero processamento ICON-2I.
 
 ## Limiti scientifici
 

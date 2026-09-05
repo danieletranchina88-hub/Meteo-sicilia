@@ -144,8 +144,25 @@ def fake_post_factory(packet, primary, *, approve=True):
         calls.append((url, headers, payload))
         if "googleapis.com" in url:
             assert headers["x-goog-api-key"] == "gemini-secret"
+            request_packet = json.loads(payload["contents"][0]["parts"][0]["text"])
+            if request_packet["scope"] == "overview":
+                generated = {
+                    "language": primary["language"],
+                    "overview": primary["overview"],
+                }
+            else:
+                period_ids = {
+                    item["periodId"] for item in request_packet["requestedPeriods"]
+                }
+                generated = {
+                    "language": primary["language"],
+                    "periods": [
+                        item for item in primary["periods"]
+                        if item["periodId"] in period_ids
+                    ],
+                }
             return {
-                "candidates": [{"content": {"parts": [{"text": json.dumps(primary)}]}}],
+                "candidates": [{"content": {"parts": [{"text": json.dumps(generated)}]}}],
                 "usageMetadata": {"promptTokenCount": 1200, "candidatesTokenCount": 500},
             }
         review_input = json.loads(payload["messages"][1]["content"])
@@ -186,7 +203,11 @@ def test_packet_and_verified_product():
     assert product["status"] == "validated"
     assert product["source"]["fieldsModifiedByLlm"] is False
     assert product["providers"]["reviewer"]["downgradedClaimCount"] == 1
-    assert len(calls) == 2 + len(packet["periods"])
+    gemini_calls = [item for item in calls if "googleapis.com" in item[0]]
+    groq_calls = [item for item in calls if "groq.com" in item[0]]
+    assert len(gemini_calls) == 1 + (len(packet["periods"]) + 1) // 2
+    assert len(groq_calls) == 1 + len(packet["periods"])
+    assert product["providers"]["primary"]["requestCount"] == len(gemini_calls)
     encoded = json.dumps(product, ensure_ascii=False, allow_nan=False)
     assert "gemini-secret" not in encoded and "groq-secret" not in encoded
 

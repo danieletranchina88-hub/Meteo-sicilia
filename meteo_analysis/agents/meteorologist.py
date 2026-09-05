@@ -20,7 +20,7 @@ from typing import Any, Callable
 from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 
-AGENT_METHOD = "icon2i-evidence-grounded-dual-llm-v2"
+AGENT_METHOD = "icon2i-evidence-grounded-dual-llm-v3"
 PACKET_METHOD = "icon2i-synoptic-evidence-packet-v1"
 GEMINI_MODEL = "gemini-3.5-flash"
 GROQ_MODEL = "openai/gpt-oss-120b"
@@ -145,6 +145,27 @@ PRIMARY_SCHEMA = _object_schema(
     ["language", "overview", "periods"],
 )
 
+OVERVIEW_RESPONSE_SCHEMA = _object_schema(
+    {
+        "language": {"type": "string", "enum": ["it"]},
+        "overview": PRIMARY_SCHEMA["properties"]["overview"],
+    },
+    ["language", "overview"],
+)
+
+PERIODS_RESPONSE_SCHEMA = _object_schema(
+    {
+        "language": {"type": "string", "enum": ["it"]},
+        "periods": {
+            "type": "array",
+            "items": PERIOD_SCHEMA,
+            "minItems": 1,
+            "maxItems": 2,
+        },
+    },
+    ["language", "periods"],
+)
+
 REVIEW_SCHEMA = _object_schema(
     {
         "approved": {"type": "boolean"},
@@ -172,8 +193,8 @@ Regole inderogabili:
    famiglie diagnostiche differenti. Nessun fenomeno deriva da un solo indice.
 2. Copia qualsiasi numero esattamente dalle prove citate; se non serve, usa
    linguaggio qualitativo. Non inventare soglie, località o orari.
-3. Riproduci esattamente periodId, fromHour e toHour richiesti e crea una sola
-   sezione per ciascuno dei sei id indicati.
+3. Produci soltanto lo scope richiesto. Riproduci esattamente periodId,
+   fromHour e toHour indicati e crea una sola sezione per ciascuno dei sei id.
 4. Se le prove sono contraddittorie o mancanti, scrivilo e abbassa la
    confidence. 'Segnale molto robusto' è ammesso soltanto con più livelli,
    evoluzione temporale coerente e nessuna contraddizione rilevante.
@@ -519,8 +540,9 @@ def _post_json(
     raise AgentError(f"{provider} API fallita: {type(last_error).__name__}")
 
 
-def _gemini_analysis(
-    packet: dict[str, Any],
+def _gemini_scope(
+    request_packet: dict[str, Any],
+    schema: dict[str, Any],
     api_key: str,
     post_json: Callable[..., dict[str, Any]],
 ) -> tuple[dict[str, Any], dict[str, Any]]:
@@ -531,13 +553,19 @@ def _gemini_analysis(
             "systemInstruction": {"parts": [{"text": PRIMARY_SYSTEM_PROMPT}]},
             "contents": [{
                 "role": "user",
-                "parts": [{"text": json.dumps(packet, ensure_ascii=False, separators=(",", ":"))}],
+                "parts": [{
+                    "text": json.dumps(
+                        request_packet,
+                        ensure_ascii=False,
+                        separators=(",", ":"),
+                    )
+                }],
             }],
             "generationConfig": {
                 "responseMimeType": "application/json",
-                "responseJsonSchema": PRIMARY_SCHEMA,
+                "responseJsonSchema": schema,
                 "temperature": 0.1,
-                "maxOutputTokens": 8192,
+                "maxOutputTokens": 4096,
                 "thinkingConfig": {"thinkingLevel": "HIGH"},
             },
         },
@@ -551,10 +579,97 @@ def _gemini_analysis(
         raise AgentError("Gemini non ha restituito JSON utilizzabile") from error
     usage = response.get("usageMetadata") or {}
     return result, {
-        "provider": "google-gemini-api",
-        "model": GEMINI_MODEL,
         "promptTokens": usage.get("promptTokenCount"),
         "outputTokens": usage.get("candidatesTokenCount"),
+    }
+
+
+def _gemini_request_packet(
+    packet: dict[str, Any],
+    *,
+    scope: str,
+    periods: list[dict[str, Any]],
+) -> dict[str, Any]:
+    if scope == "overview":
+        evidence = packet["evidence"]
+    else:
+        first_hour = min(int(period["fromHour"]) for period in periods)
+        last_hour = max(int(period["toHour"]) for period in periods)
+        evidence = [
+            item for item in packet["evidence"]
+            if first_hour <= int(item["leadHours"]) <= last_hour
+        ]
+    return {
+        "scope": scope,
+        "model": packet["model"],
+        "runTime": packet["runTime"],
+        "area": packet["area"],
+        "spatialResolutionKm": packet["spatialResolutionKm"],
+        "forecastHorizonHours": packet["forecastHorizonHours"],
+        "sourceMethod": packet["sourceMethod"],
+        "sourceSemantics": packet.get("sourceSemantics") or {},
+        "requiredSections": [
+            {"id": section_id, "title": SECTION_TITLES[section_id]}
+            for section_id in SECTION_IDS
+        ],
+        "requestedPeriods": periods,
+        "evidence": evidence,
+    }
+
+
+def _usage_total(items: list[dict[str, Any]], key: str) -> int | None:
+    values = [item.get(key) for item in items if item.get(key) is not None]
+    return sum(int(value) for value in values) if values else None
+
+
+def _gemini_analysis(
+    packet: dict[str, Any],
+    api_key: str,
+    post_json: Callable[..., dict[str, Any]],
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    """Generate bounded chunks so free-tier requests cannot time out as one monolith."""
+    usages: list[dict[str, Any]] = []
+    overview_response, usage = _gemini_scope(
+        _gemini_request_packet(
+            packet,
+            scope="overview",
+            periods=packet["periods"],
+        ),
+        OVERVIEW_RESPONSE_SCHEMA,
+        api_key,
+        post_json,
+    )
+    usages.append(usage)
+    _require_exact_keys(overview_response, {"language", "overview"}, "overview Gemini")
+
+    generated_periods: list[dict[str, Any]] = []
+    for offset in range(0, len(packet["periods"]), 2):
+        requested = packet["periods"][offset:offset + 2]
+        chunk, usage = _gemini_scope(
+            _gemini_request_packet(packet, scope="periods", periods=requested),
+            PERIODS_RESPONSE_SCHEMA,
+            api_key,
+            post_json,
+        )
+        usages.append(usage)
+        _require_exact_keys(chunk, {"language", "periods"}, "periodi Gemini")
+        generated_periods.extend(chunk["periods"])
+
+    primary = {
+        "language": overview_response["language"],
+        "overview": overview_response["overview"],
+        "periods": generated_periods,
+    }
+    # Claim identifiers are transport keys, not meteorological content. Assign
+    # them locally so independently generated chunks cannot collide.
+    for index, (claim, _) in enumerate(_iter_claims(primary), start=1):
+        claim["id"] = f"C{index:03d}"
+    return primary, {
+        "provider": "google-gemini-api",
+        "model": GEMINI_MODEL,
+        "requestCount": len(usages),
+        "promptTokens": _usage_total(usages, "promptTokens"),
+        "outputTokens": _usage_total(usages, "outputTokens"),
     }
 
 
