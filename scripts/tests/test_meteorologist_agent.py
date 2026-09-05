@@ -23,6 +23,8 @@ from meteo_analysis.agents.meteorologist import (  # noqa: E402
     AgentError,
     SECTION_IDS,
     SECTION_TITLES,
+    GEMINI_MODEL,
+    GROQ_MODEL,
     _post_json,
     _repair_invalid_claims,
     build_evidence_packet,
@@ -144,6 +146,7 @@ def fake_post_factory(packet, primary, *, approve=True):
     def fake_post(url, *, headers, payload, attempts=3):
         calls.append((url, headers, payload))
         if "googleapis.com" in url:
+            assert "temperature" not in payload["generationConfig"]
             assert headers["x-goog-api-key"] == "gemini-secret"
             request_packet = json.loads(payload["contents"][0]["parts"][0]["text"])
             if request_packet["scope"] == "overview":
@@ -395,7 +398,8 @@ def test_missing_secrets_preserve_deterministic_fallback():
         # A provider quota failure pauses calls instead of repeatedly spending.
         from datetime import datetime, timedelta, timezone
         (directory / "ai_agent_status.json").write_text(json.dumps({
-            "status":"fallback", "retryAfter":(datetime.now(timezone.utc)+timedelta(hours=1)).isoformat()
+            "status":"fallback", "primaryModel":GEMINI_MODEL, "reviewerModel":GROQ_MODEL,
+            "retryAfter":(datetime.now(timezone.utc)+timedelta(hours=1)).isoformat()
         }))
         with patch.dict(os.environ, {"GEMINI_API_KEY":"test", "GROQ_API_KEY":"test"}), patch(
             "scripts.generate_ai_bulletin.generate_verified_bulletin"

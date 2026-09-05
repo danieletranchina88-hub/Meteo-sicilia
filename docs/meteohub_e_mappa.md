@@ -66,3 +66,5 @@ metodo e modelli. Un errore 429 produce una pausa di un'ora nei tentativi della
 pipeline. Non si attiva alcun abbonamento o modifica della fatturazione.
 Se la quota del provider resta esaurita, il sito mostra esplicitamente il
 bollettino deterministico di riserva: non viene presentato come bollettino AI.
+
+Configurazione dal 5 settembre 2026: Gemini 3.8 Flash come autore e GPT-OSS 120B su Groq come revisore. La migrazione rimuove il parametro temperature non supportato dal nuovo modello. Prezzi ufficiali verificati su https://ai.google.dev/gemini-api/docs/pricing e https://console.groq.com/docs/models; nessuna stima mensile è affidabile senza misurare token e frequenza reali.

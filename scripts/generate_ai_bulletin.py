@@ -195,7 +195,9 @@ def run(data_dir: Path, cache_dir: Path | None = None) -> dict:
                         _refresh_manifest(data_dir, status)
                         return status
                 retry_after = datetime.fromisoformat(cached.get("retryAfter", "").replace("Z", "+00:00"))
-                if retry_after > datetime.now(timezone.utc):
+                if (retry_after > datetime.now(timezone.utc)
+                        and cached.get("primaryModel") == GEMINI_MODEL
+                        and cached.get("reviewerModel") == GROQ_MODEL):
                     status.update(reason="Quota AI esaurita: pausa delle richieste per evitare tentativi inutili.",
                                   failureCategory="provider-quota", retryAfter=cached["retryAfter"])
                     if output_path.exists():
@@ -242,4 +244,3 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
-

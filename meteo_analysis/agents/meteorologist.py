@@ -20,9 +20,9 @@ from typing import Any, Callable
 from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 
-AGENT_METHOD = "icon2i-evidence-grounded-dual-llm-v7"
+AGENT_METHOD = "icon2i-evidence-grounded-dual-llm-v8"
 PACKET_METHOD = "icon2i-synoptic-evidence-packet-v1"
-GEMINI_MODEL = "gemini-3.5-flash"
+GEMINI_MODEL = "gemini-3.8-flash"
 GROQ_MODEL = "openai/gpt-oss-120b"
 GEMINI_ENDPOINT = (
     "https://generativelanguage.googleapis.com/v1beta/models/"
@@ -592,7 +592,6 @@ def _gemini_scope(
             "generationConfig": {
                 "responseMimeType": "application/json",
                 "responseJsonSchema": schema,
-                "temperature": 0.1,
                 "maxOutputTokens": 2048 if request_packet.get("scope") == "claim-repair" else 8192,
                 # The task is extraction and synthesis under a strict schema,
                 # followed by an independent reasoner. LOW preserves enough
@@ -1007,4 +1006,3 @@ def generate_verified_bulletin(
             "un’allerta, non corregge i campi numerici e non misura un ensemble."
         ),
     }
-
