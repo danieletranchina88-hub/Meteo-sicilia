@@ -2552,10 +2552,10 @@
                   </select>
                 </div>
                 <button class="toggle-row" type="button" data-toggle="fusion" aria-pressed="false">
-                  <span><b>Analisi osservata</b><small>METAR entro ±45 min · T, UR; MSLP solo SLP</small></span><span class="switch"></span>
+                  <span><b>Ricalcola mappa · Downscaling</b><small id="map-downscaling-status" aria-live="polite">T, pressione, vento, UR · analisi locale sperimentale</small></span><span class="switch"></span>
                 </button>
                 <button class="toggle-row" type="button" data-toggle="stations" aria-pressed="false">
-                  <span><b>Stazioni osservate</b><small>rete METAR Italia · verde live, ambra rit., grigio assente</small></span><span class="switch"></span>
+                  <span><b>Stazioni osservate</b><small>METAR Italia + MeteoHub Sicilia · stato e fonte</small></span><span class="switch"></span>
                 </button>
                 <button class="toggle-row" type="button" data-toggle="terrain" aria-pressed="false">
                   <span><b>Rilievo topografico</b><small>ombreggiatura del terreno</small></span><span class="switch"></span>
@@ -4080,7 +4080,9 @@
         }
 
         const dataKey = key === "feels" ? "feels_like" : key;
-        return sample(currentData[dataKey], gx, gy);
+        const grid = showFusion && selectedLevel === "surface" && fusionSupported(key)
+          ? buildFusedGrid(key,getGrid(currentData[dataKey]),currentData.meta) : currentData[dataKey];
+        return sample(grid, gx, gy);
       }
 
       function windUV(gx, gy) {
@@ -4100,8 +4102,8 @@
           }
         }
         return {
-          u: sample(currentData && currentData.wind_u, gx, gy),
-          v: sample(currentData && currentData.wind_v, gx, gy)
+          u: sample(windField() && windField().u, gx, gy),
+          v: sample(windField() && windField().v, gx, gy)
         };
       }
 
@@ -4109,7 +4111,9 @@
         const upper = selectedLevel !== "surface" ? upperLevelData("wind") : null;
         if (upper) return { meta: upper, u: upper.u, v: upper.v };
         if (!currentData) return null;
-        return { meta: currentData.meta, u: currentData.wind_u, v: currentData.wind_v };
+        return { meta: currentData.meta,
+          u: showFusion ? buildFusedGrid("wind_u",getGrid(currentData.wind_u),currentData.meta) : currentData.wind_u,
+          v: showFusion ? buildFusedGrid("wind_v",getGrid(currentData.wind_v),currentData.meta) : currentData.wind_v };
       }
 
       const FRONT_TYPE_NAMES = {
@@ -5638,7 +5642,7 @@
           summary ? "Run " + front.runTime + ". " + (summary.analysisMessage || "") + " Il modello ML supporta l’analisi fisica e il tracciamento temporale; non è il modello neurale U-Net." : "Diagnostica del run non raggiungibile.");
         const local = results[2].status === "fulfilled" ? results[2].value : null;
         agentCard(content, "AI Downscaling · osservazioni e strumenti fisici", local && local.status === "active-experimental" ? "Sperimentale · disponibilità verificata nel punto" : "Correzioni sospese o dati insufficienti",
-          "Temperatura locale: confronto METAR–ICON alla stessa ora, quota e scarti delle stazioni. Apri un punto sulla mappa e la scheda AI Downscaling. " + (local && local.reason || "Prodotto non disponibile.") + " Calcolo fisico deterministico; non richiede una rete neurale addestrata.");
+          "Temperatura locale: confronto stazioni–ICON alla stessa ora, quota e scarti delle stazioni. Usa Ricalcola mappa per temperatura, vento, pressione e umidità al suolo: analisi sperimentale entro ±45 minuti dalle osservazioni, con almeno tre stazioni vicine. La griglia resta quella ICON; non simula nuovi dettagli atmosferici. Per la stima locale di temperatura apri un punto e la scheda AI Downscaling. " + (local && local.reason || "Prodotto non disponibile.") + " Calcolo fisico deterministico; non richiede una rete neurale addestrata.");
         agentCard(content, "AI Fronti U-Net · segmentazione neurale", "Ricerca · non operativo",
           "Architettura addestrabile separata dal supporto ML operativo. Richiede un checkpoint validato e il collegamento alla produzione.");
         if (ai && ai.runTime) appendBulletinParagraph(content, "Run bollettino: " + ai.runTime);
@@ -6414,19 +6418,19 @@
           showSatelliteClouds = !showSatelliteClouds;
           updateSatelliteClouds();
         } else if (name === "fusion") {
-          if (!showFusion && !fusionSupported(activeLayer)) {
+          if (!showFusion && (!fusionSupported(activeLayer) || selectedLevel !== "surface")) {
             toast(
-              "Fusione osservata disponibile su temperatura, umidità e "
+              "Ricalcolo al suolo disponibile su temperatura, vento, umidità e "
               + "MSLP quando il METAR contiene vera SLP"
             );
             return;
           }
           showFusion = !showFusion;
           if (showFusion) {
-            toast("Analisi osservata: fondo ICON-2I con METAR reali…");
-            fetchObservations().then(function () {
+            toast("Ricalcolo della mappa da ICON e osservazioni reali…");
+            Promise.all([fetchObservations(),loadLocalDownscaling().catch(function(){return null;})]).then(function () {
               if (!obsStations.length) {
-                toast("Osservazioni METAR non disponibili al momento");
+                toast("Osservazioni non disponibili al momento");
                 showFusion = false;
                 updateLayerUi();
                 return;
@@ -6434,7 +6438,7 @@
               const matchingCount = matchingObservationCount(activeLayer);
               if (!matchingCount) {
                 toast(
-                  "Nessun METAR compatibile con campo e valid time entro ±45 minuti"
+                  "Nessuna osservazione compatibile con campo e valid time entro ±45 minuti"
                 );
                 showFusion = false;
                 updateLayerUi();
@@ -6451,8 +6455,8 @@
               refreshSelectedPoint();
               updateLayerUi();
               toast(
-                "Analisi osservata attiva · " + matchingCount
-                + " METAR temporalmente coerenti"
+                "Mappa ricalcolata · " + matchingCount
+                + " osservazioni compatibili. Correzioni solo con almeno 3 stazioni vicine; altrove resta ICON."
               );
             });
           } else {
@@ -6464,7 +6468,7 @@
         } else if (name === "stations") {
           showStations = !showStations;
           if (showStations) {
-            toast("Carico la rete METAR italiana…");
+            toast("Carico le stazioni METAR e MeteoHub…");
             fetchObservations().then(function () {
               if (!stationNetwork.length) {
                 showStations = false;
@@ -6477,7 +6481,7 @@
               const reporting = obsStations.length;
               const total = stationNetwork.length;
               toast(
-                "Rete METAR Italia: " + reporting + "/" + total
+                "Stazioni METAR + MeteoHub: " + reporting + "/" + total
                 + " stazioni con report ricevuto"
               );
             });
@@ -6790,8 +6794,8 @@
           );
         }
         const windLevel = upperActive ? upperLevelData("wind") : null;
-        const windUGrid = isWindField ? getGrid(windLevel ? windLevel.u : currentData.wind_u) : null;
-        const windVGrid = isWindField ? getGrid(windLevel ? windLevel.v : currentData.wind_v) : null;
+        const windUGrid = isWindField ? getGrid(windLevel ? windLevel.u : windField().u) : null;
+        const windVGrid = isWindField ? getGrid(windLevel ? windLevel.v : windField().v) : null;
 
         for (let y = 0; y < height; y += 1) {
           const fraction = height > 1 ? y / (height - 1) : 0;
@@ -10399,9 +10403,8 @@
       // ---- ANALISI OSSERVATA: fusione ICON-2I + METAR (Cressman) ----
       // Client-side: il modello ICON e' il primo tentativo, le stazioni reali
       // lo correggono. Nessun impatto sulla pipeline dati.
-      const FUSION_RADIUS_KM = 150;
       const FUSION_TIME_TOLERANCE_MS = 45 * 60 * 1000;
-      const FUSION_FIELDS = { temp: "temp", press: "press", rh: "rh" };
+      const FUSION_FIELDS = { temp: "temp", press: "press", rh: "rh", wind: "wind" };
 
       async function fetchObservations() {
         const now = Date.now();
@@ -10427,6 +10430,7 @@
             return {
               id: s.id || s.name || "",
               name: s.name || s.id || "",
+              source: s.source || "NOAA AWC METAR",
               lat: lat,
               lon: lon,
               obsTime: Number.isFinite(Number(s.obsTime))
@@ -10456,6 +10460,7 @@
             return {
               id: id,
               name: station.name || (report && report.name) || id,
+              source: station.source || (report && report.source) || "NOAA AWC METAR",
               lat: lat,
               lon: lon,
               elevationM: numberOrNull(station.elevationM),
@@ -10472,6 +10477,8 @@
           stationNetworkMeta = payload && payload.stationNetwork
             ? payload.stationNetwork : null;
           obsFetchedAt = now;
+          if(currentData) { currentData._fused={};currentData._fusionStats={};currentData._fusedPressureAnalysis=null; }
+          if(stationNetworkMeta) stationNetworkMeta.sourceStatus=payload.sourceStatus || [];
         } catch (error) {
           console.warn("Osservazioni non disponibili:", error);
         } finally {
@@ -10488,11 +10495,18 @@
         if (!Number.isFinite(station.obsTime)) return false;
         const validTime = Date.parse(currentData.meta.validTime);
         return Number.isFinite(validTime)
+          && Date.now()-station.obsTime >= 0 && Date.now()-station.obsTime <= 2*3600000
           && Math.abs(station.obsTime - validTime) <= FUSION_TIME_TOLERANCE_MS;
       }
 
       function observationValue(station, layerKey) {
         if (!stationMatchesValidTime(station)) return null;
+        if (layerKey === "wind") return station.wspdKmh;
+        if (layerKey === "wind_u" || layerKey === "wind_v") {
+          if (!Number.isFinite(station.wspdKmh) || !Number.isFinite(station.wdir) || station.wspdKmh<0 || station.wspdKmh>250 || station.wdir<0 || station.wdir>360) return null;
+          const angle=station.wdir*Math.PI/180, speed=station.wspdKmh/3.6;
+          return -speed*(layerKey==='wind_u'?Math.sin(angle):Math.cos(angle));
+        }
         if (layerKey === "temp") return station.tempC;
         if (layerKey === "press") return station.pressHpa;
         if (layerKey === "rh") {
@@ -10517,59 +10531,76 @@
 
       // Cressman objective analysis: fused = model + weighted mean of the
       // (observation - model) increments, weight (R^2-d^2)/(R^2+d^2) for d<R.
-      function cressmanFused(baseGrid, meta, layerKey, radiusKm) {
-        const kmPerLat = 111.195;
-        const refLat = meta.la1 - ((meta.ny - 1) * meta.dy) / 2;
-        const kmPerLon = 111.195 * Math.cos((refLat * Math.PI) / 180);
-        const points = [];
-        for (let s = 0; s < obsStations.length; s += 1) {
-          const station = obsStations[s];
-          const obs = observationValue(station, layerKey);
-          if (obs === null || !Number.isFinite(obs)) continue;
-          const gx = (station.lon - meta.lo1) / meta.dx;
-          const gy = (meta.la1 - station.lat) / meta.dy;
-          const model = sampleBilinear(baseGrid, gx, gy, meta.nx, meta.ny);
-          if (!Number.isFinite(model)) continue;
-          points.push({
-            x: station.lon * kmPerLon,
-            y: station.lat * kmPerLat,
-            increment: obs - model
-          });
-        }
-        if (!points.length) return baseGrid;
-        const r2 = radiusKm * radiusKm;
-        const out = new Float32Array(baseGrid.length);
-        for (let j = 0; j < meta.ny; j += 1) {
-          const cy = (meta.la1 - j * meta.dy) * kmPerLat;
-          for (let i = 0; i < meta.nx; i += 1) {
-            const idx = j * meta.nx + i;
-            const base = baseGrid[idx];
-            if (!Number.isFinite(base)) { out[idx] = base; continue; }
-            const cx = (meta.lo1 + i * meta.dx) * kmPerLon;
-            let wsum = 0;
-            let csum = 0;
-            for (let p = 0; p < points.length; p += 1) {
-              const dx = cx - points[p].x;
-              const dy = cy - points[p].y;
-              const d2 = dx * dx + dy * dy;
-              if (d2 >= r2) continue;
-              const w = (r2 - d2) / (r2 + d2);
-              wsum += w;
-              csum += w * points[p].increment;
-            }
-            out[idx] = wsum > 0 ? base + csum / wsum : base;
+      function cressmanFused(baseGrid, meta, layerKey) {
+        const policies = {
+          temp: {radiusKm:40,maxResidual:5,maxCorrection:3,maxSpread:2,min:-60,max:60,elevationToleranceM:250},
+          press: {radiusKm:150,maxResidual:8,maxCorrection:3,maxSpread:2,min:850,max:1080},
+          rh: {radiusKm:40,maxResidual:35,maxCorrection:20,maxSpread:15,min:0,max:100},
+          wind_u: {radiusKm:40,maxResidual:10,maxCorrection:4,maxSpread:4,min:-100,max:100},
+          wind_v: {radiusKm:40,maxResidual:10,maxCorrection:4,maxSpread:4,min:-100,max:100}
+        };
+        const policy = policies[layerKey];
+        if (!policy) return baseGrid;
+        const terrainSource = localDownscalingCache && localDownscalingCache.terrain;
+        const terrainOk = terrainSource && terrainSource.runTime === meta.runTime;
+        const heightAt = function(lon,lat) {
+          if (!terrainOk) return NaN;
+          const m=terrainSource.meta;
+          const x=(lon-m.lo1)/m.dx, y=(m.la1-lat)/m.dy;
+          if(x<0||y<0||x>m.nx-1||y>m.ny-1) return NaN;
+          return sampleBilinear(getGrid(terrainSource.terrainHeight),x,y,m.nx,m.ny);
+        };
+        let terrain=null;
+        if(layerKey==='temp') {
+          if(!terrainOk) {
+            document.getElementById("map-downscaling-status").textContent="Temperatura: quota ICON non disponibile; mappa originale.";
+            return baseGrid;
           }
+          terrain=new Float32Array(baseGrid.length);
+          for(let j=0;j<meta.ny;j++) for(let i=0;i<meta.nx;i++)
+            terrain[j*meta.nx+i]=heightAt(meta.lo1+i*meta.dx,meta.la1-j*meta.dy);
         }
-        return out;
+        const points=[];
+        for(const station of obsStations) {
+          const obs=observationValue(station,layerKey);
+          if(!Number.isFinite(obs)) continue;
+          const x=(station.lon-meta.lo1)/meta.dx,y=(meta.la1-station.lat)/meta.dy;
+          if(x<0||y<0||x>meta.nx-1||y>meta.ny-1) continue;
+          let model=sampleBilinear(baseGrid,x,y,meta.nx,meta.ny);
+          if(!Number.isFinite(model)) continue;
+          if(layerKey==='temp') {
+            const z=heightAt(station.lon,station.lat);
+            if(!Number.isFinite(z)||!Number.isFinite(station.elevationM)||Math.abs(station.elevationM-z)>300) continue;
+            model += -0.0065*(station.elevationM-z);
+          }
+          const increment=obs-model;
+          if(Math.abs(increment)>policy.maxResidual) continue;
+          // Collocated reports are not independent neighboring stations.
+          if(points.some(p=>MeteoLocalDownscaling.distance(p,station)<1)) continue;
+          points.push({...station,increment:increment});
+        }
+        const result=MeteoLocalDownscaling.analyzeGrid(baseGrid,meta,points,policy,terrain);
+        if(!currentData._fusionStats) currentData._fusionStats={};
+        currentData._fusionStats[layerKey]=result;
+        return result.grid;
       }
 
       function buildFusedGrid(layerKey, baseGrid, meta) {
-        if (!currentData) return baseGrid;
+        if (!currentData || !baseGrid) return baseGrid;
         if (!currentData._fused) currentData._fused = {};
-        if (currentData._fused[layerKey]) return currentData._fused[layerKey];
-        const fused = cressmanFused(baseGrid, meta, layerKey, FUSION_RADIUS_KM);
-        currentData._fused[layerKey] = fused;
-        return fused;
+        if (!currentData._fused[layerKey])
+          currentData._fused[layerKey] = cressmanFused(baseGrid, meta, layerKey);
+        const result=currentData._fusionStats && currentData._fusionStats[layerKey];
+        if(result) {
+        const selectedKey=activeLayer==='wind'?'wind_u':activeLayer;
+        if(layerKey===selectedKey || (activeLayer==='wind' && layerKey==='wind_v')) {
+          const percent=(100*result.correctedCells/result.totalCells).toFixed(1);
+          document.getElementById('map-downscaling-status').textContent=
+            result.correctedCells ? 'Sperimentale · '+result.stationCount+' stazioni · '+percent+'% celle corrette'
+              : 'Nessuna cella correggibile: resta la mappa ICON originale.';
+        }
+        }
+        return currentData._fused[layerKey];
       }
 
       function buildStationFeatures(layerKey, info) {
@@ -10587,6 +10618,7 @@
               value: value,
               id: station.id,
               name: station.name || station.id,
+              source: station.source || "NOAA AWC METAR",
               status: "fusion",
               observedAt: station.obsTime,
               tempC: station.tempC,
@@ -10627,6 +10659,7 @@
             properties: {
               id: station.id,
               name: station.name || station.id,
+              source: station.source || "NOAA AWC METAR",
               status: status,
               color: colors[status],
               opacity: status === "offline" ? 0.55 : 1,
@@ -10659,7 +10692,7 @@
       }
 
       function stationObservationTime(value) {
-        if (!Number.isFinite(value)) return "nessun METAR corrente";
+        if (!Number.isFinite(value)) return "nessuna osservazione corrente";
         return new Date(value).toLocaleString("it-IT", {
           timeZone: "UTC", day: "2-digit", month: "2-digit",
           hour: "2-digit", minute: "2-digit", hour12: false
@@ -10695,7 +10728,7 @@
           .setHTML(
             "<div class=\"station-popup\"><strong>" + escapeStationText(p.name)
             + "</strong><small>" + escapeStationText(p.id)
-            + " · NOAA AWC METAR</small>" + rows
+            + " · " + escapeStationText(p.source || "NOAA AWC METAR") + "</small>" + rows
             + "<em>SLP e QNH sono grandezze distinte.</em></div>"
           )
           .addTo(map);

@@ -13,7 +13,7 @@ import sys
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
-from meteo_analysis.verification.observations import fetch_italy_metar_observations
+from meteo_analysis.verification.meteohub import fetch_site_observations
 
 
 def write_json_atomic(path: Path, payload) -> None:
@@ -34,7 +34,7 @@ def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--output-dir", default="observation_archive")
     arguments = parser.parse_args()
-    payload = fetch_italy_metar_observations()
+    payload = fetch_site_observations()
     if not payload.get("stations"):
         raise RuntimeError("snapshot METAR vuoto: non archivio un falso successo")
     stamp = payload["capturedAt"].replace("-", "").replace(":", "")
@@ -42,7 +42,9 @@ def main() -> None:
     output = Path(arguments.output_dir) / f"metar_{stamp}.json"
     write_json_atomic(output, payload)
     print(f"{output}: {payload['count']} stazioni")
+    print(json.dumps(payload.get("sourceStatus", []), ensure_ascii=False))
 
 
 if __name__ == "__main__":
     main()
+

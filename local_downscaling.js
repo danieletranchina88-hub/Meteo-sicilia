@@ -59,7 +59,45 @@
       stations:weighted.map(x=>({id:x.s.id,distanceKm:x.d,observedC:x.s.observedC,
         modelC:x.s.modelC,obsTime:x.s.obsTime,weight:x.w,decay:x.decay}))});
   }
-  const api={evaluate,distance};
+  // Experimental objective analysis on the existing model grid. This does
+  // not claim a finer effective resolution or a dynamically rerun forecast.
+  function analyzeGrid(base, meta, points, policy, terrain) {
+    const out = new Float32Array(base), support = new Uint16Array(base.length);
+    let correctedCells = 0;
+    const radius = policy.radiusKm, radius2 = radius * radius;
+    const weights = new Float64Array(base.length), sums = new Float64Array(base.length);
+    const squares = new Float64Array(base.length);
+    // Visit station neighborhoods instead of grid × all stations.
+    for (const point of points) {
+      if (![point.lat,point.lon,point.increment].every(finite) || Math.abs(point.increment)>policy.maxResidual) continue;
+      const halfY=radius/111.195/meta.dy;
+      const halfX=radius/(111.195*Math.cos(point.lat*Math.PI/180))/meta.dx;
+      const gx=(point.lon-meta.lo1)/meta.dx, gy=(meta.la1-point.lat)/meta.dy;
+      for(let j=Math.max(0,Math.floor(gy-halfY));j<=Math.min(meta.ny-1,Math.ceil(gy+halfY));j++) {
+        for(let i=Math.max(0,Math.floor(gx-halfX));i<=Math.min(meta.nx-1,Math.ceil(gx+halfX));i++) {
+          const k=j*meta.nx+i;
+          if(!finite(base[k])) continue;
+          const target={lat:meta.la1-j*meta.dy,lon:meta.lo1+i*meta.dx};
+          const d=distance(point,target); if(d>=radius) continue;
+          if(policy.elevationToleranceM && (!terrain || !finite(terrain[k]) || !finite(point.elevationM) || Math.abs(terrain[k]-point.elevationM)>policy.elevationToleranceM)) continue;
+          const w=(radius2-d*d)/(radius2+d*d);
+          weights[k]+=w; sums[k]+=w*point.increment;squares[k]+=w*point.increment**2;support[k]++;
+        }
+      }
+    }
+    for(let k=0;k<out.length;k++) {
+      if(support[k]<3 || weights[k]<=0) continue;
+      const mean=sums[k]/weights[k];
+      const spread=Math.sqrt(Math.max(0,squares[k]/weights[k]-mean*mean));
+      if(spread>policy.maxSpread) continue;
+      // A model prior and compact support avoid distant full-strength shifts.
+      const correction=Math.max(-policy.maxCorrection,Math.min(policy.maxCorrection,sums[k]/(1+weights[k])));
+      out[k]=Math.max(policy.min,Math.min(policy.max,base[k]+correction));
+      correctedCells++;
+    }
+    return {grid:out,correctedCells,totalCells:base.length,stationCount:points.length};
+  }
+  const api={evaluate,distance,analyzeGrid};
   if (typeof module!=='undefined'&&module.exports) module.exports=api;
   else root.MeteoLocalDownscaling=api;
 })(typeof globalThis!=='undefined'?globalThis:this);

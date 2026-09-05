@@ -71,7 +71,7 @@ from meteo_analysis.verification.archive import (
     write_run_manifest,
 )
 from meteo_analysis.verification.object_storage import RawGribArchive
-from meteo_analysis.verification.observations import fetch_italy_metar_observations
+from meteo_analysis.verification.meteohub import fetch_site_observations
 from meteo_analysis.verification.stations import StationForecastArchive
 from ml_fronts import predict_store as predict_ml_fronts
 
@@ -231,7 +231,7 @@ def write_json_gzip_atomic(path, payload, compresslevel=6):
 def collect_observations():
     """Fetch the Italian METAR network snapshot for site and verification."""
     try:
-        payload = fetch_italy_metar_observations()
+        payload = fetch_site_observations()
         if not payload.get("stations"):
             raise ValueError("snapshot senza stazioni valide")
         return payload

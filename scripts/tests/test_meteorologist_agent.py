@@ -378,6 +378,32 @@ def test_missing_secrets_preserve_deterministic_fallback():
         assert "ai_agent_status.json" in paths
         assert manifest["algorithms"]["aiMeteorologist"] is None
 
+        # Identical evidence reuses a verified product without another call.
+        source = deterministic_bulletin()
+        packet = build_evidence_packet(source)
+        fake_post, _ = fake_post_factory(packet, primary_for(packet))
+        product = generate_verified_bulletin(source, gemini_api_key="gemini-secret",
+                                            groq_api_key="groq-secret", post_json=fake_post)
+        with patch.dict(os.environ, {"GEMINI_API_KEY":"test", "GROQ_API_KEY":"test"}), patch(
+            "scripts.generate_ai_bulletin.generate_verified_bulletin", return_value=product
+        ) as generate:
+            first = run_agent_script(directory)
+            second = run_agent_script(directory, directory)
+            assert first["status"] == second["status"] == "validated"
+            assert second["cacheHit"] is True and generate.call_count == 1
+
+        # A provider quota failure pauses calls instead of repeatedly spending.
+        from datetime import datetime, timedelta, timezone
+        (directory / "ai_agent_status.json").write_text(json.dumps({
+            "status":"fallback", "retryAfter":(datetime.now(timezone.utc)+timedelta(hours=1)).isoformat()
+        }))
+        with patch.dict(os.environ, {"GEMINI_API_KEY":"test", "GROQ_API_KEY":"test"}), patch(
+            "scripts.generate_ai_bulletin.generate_verified_bulletin"
+        ) as generate:
+            status = run_agent_script(directory, directory)
+            assert status["failureCategory"] == "provider-quota"
+            generate.assert_not_called()
+
 
 if __name__ == "__main__":
     test_packet_and_verified_product()

@@ -6,6 +6,7 @@ from __future__ import annotations
 import argparse
 from datetime import datetime, timezone
 import gzip
+import hashlib
 import json
 import os
 from pathlib import Path
@@ -118,14 +119,14 @@ def attach_local_evidence(deterministic: dict, data_dir: Path) -> None:
         if not stations:
             continue
         paragraphs = [
-            "Osservazioni NOAA AWC METAR contemporanee alla scadenza; non sono previsioni. "
+            "Osservazioni di stazione contemporanee alla scadenza; non sono previsioni. "
             "Downscaling locale sperimentale tramite strumenti fisici: " + local.get("reason", "stato non disponibile")
             + " Gli scarti osservati non vanno estesi alle scadenze successive."
         ]
         # Bounded verified examples, chosen deterministically, never raw reports.
         for station in sorted(stations, key=lambda item: item['id'])[:2]:
             paragraphs.append(
-                f"METAR {station['id']} a latitudine {station['lat']} e longitudine {station['lon']}, "
+                f"Stazione {station['id']} a latitudine {station['lat']} e longitudine {station['lon']}, "
                 f"ora {datetime.fromtimestamp(station['obsTime'], timezone.utc).isoformat()}: "
                 f"temperatura osservata {station['observedC']} °C, ICON interpolato alla stessa ora "
                 f"{station['modelC']} °C. Quota stazione {station['elevationM']} m, "
@@ -138,7 +139,7 @@ def attach_local_evidence(deterministic: dict, data_dir: Path) -> None:
         })
 
 
-def run(data_dir: Path) -> dict:
+def run(data_dir: Path, cache_dir: Path | None = None) -> dict:
     deterministic_path = data_dir / "expert_bulletin.json.gz"
     output_path = data_dir / "ai_expert_bulletin.json.gz"
     status_path = data_dir / "ai_agent_status.json"
@@ -175,6 +176,35 @@ def run(data_dir: Path) -> dict:
     try:
         deterministic = _read_gzip_json(deterministic_path)
         attach_local_evidence(deterministic, data_dir)
+        fingerprint = hashlib.sha256(json.dumps(
+            {"evidence": deterministic, "method": AGENT_METHOD,
+             "primary": GEMINI_MODEL, "reviewer": GROQ_MODEL},
+            sort_keys=True, ensure_ascii=False, separators=(",", ":"),
+        ).encode()).hexdigest()
+        status["evidenceFingerprint"] = fingerprint
+        if cache_dir is not None:
+            try:
+                cached = json.loads((cache_dir / "ai_agent_status.json").read_text())
+                if (cached.get("status") == "validated"
+                        and cached.get("evidenceFingerprint") == fingerprint):
+                    previous = _read_gzip_json(cache_dir / "ai_expert_bulletin.json.gz")
+                    if previous.get("status") == "validated" and previous.get("runTime") == status.get("runTime"):
+                        _write_gzip_json_atomic(output_path, previous)
+                        status = {**cached, "cacheHit": True}
+                        _write_json_atomic(status_path, status)
+                        _refresh_manifest(data_dir, status)
+                        return status
+                retry_after = datetime.fromisoformat(cached.get("retryAfter", "").replace("Z", "+00:00"))
+                if retry_after > datetime.now(timezone.utc):
+                    status.update(reason="Quota AI esaurita: pausa delle richieste per evitare tentativi inutili.",
+                                  failureCategory="provider-quota", retryAfter=cached["retryAfter"])
+                    if output_path.exists():
+                        output_path.unlink()
+                    _write_json_atomic(status_path, status)
+                    _refresh_manifest(data_dir, status)
+                    return status
+            except (OSError, ValueError, TypeError, KeyError):
+                pass
         product = generate_verified_bulletin(
             deterministic,
             gemini_api_key=gemini_key,
@@ -192,6 +222,10 @@ def run(data_dir: Path) -> dict:
         if output_path.exists():
             output_path.unlink()
         status["reason"] = _safe_error(error)
+        if "HTTP 429" in status["reason"]:
+            from datetime import timedelta
+            status["failureCategory"] = "provider-quota"
+            status["retryAfter"] = (datetime.now(timezone.utc) + timedelta(hours=1)).isoformat()
     _write_json_atomic(status_path, status)
     _refresh_manifest(data_dir, status)
     return status
@@ -200,12 +234,12 @@ def run(data_dir: Path) -> dict:
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--data-dir", default="data_weather")
+    parser.add_argument("--cache-dir")
     arguments = parser.parse_args()
-    status = run(Path(arguments.data_dir))
+    status = run(Path(arguments.data_dir), Path(arguments.cache_dir) if arguments.cache_dir else None)
     print(json.dumps(status, ensure_ascii=False, separators=(",", ":")))
 
 
 if __name__ == "__main__":
     main()
-
 
