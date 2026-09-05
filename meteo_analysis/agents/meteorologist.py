@@ -20,7 +20,7 @@ from typing import Any, Callable
 from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 
-AGENT_METHOD = "icon2i-evidence-grounded-dual-llm-v5"
+AGENT_METHOD = "icon2i-evidence-grounded-dual-llm-v6"
 PACKET_METHOD = "icon2i-synoptic-evidence-packet-v1"
 GEMINI_MODEL = "gemini-3.5-flash"
 GROQ_MODEL = "openai/gpt-oss-120b"
@@ -365,6 +365,18 @@ def _validate_headline(value: Any, label: str) -> None:
         raise AgentError(f"titolo {label} con numeri non verificabili")
 
 
+def _normalize_headline(value: Any) -> str:
+    """Remove numeric decoration from display-only headings, never from claims."""
+    text = _clean_text(value, 160)
+    text = re.sub(r"\bICON[\s-]*2I\b", "ICON", text, flags=re.IGNORECASE)
+    text = NUMBER_RE.sub("", text)
+    text = re.sub(r"\s+([,.;:])", r"\1", text)
+    text = re.sub(r"\s{2,}", " ", text).strip(" -–—:;,.")
+    text = re.sub(r"\btra\s+e\s+ore\b", "nel periodo", text, flags=re.IGNORECASE)
+    text = re.sub(r"\bdalle?\s+alle?\s+ore\b", "nel periodo", text, flags=re.IGNORECASE)
+    return text or "Sintesi meteorologica del run"
+
+
 def _iter_claims(primary: dict[str, Any]):
     for claim in (primary.get("overview") or {}).get("claims") or []:
         yield claim, None
@@ -678,6 +690,11 @@ def _gemini_analysis(
         "overview": overview_response["overview"],
         "periods": generated_periods,
     }
+    primary["overview"]["headline"] = _normalize_headline(
+        primary["overview"].get("headline")
+    )
+    for period in primary["periods"]:
+        period["headline"] = _normalize_headline(period.get("headline"))
     # Claim identifiers are transport keys, not meteorological content. Assign
     # them locally so independently generated chunks cannot collide.
     for index, (claim, _) in enumerate(_iter_claims(primary), start=1):

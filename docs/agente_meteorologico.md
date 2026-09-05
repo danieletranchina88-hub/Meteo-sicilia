@@ -41,6 +41,9 @@ Il reasoning del generatore è mantenuto su livello basso perché il suo compito
 è una sintesi vincolata, non una deduzione libera: il budget rimane disponibile
 per chiudere il JSON. La profondità critica è affidata alla combinazione fra
 prove multi-famiglia, validatore deterministico e revisore indipendente.
+I numeri eventualmente inseriti nei soli titoli di presentazione vengono
+rimossi localmente; nessun valore viene invece modificato nei claim o nelle
+prove meteorologiche.
 
 ## Regole di pubblicazione
 

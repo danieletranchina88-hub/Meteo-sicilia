@@ -199,7 +199,10 @@ def test_packet_and_verified_product():
     primary = primary_for(packet)
     validation = validate_primary_analysis(primary, packet)
     assert validation["claimCount"] == 3 + 6 * len(packet["periods"])
-    fake_post, calls = fake_post_factory(packet, primary)
+    generated_primary = copy.deepcopy(primary)
+    generated_primary["overview"]["headline"] = "ICON-2I: evoluzione nelle prossime 72 ore"
+    generated_primary["periods"][0]["headline"] = "Scenario tra 0 e 12 ore"
+    fake_post, calls = fake_post_factory(packet, generated_primary)
     product = generate_verified_bulletin(
         source,
         gemini_api_key="gemini-secret",
@@ -209,6 +212,8 @@ def test_packet_and_verified_product():
     assert product["status"] == "validated"
     assert product["source"]["fieldsModifiedByLlm"] is False
     assert product["providers"]["reviewer"]["downgradedClaimCount"] == 1
+    assert product["overview"]["headline"] == "ICON: evoluzione nelle prossime ore"
+    assert product["periods"][0]["headline"] == "Scenario nel periodo"
     gemini_calls = [item for item in calls if "googleapis.com" in item[0]]
     groq_calls = [item for item in calls if "groq.com" in item[0]]
     assert len(gemini_calls) == 1 + (len(packet["periods"]) + 1) // 2
