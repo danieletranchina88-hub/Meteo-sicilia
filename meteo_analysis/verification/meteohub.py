@@ -155,30 +155,38 @@ def fetch_meteohub_stations(session=None, now=None):
         session = requests
     now = now or datetime.now(timezone.utc)
     start = now - timedelta(hours=2)
-    query = (f"reftime:>={start:%Y-%m-%d %H:%M},<={now:%Y-%m-%d %H:%M};"
-             "license:CCBY_COMPLIANT")
-    response = session.post(URL, params={
-        "q": query, "networks": NETWORK, "output_format": "JSON",
-        "stationDetails": "true", "allStationProducts": "true",
-        "reliabilityCheck": "true", "lonmin": 11, "lonmax": 16,
-        "latmin": 35, "latmax": 39,
-    }, timeout=(15, 60), stream=True)
-    try:
-        response.raise_for_status()
-        size = 0
-        def lines():
-            nonlocal size
+    base_query = (f"reftime:>={start:%Y-%m-%d %H:%M},<={now:%Y-%m-%d %H:%M};"
+                  "license:CCBY_COMPLIANT")
+    # The public map serves pressure only after selecting that product even
+    # when allStationProducts=true. Ask B10004/B10051 explicitly and merge the
+    # JSONL records with the broad temperature/humidity/wind response.
+    lines = []
+    size = 0
+    for product in (None, "B10004", "B10051"):
+        query = base_query + (f";product:{product}" if product else "")
+        response = session.post(URL, params={
+            "q": query, "networks": NETWORK, "output_format": "JSON",
+            "stationDetails": "true",
+            "allStationProducts": "true" if product is None else "false",
+            "reliabilityCheck": "true", "lonmin": 11, "lonmax": 16,
+            "latmin": 35, "latmax": 39,
+        }, timeout=(15, 60), stream=True)
+        try:
+            response.raise_for_status()
             for line in response.iter_lines():
                 size += len(line)
                 if size > 80_000_000:
                     raise ValueError("export MeteoHub troppo grande")
-                yield line
-        stations = normalize_jsonl(lines(), now)
-        if not stations:
-            raise ValueError("nessuna osservazione MeteoHub recente e utilizzabile")
-        return stations
-    finally:
-        response.close()
+                lines.append(line)
+        except Exception:
+            if product is None:
+                raise
+        finally:
+            response.close()
+    stations = normalize_jsonl(lines, now)
+    if not stations:
+        raise ValueError("nessuna osservazione MeteoHub recente e utilizzabile")
+    return stations
 
 
 def fetch_site_observations():

@@ -12,6 +12,8 @@ POST `/api/observations`, parametri query `networks=dpcn-sicilia`,
 variabili utilizzabili sono
 temperatura e rugiada a 2 m, umidità relativa, direzione, intensità e raffica
 del vento, pressione ridotta al livello del mare e pressione di stazione.
+Poiché il feed generale non include sempre la pressione mostrata dalla mappa
+ufficiale, due richieste mirate a `B10004` e `B10051` vengono fuse al risultato.
 La richiesta riguarda solo le ultime due ore e il dominio Sicilia. È un download pubblico, non una
 richiesta di estrazione persistente dell'account.
 

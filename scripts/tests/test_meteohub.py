@@ -27,11 +27,14 @@ def test_real_contract():
     session = Mock()
     session.post.return_value.iter_lines.return_value = [json.dumps(ROW).encode()]
     assert len(fetch_meteohub_stations(session, NOW)) == 1
-    params = session.post.call_args.kwargs["params"]
+    params = session.post.call_args_list[0].kwargs["params"]
     assert params["output_format"] == "JSON"
     assert params["allStationProducts"] == "true"
     assert "product:" not in params["q"]
-    session.post.return_value.close.assert_called_once()
+    assert session.post.call_count == 3
+    assert "product:B10004" in session.post.call_args_list[1].kwargs["params"]["q"]
+    assert "product:B10051" in session.post.call_args_list[2].kwargs["params"]["q"]
+    assert session.post.return_value.close.call_count == 3
     result = normalize_jsonl([json.dumps(ROW)], NOW)
     assert len(result) == 1 and result[0]["tempC"] == 22.94
     assert result[0]["dewpC"] == 15.0 and result[0]["rhPct"] == 58.0
