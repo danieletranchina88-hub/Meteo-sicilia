@@ -71,8 +71,10 @@ assert.match(html, /function stationMatchesValidTime\(station\)/,
   "le stazioni METAR possono ancora correggere scadenze temporalmente lontane");
 assert.match(html, /Math\.abs\(station\.obsTime - validTime\) <= FUSION_TIME_TOLERANCE_MS/,
   "il valid time ICON non viene confrontato con l'ora della singola stazione");
-assert.match(html, /MSLP solo SLP/,
+assert.match(html, /pressione stazione ≠ MSLP/,
   "l'interfaccia confonde ancora altimeter setting e pressione MSLP");
+assert.match(html, /pressureAtElevation/,
+  "la pressione di stazione non viene confrontata nello spazio osservativo");
 assert.match(html, /data-toggle="stations"[\s\S]{0,220}?rete METAR Italia/,
   "manca il controllo della rete nazionale delle stazioni");
 assert.match(html, /let stationNetwork = \[\];/,

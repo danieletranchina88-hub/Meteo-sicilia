@@ -61,7 +61,9 @@ def normalize_jsonl(lines, now=None):
                         level[:2] in ([103, 10000], [1, 0])
                     ):
                         continue
-                    if code in {"B10051", "B10004"} and level[:2] != [1, 0]:
+                    if code == "B10051" and level[:2] != [1, 0]:
+                        continue
+                    if code == "B10004" and level[:2] not in ([1, 0], [103, 2000]):
                         continue
                     value = number((values.get(code) or {}).get("v"))
                     if value is not None:

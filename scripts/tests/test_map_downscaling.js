@@ -1,5 +1,5 @@
 const assert=require('node:assert/strict');
-const {analyzeGrid}=require('../../local_downscaling.js');
+const {analyzeGrid,pressureAtElevation}=require('../../local_downscaling.js');
 const meta={nx:3,ny:3,dx:0.1,dy:0.1,lo1:14,la1:38};
 const base=new Float32Array(9).fill(20);
 const policy={radiusKm:40,maxResidual:5,maxCorrection:3,maxSpread:2,min:-60,max:60,elevationToleranceM:250};
@@ -16,4 +16,7 @@ assert.equal(analyzeGrid(base,meta,points.map(p=>({...p,increment:50})),policy,t
 assert.equal(analyzeGrid(base,meta,points.map((p,i)=>({...p,increment:i===0?-5:5})),policy,terrain).correctedCells,0);
 const windPolicy={radiusKm:40,maxResidual:10,maxCorrection:4,maxSpread:4,min:-100,max:100};
 assert.ok(analyzeGrid(new Float32Array(9),meta,points.map(p=>({...p,increment:-2})),windPolicy).grid.every(x=>x<0));
+assert.equal(pressureAtElevation(1013.25,15,0),1013.25);
+assert.ok(pressureAtElevation(1013.25,15,1000)>890 && pressureAtElevation(1013.25,15,1000)<910);
+assert.ok(Number.isNaN(pressureAtElevation(1013.25,15,4000)));
 console.log('Map downscaling tests passed');

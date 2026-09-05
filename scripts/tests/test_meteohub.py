@@ -60,6 +60,10 @@ def test_real_contract():
     assert merged["fieldObsTime"]["tempC"] < merged["fieldObsTime"]["wspdKmh"]
     bad = copy.deepcopy(ROW); bad["data"][1]["timerange"]=[0,0,3600]
     assert "tempC" not in normalize_jsonl([json.dumps(bad)], NOW)[0]
+    pressure_at_two_metres = copy.deepcopy(ROW)
+    pressure_at_two_metres["data"][3]["level"] = [103,2000,None,None]
+    reduced = normalize_jsonl([json.dumps(pressure_at_two_metres)], NOW)[0]
+    assert reduced["stationPressureHpa"] == 1008.0 and "pressHpa" not in reduced
 
 
 def test_sources_fail_independently():

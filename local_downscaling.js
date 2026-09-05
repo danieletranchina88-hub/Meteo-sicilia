@@ -8,6 +8,16 @@
     const h=Math.sin(dlat/2)**2+Math.cos(a.lat*rad)*Math.cos(b.lat*rad)*Math.sin(dlon/2)**2;
     return 6371.0088*2*Math.asin(Math.sqrt(Math.min(1,Math.max(0,h))));
   }
+  // Reduce model MSLP into observation space before comparing it with true
+  // station pressure. The residual is then applied back to the MSLP grid.
+  // This is deliberately an approximation: the grid correction remains
+  // capped and requires three mutually consistent stations.
+  function pressureAtElevation(mslpHpa,tempC,elevationM) {
+    if (![mslpHpa,tempC,elevationM].every(finite) || mslpHpa<800 || mslpHpa>1100
+        || tempC<-80 || tempC>60 || elevationM<0 || elevationM>2500) return NaN;
+    const meanLayerK=tempC+273.15+0.00325*elevationM;
+    return mslpHpa*Math.exp(-9.80665*elevationM/(287.05*meanLayerK));
+  }
   function evaluate(product, target, now=Date.now()) {
     const result={status:'unavailable',baseC:target.temperatureC,correctedC:null,stations:[]};
     function stop(reason) { result.reason=reason;return result; }
@@ -97,7 +107,7 @@
     }
     return {grid:out,correctedCells,totalCells:base.length,stationCount:points.length};
   }
-  const api={evaluate,distance,analyzeGrid};
+  const api={evaluate,distance,analyzeGrid,pressureAtElevation};
   if (typeof module!=='undefined'&&module.exports) module.exports=api;
   else root.MeteoLocalDownscaling=api;
 })(typeof globalThis!=='undefined'?globalThis:this);

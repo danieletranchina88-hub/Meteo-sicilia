@@ -2512,7 +2512,7 @@
                 <span><b>Modalità carta</b><small>analisi al suolo su carta, campo velato sotto</small></span><span class="switch"></span>
               </button>
               <button class="toggle-row" type="button" data-toggle="fusion" aria-pressed="false">
-                <span><b>Ricalcola mappa · Downscaling</b><small id="map-downscaling-status" aria-live="polite">T · vento · UR · MSLP solo SLP · osservazioni MeteoHub</small></span><span class="switch"></span>
+                <span><b>Ricalcola mappa · Downscaling</b><small id="map-downscaling-status" aria-live="polite">T · vento · UR · MSLP · pressione stazione ≠ MSLP</small></span><span class="switch"></span>
               </button>
             </div>
 
@@ -10511,7 +10511,8 @@
           return Number.isFinite(value) ? value : station.obsTime;
         };
         const fields = layerKey === "temp" ? ["tempC"]
-          : layerKey === "press" ? ["pressHpa"]
+          : layerKey === "press" && Number.isFinite(station.pressHpa) ? ["pressHpa"]
+          : layerKey === "press" ? ["stationPressureHpa"]
           : layerKey === "wind" ? ["wspdKmh"]
           : (layerKey === "wind_u" || layerKey === "wind_v") ? ["wspdKmh", "wdir"]
           : layerKey === "rh" && Number.isFinite(station.rhPct) ? ["rhPct"]
@@ -10536,7 +10537,8 @@
           return -speed*(layerKey==='wind_u'?Math.sin(angle):Math.cos(angle));
         }
         if (layerKey === "temp") return station.tempC;
-        if (layerKey === "press") return station.pressHpa;
+        if (layerKey === "press") return Number.isFinite(station.pressHpa)
+          ? station.pressHpa : station.stationPressureHpa;
         if (layerKey === "rh") {
           if (Number.isFinite(station.rhPct)) return clamp(station.rhPct, 0, 100);
           if (station.tempC === null || station.dewpC === null) return null;
@@ -10601,6 +10603,15 @@
             const z=heightAt(station.lon,station.lat);
             if(!Number.isFinite(z)||!Number.isFinite(station.elevationM)||Math.abs(station.elevationM-z)>300) continue;
             model += -0.0065*(station.elevationM-z);
+          }
+          if(layerKey==='press' && !Number.isFinite(station.pressHpa)) {
+            const temperatureGrid=getGrid(currentData && currentData.temp);
+            const stationTemperature=temperatureGrid
+              ? sampleBilinear(temperatureGrid,x,y,meta.nx,meta.ny) : NaN;
+            model=MeteoLocalDownscaling.pressureAtElevation(
+              model,stationTemperature,station.elevationM
+            );
+            if(!Number.isFinite(model)) continue;
           }
           const increment=obs-model;
           if(Math.abs(increment)>policy.maxResidual) continue;

@@ -42,8 +42,12 @@ Le scadenze future senza osservazioni compatibili rimangono ICON.
 
 Temperatura: raggio 40 km, correzione massima 3 °C, quota del modello
 necessaria; normalizzazione con gradiente standard assunto −6,5 K/km.
-Pressione: raggio 150 km, correzione massima 3 hPa, esclusivamente vera SLP,
-mai QNH o pressione di stazione. Vento: raggio 40 km, componenti U/V in m/s,
+Pressione: raggio 150 km e correzione massima 3 hPa. La vera SLP viene
+confrontata direttamente con MSLP; la pressione di stazione resta distinta e
+viene confrontata con ICON ridotto idrostaticamente alla quota della stazione.
+In questo modo lo scarto corregge MSLP senza fingere che pressione locale e
+pressione al livello del mare siano la stessa variabile. QNH/altimeter METAR
+non viene usato. Vento: raggio 40 km, componenti U/V in m/s,
 correzione massima 4 m/s per componente. Umidità relativa: raggio 40 km,
 massimo 20 punti percentuali e risultato limitato a 0–100%.
 
