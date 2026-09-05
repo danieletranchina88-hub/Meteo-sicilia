@@ -25,6 +25,7 @@ from meteo_analysis.agents.meteorologist import (  # noqa: E402
     SECTION_TITLES,
     GEMINI_MODEL,
     GROQ_MODEL,
+    PRIMARY_MODEL,
     _post_json,
     _repair_invalid_claims,
     build_evidence_packet,
@@ -145,10 +146,9 @@ def fake_post_factory(packet, primary, *, approve=True):
 
     def fake_post(url, *, headers, payload, attempts=3):
         calls.append((url, headers, payload))
-        if "googleapis.com" in url:
-            assert "temperature" not in payload["generationConfig"]
-            assert headers["x-goog-api-key"] == "gemini-secret"
-            request_packet = json.loads(payload["contents"][0]["parts"][0]["text"])
+        if payload.get("model") == PRIMARY_MODEL:
+            assert headers["Authorization"] == "Bearer groq-secret"
+            request_packet = json.loads(payload["messages"][1]["content"])
             if request_packet["scope"] == "overview":
                 generated = {
                     "language": primary["language"],
@@ -165,16 +165,8 @@ def fake_post_factory(packet, primary, *, approve=True):
                         if item["periodId"] in period_ids
                     ],
                 }
-            return {
-                "candidates": [{
-                    "finishReason": "STOP",
-                    "content": {"parts": [
-                        {"thought": True, "text": "ragionamento non pubblicabile"},
-                        {"text": json.dumps(generated)},
-                    ]},
-                }],
-                "usageMetadata": {"promptTokenCount": 1200, "candidatesTokenCount": 500},
-            }
+            return {"choices": [{"message": {"content": json.dumps(generated)}}],
+                    "usage": {"prompt_tokens": 1200, "completion_tokens": 500}}
         review_input = json.loads(payload["messages"][1]["content"])
         claim_ids = [item["id"] for item in review_input["claims"]]
         return {
@@ -218,11 +210,11 @@ def test_packet_and_verified_product():
     assert product["providers"]["reviewer"]["downgradedClaimCount"] == 1
     assert product["overview"]["headline"] == "ICON: evoluzione nelle prossime ore"
     assert product["periods"][0]["headline"] == "Scenario nel periodo"
-    gemini_calls = [item for item in calls if "googleapis.com" in item[0]]
-    groq_calls = [item for item in calls if "groq.com" in item[0]]
-    assert len(gemini_calls) == 1 + (len(packet["periods"]) + 1) // 2
-    assert len(groq_calls) == 1 + len(packet["periods"])
-    assert product["providers"]["primary"]["requestCount"] == len(gemini_calls)
+    primary_calls = [item for item in calls if item[2].get("model") == PRIMARY_MODEL]
+    review_calls = [item for item in calls if item[2].get("model") == GROQ_MODEL]
+    assert len(primary_calls) == 1 + (len(packet["periods"]) + 1) // 2
+    assert len(review_calls) == 1 + len(packet["periods"])
+    assert product["providers"]["primary"]["requestCount"] == len(primary_calls)
     encoded = json.dumps(product, ensure_ascii=False, allow_nan=False)
     assert "gemini-secret" not in encoded and "groq-secret" not in encoded
 
@@ -311,13 +303,12 @@ def test_claim_repair_preserves_validation_and_review():
     repairs = []
 
     def repaired_post(url, **kwargs):
-        if "googleapis.com" in url:
-            request = json.loads(kwargs["payload"]["contents"][0]["parts"][0]["text"])
-            if request["scope"] == "claim-repair":
-                repairs.append(request)
-                return {"candidates": [{"content": {"parts": [{"text": json.dumps(
-                    original["overview"]["claims"][0]
-                )}]}}]}
+        request = json.loads(kwargs["payload"]["messages"][1]["content"])
+        if kwargs["payload"].get("model") == PRIMARY_MODEL and request["scope"] == "claim-repair":
+            repairs.append(request)
+            return {"choices": [{"message": {"content": json.dumps(
+                original["overview"]["claims"][0]
+            )}}], "usage": {}}
         return base_post(url, **kwargs)
 
     product = generate_verified_bulletin(source, gemini_api_key="gemini-secret",
@@ -338,11 +329,11 @@ def test_invalid_repair_still_fails_closed_and_stays_in_period():
     requests = []
 
     def invalid_post(url, **kwargs):
-        request = json.loads(kwargs["payload"]["contents"][0]["parts"][0]["text"])
+        request = json.loads(kwargs["payload"]["messages"][1]["content"])
         requests.append(request)
         assert all(period["fromHour"] <= item["leadHours"] <= period["toHour"]
                    for item in request["evidence"])
-        return {"candidates": [{"content": {"parts": [{"text": json.dumps(claim)}]}}]}
+        return {"choices": [{"message": {"content": json.dumps(claim)}}], "usage": {}}
 
     try:
         _repair_invalid_claims(primary, packet, "unused", invalid_post)
@@ -398,7 +389,7 @@ def test_missing_secrets_preserve_deterministic_fallback():
         # A provider quota failure pauses calls instead of repeatedly spending.
         from datetime import datetime, timedelta, timezone
         (directory / "ai_agent_status.json").write_text(json.dumps({
-            "status":"fallback", "primaryModel":GEMINI_MODEL, "reviewerModel":GROQ_MODEL,
+            "status":"fallback", "primaryModel":PRIMARY_MODEL, "reviewerModel":GROQ_MODEL,
             "retryAfter":(datetime.now(timezone.utc)+timedelta(hours=1)).isoformat()
         }))
         with patch.dict(os.environ, {"GEMINI_API_KEY":"test", "GROQ_API_KEY":"test"}), patch(

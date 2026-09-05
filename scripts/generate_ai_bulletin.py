@@ -21,6 +21,7 @@ from meteo_analysis.agents.meteorologist import (  # noqa: E402
     AGENT_METHOD,
     GEMINI_MODEL,
     GROQ_MODEL,
+    PRIMARY_MODEL,
     generate_verified_bulletin,
 )
 from meteo_analysis.verification.archive import (  # noqa: E402
@@ -147,7 +148,7 @@ def run(data_dir: Path, cache_dir: Path | None = None) -> dict:
         "schemaVersion": 1,
         "method": AGENT_METHOD,
         "status": "fallback",
-        "primaryModel": GEMINI_MODEL,
+        "primaryModel": PRIMARY_MODEL,
         "reviewerModel": GROQ_MODEL,
         "reason": None,
         "generatedAt": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
@@ -160,10 +161,8 @@ def run(data_dir: Path, cache_dir: Path | None = None) -> dict:
             pass
     gemini_key = os.environ.get("GEMINI_API_KEY", "").strip()
     groq_key = os.environ.get("GROQ_API_KEY", "").strip()
-    if not gemini_key or not groq_key:
+    if not groq_key:
         missing = []
-        if not gemini_key:
-            missing.append("GEMINI_API_KEY")
         if not groq_key:
             missing.append("GROQ_API_KEY")
         status["reason"] = "segreti non disponibili: " + ", ".join(missing)
@@ -178,7 +177,7 @@ def run(data_dir: Path, cache_dir: Path | None = None) -> dict:
         attach_local_evidence(deterministic, data_dir)
         fingerprint = hashlib.sha256(json.dumps(
             {"evidence": deterministic, "method": AGENT_METHOD,
-             "primary": GEMINI_MODEL, "reviewer": GROQ_MODEL},
+             "primary": PRIMARY_MODEL, "reviewer": GROQ_MODEL},
             sort_keys=True, ensure_ascii=False, separators=(",", ":"),
         ).encode()).hexdigest()
         status["evidenceFingerprint"] = fingerprint
@@ -196,7 +195,7 @@ def run(data_dir: Path, cache_dir: Path | None = None) -> dict:
                         return status
                 retry_after = datetime.fromisoformat(cached.get("retryAfter", "").replace("Z", "+00:00"))
                 if (retry_after > datetime.now(timezone.utc)
-                        and cached.get("primaryModel") == GEMINI_MODEL
+                        and cached.get("primaryModel") == PRIMARY_MODEL
                         and cached.get("reviewerModel") == GROQ_MODEL):
                     status.update(reason="Quota AI esaurita: pausa delle richieste per evitare tentativi inutili.",
                                   failureCategory="provider-quota", retryAfter=cached["retryAfter"])

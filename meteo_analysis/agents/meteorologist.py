@@ -20,10 +20,11 @@ from typing import Any, Callable
 from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 
-AGENT_METHOD = "icon2i-evidence-grounded-dual-llm-v8"
+AGENT_METHOD = "icon2i-evidence-grounded-dual-llm-v9"
 PACKET_METHOD = "icon2i-synoptic-evidence-packet-v1"
 GEMINI_MODEL = "gemini-3.8-flash"
-GROQ_MODEL = "openai/gpt-oss-120b"
+PRIMARY_MODEL = "openai/gpt-oss-120b"
+GROQ_MODEL = "openai/gpt-oss-20b"
 GEMINI_ENDPOINT = (
     "https://generativelanguage.googleapis.com/v1beta/models/"
     f"{GEMINI_MODEL}:generateContent"
@@ -629,6 +630,40 @@ def _gemini_scope(
     }
 
 
+def _groq_generation_scope(
+    request_packet: dict[str, Any],
+    schema: dict[str, Any],
+    api_key: str,
+    post_json: Callable[..., dict[str, Any]],
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    """Generate one schema-bound meteorological scope with the primary model."""
+    response = post_json(
+        GROQ_ENDPOINT,
+        headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
+        payload={
+            "model": PRIMARY_MODEL,
+            "messages": [
+                {"role": "system", "content": PRIMARY_SYSTEM_PROMPT},
+                {"role": "user", "content": json.dumps(request_packet, ensure_ascii=False, separators=(",", ":"))},
+            ],
+            "reasoning_effort": "medium",
+            "reasoning_format": "hidden",
+            "temperature": 0,
+            "max_completion_tokens": 2048 if request_packet.get("scope") == "claim-repair" else 8192,
+            "response_format": {
+                "type": "json_schema",
+                "json_schema": {"name": "meteorological_analysis", "strict": True, "schema": schema},
+            },
+        },
+    )
+    try:
+        result = json.loads(response["choices"][0]["message"]["content"])
+    except (KeyError, IndexError, TypeError, json.JSONDecodeError) as error:
+        raise AgentError("Groq non ha restituito un'analisi JSON utilizzabile") from error
+    usage = response.get("usage") or {}
+    return result, {"promptTokens": usage.get("prompt_tokens"), "outputTokens": usage.get("completion_tokens")}
+
+
 def _gemini_request_packet(
     packet: dict[str, Any],
     *,
@@ -669,14 +704,14 @@ def _usage_total(items: list[dict[str, Any]], key: str) -> int | None:
     return sum(int(value) for value in values) if values else None
 
 
-def _gemini_analysis(
+def _primary_analysis(
     packet: dict[str, Any],
     api_key: str,
     post_json: Callable[..., dict[str, Any]],
 ) -> tuple[dict[str, Any], dict[str, Any]]:
     """Generate bounded chunks so free-tier requests cannot time out as one monolith."""
     usages: list[dict[str, Any]] = []
-    overview_response, usage = _gemini_scope(
+    overview_response, usage = _groq_generation_scope(
         _gemini_request_packet(
             packet,
             scope="overview",
@@ -692,7 +727,7 @@ def _gemini_analysis(
     generated_periods: list[dict[str, Any]] = []
     for offset in range(0, len(packet["periods"]), 2):
         requested = packet["periods"][offset:offset + 2]
-        chunk, usage = _gemini_scope(
+        chunk, usage = _groq_generation_scope(
             _gemini_request_packet(packet, scope="periods", periods=requested),
             PERIODS_RESPONSE_SCHEMA,
             api_key,
@@ -717,8 +752,8 @@ def _gemini_analysis(
     for index, (claim, _) in enumerate(_iter_claims(primary), start=1):
         claim["id"] = f"C{index:03d}"
     return primary, {
-        "provider": "google-gemini-api",
-        "model": GEMINI_MODEL,
+        "provider": "groq-cloud",
+        "model": PRIMARY_MODEL,
         "requestCount": len(usages),
         "promptTokens": _usage_total(usages, "promptTokens"),
         "outputTokens": _usage_total(usages, "outputTokens"),
@@ -759,7 +794,7 @@ def _repair_invalid_claims(primary, packet, api_key, post_json):
             counts[family] = counts.get(family, 0)+1
         if len(counts) < 2:
             raise AgentError("prove indipendenti insufficienti per riscrivere il claim")
-        replacement, usage = _gemini_scope({
+        replacement, usage = _groq_generation_scope({
             "scope": "claim-repair", "runTime": packet["runTime"],
             "originalClaim": claim, "validationError": feedback,
             "instruction": "Riscrivi il claim basandoti solo sulle prove fornite. Mantieni id. Non aggiungere riferimenti non pertinenti per superare i controlli; se la tesi non è sostenuta, cambiala o esplicita i limiti.",
@@ -945,8 +980,8 @@ def generate_verified_bulletin(
     if not gemini_api_key or not groq_api_key:
         raise AgentError("chiavi API non disponibili")
     packet = build_evidence_packet(deterministic_bulletin)
-    primary, primary_usage = _gemini_analysis(packet, gemini_api_key, post_json)
-    repairs = _repair_invalid_claims(primary, packet, gemini_api_key, post_json)
+    primary, primary_usage = _primary_analysis(packet, groq_api_key, post_json)
+    repairs = _repair_invalid_claims(primary, packet, groq_api_key, post_json)
     primary_usage["repairRequestCount"] = len(repairs)
     if repairs:
         primary_usage["requestCount"] += len(repairs)
