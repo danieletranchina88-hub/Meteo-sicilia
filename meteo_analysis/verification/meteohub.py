@@ -36,6 +36,7 @@ def number(value):
 def normalize_jsonl(lines, now=None):
     now = now or datetime.now(timezone.utc)
     latest = {}
+    field_times = {}
     for line in lines:
         if not line.strip():
             continue
@@ -115,8 +116,9 @@ def normalize_jsonl(lines, now=None):
         # visible, but do not treat them as verified sea-level stations.
         if elevation is None or not 0 < elevation <= 4000:
             elevation = None
+        observed_epoch = int(observed.timestamp())
         station = dict(id=sid, name=str(value("B01019") or sid), lat=lat, lon=lon,
-                       elevationM=elevation, obsTime=int(observed.timestamp()),
+                       elevationM=elevation, obsTime=observed_epoch,
                        source=SOURCE, quality="provisional", network=NETWORK)
         optional = {
             "tempC": temperature, "dewpC": dewpoint, "rhPct": humidity,
@@ -124,10 +126,24 @@ def normalize_jsonl(lines, now=None):
             "wdir": wind_direction, "pressHpa": sea_level_pressure,
             "stationPressureHpa": station_pressure,
         }
-        station.update({key: round(value, 2) for key, value in optional.items()
-                        if value is not None})
-        if sid not in latest or station["obsTime"] > latest[sid]["obsTime"]:
+        if sid not in latest:
             latest[sid] = station
+            field_times[sid] = {}
+        elif observed_epoch > latest[sid]["obsTime"]:
+            # A MeteoHub station can arrive as one JSONL record per product.
+            # Refresh station metadata without discarding the other products.
+            latest[sid].update(name=station["name"], lat=lat, lon=lon,
+                               obsTime=observed_epoch)
+            if elevation is not None:
+                latest[sid]["elevationM"] = elevation
+        for key, item in optional.items():
+            if item is None or observed_epoch < field_times[sid].get(key, -1):
+                continue
+            latest[sid][key] = round(item, 2)
+            field_times[sid][key] = observed_epoch
+    for sid, station in latest.items():
+        station["fieldObsTime"] = field_times[sid]
+        station["obsTime"] = max(field_times[sid].values())
     return sorted(latest.values(), key=lambda s: s["id"])
 
 
@@ -137,12 +153,11 @@ def fetch_meteohub_stations(session=None, now=None):
         session = requests
     now = now or datetime.now(timezone.utc)
     start = now - timedelta(hours=2)
-    products = " or ".join(PRODUCTS)
     query = (f"reftime:>={start:%Y-%m-%d %H:%M},<={now:%Y-%m-%d %H:%M};"
-             f"product:{products};license:CCBY_COMPLIANT")
+             "license:CCBY_COMPLIANT")
     response = session.post(URL, params={
         "q": query, "networks": NETWORK, "output_format": "JSON",
-        "stationDetails": "true", "allStationProducts": "false",
+        "stationDetails": "true", "allStationProducts": "true",
         "reliabilityCheck": "true", "lonmin": 11, "lonmax": 16,
         "latmin": 35, "latmax": 39,
     }, timeout=(15, 60), stream=True)

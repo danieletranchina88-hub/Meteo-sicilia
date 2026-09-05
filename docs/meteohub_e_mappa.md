@@ -7,8 +7,9 @@ Non serve trasferire il login dell'utente al sito né pubblicare chiavi API.
 Contratto verificato sul codice ufficiale MeteoHub (`maps_observed.py`,
 `services/dballe.py`) e su un export reale JSONL del 5 settembre 2026:
 POST `/api/observations`, parametri query `networks=dpcn-sicilia`,
-`output_format=JSON` (maiuscolo), `reliabilityCheck=true` e `q` con `reftime`,
-le variabili BUFR richieste, `license:CCBY_COMPLIANT`. Le variabili sono
+`output_format=JSON` (maiuscolo), `reliabilityCheck=true`,
+`allStationProducts=true` e `q` con `reftime`, `license:CCBY_COMPLIANT`. Le
+variabili utilizzabili sono
 temperatura e rugiada a 2 m, umidità relativa, direzione, intensità e raffica
 del vento, pressione ridotta al livello del mare e pressione di stazione.
 La richiesta riguarda solo le ultime due ore e il dominio Sicilia. È un download pubblico, non una
@@ -19,7 +20,9 @@ Portale e attribuzioni: https://meteohub.agenziaitaliameteo.it/app/license
 Codice del servizio: https://gitlab.hpc.cineca.it/mistral/meteo-hub
 Guida: https://meteohub.agenziaitaliameteo.it/ui/user-guide
 
-Il parser accetta solo livelli e intervalli temporali compatibili con ciascuna
+Il parser riunisce i record per stazione senza perdere i prodotti acquisiti a
+orari differenti e pubblica anche l'orario di ogni singolo campo. Accetta solo
+livelli e intervalli temporali compatibili con ciascuna
 variabile, converte kelvin in °C, m/s in km/h e pascal in hPa, mantiene
 l'orario di ciascuna stazione, scarta tempi futuri e dati più vecchi di due
 ore e conserva l'ultima misura per coordinate. La pressione di stazione resta

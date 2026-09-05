@@ -10439,6 +10439,9 @@
               lon: lon,
               obsTime: Number.isFinite(Number(s.obsTime))
                 ? Number(s.obsTime) * 1000 : null,
+              fieldObsTime: Object.fromEntries(Object.entries(s.fieldObsTime || {}).map(function (entry) {
+                return [entry[0], Number.isFinite(Number(entry[1])) ? Number(entry[1]) * 1000 : null];
+              })),
               elevationM: numberOrNull(s.elevationM),
               tempC: numberOrNull(s.tempC),
               dewpC: numberOrNull(s.dewpC),
@@ -10502,13 +10505,30 @@
         if (!currentData || !currentData.meta || !currentData.meta.validTime) return false;
         if (!Number.isFinite(station.obsTime)) return false;
         const validTime = Date.parse(currentData.meta.validTime);
+        const layerKey = arguments.length > 1 ? arguments[1] : null;
+        const timeFor = function (field) {
+          const value = station.fieldObsTime && station.fieldObsTime[field];
+          return Number.isFinite(value) ? value : station.obsTime;
+        };
+        const fields = layerKey === "temp" ? ["tempC"]
+          : layerKey === "press" ? ["pressHpa"]
+          : layerKey === "wind" ? ["wspdKmh"]
+          : (layerKey === "wind_u" || layerKey === "wind_v") ? ["wspdKmh", "wdir"]
+          : layerKey === "rh" && Number.isFinite(station.rhPct) ? ["rhPct"]
+          : layerKey === "rh" ? ["tempC", "dewpC"] : [];
+        const matches = function (timestamp) {
+          return Number.isFinite(timestamp) && Number.isFinite(validTime)
+            && Date.now()-timestamp >= 0 && Date.now()-timestamp <= 2*3600000
+            && Math.abs(timestamp - validTime) <= FUSION_TIME_TOLERANCE_MS;
+        };
+        if (fields.length) return fields.every(function (field) { return matches(timeFor(field)); });
         return Number.isFinite(validTime)
           && Date.now()-station.obsTime >= 0 && Date.now()-station.obsTime <= 2*3600000
           && Math.abs(station.obsTime - validTime) <= FUSION_TIME_TOLERANCE_MS;
       }
 
       function observationValue(station, layerKey) {
-        if (!stationMatchesValidTime(station)) return null;
+        if (!stationMatchesValidTime(station, layerKey)) return null;
         if (layerKey === "wind") return station.wspdKmh;
         if (layerKey === "wind_u" || layerKey === "wind_v") {
           if (!Number.isFinite(station.wspdKmh) || !Number.isFinite(station.wdir) || station.wspdKmh<0 || station.wspdKmh>250 || station.wdir<0 || station.wdir>360) return null;

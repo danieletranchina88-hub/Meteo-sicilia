@@ -27,7 +27,10 @@ def test_real_contract():
     session = Mock()
     session.post.return_value.iter_lines.return_value = [json.dumps(ROW).encode()]
     assert len(fetch_meteohub_stations(session, NOW)) == 1
-    assert session.post.call_args.kwargs["params"]["output_format"] == "JSON"
+    params = session.post.call_args.kwargs["params"]
+    assert params["output_format"] == "JSON"
+    assert params["allStationProducts"] == "true"
+    assert "product:" not in params["q"]
     session.post.return_value.close.assert_called_once()
     result = normalize_jsonl([json.dumps(ROW)], NOW)
     assert len(result) == 1 and result[0]["tempC"] == 22.94
@@ -35,6 +38,7 @@ def test_real_contract():
     assert result[0]["wspdKmh"] == 18.0 and result[0]["windGustKmh"] == 28.8
     assert result[0]["wdir"] == 245.0 and result[0]["pressHpa"] == 1013.25
     assert result[0]["stationPressureHpa"] == 1008.0
+    assert result[0]["fieldObsTime"]["tempC"] == 1788566400
     assert result[0]["elevationM"] is None
     assert result[0]["lat"] == 37.62172
     for bad_value in [None, True, 9999, "NaN"]:
@@ -46,6 +50,14 @@ def test_real_contract():
         assert not normalize_jsonl([json.dumps(bad)], NOW)
     newer = {**ROW, "date":"2026-09-05T00:30:00Z"}
     assert len(normalize_jsonl([json.dumps(newer), json.dumps(ROW)], NOW)) == 1
+    temperature_record = copy.deepcopy(ROW)
+    temperature_record["data"] = [ROW["data"][0], ROW["data"][1]]
+    wind_record = copy.deepcopy(ROW)
+    wind_record["date"] = "2026-09-05T00:05:00Z"
+    wind_record["data"] = [ROW["data"][0], ROW["data"][2]]
+    merged = normalize_jsonl([json.dumps(temperature_record), json.dumps(wind_record)], NOW)[0]
+    assert merged["tempC"] == 22.94 and merged["wspdKmh"] == 18.0
+    assert merged["fieldObsTime"]["tempC"] < merged["fieldObsTime"]["wspdKmh"]
     bad = copy.deepcopy(ROW); bad["data"][1]["timerange"]=[0,0,3600]
     assert "tempC" not in normalize_jsonl([json.dumps(bad)], NOW)[0]
 
