@@ -37,6 +37,11 @@ che tutti i blocchi sono presenti. Le eventuali parti interne di reasoning del
 provider vengono escluse esplicitamente: soltanto il testo JSON finale entra
 nel validatore e nel prodotto pubblico.
 
+Il reasoning del generatore è mantenuto su livello basso perché il suo compito
+è una sintesi vincolata, non una deduzione libera: il budget rimane disponibile
+per chiudere il JSON. La profondità critica è affidata alla combinazione fra
+prove multi-famiglia, validatore deterministico e revisore indipendente.
+
 ## Regole di pubblicazione
 
 Ogni claim deve:

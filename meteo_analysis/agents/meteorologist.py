@@ -20,7 +20,7 @@ from typing import Any, Callable
 from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 
-AGENT_METHOD = "icon2i-evidence-grounded-dual-llm-v4"
+AGENT_METHOD = "icon2i-evidence-grounded-dual-llm-v5"
 PACKET_METHOD = "icon2i-synoptic-evidence-packet-v1"
 GEMINI_MODEL = "gemini-3.5-flash"
 GROQ_MODEL = "openai/gpt-oss-120b"
@@ -77,8 +77,8 @@ def _object_schema(properties: dict[str, Any], required: list[str]) -> dict[str,
 
 CLAIM_SCHEMA = _object_schema(
     {
-        "id": {"type": "string"},
-        "text": {"type": "string"},
+        "id": {"type": "string", "maxLength": 40},
+        "text": {"type": "string", "maxLength": 420},
         "confidence": {"type": "string", "enum": list(CONFIDENCE_LEVELS)},
         "evidenceIds": {
             "type": "array",
@@ -93,7 +93,7 @@ CLAIM_SCHEMA = _object_schema(
 SECTION_SCHEMA = _object_schema(
     {
         "id": {"type": "string", "enum": list(SECTION_IDS)},
-        "title": {"type": "string"},
+        "title": {"type": "string", "maxLength": 80},
         "claims": {
             "type": "array",
             "items": CLAIM_SCHEMA,
@@ -106,10 +106,10 @@ SECTION_SCHEMA = _object_schema(
 
 PERIOD_SCHEMA = _object_schema(
     {
-        "periodId": {"type": "string"},
+        "periodId": {"type": "string", "maxLength": 20},
         "fromHour": {"type": "integer", "minimum": 0, "maximum": 240},
         "toHour": {"type": "integer", "minimum": 0, "maximum": 240},
-        "headline": {"type": "string"},
+        "headline": {"type": "string", "maxLength": 160},
         "sections": {
             "type": "array",
             "items": SECTION_SCHEMA,
@@ -125,7 +125,7 @@ PRIMARY_SCHEMA = _object_schema(
         "language": {"type": "string", "enum": ["it"]},
         "overview": _object_schema(
             {
-                "headline": {"type": "string"},
+                "headline": {"type": "string", "maxLength": 160},
                 "claims": {
                     "type": "array",
                     "items": CLAIM_SCHEMA,
@@ -566,7 +566,10 @@ def _gemini_scope(
                 "responseJsonSchema": schema,
                 "temperature": 0.1,
                 "maxOutputTokens": 8192,
-                "thinkingConfig": {"thinkingLevel": "MEDIUM"},
+                # The task is extraction and synthesis under a strict schema,
+                # followed by an independent reasoner. LOW preserves enough
+                # deliberation while reserving the output budget for valid JSON.
+                "thinkingConfig": {"thinkingLevel": "LOW"},
             },
         },
     )
