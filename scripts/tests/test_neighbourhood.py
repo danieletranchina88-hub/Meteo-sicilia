@@ -288,5 +288,73 @@ class TestPassoDellaGriglia(unittest.TestCase):
         self.assertAlmostEqual(schiacciamento, 0.178, delta=0.005)
 
 
+class TestPubblicazione(unittest.TestCase):
+    """Il blocco che finisce nel file del passo."""
+
+    def setUp(self):
+        sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+        import process_data
+
+        self.pipeline = process_data
+        self.header = {
+            "nx": 60, "ny": 50, "lo1": 3.0, "la1": 48.9,
+            "dx": 0.025, "dy": 0.02,
+        }
+
+    def test_pubblica_le_soglie_dichiarate(self):
+        rng = np.random.default_rng(1)
+        pioggia = rng.gamma(0.4, 6.0, size=50 * 60)
+        raffica = rng.gamma(2.0, 6.0, size=50 * 60)  # m/s
+        blocco = self.pipeline.build_exceedance_probabilities(
+            self.header, pioggia, raffica
+        )
+        self.assertEqual(
+            sorted(blocco["fields"]),
+            sorted(["rain_1", "rain_5", "rain_10", "rain_20",
+                    "gust_50", "gust_75"]),
+        )
+        # La griglia e' diradata: passo doppio, meta' dei punti per lato.
+        self.assertEqual(blocco["nx"], 30)
+        self.assertEqual(blocco["ny"], 25)
+        self.assertAlmostEqual(blocco["dx"], 0.05)
+        self.assertAlmostEqual(blocco["dy"], 0.04)
+        for nome, valori in blocco["fields"].items():
+            self.assertEqual(len(valori), 30 * 25, nome)
+            noti = [v for v in valori if v is not None]
+            self.assertTrue(all(0 <= v <= 100 for v in noti), nome)
+
+    def test_semantica_dichiarata_nel_file(self):
+        # Chi legge il JSON deve trovare scritto che non e' calibrata, senza
+        # dover risalire al codice che l'ha prodotta.
+        blocco = self.pipeline.build_exceedance_probabilities(
+            self.header, np.ones(50 * 60), np.ones(50 * 60) * 20.0
+        )
+        self.assertIn("not-calibrated", blocco["semantics"])
+        self.assertEqual(blocco["eventRadiusKm"], self.pipeline.PROB_EVENT_RADIUS_KM)
+        self.assertEqual(blocco["spreadRadiusKm"], self.pipeline.PROB_SPREAD_RADIUS_KM)
+
+    def test_senza_campi_non_pubblica_nulla(self):
+        # Meglio assente che pieno di zeri: uno zero si legge come "non
+        # succedera'", che e' un'affermazione, mentre qui non si sa.
+        self.assertIsNone(
+            self.pipeline.build_exceedance_probabilities(self.header, None, None)
+        )
+        vuoto = np.full(50 * 60, np.nan)
+        self.assertIsNone(
+            self.pipeline.build_exceedance_probabilities(self.header, vuoto, vuoto)
+        )
+
+    def test_la_raffica_viene_convertita_in_kmh(self):
+        # 20 m/s sono 72 km/h: sopra 50, sotto 75. Se la conversione sparisse,
+        # la soglia da 50 km/h verrebbe letta su un campo in m/s e non
+        # scatterebbe quasi mai.
+        raffica = np.full(50 * 60, 20.0)
+        blocco = self.pipeline.build_exceedance_probabilities(
+            self.header, None, raffica
+        )
+        self.assertEqual(max(blocco["fields"]["gust_50"]), 100)
+        self.assertEqual(max(blocco["fields"]["gust_75"]), 0)
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

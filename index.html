@@ -700,6 +700,16 @@
         margin: 0 2px 8px;
       }
 
+      /* Spiega a cosa serve una sezione quando il titolo non basta: la
+         probabilita' risponde a una domanda diversa dagli altri campi, e
+         senza dirlo si legge come "quanta pioggia", che sarebbe sbagliato. */
+      .section-note {
+        margin: -2px 2px 10px;
+        color: #91a7b6;
+        font-size: 10px;
+        line-height: 1.5;
+      }
+
       .section-title h3 {
         margin: 0;
         color: #c5d6e2;
@@ -2420,6 +2430,34 @@
 
           <section class="drawer-section">
             <div class="section-title">
+              <h3>Probabilità</h3>
+              <span>che accada entro 10 km</span>
+            </div>
+            <p class="section-note">Un modello a 2,2 km sa che ci sarà un rovescio, non su quale paese cadrà. Queste mappe non dicono quanta pioggia cade in un punto — domanda a cui nessun modello sa rispondere — ma quanto è probabile che il fenomeno tocchi la tua zona. Tutte usano la stessa scala, quindi il 60% è lo stesso 60% ovunque.</p>
+            <div class="layer-grid">
+              <button class="layer-card" type="button" data-layer="prob_rain_1" style="--swatch: linear-gradient(90deg,#cee7f3,#7abae0,#3e7cc0,#563e94,#72145c)">
+                <span class="layer-swatch"></span><span><b>Pioggia ≥ 1 mm/h</b><small>che piova, in pratica</small></span>
+              </button>
+              <button class="layer-card" type="button" data-layer="prob_rain_5" style="--swatch: linear-gradient(90deg,#cee7f3,#7abae0,#3e7cc0,#563e94,#72145c)">
+                <span class="layer-swatch"></span><span><b>Pioggia ≥ 5 mm/h</b><small>rovescio vero</small></span>
+              </button>
+              <button class="layer-card" type="button" data-layer="prob_rain_10" style="--swatch: linear-gradient(90deg,#cee7f3,#7abae0,#3e7cc0,#563e94,#72145c)">
+                <span class="layer-swatch"></span><span><b>Pioggia ≥ 10 mm/h</b><small>pioggia intensa</small></span>
+              </button>
+              <button class="layer-card" type="button" data-layer="prob_rain_20" style="--swatch: linear-gradient(90deg,#cee7f3,#7abae0,#3e7cc0,#563e94,#72145c)">
+                <span class="layer-swatch"></span><span><b>Pioggia ≥ 20 mm/h</b><small>nubifragio</small></span>
+              </button>
+              <button class="layer-card" type="button" data-layer="prob_gust_50" style="--swatch: linear-gradient(90deg,#cee7f3,#7abae0,#3e7cc0,#563e94,#72145c)">
+                <span class="layer-swatch"></span><span><b>Raffiche ≥ 50 km/h</b><small>vento forte · 7 Beaufort</small></span>
+              </button>
+              <button class="layer-card" type="button" data-layer="prob_gust_75" style="--swatch: linear-gradient(90deg,#cee7f3,#7abae0,#3e7cc0,#563e94,#72145c)">
+                <span class="layer-swatch"></span><span><b>Raffiche ≥ 75 km/h</b><small>burrasca forte · 9 Beaufort</small></span>
+              </button>
+            </div>
+          </section>
+
+          <section class="drawer-section">
+            <div class="section-title">
               <h3>Analisi</h3>
               <span>sovrapposta al campo</span>
             </div>
@@ -2850,6 +2888,31 @@
         { v: 140, c: [70, 22, 92] }
       ];
 
+      // Probabilita'. Una grandezza sola, quindi una scala sola, usata da
+      // tutti i livelli probabilistici: cosi' il 60% ha lo stesso colore che
+      // parli di pioggia o di raffiche, ed e' confrontabile a colpo d'occhio.
+      // Sequenziale e con luminosita' monotona, percio' resta ordinata anche
+      // stampata in bianco e nero; sale verso il viola per non confondersi con
+      // pioggia e raffiche, che sul sito percorrono gia' verde-giallo-rosso.
+      // Trasparente a zero: dove non succede niente si deve vedere la carta.
+      // Misurata in CAM02-UCS: distanza minima fra fasce adiacenti 7,8, e 5,1
+      // simulando il daltonismo piu' penalizzante. I salti sono volutamente
+      // uniformi (7,8-13,6), perche' incrementi uguali di probabilita' devono
+      // sembrare ugualmente diversi.
+      const PROB_STOPS = [
+        { v: 0, c: [236, 244, 248], a: 0 },
+        { v: 10, c: [206, 231, 243], a: 0.62 },
+        { v: 20, c: [166, 211, 235], a: 0.78 },
+        { v: 30, c: [122, 186, 224], a: 0.86 },
+        { v: 40, c: [84, 157, 210], a: 0.9 },
+        { v: 50, c: [62, 124, 192], a: 0.92 },
+        { v: 60, c: [66, 92, 172], a: 0.93 },
+        { v: 70, c: [86, 62, 148], a: 0.94 },
+        { v: 80, c: [104, 38, 124], a: 0.95 },
+        { v: 90, c: [114, 20, 92], a: 0.96 },
+        { v: 100, c: [104, 10, 58], a: 0.96 }
+      ];
+
       const RAIN_STOPS = [
         { v: 0, c: [0, 0, 0], a: 0 },
         { v: 0.1, c: [213, 240, 255], a: 0.78 },
@@ -3171,6 +3234,78 @@
           note: "Il picco del vento nell'intervallo, non la media: è il valore che rompe rami e ombrelloni. I bordi delle fasce sono i gradi Beaufort, così 50 km/h (vento forte), 75 (burrasca forte) e 103 (tempesta violenta) si riconoscono a colpo d'occhio.",
           opacity: 0.93,
           terrainOpacity: 0.29
+        },
+        prob_rain_1: {
+          label: "Probabilità pioggia ≥ 1 mm/h",
+          unit: "%",
+          stops: PROB_STOPS,
+          discrete: true,
+          decimals: 0,
+          ticks: [10, 20, 30, 40, 50, 60, 70, 80, 90],
+          note: "Probabilità che entro 10 km cada almeno 1 mm in un\u0027ora: in pratica, che piova. Non è quanta area si bagna, è quanto è probabile che tocchi a te.",
+          opacity: 0.9,
+          terrainOpacity: 0.26,
+          prob: "rain_1"
+        },
+        prob_rain_5: {
+          label: "Probabilità pioggia ≥ 5 mm/h",
+          unit: "%",
+          stops: PROB_STOPS,
+          discrete: true,
+          decimals: 0,
+          ticks: [10, 20, 30, 40, 50, 60, 70, 80, 90],
+          note: "Un rovescio vero entro 10 km. Sopra questa soglia la pioggia si sente e le strade si bagnano davvero.",
+          opacity: 0.9,
+          terrainOpacity: 0.26,
+          prob: "rain_5"
+        },
+        prob_rain_10: {
+          label: "Probabilità pioggia ≥ 10 mm/h",
+          unit: "%",
+          stops: PROB_STOPS,
+          discrete: true,
+          decimals: 0,
+          ticks: [10, 20, 30, 40, 50, 60, 70, 80, 90],
+          note: "Pioggia intensa entro 10 km: la soglia a cui i tombini iniziano a non farcela.",
+          opacity: 0.9,
+          terrainOpacity: 0.26,
+          prob: "rain_10"
+        },
+        prob_rain_20: {
+          label: "Probabilità pioggia ≥ 20 mm/h",
+          unit: "%",
+          stops: PROB_STOPS,
+          discrete: true,
+          decimals: 0,
+          ticks: [10, 20, 30, 40, 50, 60, 70, 80, 90],
+          note: "Nubifragio entro 10 km. È la soglia a cui rispondono i piccoli bacini: rara, e quando compare va guardata.",
+          opacity: 0.9,
+          terrainOpacity: 0.26,
+          prob: "rain_20"
+        },
+        prob_gust_50: {
+          label: "Probabilità raffiche ≥ 50 km/h",
+          unit: "%",
+          stops: PROB_STOPS,
+          discrete: true,
+          decimals: 0,
+          ticks: [10, 20, 30, 40, 50, 60, 70, 80, 90],
+          note: "Vento forte (7 Beaufort) entro 10 km: rami che si muovono, ombrelloni da chiudere.",
+          opacity: 0.9,
+          terrainOpacity: 0.26,
+          prob: "gust_50"
+        },
+        prob_gust_75: {
+          label: "Probabilità raffiche ≥ 75 km/h",
+          unit: "%",
+          stops: PROB_STOPS,
+          discrete: true,
+          decimals: 0,
+          ticks: [10, 20, 30, 40, 50, 60, 70, 80, 90],
+          note: "Burrasca forte (9 Beaufort) entro 10 km: danni possibili, rami spezzati.",
+          opacity: 0.9,
+          terrainOpacity: 0.26,
+          prob: "gust_75"
         },
         rain: {
           label: "Precipitazioni",
@@ -3968,6 +4103,8 @@
       function fieldValue(key, gx, gy) {
         if (!currentData) return NaN;
 
+        if (usesProbData(key)) return probSample(key, gx, gy);
+
         const stormName = stormFieldName(key);
         if (stormName) {
           // Il modo del temporale e' un codice, non un valore continuo:
@@ -4327,6 +4464,7 @@
           const item = catalog[currentIndex];
           return !(item && item.storm === false);
         }
+        if (usesProbData(key)) return Boolean(probGrid(key));
         if (!currentData) return true;
         if (key === "feels") return Boolean(currentData.feels_like);
         if (key === "wind") return Boolean(currentData.wind_u && currentData.wind_v);
@@ -4349,6 +4487,10 @@
         if (key === "convection_prob") {
           return meta.convectionMessage ||
             "Indice convettivo non disponibile per questa scadenza";
+        }
+        if (usesProbData(key)) {
+          return "Probabilità non disponibile per questa scadenza: manca il "
+            + "campo di partenza nel run";
         }
         if (usesStormData(key)) {
           return "Diagnostica dei temporali non disponibile per questa "
@@ -4415,6 +4557,25 @@
           scale: MODEL_INFO[activeModel].gridLabel,
           limit: "Interpretare insieme a run, validità, unità e campi indipendenti."
         };
+        // I livelli probabilistici condividono metodo, scala e limite: cambia
+        // solo la soglia, che sta gia' nell'etichetta. Scriverli sei volte
+        // significherebbe sei posti da aggiornare quando il metodo cambia.
+        if (usesProbData(key)) {
+          const payload = probPayload();
+          const evento = payload ? payload.eventRadiusKm : 10;
+          const dispersione = payload ? payload.spreadRadiusKm : 25;
+          return {
+            nature: "Probabilità derivata, non un campo del modello",
+            method: "Frazione di punti entro " + dispersione + " km in cui la "
+              + "soglia viene raggiunta da qualche parte entro " + evento
+              + " km (Theis et al. 2005; Schwartz e Sobash 2017)",
+            scale: "Griglia diradata ≈4,4 km; vicinato circolare sul terreno, "
+              + "corretto per il restringimento dei meridiani",
+            limit: "Frequenza geometrica su una singola corsa, non una "
+              + "probabilità calibrata: nessun archivio la verifica ancora, e "
+              + "il raggio di dispersione è una scelta dichiarata, non tarata."
+          };
+        }
         const base = LAYER_SCIENCE[key] || fallback;
         const level = selectedPressureLevel(key);
         if (level === "surface") {
@@ -4456,6 +4617,42 @@
 
       // Un campo appartiene alla sezione temporali se la sua voce dichiara
       // da quale griglia del file storm viene.
+      function probFieldName(key) {
+        const info = LAYER_INFO[key];
+        return info && info.prob ? info.prob : null;
+      }
+
+      function usesProbData(key) {
+        return Boolean(probFieldName(key));
+      }
+
+      function probPayload() {
+        return currentData && currentData.prob ? currentData.prob : null;
+      }
+
+      function probGrid(key) {
+        const payload = probPayload();
+        const name = probFieldName(key);
+        if (!payload || !name || !payload.fields) return null;
+        return getGrid(payload.fields[name]);
+      }
+
+      // La probabilita' vive su una griglia diradata di due, con la propria
+      // intestazione: il campionamento passa per le coordinate, non per gli
+      // indici del campo nativo.
+      function probSample(key, gx, gy) {
+        const payload = probPayload();
+        const values = probGrid(key);
+        if (!payload || !values || !currentData) return NaN;
+        const meta = currentData.meta;
+        const lon = meta.lo1 + gx * meta.dx;
+        const lat = meta.la1 - gy * meta.dy;
+        const sx = (lon - payload.lo1) / payload.dx;
+        const sy = (payload.la1 - lat) / payload.dy;
+        const sampler = useNearestCell ? sampleNearest : sampleBilinear;
+        return sampler(values, sx, sy, payload.nx, payload.ny);
+      }
+
       function stormFieldName(key) {
         const info = LAYER_INFO[key];
         return info && info.storm ? info.storm : null;
@@ -6474,9 +6671,10 @@
         }
         // I campi a 850 hPa vivono su una griglia propria (dominio piu'
         // ampio, passo ~19 km): il raster usa la geometria del campo attivo.
+        const probActive = usesProbData(activeLayer);
         const fieldMeta = upperActive
           ? upperLevelData(activeLayer)
-          : (stormActive ? stormData : meta);
+          : (stormActive ? stormData : (probActive ? probPayload() : meta));
         if (!fieldMeta) return;
         const dataWest = fieldMeta.lo1 - fieldMeta.dx / 2;
         const dataEast = fieldMeta.lo1 + (fieldMeta.nx - 1) * fieldMeta.dx + fieldMeta.dx / 2;
@@ -6590,11 +6788,14 @@
                 ? upperFieldArray(activeLayer)
                 : (stormActive
                     ? stormData[stormFieldName(activeLayer)]
-                    : currentData[fieldKey])
+                    : (probActive
+                        ? probPayload().fields[probFieldName(activeLayer)]
+                        : currentData[fieldKey]))
             );
         // Observed analysis: fuse the surface field with live METAR (Cressman).
         if (
-          showFusion && !isWindField && !upperActive && !stormActive && fieldGrid
+          showFusion && !isWindField && !upperActive && !stormActive
+          && !probActive && fieldGrid
           && fusionSupported(activeLayer)
         ) {
           fieldGrid = buildFusedGrid(activeLayer, fieldGrid, fieldMeta);

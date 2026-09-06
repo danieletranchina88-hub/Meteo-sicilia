@@ -63,6 +63,10 @@ from meteo_analysis.products.synoptic_engine import (
     generate_run_bulletin,
 )
 from meteo_analysis.products.meteograms import MeteogramArchive
+from meteo_analysis.core.neighbourhood import (
+    cell_sizes_km,
+    event_probabilities,
+)
 from meteo_analysis.ml.icon2i import Icon2IStore
 from meteo_analysis.ml.model import FrontModel
 from meteo_analysis.verification.archive import (
@@ -1216,6 +1220,80 @@ def clean_for_json(arr, decimals):
     return [None if not np.isfinite(float(v)) else float(v) for v in rounded]
 
 
+# Probabilita' di superamento sul vicinato.
+#
+# Le soglie non sono numeri tondi scelti per simmetria: sono i gradini a cui
+# cambia quello che succede. Per la pioggia oraria, 1 mm separa "bagnato" da
+# "asciutto", 5 mm e' un rovescio, 10 mm allaga i tombini, 20 mm e' la soglia
+# a cui i piccoli bacini rispondono. Per le raffiche sono i gradi Beaufort
+# gia' usati dalla scala colore: 50 km/h vento forte, 75 burrasca forte.
+#
+# I due raggi hanno significati distinti e vanno letti insieme: 10 km e' quanto
+# vicino deve accadere perche' conti come "e' successo a te", 25 km e' la scala
+# su cui il modello sbaglia la posizione. Nessuno dei due e' tarato su un
+# archivio, perche' un archivio non c'e': sono scelte dichiarate.
+PROB_EVENT_RADIUS_KM = 10.0
+PROB_SPREAD_RADIUS_KM = 25.0
+# Il campo esce da una media su 25 km: sotto i 4 km non ha piu' struttura.
+# Misurato sul run del 6 settembre, diradare di 2 costa in media 0,12 punti di
+# probabilita' e al massimo 3,9; diradare di 5 arriverebbe a 15, troppo.
+PROB_COARSEN = 2
+PROB_FIELDS = (
+    ("rain", (1.0, 5.0, 10.0, 20.0), 1.0),
+    ("gust", (50.0, 75.0), 3.6),
+)
+
+
+def build_exceedance_probabilities(header, rain, wind_gust_10m):
+    """Probabilita' che l'evento accada vicino, per le soglie che contano.
+
+    Restituisce una griglia diradata con la propria intestazione, perche' il
+    passo non e' quello dei campi nativi. ``None`` se non c'e' nulla da dire:
+    il sito lo tratta come campo assente invece di disegnare zeri.
+    """
+    sources = {"rain": rain, "gust": wind_gust_10m}
+    nx, ny = int(header["nx"]), int(header["ny"])
+    cell_x_km, cell_y_km = cell_sizes_km(header)
+
+    fields = {}
+    for name, thresholds, scale in PROB_FIELDS:
+        values = sources.get(name)
+        if values is None:
+            continue
+        grid = np.asarray(values, dtype=float).reshape(ny, nx) * float(scale)
+        if not np.any(np.isfinite(grid)):
+            continue
+        probabilities = event_probabilities(
+            grid,
+            thresholds,
+            cell_x_km=cell_x_km,
+            cell_y_km=cell_y_km,
+            event_radius_km=PROB_EVENT_RADIUS_KM,
+            spread_radius_km=PROB_SPREAD_RADIUS_KM,
+        )
+        for threshold, probability in zip(thresholds, probabilities):
+            key = f"{name}_{threshold:g}".replace(".", "_")
+            fields[key] = clean_for_json(
+                coarsen(probability * 100.0, PROB_COARSEN, "mean"), 0
+            )
+    if not fields:
+        return None
+
+    return {
+        "method": "neighbourhood-exceedance-deterministic-v1",
+        "semantics": "frequency-of-occurrence-within-eventRadiusKm-not-calibrated",
+        "eventRadiusKm": PROB_EVENT_RADIUS_KM,
+        "spreadRadiusKm": PROB_SPREAD_RADIUS_KM,
+        "nx": -(-nx // PROB_COARSEN),
+        "ny": -(-ny // PROB_COARSEN),
+        "lo1": header["lo1"],
+        "la1": header["la1"],
+        "dx": header["dx"] * PROB_COARSEN,
+        "dy": header["dy"] * PROB_COARSEN,
+        "fields": fields,
+    }
+
+
 def interpolate_native_field(payload, target_latitudes, target_longitudes):
     """Interpolate a regular native-grid diagnostic onto the surface grid."""
     if not payload:
@@ -2129,6 +2207,9 @@ def process_data():
                     "foehn": (
                         clean_for_json(foehn, 0)
                         if foehn is not None else None
+                    ),
+                    "prob": build_exceedance_probabilities(
+                        header, rain, wind_gust_10m
                     ),
                     "nlg_bulletin": nlg_bulletin,
                     "nlg_bulletin_details": nlg_details,
