@@ -1489,4 +1489,17 @@ assert.match(html, /const CAPE_STOPS = \[\s*\{ v: 0, c: \[238, 244, 240\], a: 0 
   assert.match(html, /elevationDownscalingActive\(\), terrainSamplerKey,/,
     "la correzione non entra nella firma del raster");
 }
+// --- Rete osservativa su tutta Italia ---
+// La rete e' passata da 455 stazioni della sola Sicilia a circa 3640 su 27
+// reti regionali. A quel numero due dettagli diventano decisivi.
+{
+  // Il confronto di ogni stazione con tutte le precedenti costava 299 ms su
+  // 3399 stazioni; a secchielli ne costa 8, scartando le stesse.
+  assert.match(html, /const secchi=new Map\(\);/,
+    "il controllo dei doppioni e' tornato quadratico");
+  assert.doesNotMatch(html, /points\.some\(p=>MeteoLocalDownscaling\.distance/,
+    "il confronto tutti-con-tutti e' rientrato");
+  assert.match(html, /if\(gia\(station\)\) continue;/,
+    "le stazioni sovrapposte non vengono piu' scartate");
+}
 console.log("3D map regression checks: OK");

@@ -31,8 +31,16 @@ def test_real_contract():
     assert len(fetch_meteohub_stations(session, NOW)) == 1
     params = session.post.call_args_list[0].kwargs["params"]
     assert params["output_format"] == "JSON"
-    assert params["allStationProducts"] == "true"
-    assert "product:" not in params["q"]
+    # Si chiedono i prodotti che servono, non tutti quelli della stazione: sul
+    # dominio intero la differenza era 18 MB contro 78.
+    assert params["allStationProducts"] == "false"
+    assert "product:B12101 or B12103" in params["q"]
+    # Il dominio e' quello del modello, non la Sicilia: un'analisi che corregge
+    # una regione sola lascia scoperto il resto della carta.
+    assert (params["lonmin"], params["lonmax"]) == (3.0, 22.0)
+    assert (params["latmin"], params["latmax"]) == (33.7, 48.9)
+    # Nessun filtro di rete: le reti regionali sono 27 e servono tutte.
+    assert "networks" not in params
     assert session.post.call_count == 3
     assert "product:B10004" in session.post.call_args_list[1].kwargs["params"]["q"]
     assert "product:B10051" in session.post.call_args_list[2].kwargs["params"]["q"]
@@ -46,6 +54,22 @@ def test_real_contract():
     assert result[0]["fieldObsTime"]["tempC"] == 1788566400
     assert result[0]["elevationM"] is None
     assert result[0]["lat"] == 37.62172
+    assert result[0]["id"] == "MH:dpcn-sicilia:37.62172:14.50112"
+    assert result[0]["network"] == "dpcn-sicilia"
+    # Stessa posizione, rete diversa: due stazioni, non una sovrascritta.
+    altra = copy.deepcopy(ROW)
+    altra["network"] = "dpcn-calabria"
+    assert len(normalize_jsonl([json.dumps(ROW), json.dumps(altra)], NOW)) == 2
+    # Fuori dal dominio del modello si scarta comunque.
+    fuori = copy.deepcopy(ROW)
+    fuori["data"][0]["vars"]["B05001"]["v"] = 60.0
+    assert not normalize_jsonl([json.dumps(fuori)], NOW)
+    # Una stazione del nord ora entra: prima veniva buttata via.
+    nord = copy.deepcopy(ROW)
+    nord["network"] = "dpcn-lombardia"
+    nord["data"][0]["vars"]["B05001"]["v"] = 45.7
+    nord["data"][0]["vars"]["B06001"]["v"] = 9.3
+    assert len(normalize_jsonl([json.dumps(nord)], NOW)) == 1
     for bad_value in [None, True, 9999, "NaN"]:
         bad = copy.deepcopy(ROW)
         bad["data"][1]["vars"]["B12101"]["v"] = bad_value

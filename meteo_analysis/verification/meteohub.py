@@ -1,15 +1,29 @@
-"""Public MeteoHub Sicily surface observations, normalized for the site.
+"""Osservazioni di superficie pubbliche di MeteoHub, normalizzate per il sito.
 
-Contract checked against MeteoHub maps_observed.py and a real JSONL export.
-No account credentials are required for this recent public dataset.
+Contratto verificato contro maps_observed.py di MeteoHub e un export JSONL
+reale. Non servono credenziali: questo insieme di dati recenti e' pubblico.
+
+Copre l'intero dominio del modello, non la sola Sicilia. Interrogando l'API
+sul dominio ICON-2I il 6 settembre 2026 rispondevano 3459 stazioni su 27 reti
+regionali; chiedendo la sola rete siciliana, com'era prima, ne arrivavano 421.
+Il modello copre tutta l'Italia, e un'analisi che corregge solo la Sicilia
+lascia scoperto il resto della carta.
 """
 from datetime import datetime, timedelta, timezone
 import json
 import math
 
 URL = "https://meteohub.agenziaitaliameteo.it/api/observations"
-SOURCE = "MeteoHub · Regione Siciliana · Agenzia ItaliaMeteo / CINECA"
-NETWORK = "dpcn-sicilia"
+SOURCE = "MeteoHub · Agenzia ItaliaMeteo / CINECA"
+
+# Il dominio del modello, non una regione: e' il riquadro che la mappa mostra.
+DOMAIN = dict(lonmin=3.0, lonmax=22.0, latmin=33.7, latmax=48.9)
+
+# Finestra di ricerca. Le stazioni riportano con cadenze diverse e serve solo
+# l'ultimo dato di ognuna; misurato sul dominio intero, 75 minuti ne
+# raccolgono 3606 contro le 3669 di due ore, con 18 MB invece di 34.
+WINDOW_MINUTES = 75
+
 PRODUCTS = (
     "B12101",  # air temperature at 2 m
     "B12103",  # dew-point temperature at 2 m
@@ -41,8 +55,11 @@ def normalize_jsonl(lines, now=None):
         if not line.strip():
             continue
         record = json.loads(line)
-        if not isinstance(record, dict) or record.get("network") != NETWORK:
+        # Ogni rete regionale ha il proprio nome: si accettano tutte, e serve
+        # solo che il record ne dichiari una, perche' entra nell'identificativo.
+        if not isinstance(record, dict) or not record.get("network"):
             continue
+        network = str(record["network"])
         metadata = {}
         observed_values = {}
         for group in record.get("data", []):
@@ -66,8 +83,14 @@ def normalize_jsonl(lines, now=None):
                     if code == "B10004":
                         level_type = number(level[0]) if level else None
                         level_value = number(level[1]) if len(level) > 1 else None
+                        # Il tipo 1 e' "superficie del suolo": alcune reti lo
+                        # accompagnano con valore 0, altre lo lasciano nullo, e
+                        # significano la stessa cosa. Pretendere lo zero
+                        # scartava la pressione di 928 stazioni su 27 reti --
+                        # non si vedeva finche' si guardava la sola Sicilia,
+                        # che la riporta come quota in millimetri (tipo 102).
                         station_level = (
-                            (level_type == 1 and level_value == 0)
+                            (level_type == 1 and level_value in (0, None))
                             or (level_type == 102 and level_value is not None
                                 and -500_000 <= level_value <= 4_000_000)
                             or (level_type == 103 and level_value is not None
@@ -81,7 +104,10 @@ def normalize_jsonl(lines, now=None):
         def value(key):
             return (metadata.get(key) or {}).get("v")
         lat, lon = number(value("B05001")), number(value("B06001"))
-        if lat is None or lon is None or not (35 <= lat <= 39 and 11 <= lon <= 16):
+        if lat is None or lon is None or not (
+            DOMAIN["latmin"] <= lat <= DOMAIN["latmax"]
+            and DOMAIN["lonmin"] <= lon <= DOMAIN["lonmax"]
+        ):
             continue
         try:
             observed = datetime.fromisoformat(record["date"].replace("Z", "+00:00"))
@@ -122,7 +148,9 @@ def normalize_jsonl(lines, now=None):
             wind_direction, sea_level_pressure, station_pressure,
         )):
             continue
-        sid = f"MH:SICILIA:{lat:.5f}:{lon:.5f}"
+        # La rete entra nell'identificativo: due reti diverse possono avere
+        # stazioni vicine, e senza il prefisso una sovrascriverebbe l'altra.
+        sid = f"MH:{network}:{lat:.5f}:{lon:.5f}"
         elevation = number(value("B07030"))
         # The real export uses zero for many unknown heights. Keep these
         # visible, but do not treat them as verified sea-level stations.
@@ -131,7 +159,7 @@ def normalize_jsonl(lines, now=None):
         observed_epoch = int(observed.timestamp())
         station = dict(id=sid, name=str(value("B01019") or sid), lat=lat, lon=lon,
                        elevationM=elevation, obsTime=observed_epoch,
-                       source=SOURCE, quality="provisional", network=NETWORK)
+                       source=SOURCE, quality="provisional", network=network)
         optional = {
             "tempC": temperature, "dewpC": dewpoint, "rhPct": humidity,
             "wspdKmh": wind_speed, "windGustKmh": gust,
@@ -164,23 +192,27 @@ def fetch_meteohub_stations(session=None, now=None):
         import requests
         session = requests
     now = now or datetime.now(timezone.utc)
-    start = now - timedelta(hours=2)
+    start = now - timedelta(minutes=WINDOW_MINUTES)
     base_query = (f"reftime:>={start:%Y-%m-%d %H:%M},<={now:%Y-%m-%d %H:%M};"
                   "license:CCBY_COMPLIANT")
-    # The public map serves pressure only after selecting that product even
-    # when allStationProducts=true. Ask B10004/B10051 explicitly and merge the
-    # JSONL records with the broad temperature/humidity/wind response.
+    # Si chiedono i prodotti che servono, non tutti quelli che la stazione ha:
+    # con allStationProducts arrivavano anche pioggia, radiazione e suolo, e
+    # sul dominio intero erano 78 MB contro i 18 di questa richiesta.
+    #
+    # La pressione resta in due passate a parte: la mappa pubblica la serve solo
+    # se quel prodotto viene chiesto da solo, e unire i JSONL costa meno che
+    # rinunciarci.
     lines = []
     size = 0
-    for product in (None, "B10004", "B10051"):
-        query = base_query + (f";product:{product}" if product else "")
+    wanted = " or ".join(PRODUCTS)
+    for product in (wanted, "B10004", "B10051"):
+        query = base_query + f";product:{product}"
         response = session.post(URL, params={
-            "q": query, "networks": NETWORK, "output_format": "JSON",
+            "q": query, "output_format": "JSON",
             "stationDetails": "true",
-            "allStationProducts": "true" if product is None else "false",
-            "reliabilityCheck": "true", "lonmin": 11, "lonmax": 16,
-            "latmin": 35, "latmax": 39,
-        }, timeout=(15, 60), stream=True)
+            "allStationProducts": "false",
+            "reliabilityCheck": "true", **DOMAIN,
+        }, timeout=(15, 180), stream=True)
         try:
             response.raise_for_status()
             for line in response.iter_lines():
@@ -227,7 +259,7 @@ def fetch_site_observations():
         statuses.append(dict(source=SOURCE, status="unavailable", reason=reason))
     if not payload["stations"]:
         raise ValueError("nessuna fonte osservativa disponibile")
-    payload.update(source="NOAA AWC METAR + MeteoHub Sicilia", sourceUrl=URL,
+    payload.update(source="NOAA AWC METAR + MeteoHub Italia", sourceUrl=URL,
                    capturedAt=now.strftime("%Y-%m-%dT%H:%M:%SZ"),
                    count=len(payload["stations"]), sourceStatus=statuses,
                    obsTime=max(s.get("obsTime") or 0 for s in payload["stations"]))

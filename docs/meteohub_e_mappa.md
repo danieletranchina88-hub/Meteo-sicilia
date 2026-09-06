@@ -1,23 +1,45 @@
 # MeteoHub, ricalcolo della mappa e costi AI
 
-La raccolta oraria e la pipeline ICON acquisiscono le osservazioni pubbliche
-della rete `dpcn-sicilia` da MeteoHub, separatamente dai METAR NOAA AWC.
+La raccolta oraria e la pipeline ICON acquisiscono le osservazioni pubbliche di
+MeteoHub su **tutto il dominio del modello**, separatamente dai METAR NOAA AWC.
 Non serve trasferire il login dell'utente al sito né pubblicare chiavi API.
 
+MeteoHub aggrega le reti regionali di tutta Italia. Chiedendo la sola rete
+`dpcn-sicilia` su un riquadro siciliano, com'era prima, rispondevano 421
+stazioni; chiedendo tutte le reti sul dominio ICON-2I ne rispondono 3459 su 27
+reti. Il modello copre tutta l'Italia, e un'analisi che corregge solo la Sicilia
+lascia scoperto il resto della carta.
+
 Contratto verificato sul codice ufficiale MeteoHub (`maps_observed.py`,
-`services/dballe.py`) e su un export reale JSONL del 5 settembre 2026:
-POST `/api/observations`, parametri query `networks=dpcn-sicilia`,
-`output_format=JSON` (maiuscolo), `reliabilityCheck=true`,
-`allStationProducts=true` e `q` con `reftime`, `license:CCBY_COMPLIANT`. Le
-variabili utilizzabili sono
-temperatura e rugiada a 2 m, umidità relativa, direzione, intensità e raffica
-del vento, pressione ridotta al livello del mare e pressione di stazione.
-Poiché il feed generale non include sempre la pressione mostrata dalla mappa
-ufficiale, due richieste mirate a `B10004` e `B10051` vengono fuse al risultato.
-La richiesta riguarda solo le ultime due ore e il dominio Sicilia. È un download pubblico, non una
+`services/dballe.py`) e su un export reale JSONL: POST `/api/observations`,
+`output_format=JSON` (maiuscolo), `reliabilityCheck=true`, nessun filtro
+`networks`, riquadro 3–22 °E / 33,7–48,9 °N, e `q` con `reftime`,
+`license:CCBY_COMPLIANT` e la lista dei prodotti separati da `or`. Le variabili
+sono temperatura e rugiada a 2 m, umidità relativa, direzione, intensità e
+raffica del vento, pressione ridotta al livello del mare e pressione di
+stazione. Poiché il feed generale non include sempre la pressione mostrata dalla
+mappa ufficiale, due richieste mirate a `B10004` e `B10051` vengono fuse al
+risultato.
+
+Due scelte tengono il download ragionevole, entrambe misurate sul dominio
+intero:
+
+- si chiedono i prodotti che servono invece di `allStationProducts=true`, che
+  portava anche pioggia, radiazione e suolo: 18 MB invece di 78;
+- la finestra è di **75 minuti** invece di due ore. Serve solo l'ultimo dato di
+  ogni stazione, e 75 minuti ne raccolgono 3606 contro le 3669 di due ore,
+  dimezzando i byte. A 45 minuti se ne perderebbe il 42%.
+
+Una richiesta ogni ora, circa 10 secondi. È un download pubblico, non una
 richiesta di estrazione persistente dell'account.
 
-Fonte: Regione Siciliana tramite MeteoHub, Agenzia ItaliaMeteo / CINECA.
+**Livello della pressione di stazione.** Le reti dichiarano `B10004` a livelli
+diversi: la Sicilia come quota in millimetri (tipo 102), molte altre come
+"superficie del suolo" (tipo 1) con valore nullo. Pretendere lo zero, com'era
+prima, scartava la pressione di 928 record su 27 reti — un difetto invisibile
+finché si guardava una regione sola.
+
+Fonte: reti regionali italiane tramite MeteoHub, Agenzia ItaliaMeteo / CINECA.
 Portale e attribuzioni: https://meteohub.agenziaitaliameteo.it/app/license
 Codice del servizio: https://gitlab.hpc.cineca.it/mistral/meteo-hub
 Guida: https://meteohub.agenziaitaliameteo.it/ui/user-guide
