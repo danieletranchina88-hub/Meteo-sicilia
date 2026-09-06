@@ -700,6 +700,16 @@
         margin: 0 2px 8px;
       }
 
+      /* Spiega a cosa serve una sezione quando il titolo non basta: la
+         probabilita' risponde a una domanda diversa dagli altri campi, e
+         senza dirlo si legge come "quanta pioggia", che sarebbe sbagliato. */
+      .section-note {
+        margin: -2px 2px 10px;
+        color: #91a7b6;
+        font-size: 10px;
+        line-height: 1.5;
+      }
+
       .section-title h3 {
         margin: 0;
         color: #c5d6e2;
@@ -2420,6 +2430,34 @@
 
           <section class="drawer-section">
             <div class="section-title">
+              <h3>Probabilità</h3>
+              <span>che accada entro 10 km</span>
+            </div>
+            <p class="section-note">Un modello a 2,2 km sa che ci sarà un rovescio, non su quale paese cadrà. Queste mappe non dicono quanta pioggia cade in un punto — domanda a cui nessun modello sa rispondere — ma quanto è probabile che il fenomeno tocchi la tua zona. Tutte usano la stessa scala, quindi il 60% è lo stesso 60% ovunque.</p>
+            <div class="layer-grid">
+              <button class="layer-card" type="button" data-layer="prob_rain_1" style="--swatch: linear-gradient(90deg,#cee7f3,#7abae0,#3e7cc0,#563e94,#72145c)">
+                <span class="layer-swatch"></span><span><b>Pioggia ≥ 1 mm/h</b><small>che piova, in pratica</small></span>
+              </button>
+              <button class="layer-card" type="button" data-layer="prob_rain_5" style="--swatch: linear-gradient(90deg,#cee7f3,#7abae0,#3e7cc0,#563e94,#72145c)">
+                <span class="layer-swatch"></span><span><b>Pioggia ≥ 5 mm/h</b><small>rovescio vero</small></span>
+              </button>
+              <button class="layer-card" type="button" data-layer="prob_rain_10" style="--swatch: linear-gradient(90deg,#cee7f3,#7abae0,#3e7cc0,#563e94,#72145c)">
+                <span class="layer-swatch"></span><span><b>Pioggia ≥ 10 mm/h</b><small>pioggia intensa</small></span>
+              </button>
+              <button class="layer-card" type="button" data-layer="prob_rain_20" style="--swatch: linear-gradient(90deg,#cee7f3,#7abae0,#3e7cc0,#563e94,#72145c)">
+                <span class="layer-swatch"></span><span><b>Pioggia ≥ 20 mm/h</b><small>nubifragio</small></span>
+              </button>
+              <button class="layer-card" type="button" data-layer="prob_gust_50" style="--swatch: linear-gradient(90deg,#cee7f3,#7abae0,#3e7cc0,#563e94,#72145c)">
+                <span class="layer-swatch"></span><span><b>Raffiche ≥ 50 km/h</b><small>vento forte · 7 Beaufort</small></span>
+              </button>
+              <button class="layer-card" type="button" data-layer="prob_gust_75" style="--swatch: linear-gradient(90deg,#cee7f3,#7abae0,#3e7cc0,#563e94,#72145c)">
+                <span class="layer-swatch"></span><span><b>Raffiche ≥ 75 km/h</b><small>burrasca forte · 9 Beaufort</small></span>
+              </button>
+            </div>
+          </section>
+
+          <section class="drawer-section">
+            <div class="section-title">
               <h3>Analisi</h3>
               <span>sovrapposta al campo</span>
             </div>
@@ -2447,7 +2485,7 @@
                 <span><b>Modalità carta</b><small>analisi al suolo su carta, campo velato sotto</small></span><span class="switch"></span>
               </button>
               <button class="toggle-row" type="button" data-toggle="fusion" aria-pressed="false">
-                <span><b>Ricalcola mappa · Downscaling</b><small id="map-downscaling-status" aria-live="polite">T · vento · UR · MSLP · pressione stazione ≠ MSLP</small></span><span class="switch"></span>
+                <span><b>Ricalcola mappa · Downscaling</b><small id="map-downscaling-status" aria-live="polite">quota vera del terreno + osservazioni · T · vento · UR · MSLP · pressione stazione ≠ MSLP</small></span><span class="switch"></span>
               </button>
             </div>
 
@@ -2850,6 +2888,31 @@
         { v: 140, c: [70, 22, 92] }
       ];
 
+      // Probabilita'. Una grandezza sola, quindi una scala sola, usata da
+      // tutti i livelli probabilistici: cosi' il 60% ha lo stesso colore che
+      // parli di pioggia o di raffiche, ed e' confrontabile a colpo d'occhio.
+      // Sequenziale e con luminosita' monotona, percio' resta ordinata anche
+      // stampata in bianco e nero; sale verso il viola per non confondersi con
+      // pioggia e raffiche, che sul sito percorrono gia' verde-giallo-rosso.
+      // Trasparente a zero: dove non succede niente si deve vedere la carta.
+      // Misurata in CAM02-UCS: distanza minima fra fasce adiacenti 7,8, e 5,1
+      // simulando il daltonismo piu' penalizzante. I salti sono volutamente
+      // uniformi (7,8-13,6), perche' incrementi uguali di probabilita' devono
+      // sembrare ugualmente diversi.
+      const PROB_STOPS = [
+        { v: 0, c: [236, 244, 248], a: 0 },
+        { v: 10, c: [206, 231, 243], a: 0.62 },
+        { v: 20, c: [166, 211, 235], a: 0.78 },
+        { v: 30, c: [122, 186, 224], a: 0.86 },
+        { v: 40, c: [84, 157, 210], a: 0.9 },
+        { v: 50, c: [62, 124, 192], a: 0.92 },
+        { v: 60, c: [66, 92, 172], a: 0.93 },
+        { v: 70, c: [86, 62, 148], a: 0.94 },
+        { v: 80, c: [104, 38, 124], a: 0.95 },
+        { v: 90, c: [114, 20, 92], a: 0.96 },
+        { v: 100, c: [104, 10, 58], a: 0.96 }
+      ];
+
       const RAIN_STOPS = [
         { v: 0, c: [0, 0, 0], a: 0 },
         { v: 0.1, c: [213, 240, 255], a: 0.78 },
@@ -3171,6 +3234,78 @@
           note: "Il picco del vento nell'intervallo, non la media: è il valore che rompe rami e ombrelloni. I bordi delle fasce sono i gradi Beaufort, così 50 km/h (vento forte), 75 (burrasca forte) e 103 (tempesta violenta) si riconoscono a colpo d'occhio.",
           opacity: 0.93,
           terrainOpacity: 0.29
+        },
+        prob_rain_1: {
+          label: "Probabilità pioggia ≥ 1 mm/h",
+          unit: "%",
+          stops: PROB_STOPS,
+          discrete: true,
+          decimals: 0,
+          ticks: [10, 20, 30, 40, 50, 60, 70, 80, 90],
+          note: "Probabilità che entro 10 km cada almeno 1 mm in un\u0027ora: in pratica, che piova. Non è quanta area si bagna, è quanto è probabile che tocchi a te.",
+          opacity: 0.9,
+          terrainOpacity: 0.26,
+          prob: "rain_1"
+        },
+        prob_rain_5: {
+          label: "Probabilità pioggia ≥ 5 mm/h",
+          unit: "%",
+          stops: PROB_STOPS,
+          discrete: true,
+          decimals: 0,
+          ticks: [10, 20, 30, 40, 50, 60, 70, 80, 90],
+          note: "Un rovescio vero entro 10 km. Sopra questa soglia la pioggia si sente e le strade si bagnano davvero.",
+          opacity: 0.9,
+          terrainOpacity: 0.26,
+          prob: "rain_5"
+        },
+        prob_rain_10: {
+          label: "Probabilità pioggia ≥ 10 mm/h",
+          unit: "%",
+          stops: PROB_STOPS,
+          discrete: true,
+          decimals: 0,
+          ticks: [10, 20, 30, 40, 50, 60, 70, 80, 90],
+          note: "Pioggia intensa entro 10 km: la soglia a cui i tombini iniziano a non farcela.",
+          opacity: 0.9,
+          terrainOpacity: 0.26,
+          prob: "rain_10"
+        },
+        prob_rain_20: {
+          label: "Probabilità pioggia ≥ 20 mm/h",
+          unit: "%",
+          stops: PROB_STOPS,
+          discrete: true,
+          decimals: 0,
+          ticks: [10, 20, 30, 40, 50, 60, 70, 80, 90],
+          note: "Nubifragio entro 10 km. È la soglia a cui rispondono i piccoli bacini: rara, e quando compare va guardata.",
+          opacity: 0.9,
+          terrainOpacity: 0.26,
+          prob: "rain_20"
+        },
+        prob_gust_50: {
+          label: "Probabilità raffiche ≥ 50 km/h",
+          unit: "%",
+          stops: PROB_STOPS,
+          discrete: true,
+          decimals: 0,
+          ticks: [10, 20, 30, 40, 50, 60, 70, 80, 90],
+          note: "Vento forte (7 Beaufort) entro 10 km: rami che si muovono, ombrelloni da chiudere.",
+          opacity: 0.9,
+          terrainOpacity: 0.26,
+          prob: "gust_50"
+        },
+        prob_gust_75: {
+          label: "Probabilità raffiche ≥ 75 km/h",
+          unit: "%",
+          stops: PROB_STOPS,
+          discrete: true,
+          decimals: 0,
+          ticks: [10, 20, 30, 40, 50, 60, 70, 80, 90],
+          note: "Burrasca forte (9 Beaufort) entro 10 km: danni possibili, rami spezzati.",
+          opacity: 0.9,
+          terrainOpacity: 0.26,
+          prob: "gust_75"
         },
         rain: {
           label: "Precipitazioni",
@@ -3968,6 +4103,8 @@
       function fieldValue(key, gx, gy) {
         if (!currentData) return NaN;
 
+        if (usesProbData(key)) return probSample(key, gx, gy);
+
         const stormName = stormFieldName(key);
         if (stormName) {
           // Il modo del temporale e' un codice, non un valore continuo:
@@ -4017,7 +4154,21 @@
         const dataKey = key === "feels" ? "feels_like" : key;
         const grid = showFusion && selectedLevel === "surface" && fusionSupported(key)
           ? buildFusedGrid(key,getGrid(currentData[dataKey]),currentData.meta) : currentData[dataKey];
-        return sample(grid, gx, gy);
+        const value = sample(grid, gx, gy);
+        // La stessa correzione di quota che vede la mappa. Senza questa riga la
+        // carta direbbe una temperatura e il punto cliccato un'altra, ed e' la
+        // contraddizione che si nota per prima.
+        if (key === "temp" && Number.isFinite(value) && elevationDownscalingActive()) {
+          const terrain = localDownscalingCache && localDownscalingCache.terrain;
+          if (terrain && terrain.runTime === currentData.meta.runTime) {
+            const meta = currentData.meta;
+            return value + elevationCorrection(
+              profilePayload(), getGrid(terrain.terrainHeight),
+              meta.lo1 + gx * meta.dx, meta.la1 - gy * meta.dy
+            );
+          }
+        }
+        return value;
       }
 
       function windUV(gx, gy) {
@@ -4327,6 +4478,7 @@
           const item = catalog[currentIndex];
           return !(item && item.storm === false);
         }
+        if (usesProbData(key)) return Boolean(probGrid(key));
         if (!currentData) return true;
         if (key === "feels") return Boolean(currentData.feels_like);
         if (key === "wind") return Boolean(currentData.wind_u && currentData.wind_v);
@@ -4349,6 +4501,10 @@
         if (key === "convection_prob") {
           return meta.convectionMessage ||
             "Indice convettivo non disponibile per questa scadenza";
+        }
+        if (usesProbData(key)) {
+          return "Probabilità non disponibile per questa scadenza: manca il "
+            + "campo di partenza nel run";
         }
         if (usesStormData(key)) {
           return "Diagnostica dei temporali non disponibile per questa "
@@ -4415,6 +4571,25 @@
           scale: MODEL_INFO[activeModel].gridLabel,
           limit: "Interpretare insieme a run, validità, unità e campi indipendenti."
         };
+        // I livelli probabilistici condividono metodo, scala e limite: cambia
+        // solo la soglia, che sta gia' nell'etichetta. Scriverli sei volte
+        // significherebbe sei posti da aggiornare quando il metodo cambia.
+        if (usesProbData(key)) {
+          const payload = probPayload();
+          const evento = payload ? payload.eventRadiusKm : 10;
+          const dispersione = payload ? payload.spreadRadiusKm : 25;
+          return {
+            nature: "Probabilità derivata, non un campo del modello",
+            method: "Frazione di punti entro " + dispersione + " km in cui la "
+              + "soglia viene raggiunta da qualche parte entro " + evento
+              + " km (Theis et al. 2005; Schwartz e Sobash 2017)",
+            scale: "Griglia diradata ≈4,4 km; vicinato circolare sul terreno, "
+              + "corretto per il restringimento dei meridiani",
+            limit: "Frequenza geometrica su una singola corsa, non una "
+              + "probabilità calibrata: nessun archivio la verifica ancora, e "
+              + "il raggio di dispersione è una scelta dichiarata, non tarata."
+          };
+        }
         const base = LAYER_SCIENCE[key] || fallback;
         const level = selectedPressureLevel(key);
         if (level === "surface") {
@@ -4456,6 +4631,42 @@
 
       // Un campo appartiene alla sezione temporali se la sua voce dichiara
       // da quale griglia del file storm viene.
+      function probFieldName(key) {
+        const info = LAYER_INFO[key];
+        return info && info.prob ? info.prob : null;
+      }
+
+      function usesProbData(key) {
+        return Boolean(probFieldName(key));
+      }
+
+      function probPayload() {
+        return currentData && currentData.prob ? currentData.prob : null;
+      }
+
+      function probGrid(key) {
+        const payload = probPayload();
+        const name = probFieldName(key);
+        if (!payload || !name || !payload.fields) return null;
+        return getGrid(payload.fields[name]);
+      }
+
+      // La probabilita' vive su una griglia diradata di due, con la propria
+      // intestazione: il campionamento passa per le coordinate, non per gli
+      // indici del campo nativo.
+      function probSample(key, gx, gy) {
+        const payload = probPayload();
+        const values = probGrid(key);
+        if (!payload || !values || !currentData) return NaN;
+        const meta = currentData.meta;
+        const lon = meta.lo1 + gx * meta.dx;
+        const lat = meta.la1 - gy * meta.dy;
+        const sx = (lon - payload.lo1) / payload.dx;
+        const sy = (payload.la1 - lat) / payload.dy;
+        const sampler = useNearestCell ? sampleNearest : sampleBilinear;
+        return sampler(values, sx, sy, payload.nx, payload.ny);
+      }
+
       function stormFieldName(key) {
         const info = LAYER_INFO[key];
         return info && info.storm ? info.storm : null;
@@ -6245,16 +6456,19 @@
           if (showFusion) {
             toast("Ricalcolo della mappa da ICON e osservazioni reali…");
             Promise.all([fetchObservations(),loadLocalDownscaling().catch(function(){return null;})]).then(function () {
-              if (!obsStations.length) {
-                toast("Osservazioni non disponibili al momento");
-                showFusion = false;
-                updateLayerUi();
-                return;
-              }
-              const matchingCount = matchingObservationCount(activeLayer);
-              if (!matchingCount) {
+              // La correzione di quota non ha bisogno di stazioni: legge il
+              // terreno vero dal DEM e vale ovunque, anche dove non misura
+              // nessuno. Percio' il selettore non si spegne piu' quando le
+              // osservazioni mancano -- resterebbe spento proprio in montagna,
+              // che e' dove serve di piu'.
+              const elevationReady = elevationDownscalingActive();
+              const matchingCount = obsStations.length
+                ? matchingObservationCount(activeLayer) : 0;
+              if (!matchingCount && !elevationReady) {
                 toast(
-                  "Nessuna osservazione compatibile con campo e valid time entro ±45 minuti"
+                  obsStations.length
+                    ? "Nessuna osservazione compatibile con campo e valid time entro ±45 minuti"
+                    : "Osservazioni non disponibili al momento"
                 );
                 showFusion = false;
                 updateLayerUi();
@@ -6270,9 +6484,18 @@
               requestVectorRender();
               refreshSelectedPoint();
               updateLayerUi();
+              const parti = [];
+              if (elevationDownscalingActive()) {
+                parti.push("temperatura riportata sulla quota vera del terreno");
+              }
+              if (matchingCount) {
+                parti.push(matchingCount + " osservazioni compatibili");
+              }
               toast(
-                "Mappa ricalcolata · " + matchingCount
-                + " osservazioni compatibili. Correzioni solo con almeno 3 stazioni vicine; altrove resta ICON."
+                "Mappa ricalcolata · " + parti.join(" · ")
+                + (matchingCount
+                    ? ". Correzioni da stazioni solo con almeno 3 vicine; altrove resta ICON."
+                    : ".")
               );
             });
           } else {
@@ -6450,6 +6673,203 @@
         }
       }
 
+      // ---- QUOTA VERA DEL TERRENO: lettura diretta delle tessere DEM -------
+      //
+      // Il modello smussa le montagne: sul run del 6 settembre l'orografia
+      // ICON-2I sta 834 m sotto il Gran Sasso e 808 sotto il Monte Bianco.
+      // Le stesse tessere Terrarium che alimentano la vista 3D contengono la
+      // quota vera, e qui vengono lette per numero invece che per rilievo.
+      const DEM_TILE_PIXELS = 256;
+      const DEM_MAX_ZOOM = 13;
+      const DEM_TILE_BUDGET = 48;
+      const demTiles = new Map();
+
+      function demTileHeights(z, x, y) {
+        const key = z + "/" + x + "/" + y;
+        if (demTiles.has(key)) return demTiles.get(key);
+        const promise = new Promise(function (resolve) {
+          const image = new Image();
+          image.crossOrigin = "anonymous";
+          image.onload = function () {
+            try {
+              const canvas = document.createElement("canvas");
+              canvas.width = canvas.height = DEM_TILE_PIXELS;
+              const context = canvas.getContext("2d", { willReadFrequently: true });
+              context.drawImage(image, 0, 0, DEM_TILE_PIXELS, DEM_TILE_PIXELS);
+              const data = context.getImageData(
+                0, 0, DEM_TILE_PIXELS, DEM_TILE_PIXELS
+              ).data;
+              const heights = new Float32Array(DEM_TILE_PIXELS * DEM_TILE_PIXELS);
+              for (let i = 0; i < heights.length; i += 1) {
+                const p = i * 4;
+                // Codifica terrarium. La batimetria e' negativa: sul mare va
+                // azzerata, altrimenti la correzione inventerebbe gradi in
+                // mezzo al Tirreno, dove il modello ha giustamente quota zero.
+                const metres = data[p] * 256 + data[p + 1] + data[p + 2] / 256 - 32768;
+                heights[i] = metres > 0 ? metres : 0;
+              }
+              resolve(heights);
+            } catch (error) {
+              // Senza CORS la tessera si disegna ma non si legge: meglio
+              // nessuna correzione che una correzione su dati inventati.
+              resolve(null);
+            }
+          };
+          image.onerror = function () { resolve(null); };
+          image.src = "https://s3.amazonaws.com/elevation-tiles-prod/terrarium/"
+            + z + "/" + x + "/" + y + ".png";
+        });
+        demTiles.set(key, promise);
+        return promise;
+      }
+
+      function mercatorPixelY(latitude, scale) {
+        const clamped = Math.max(-85.0511, Math.min(85.0511, latitude));
+        const radians = clamped * Math.PI / 180;
+        return (1 - Math.log(Math.tan(radians) + 1 / Math.cos(radians)) / Math.PI)
+          / 2 * scale;
+      }
+
+      // Sceglie lo zoom del DEM in modo che il suo passo somigli a quello del
+      // raster: piu' fine sarebbe lavoro sprecato, piu' grosso perderebbe
+      // proprio il dettaglio che si vuole aggiungere.
+      function demZoomFor(west, east, width) {
+        const degreesPerPixel = Math.abs(east - west) / Math.max(width, 1);
+        const ideal = Math.log2(360 / Math.max(degreesPerPixel * DEM_TILE_PIXELS, 1e-9));
+        return Math.max(4, Math.min(DEM_MAX_ZOOM, Math.round(ideal)));
+      }
+
+      async function buildTerrainSampler(west, east, south, north, width) {
+        let zoom = demZoomFor(west, east, width);
+        let x0, x1, y0, y1;
+        for (; zoom >= 4; zoom -= 1) {
+          const scale = Math.pow(2, zoom);
+          x0 = Math.floor((west + 180) / 360 * scale);
+          x1 = Math.floor((east + 180) / 360 * scale);
+          y0 = Math.floor(mercatorPixelY(north, scale));
+          y1 = Math.floor(mercatorPixelY(south, scale));
+          if ((x1 - x0 + 1) * (y1 - y0 + 1) <= DEM_TILE_BUDGET) break;
+        }
+        const columns = x1 - x0 + 1;
+        const rows = y1 - y0 + 1;
+        const requests = [];
+        for (let ty = y0; ty <= y1; ty += 1) {
+          for (let tx = x0; tx <= x1; tx += 1) {
+            requests.push(demTileHeights(zoom, tx, ty));
+          }
+        }
+        const tiles = await Promise.all(requests);
+        if (tiles.every(function (tile) { return tile === null; })) return null;
+
+        const scale = Math.pow(2, zoom);
+        const mosaicWidth = columns * DEM_TILE_PIXELS;
+        const originX = x0 * DEM_TILE_PIXELS;
+        const originY = y0 * DEM_TILE_PIXELS;
+        const at = function (px, py) {
+          const ix = Math.floor(px), iy = Math.floor(py);
+          if (ix < 0 || iy < 0 || ix >= mosaicWidth || iy >= rows * DEM_TILE_PIXELS) {
+            return NaN;
+          }
+          const tile = tiles[
+            Math.floor(iy / DEM_TILE_PIXELS) * columns
+            + Math.floor(ix / DEM_TILE_PIXELS)
+          ];
+          if (!tile) return NaN;
+          return tile[(iy % DEM_TILE_PIXELS) * DEM_TILE_PIXELS + (ix % DEM_TILE_PIXELS)];
+        };
+        return {
+          zoom: zoom,
+          metresPerPixel: 40075017 / (scale * DEM_TILE_PIXELS),
+          heightAt: function (longitude, latitude) {
+            const px = (longitude + 180) / 360 * scale * DEM_TILE_PIXELS - originX;
+            const py = mercatorPixelY(latitude, scale) * DEM_TILE_PIXELS - originY;
+            const fx = px - Math.floor(px), fy = py - Math.floor(py);
+            const a = at(px, py), b = at(px + 1, py);
+            const c = at(px, py + 1), d = at(px + 1, py + 1);
+            if (!Number.isFinite(a)) return NaN;
+            const top = a + (Number.isFinite(b) ? (b - a) * fx : 0);
+            const bottom = Number.isFinite(c)
+              ? c + (Number.isFinite(d) ? (d - c) * fx : 0)
+              : top;
+            return top + (bottom - top) * fy;
+          }
+        };
+      }
+
+      // ---- CORREZIONE DI QUOTA ---------------------------------------------
+      let terrainSampler = null;
+      let terrainSamplerKey = "";
+      let terrainSamplerPending = "";
+
+      function profilePayload() {
+        return currentData && currentData.profile ? currentData.profile : null;
+      }
+
+      function elevationDownscalingActive() {
+        return Boolean(
+          showFusion && activeLayer === "temp"
+          && selectedLevel === "surface" && profilePayload()
+        );
+      }
+
+      function requestTerrainSampler(west, east, south, north, width, key) {
+        if (terrainSamplerPending === key) return;
+        terrainSamplerPending = key;
+        buildTerrainSampler(west, east, south, north, width).then(function (sampler) {
+          if (terrainSamplerPending !== key) return;
+          terrainSamplerPending = "";
+          terrainSampler = sampler;
+          terrainSamplerKey = sampler ? key : "";
+          if (sampler) {
+            lastRasterSignature = "";
+            renderWeather();
+          }
+        });
+      }
+
+      // Temperatura del profilo del modello alla quota richiesta. Fra i livelli
+      // si interpola, oltre si prolunga il gradiente del segmento estremo: e'
+      // la stessa funzione che la pipeline usa in Python, e deve restare tale.
+      function profileTemperature(profile, gx, gy, metres) {
+        const sampleLevel = function (list, index) {
+          return sampleBilinear(
+            getGrid(list[index]), gx, gy, profile.nx, profile.ny
+          );
+        };
+        const z0 = sampleLevel(profile.z, 0), t0 = sampleLevel(profile.t, 0);
+        const z1 = sampleLevel(profile.z, 1), t1 = sampleLevel(profile.t, 1);
+        if (!Number.isFinite(z0) || !Number.isFinite(z1)) return NaN;
+        let low = z0, high = z1, lowT = t0, highT = t1;
+        if (metres >= z1) {
+          const z2 = sampleLevel(profile.z, 2), t2 = sampleLevel(profile.t, 2);
+          if (Number.isFinite(z2)) { low = z1; high = z2; lowT = t1; highT = t2; }
+        }
+        const span = high - low;
+        if (!(Math.abs(span) > 1)) return lowT;
+        return lowT + (highT - lowT) / span * (metres - low);
+      }
+
+      function elevationCorrection(profile, modelTerrain, longitude, latitude) {
+        if (!terrainSampler) return 0;
+        const trueHeight = terrainSampler.heightAt(longitude, latitude);
+        if (!Number.isFinite(trueHeight)) return 0;
+        const meta = currentData.meta;
+        const mx = (longitude - meta.lo1) / meta.dx;
+        const my = (meta.la1 - latitude) / meta.dy;
+        const modelHeight = sampleBilinear(modelTerrain, mx, my, meta.nx, meta.ny);
+        if (!Number.isFinite(modelHeight)) return 0;
+        const delta = trueHeight - modelHeight;
+        // Sotto il mezzo metro non c'e' niente da correggere, e sopra i 2500 m
+        // di scarto non c'e' piu' orografia ma un errore: meglio fermarsi.
+        if (!(Math.abs(delta) > 0.5) || Math.abs(delta) > 2500) return 0;
+        const px = (longitude - profile.lo1) / profile.dx;
+        const py = (profile.la1 - latitude) / profile.dy;
+        const warm = profileTemperature(profile, px, py, trueHeight);
+        const cold = profileTemperature(profile, px, py, modelHeight);
+        if (!Number.isFinite(warm) || !Number.isFinite(cold)) return 0;
+        return warm - cold;
+      }
+
       function renderWeather() {
         if (!mapLoaded || !currentData || !map.getSource("weather")) return;
 
@@ -6474,9 +6894,10 @@
         }
         // I campi a 850 hPa vivono su una griglia propria (dominio piu'
         // ampio, passo ~19 km): il raster usa la geometria del campo attivo.
+        const probActive = usesProbData(activeLayer);
         const fieldMeta = upperActive
           ? upperLevelData(activeLayer)
-          : (stormActive ? stormData : meta);
+          : (stormActive ? stormData : (probActive ? probPayload() : meta));
         if (!fieldMeta) return;
         const dataWest = fieldMeta.lo1 - fieldMeta.dx / 2;
         const dataEast = fieldMeta.lo1 + (fieldMeta.nx - 1) * fieldMeta.dx + fieldMeta.dx / 2;
@@ -6563,6 +6984,7 @@
           activeLayer, selectedLevel, activeModel, currentIndex,
           currentData.meta && currentData.meta.validTime,
           useNearestCell, showFusion, width, height,
+          elevationDownscalingActive(), terrainSamplerKey,
           leftLongitude.toFixed(4), rightLongitude.toFixed(4),
           bottomLatitude.toFixed(4), topLatitude.toFixed(4)
         ].join("|");
@@ -6590,11 +7012,14 @@
                 ? upperFieldArray(activeLayer)
                 : (stormActive
                     ? stormData[stormFieldName(activeLayer)]
-                    : currentData[fieldKey])
+                    : (probActive
+                        ? probPayload().fields[probFieldName(activeLayer)]
+                        : currentData[fieldKey]))
             );
         // Observed analysis: fuse the surface field with live METAR (Cressman).
         if (
-          showFusion && !isWindField && !upperActive && !stormActive && fieldGrid
+          showFusion && !isWindField && !upperActive && !stormActive
+          && !probActive && fieldGrid
           && fusionSupported(activeLayer)
         ) {
           fieldGrid = buildFusedGrid(activeLayer, fieldGrid, fieldMeta);
@@ -6613,6 +7038,28 @@
         const windUGrid = isWindField ? getGrid(windLevel ? windLevel.u : windField().u) : null;
         const windVGrid = isWindField ? getGrid(windLevel ? windLevel.v : windField().v) : null;
 
+        // Quota vera del terreno: il campionatore arriva in modo asincrono,
+        // quindi il primo disegno esce non corretto e il secondo lo sostituisce.
+        const elevationActive = elevationDownscalingActive();
+        const profile = elevationActive ? profilePayload() : null;
+        const modelTerrain = elevationActive && localDownscalingCache
+          && localDownscalingCache.terrain
+          && localDownscalingCache.terrain.runTime === currentData.meta.runTime
+          ? getGrid(localDownscalingCache.terrain.terrainHeight) : null;
+        const terrainKey = elevationActive && modelTerrain
+          ? [leftLongitude.toFixed(3), rightLongitude.toFixed(3),
+             bottomLatitude.toFixed(3), topLatitude.toFixed(3), width].join("|")
+          : "";
+        if (terrainKey && terrainSamplerKey !== terrainKey) {
+          requestTerrainSampler(
+            leftLongitude, rightLongitude, bottomLatitude, topLatitude,
+            width, terrainKey
+          );
+        }
+        const correctElevation = Boolean(
+          terrainKey && terrainSamplerKey === terrainKey && terrainSampler
+        );
+
         for (let y = 0; y < height; y += 1) {
           const fraction = height > 1 ? y / (height - 1) : 0;
           const mercatorY = topMercator + fraction * (bottomMercator - topMercator);
@@ -6630,6 +7077,11 @@
               value = Number.isFinite(u) && Number.isFinite(v) ? Math.hypot(u, v) * 3.6 : NaN;
             } else {
               value = rasterSampler(fieldGrid, gx, gy, fieldMeta.nx, fieldMeta.ny);
+            }
+            if (correctElevation && Number.isFinite(value)) {
+              value += elevationCorrection(
+                profile, modelTerrain, longitude, latitude
+              );
             }
             const pixel = (y * width + x) * 4;
 

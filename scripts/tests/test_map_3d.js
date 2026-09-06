@@ -685,7 +685,7 @@ assert.match(html, />Schermo intero<\/span>/,
   "il vecchio pulsante che nasconde solo la UI resta chiamato Solo mappa");
 assert.match(html, /if \(item\.storm === false\) \{/,
   "senza il controllo sul catalogo si chiederebbe un file inesistente");
-assert.match(html, /!upperActive && !stormActive && fieldGrid/,
+assert.match(html, /!upperActive && !stormActive\s*\n\s*&& !probActive && fieldGrid/,
   "la fusione con le stazioni si applicherebbe anche ai campi temporaleschi");
 
 // La catena: sette anelli piu' i due rischi, e l'ultimo deve parlare la
@@ -1406,5 +1406,87 @@ assert.match(html, /const CAPE_STOPS = \[\s*\{ v: 0, c: \[238, 244, 240\], a: 0 
     path.join(__dirname, "..", "process_data.py"), "utf8");
   assert.match(pipeline, /"gust": \(\s*\n\s*clean_for_json\(np\.asarray\(wind_gust_10m\) \* 3\.6, 0\)/,
     "la pipeline non pubblica le raffiche in km/h");
+}
+// --- Probabilita' di vicinato ---
+// La probabilita' non e' un campo del modello ma una grandezza derivata, e il
+// sito la deve trattare come tale: griglia propria, scala unica, e una scheda
+// che dica che non e' calibrata. Se qualcuna di queste cade, la mappa mostra
+// numeri che sembrano piu' solidi di quanto sono.
+{
+  const scala = html.match(/const PROB_STOPS = \[[\s\S]*?\n {6}\];/);
+  assert.ok(scala, "scala delle probabilita' assente");
+  assert.match(scala[0], /\{ v: 0, c: \[236, 244, 248\], a: 0 \}/,
+    "la probabilita' nulla non e' trasparente: coprirebbe la carta con un velo");
+  const bordi = [...scala[0].matchAll(/\{ v: (\d+),/g)].map((m) => Number(m[1]));
+  assert.deepEqual(bordi, [0, 10, 20, 30, 40, 50, 60, 70, 80, 90, 100],
+    "le fasce di probabilita' non sono piu' decili");
+
+  const livelli = ["prob_rain_1", "prob_rain_5", "prob_rain_10", "prob_rain_20",
+                   "prob_gust_50", "prob_gust_75"];
+  livelli.forEach((chiave) => {
+    const blocco = html.match(new RegExp("\\n {8}" + chiave + ": \\{[\\s\\S]*?\\n {8}\\},"));
+    assert.ok(blocco, "manca il livello " + chiave);
+    assert.match(blocco[0], /stops: PROB_STOPS,/,
+      chiave + " non usa la scala comune delle probabilita'");
+    assert.match(blocco[0], /unit: "%",/, chiave + " non e' in percentuale");
+    assert.match(blocco[0], /prob: "/, chiave + " non punta a un campo pubblicato");
+    assert.match(html, new RegExp('data-layer="' + chiave + '"'),
+      "manca la scheda di " + chiave + " nel pannello");
+  });
+
+  // La griglia e' diradata: campionarla con gli indici del campo nativo
+  // sposterebbe il campo di meta' dominio.
+  assert.match(html, /function probSample\(key, gx, gy\)/,
+    "manca il campionamento sulla griglia diradata");
+  assert.match(html, /const sx = \(lon - payload\.lo1\) \/ payload\.dx;/,
+    "la probabilita' non viene campionata per coordinate");
+  assert.match(html, /if \(usesProbData\(key\)\) return Boolean\(probGrid\(key\)\);/,
+    "la disponibilita' della probabilita' non viene verificata");
+  assert.match(html, /Frequenza geometrica su una singola corsa/,
+    "la scheda non dice che la probabilita' viene da una sola corsa");
+  assert.match(html, /probabilità calibrata: nessun archivio la verifica/,
+    "la scheda non dichiara che la probabilita' non e' calibrata");
+}
+// --- Downscaling di quota ---
+// Il modello smussa le montagne di centinaia di metri. La correzione legge la
+// quota vera dalle stesse tessere DEM della vista 3D e sposta la temperatura
+// lungo il profilo del modello. Le prove qui sotto proteggono i punti in cui
+// una svista produrrebbe numeri plausibili ma sbagliati.
+{
+  assert.match(html, /const metres = data\[p\] \* 256 \+ data\[p \+ 1\] \+ data\[p \+ 2\] \/ 256 - 32768;/,
+    "la decodifica terrarium non e' piu' quella dello standard");
+  // La batimetria e' negativa: senza azzerarla la correzione inventerebbe
+  // gradi in mezzo al mare, dove il modello ha giustamente quota zero.
+  assert.match(html, /heights\[i\] = metres > 0 \? metres : 0;/,
+    "la batimetria negativa non viene azzerata");
+  assert.match(html, /image\.crossOrigin = "anonymous";/,
+    "senza CORS le tessere si disegnano ma non si leggono");
+  assert.match(html, /resolve\(null\);/,
+    "una tessera illeggibile deve annullare la correzione, non falsarla");
+
+  // Il profilo viene dal modello, non da un gradiente di manuale: e' l'unico
+  // modo di avere il segno giusto sotto un'inversione.
+  assert.match(html, /function profileTemperature\(profile, gx, gy, metres\)/,
+    "manca l'interpolazione sul profilo del modello");
+  assert.doesNotMatch(html, /elevationCorrection[\s\S]{0,600}?0\.0065/,
+    "la correzione di quota e' tornata a un gradiente fisso");
+
+  // Guardie sui casi che non vanno corretti.
+  assert.match(html, /if \(!\(Math\.abs\(delta\) > 0\.5\) \|\| Math\.abs\(delta\) > 2500\) return 0;/,
+    "manca la guardia su dislivelli nulli o assurdi");
+  assert.match(html, /const DEM_TILE_BUDGET = 48;/,
+    "senza tetto alle tessere una vista larga ne chiederebbe centinaia");
+
+  // Mappa e lettura del punto devono dire la stessa cosa.
+  assert.match(html, /if \(key === "temp" && Number\.isFinite\(value\) && elevationDownscalingActive\(\)\)/,
+    "la lettura del punto non applica la correzione che applica la mappa");
+  // La correzione non ha bisogno di stazioni: vale anche dove non misura
+  // nessuno, che e' esattamente la montagna.
+  assert.match(html, /if \(!matchingCount && !elevationReady\)/,
+    "senza osservazioni il selettore si spegnerebbe anche in montagna");
+  // La firma del raster deve includerla, altrimenti accendere il selettore
+  // non ridisegnerebbe nulla.
+  assert.match(html, /elevationDownscalingActive\(\), terrainSamplerKey,/,
+    "la correzione non entra nella firma del raster");
 }
 console.log("3D map regression checks: OK");

@@ -114,6 +114,34 @@ out["GUST_STOPS"] = [
     {"v": 140, "c": [70, 22, 92]},
 ]
 
+# Probabilita'. Una grandezza sola, quindi una scala sola per tutti i livelli
+# probabilistici: il 60% ha lo stesso colore che parli di pioggia o di raffiche,
+# e i due campi restano confrontabili a colpo d'occhio. Sequenziale e con
+# luminosita' monotona, percio' resta ordinata anche stampata in bianco e nero;
+# sale verso il viola per non confondersi con pioggia e raffiche, che percorrono
+# gia' verde-giallo-rosso. Trasparente a zero: dove non succede niente si deve
+# vedere la carta.
+#
+# Misurata in CAM02-UCS fra fasce adiacenti: distanza minima 7,8 e mediana 11,6,
+# con 5,1 simulando deuteranomalia, protanomalia e tritanomalia. I salti sono
+# volutamente uniformi (7,8-13,6) perche' incrementi uguali di probabilita'
+# devono sembrare ugualmente diversi: su una scala divergente o a salti
+# irregolari il passaggio dal 40 al 50% sembrerebbe piu' grande di quello dal
+# 70 all'80, che sarebbe falso.
+out["PROB_STOPS"] = [
+    {"v": 0, "c": [236, 244, 248], "a": 0},
+    {"v": 10, "c": [206, 231, 243], "a": 0.62},
+    {"v": 20, "c": [166, 211, 235], "a": 0.78},
+    {"v": 30, "c": [122, 186, 224], "a": 0.86},
+    {"v": 40, "c": [84, 157, 210], "a": 0.9},
+    {"v": 50, "c": [62, 124, 192], "a": 0.92},
+    {"v": 60, "c": [66, 92, 172], "a": 0.93},
+    {"v": 70, "c": [86, 62, 148], "a": 0.94},
+    {"v": 80, "c": [104, 38, 124], "a": 0.95},
+    {"v": 90, "c": [114, 20, 92], "a": 0.96},
+    {"v": 100, "c": [104, 10, 58], "a": 0.96},
+]
+
 out["RAIN_STOPS"] = [
     {"v": 0, "c": [0, 0, 0], "a": 0},
     {"v": 0.1, "c": [213, 240, 255], "a": 0.78},
