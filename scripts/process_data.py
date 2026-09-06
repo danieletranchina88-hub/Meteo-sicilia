@@ -67,6 +67,10 @@ from meteo_analysis.core.neighbourhood import (
     cell_sizes_km,
     event_probabilities,
 )
+from meteo_analysis.core.vertical_profile import (
+    LEVELS_HPA,
+    temperature_profile,
+)
 from meteo_analysis.ml.icon2i import Icon2IStore
 from meteo_analysis.ml.model import FrontModel
 from meteo_analysis.verification.archive import (
@@ -1294,6 +1298,62 @@ def build_exceedance_probabilities(header, rain, wind_gust_10m):
     }
 
 
+# Profilo termico verticale, per portare la temperatura sulla quota vera.
+#
+# Il campo e' sinottico: le quote dei livelli barici e le loro temperature
+# cambiano su centinaia di chilometri, non su due. Diradare di 8 (17,6 km) non
+# toglie nulla e riduce il peso di 64 volte.
+PROFILE_COARSEN = 8
+
+
+def build_vertical_profile(header, mslp_hpa, t2m_c, terrain_m, t925, t850, t700):
+    """Quote e temperature di 925, 850 e 700 hPa, su griglia diradata.
+
+    Serve al browser per spostare la temperatura dalla quota che il modello
+    crede a quella vera del DEM. Senza uno dei tre livelli non si pubblica
+    nulla: un profilo con un buco produrrebbe correzioni peggiori dell'assenza
+    di correzione.
+    """
+    if t925 is None or t850 is None or t700 is None or terrain_m is None:
+        return None
+    nx, ny = int(header["nx"]), int(header["ny"])
+    shape = (ny, nx)
+
+    def as_grid(values):
+        return np.asarray(values, dtype=float).reshape(shape)
+
+    heights, temperatures = temperature_profile(
+        as_grid(mslp_hpa),
+        as_grid(t2m_c),
+        as_grid(terrain_m),
+        as_grid(t925),
+        as_grid(t850),
+        as_grid(t700),
+    )
+    if not any(np.any(np.isfinite(h)) for h in heights):
+        return None
+
+    return {
+        "method": "hypsometric-925-850-700",
+        "semantics": "model-own-profile-not-standard-lapse-rate",
+        "levelsHpa": list(LEVELS_HPA),
+        "nx": -(-nx // PROFILE_COARSEN),
+        "ny": -(-ny // PROFILE_COARSEN),
+        "lo1": header["lo1"],
+        "la1": header["la1"],
+        "dx": header["dx"] * PROFILE_COARSEN,
+        "dy": header["dy"] * PROFILE_COARSEN,
+        "z": [
+            clean_for_json(coarsen(h, PROFILE_COARSEN, "mean"), 0)
+            for h in heights
+        ],
+        "t": [
+            clean_for_json(coarsen(v, PROFILE_COARSEN, "mean"), 1)
+            for v in temperatures
+        ],
+    }
+
+
 def interpolate_native_field(payload, target_latitudes, target_longitudes):
     """Interpolate a regular native-grid diagnostic onto the surface grid."""
     if not payload:
@@ -2210,6 +2270,14 @@ def process_data():
                     ),
                     "prob": build_exceedance_probabilities(
                         header, rain, wind_gust_10m
+                    ),
+                    # Il profilo del modello: serve al browser per correggere
+                    # la temperatura sulla quota vera del terreno.
+                    "profile": build_vertical_profile(
+                        header, press, temp_c,
+                        icon_hazard_fields.field("hsurf", step_hours, lat, lon)
+                        if icon_hazard_fields is not None else None,
+                        t925, t850, t700,
                     ),
                     "nlg_bulletin": nlg_bulletin,
                     "nlg_bulletin_details": nlg_details,
