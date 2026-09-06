@@ -144,3 +144,102 @@ def _segment(z_low, t_low, z_high, t_high, target):
     with np.errstate(divide="ignore", invalid="ignore"):
         gradient = np.where(np.abs(span) > 1.0, (t_high - t_low) / span, 0.0)
     return t_low + gradient * (target - z_low)
+
+
+# --- Quota neve -------------------------------------------------------------
+#
+# Il confine fra pioggia e neve non e' lo zero del bulbo secco. La neve che
+# cade attraverso aria sopra zero fonde, e fondendo raffredda l'aria che
+# attraversa: se quell'aria e' secca, il raffreddamento la porta sotto zero e i
+# fiocchi arrivano al suolo anche con due o tre gradi di temperatura misurata.
+# La grandezza che governa il passaggio e' quindi il bulbo bagnato, ed e' per
+# questo che la quota neve sta sotto lo zero termico, di piu' quanto piu'
+# l'aria e' secca.
+#
+# Il bulbo bagnato si ricava dalla relazione psicrometrica
+#
+#     e = es(Tw) - gamma * p * (T - Tw)
+#
+# che non ha soluzione esplicita ma si risolve per bisezione in un intervallo
+# noto a priori: Tw sta sempre fra il punto di rugiada e la temperatura.
+
+PSYCHROMETRIC_PER_K = 6.53e-4  # costante psicrometrica, 1/K
+SNOW_LINE_WET_BULB_C = 0.0
+
+
+def saturation_vapour_pressure_pa(temperature_c):
+    """Tensione di vapore saturo secondo Bolton (1980), in pascal."""
+    t = np.asarray(temperature_c, dtype=float)
+    return 611.2 * np.exp(17.67 * t / (t + 243.5))
+
+
+def vapour_pressure_pa(specific_humidity, pressure_hpa):
+    """Tensione di vapore da umidita' specifica (kg/kg) e pressione."""
+    q = np.clip(np.asarray(specific_humidity, dtype=float), 1e-9, 0.05)
+    p = np.asarray(pressure_hpa, dtype=float) * 100.0
+    # e = q * p / (eps + (1 - eps) * q), con eps = R_d/R_v = 0,622.
+    return q * p / (0.622 + 0.378 * q)
+
+
+def wet_bulb_c(temperature_c, specific_humidity, pressure_hpa, iterations: int = 40):
+    """Temperatura di bulbo bagnato, in gradi.
+
+    Bisezione fra punto di rugiada e temperatura: l'intervallo contiene sempre
+    la soluzione, quindi il metodo converge senza bisogno di un valore di
+    partenza fortunato. Quaranta passi portano l'incertezza sotto il millesimo
+    di grado su un intervallo di 60 gradi.
+    """
+    t = np.asarray(temperature_c, dtype=float)
+    e = vapour_pressure_pa(specific_humidity, pressure_hpa)
+    p_pa = np.asarray(pressure_hpa, dtype=float) * 100.0
+
+    # Punto di rugiada, invertendo Bolton: e' il limite inferiore.
+    ratio = np.log(np.clip(e, 1e-6, None) / 611.2)
+    dewpoint = 243.5 * ratio / np.clip(17.67 - ratio, 1e-6, None)
+    low = np.minimum(dewpoint, t)
+    high = t
+    for _ in range(iterations):
+        middle = 0.5 * (low + high)
+        # Residuo positivo: il bulbo bagnato ipotizzato e' troppo alto.
+        residual = (
+            saturation_vapour_pressure_pa(middle)
+            - PSYCHROMETRIC_PER_K * p_pa * (t - middle)
+            - e
+        )
+        high = np.where(residual > 0.0, middle, high)
+        low = np.where(residual > 0.0, low, middle)
+    return 0.5 * (low + high)
+
+
+def snow_line_m(heights, wet_bulbs, surface_height_m, surface_wet_bulb_c,
+                threshold_c: float = SNOW_LINE_WET_BULB_C):
+    """Quota a cui il bulbo bagnato attraversa la soglia, in metri.
+
+    Si scende dall'alto e si prende il primo attraversamento: sopra la quota
+    neve fa piu' freddo della soglia, sotto piu' caldo. Dove l'aria e' sotto
+    soglia fino al suolo la quota vale quella del terreno, cioe' nevica fino a
+    terra; dove e' sopra soglia anche al livello piu' alto disponibile il
+    valore resta ignoto, perche' affermare una quota fuori dai dati sarebbe
+    inventarla.
+    """
+    levels = [np.asarray(surface_height_m, dtype=float)] + [
+        np.asarray(h, dtype=float) for h in heights
+    ]
+    values = [np.asarray(surface_wet_bulb_c, dtype=float)] + [
+        np.asarray(v, dtype=float) for v in wet_bulbs
+    ]
+    result = np.full(np.broadcast(levels[0], values[0]).shape, np.nan)
+    # Dal basso verso l'alto: l'ultimo attraversamento trovato risalendo e' il
+    # primo che si incontra scendendo.
+    for index in range(len(levels) - 1):
+        z_low, z_high = levels[index], levels[index + 1]
+        t_low, t_high = values[index], values[index + 1]
+        crosses = (t_low - threshold_c) * (t_high - threshold_c) < 0.0
+        span = t_high - t_low
+        with np.errstate(divide="ignore", invalid="ignore"):
+            fraction = np.where(np.abs(span) > 1e-9,
+                                (threshold_c - t_low) / span, 0.0)
+        crossing = z_low + fraction * (z_high - z_low)
+        result = np.where(crosses, crossing, result)
+    # Gia' sotto soglia al suolo: nevica fino a terra.
+    return np.where(values[0] <= threshold_c, levels[0], result)

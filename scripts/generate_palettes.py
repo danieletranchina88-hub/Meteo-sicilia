@@ -142,6 +142,35 @@ out["PROB_STOPS"] = [
     {"v": 100, "c": [104, 10, 58], "a": 0.96},
 ]
 
+# Quote in metri: zero termico e quota neve. Il verso e' quello intuitivo -- in
+# basso fa freddo, quindi il blu sta alle quote basse: una quota neve a 300 m e'
+# notizia, a 3500 non lo e'.
+#
+# La luminosita' sale fino a 2100 m e poi riscende, e non e' una svista: non e'
+# una scala di intensita' ma di quota, e in Italia i 2100 m sono il valore che
+# non dice niente, mentre entrambi gli estremi -- neve sul mare, oppure zero
+# termico altissimo -- meritano di risaltare.
+#
+# Misurata in CAM02-UCS: distanza minima fra fasce 10,4, mediana 14,4, e 5,8
+# simulando il daltonismo piu' penalizzante. La prima stesura si fermava a 2,3
+# fra 2100 e 2400 m, cioe' due gialli quasi uguali per chi ha deuteranomalia.
+out["ALTITUDE_STOPS"] = [
+    {"v": 0, "c": [74, 30, 104]},
+    {"v": 300, "c": [62, 62, 152]},
+    {"v": 600, "c": [52, 104, 184]},
+    {"v": 900, "c": [58, 146, 196]},
+    {"v": 1200, "c": [86, 180, 186]},
+    {"v": 1500, "c": [128, 202, 150]},
+    {"v": 1800, "c": [186, 216, 124]},
+    {"v": 2100, "c": [236, 230, 138]},
+    {"v": 2400, "c": [224, 176, 84]},
+    {"v": 2700, "c": [212, 138, 72]},
+    {"v": 3000, "c": [196, 104, 78]},
+    {"v": 3500, "c": [172, 80, 96]},
+    {"v": 4000, "c": [146, 74, 116]},
+    {"v": 4500, "c": [122, 72, 130]},
+]
+
 out["RAIN_STOPS"] = [
     {"v": 0, "c": [0, 0, 0], "a": 0},
     {"v": 0.1, "c": [213, 240, 255], "a": 0.78},

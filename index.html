@@ -2382,6 +2382,12 @@
               <button class="layer-card" type="button" data-layer="wetbulb" style="--swatch: linear-gradient(#3656a8,#7fc9a8,#e8a33d)">
                 <span class="layer-swatch"></span><span><b>Bulbo umido</b><small>2 m · soglia neve</small></span>
               </button>
+              <button class="layer-card" type="button" data-layer="snow_level" style="--swatch: linear-gradient(90deg,#4a1e68,#3468b8,#56b4ba,#ecE68a,#c4684e,#7a4882)">
+                <span class="layer-swatch"></span><span><b>Quota neve</b><small>bulbo bagnato · non lo zero termico</small></span>
+              </button>
+              <button class="layer-card" type="button" data-layer="freezing_level" style="--swatch: linear-gradient(90deg,#4a1e68,#3468b8,#56b4ba,#ecE68a,#c4684e,#7a4882)">
+                <span class="layer-swatch"></span><span><b>Zero termico</b><small>quota dello zero in aria libera</small></span>
+              </button>
               <button class="layer-card" type="button" data-layer="press" style="--swatch: linear-gradient(90deg,#4b1d78,#4da6c6,#ece8d9,#e7a24a,#7a1f3d)">
                 <span class="layer-swatch"></span><span><b>Pressione</b><small>livello medio del mare · analisi sinottica</small></span>
               </button>
@@ -2913,6 +2919,36 @@
         { v: 100, c: [104, 10, 58], a: 0.96 }
       ];
 
+      // Quote in metri: zero termico e quota neve. Il verso e' quello
+      // intuitivo -- in basso fa freddo, quindi il blu sta alle quote basse.
+      // Una quota neve a 300 m e' notizia, a 3500 non lo e'.
+      //
+      // La luminosita' sale fino a 2100 m e poi riscende: non e' una svista.
+      // Non e' una scala di intensita' ma di quota, e in Italia i 2100 m sono
+      // il valore che non dice niente, mentre entrambi gli estremi -- neve sul
+      // mare, oppure zero termico altissimo -- meritano di risaltare.
+      //
+      // Misurata in CAM02-UCS: distanza minima fra fasce 10,4, mediana 14,4, e
+      // 5,8 simulando il daltonismo piu' penalizzante. La prima stesura si
+      // fermava a 2,3 fra 2100 e 2400 m, sotto la soglia di distinguibilita':
+      // due gialli quasi uguali per chi ha deuteranomalia.
+      const ALTITUDE_STOPS = [
+        { v: 0, c: [74, 30, 104] },
+        { v: 300, c: [62, 62, 152] },
+        { v: 600, c: [52, 104, 184] },
+        { v: 900, c: [58, 146, 196] },
+        { v: 1200, c: [86, 180, 186] },
+        { v: 1500, c: [128, 202, 150] },
+        { v: 1800, c: [186, 216, 124] },
+        { v: 2100, c: [236, 230, 138] },
+        { v: 2400, c: [224, 176, 84] },
+        { v: 2700, c: [212, 138, 72] },
+        { v: 3000, c: [196, 104, 78] },
+        { v: 3500, c: [172, 80, 96] },
+        { v: 4000, c: [146, 74, 116] },
+        { v: 4500, c: [122, 72, 130] }
+      ];
+
       const RAIN_STOPS = [
         { v: 0, c: [0, 0, 0], a: 0 },
         { v: 0.1, c: [213, 240, 255], a: 0.78 },
@@ -3234,6 +3270,30 @@
           note: "Il picco del vento nell'intervallo, non la media: è il valore che rompe rami e ombrelloni. I bordi delle fasce sono i gradi Beaufort, così 50 km/h (vento forte), 75 (burrasca forte) e 103 (tempesta violenta) si riconoscono a colpo d'occhio.",
           opacity: 0.93,
           terrainOpacity: 0.29
+        },
+        snow_level: {
+          label: "Quota neve",
+          unit: "m",
+          stops: ALTITUDE_STOPS,
+          discrete: false,
+          decimals: 0,
+          ticks: [0, 600, 1200, 1800, 2400, 3000, 4000],
+          note: "La quota a cui il bulbo bagnato passa per lo zero, non lo zero termico. La neve che fonde raffredda l\u0027aria che attraversa, e in aria secca i fiocchi arrivano al suolo anche con due o tre gradi misurati: per questo la quota neve sta sotto lo zero termico, tanto più quanto più l\u0027aria è secca.",
+          opacity: 0.88,
+          terrainOpacity: 0.24,
+          profileField: "snowLevel"
+        },
+        freezing_level: {
+          label: "Zero termico",
+          unit: "m",
+          stops: ALTITUDE_STOPS,
+          discrete: false,
+          decimals: 0,
+          ticks: [0, 600, 1200, 1800, 2400, 3000, 4000],
+          note: "Quota a cui la temperatura dell\u0027aria passa per zero, calcolata dal modello. Non è la quota neve: quella sta più in basso, perché a decidere è il bulbo bagnato.",
+          opacity: 0.88,
+          terrainOpacity: 0.24,
+          storm: "freezingLevel"
         },
         prob_rain_1: {
           label: "Probabilità pioggia ≥ 1 mm/h",
@@ -4085,6 +4145,41 @@
         );
       }
 
+      // Bilineare tollerante, per le sole griglie deliberatamente diradate.
+      //
+      // Sulla griglia nativa un angolo mancante significa "qui non c'e' dato",
+      // e inventarlo sarebbe sbagliato: per questo sampleBilinear resta severo.
+      // Su una griglia diradata di otto, invece, una cella e' larga 17 km e un
+      // angolo mancante significa quasi sempre che il confine del fenomeno --
+      // il bordo della quota neve, per dire -- cade dentro quella cella. Con la
+      // regola severa quel bordo diventa un gradino di 17 km, ben visibile
+      // sulla carta; qui i pesi vengono ridistribuiti sugli angoli noti.
+      function sampleCoarseBilinear(array, gx, gy, nx, ny) {
+        const values = getGrid(array);
+        if (!values) return NaN;
+        if (nx < 2 || ny < 2) return sampleNearest(values, gx, gy, nx, ny);
+        const x = clamp(gx, 0, nx - 1), y = clamp(gy, 0, ny - 1);
+        const x0 = clamp(Math.floor(x), 0, nx - 2);
+        const y0 = clamp(Math.floor(y), 0, ny - 2);
+        const fx = x - x0, fy = y - y0;
+        const index = y0 * nx + x0;
+        const corners = [
+          [values[index], (1 - fx) * (1 - fy)],
+          [values[index + 1], fx * (1 - fy)],
+          [values[index + nx], (1 - fx) * fy],
+          [values[index + nx + 1], fx * fy]
+        ];
+        let sum = 0, weight = 0;
+        for (let i = 0; i < 4; i += 1) {
+          if (!Number.isFinite(corners[i][0])) continue;
+          sum += corners[i][0] * corners[i][1];
+          weight += corners[i][1];
+        }
+        // Sotto un quarto di peso il valore verrebbe da un angolo solo e
+        // lontano: meglio dichiararlo mancante che stiracchiarlo.
+        return weight >= 0.25 ? sum / weight : NaN;
+      }
+
       function sampleNearest(array, gx, gy, nx, ny) {
         const values = getGrid(array);
         if (!values) return NaN;
@@ -4104,6 +4199,7 @@
         if (!currentData) return NaN;
 
         if (usesProbData(key)) return probSample(key, gx, gy);
+        if (usesProfileData(key)) return profileSample(key, gx, gy);
 
         const stormName = stormFieldName(key);
         if (stormName) {
@@ -4479,6 +4575,7 @@
           return !(item && item.storm === false);
         }
         if (usesProbData(key)) return Boolean(probGrid(key));
+        if (usesProfileData(key)) return Boolean(profileGrid(key));
         if (!currentData) return true;
         if (key === "feels") return Boolean(currentData.feels_like);
         if (key === "wind") return Boolean(currentData.wind_u && currentData.wind_v);
@@ -4505,6 +4602,10 @@
         if (usesProbData(key)) {
           return "Probabilità non disponibile per questa scadenza: manca il "
             + "campo di partenza nel run";
+        }
+        if (key === "snow_level") {
+          return "Quota neve non disponibile: manca il profilo termico o "
+            + "l'umidità in quota nel run";
         }
         if (usesStormData(key)) {
           return "Diagnostica dei temporali non disponibile per questa "
@@ -4590,6 +4691,27 @@
               + "il raggio di dispersione è una scelta dichiarata, non tarata."
           };
         }
+        if (key === "snow_level" || key === "freezing_level") {
+          const neve = key === "snow_level";
+          return {
+            nature: "Quota derivata dal profilo del modello",
+            method: neve
+              ? "Quota a cui il bulbo bagnato attraversa lo zero, risolto per "
+                + "bisezione sulla relazione psicrometrica ai livelli 925, 850 "
+                + "e 700 hPa"
+              : "Quota dello zero termico calcolata da ICON-2I (HZEROCL)",
+            scale: neve
+              ? "Griglia diradata ≈17 km; quote dei livelli barici "
+                + "dall'equazione ipsometrica"
+              : "Griglia diradata ≈4,3 km",
+            limit: neve
+              ? "Tre livelli soltanto: un'inversione più sottile dello strato "
+                + "925-850 hPa non viene risolta. Dove il bulbo bagnato resta "
+                + "sopra zero fino a 700 hPa il valore è ignoto, non alto."
+              : "Non è la quota neve: quella sta più in basso, perché a "
+                + "decidere il passaggio è il bulbo bagnato e non l'aria secca."
+          };
+        }
         const base = LAYER_SCIENCE[key] || fallback;
         const level = selectedPressureLevel(key);
         if (level === "surface") {
@@ -4631,6 +4753,36 @@
 
       // Un campo appartiene alla sezione temporali se la sua voce dichiara
       // da quale griglia del file storm viene.
+      function profileFieldName(key) {
+        const info = LAYER_INFO[key];
+        return info && info.profileField ? info.profileField : null;
+      }
+
+      function usesProfileData(key) {
+        return Boolean(profileFieldName(key));
+      }
+
+      function profileGrid(key) {
+        const payload = profilePayload();
+        const name = profileFieldName(key);
+        if (!payload || !name) return null;
+        return getGrid(payload[name]);
+      }
+
+      // Il profilo vive su una griglia diradata di otto, con la propria
+      // intestazione: si campiona per coordinate, come la probabilita'.
+      function profileSample(key, gx, gy) {
+        const payload = profilePayload();
+        const values = profileGrid(key);
+        if (!payload || !values || !currentData) return NaN;
+        const meta = currentData.meta;
+        const lon = meta.lo1 + gx * meta.dx;
+        const lat = meta.la1 - gy * meta.dy;
+        const sampler = useNearestCell ? sampleNearest : sampleCoarseBilinear;
+        return sampler(values, (lon - payload.lo1) / payload.dx,
+                       (payload.la1 - lat) / payload.dy, payload.nx, payload.ny);
+      }
+
       function probFieldName(key) {
         const info = LAYER_INFO[key];
         return info && info.prob ? info.prob : null;
@@ -6898,9 +7050,12 @@
         // I campi a 850 hPa vivono su una griglia propria (dominio piu'
         // ampio, passo ~19 km): il raster usa la geometria del campo attivo.
         const probActive = usesProbData(activeLayer);
+        const profileActive = usesProfileData(activeLayer);
         const fieldMeta = upperActive
           ? upperLevelData(activeLayer)
-          : (stormActive ? stormData : (probActive ? probPayload() : meta));
+          : (stormActive ? stormData
+             : (probActive ? probPayload()
+                : (profileActive ? profilePayload() : meta)));
         if (!fieldMeta) return;
         const dataWest = fieldMeta.lo1 - fieldMeta.dx / 2;
         const dataEast = fieldMeta.lo1 + (fieldMeta.nx - 1) * fieldMeta.dx + fieldMeta.dx / 2;
@@ -7005,7 +7160,7 @@
         const pixels = image.data;
         const rasterSampler = useNearestCell || info.categorical
           ? sampleNearest
-          : sampleBilinear;
+          : (usesProfileData(activeLayer) ? sampleCoarseBilinear : sampleBilinear);
         const isWindField = activeLayer === "wind";
         const fieldKey = activeLayer === "feels" ? "feels_like" : activeLayer;
         let fieldGrid = isWindField
@@ -7017,12 +7172,14 @@
                     ? stormData[stormFieldName(activeLayer)]
                     : (probActive
                         ? probPayload().fields[probFieldName(activeLayer)]
-                        : currentData[fieldKey]))
+                        : (profileActive
+                            ? profilePayload()[profileFieldName(activeLayer)]
+                            : currentData[fieldKey])))
             );
         // Observed analysis: fuse the surface field with live METAR (Cressman).
         if (
           showFusion && !isWindField && !upperActive && !stormActive
-          && !probActive && fieldGrid
+          && !probActive && !profileActive && fieldGrid
           && fusionSupported(activeLayer)
         ) {
           fieldGrid = buildFusedGrid(activeLayer, fieldGrid, fieldMeta);

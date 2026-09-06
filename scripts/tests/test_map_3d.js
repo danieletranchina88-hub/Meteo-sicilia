@@ -685,8 +685,8 @@ assert.match(html, />Schermo intero<\/span>/,
   "il vecchio pulsante che nasconde solo la UI resta chiamato Solo mappa");
 assert.match(html, /if \(item\.storm === false\) \{/,
   "senza il controllo sul catalogo si chiederebbe un file inesistente");
-assert.match(html, /!upperActive && !stormActive\s*\n\s*&& !probActive && fieldGrid/,
-  "la fusione con le stazioni si applicherebbe anche ai campi temporaleschi");
+assert.match(html, /!upperActive && !stormActive\s*\n\s*&& !probActive && !profileActive && fieldGrid/,
+  "la fusione con le stazioni si applicherebbe anche ai campi derivati");
 
 // La catena: sette anelli piu' i due rischi, e l'ultimo deve parlare la
 // stessa lingua dello score di vicinato che sta sopra.
@@ -1518,5 +1518,36 @@ assert.match(html, /const CAPE_STOPS = \[\s*\{ v: 0, c: \[238, 244, 240\], a: 0 
     "manca lo stato che distingue quota e osservazioni");
   assert.match(html, /quota vera del terreno · scarto medio/,
     "lo stato non riporta quanto pesa la correzione di quota");
+}
+// --- Quota neve e zero termico ---
+{
+  const scala = html.match(/const ALTITUDE_STOPS = \[[\s\S]*?\n {6}\];/);
+  assert.ok(scala, "scala delle quote assente");
+  const bordi = [...scala[0].matchAll(/\{ v: (\d+),/g)].map((m) => Number(m[1]));
+  assert.equal(bordi[0], 0, "la scala delle quote non parte dal livello del mare");
+  assert.equal(bordi[bordi.length - 1], 4500, "la scala non arriva a 4500 m");
+  ["snow_level", "freezing_level"].forEach((chiave) => {
+    const blocco = html.match(new RegExp("\\n {8}" + chiave + ": \\{[\\s\\S]*?\\n {8}\\},"));
+    assert.ok(blocco, "manca il livello " + chiave);
+    assert.match(blocco[0], /stops: ALTITUDE_STOPS,/,
+      chiave + " non usa la scala delle quote");
+    assert.match(blocco[0], /unit: "m",/, chiave + " non e' in metri");
+    assert.match(html, new RegExp('data-layer="' + chiave + '"'),
+      "manca la scheda di " + chiave);
+  });
+  // La quota neve viene dal bulbo bagnato: se tornasse allo zero termico
+  // sbaglierebbe di centinaia di metri in aria secca, sempre verso l'alto.
+  assert.match(html, /bulbo bagnato passa per lo zero, non lo zero termico/,
+    "la quota neve non dichiara piu' di venire dal bulbo bagnato");
+  assert.match(html, /il valore è ignoto, non alto/,
+    "la scheda non dice che sopra il profilo la quota neve e' ignota");
+  // Su una griglia da 17 km la regola severa sui NaN faceva un gradino
+  // visibile: il campionatore tollerante vale solo li'.
+  assert.match(html, /function sampleCoarseBilinear\(array, gx, gy, nx, ny\)/,
+    "manca il campionatore per le griglie diradate");
+  assert.match(html, /return weight >= 0\.25 \? sum \/ weight : NaN;/,
+    "un valore stiracchiato da un angolo solo passerebbe per buono");
+  assert.match(html, /usesProfileData\(activeLayer\) \? sampleCoarseBilinear : sampleBilinear/,
+    "il raster non usa il campionatore tollerante sulle griglie diradate");
 }
 console.log("3D map regression checks: OK");

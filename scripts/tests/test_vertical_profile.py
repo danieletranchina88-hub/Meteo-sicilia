@@ -20,7 +20,11 @@ from meteo_analysis.core.vertical_profile import (  # noqa: E402
     HYPSOMETRIC_M_PER_K,
     elevation_correction_c,
     layer_thickness_m,
+    saturation_vapour_pressure_pa,
+    snow_line_m,
     temperature_profile,
+    vapour_pressure_pa,
+    wet_bulb_c,
 )
 
 
@@ -238,6 +242,102 @@ class TestPubblicazione(unittest.TestCase):
                 *[np.full(48 * 40, v) for v in (10.0, 5.5, -4.6)]
             )
         )
+
+
+class TestBulboBagnato(unittest.TestCase):
+    def test_saturazione_a_zero_gradi(self):
+        # Valore tabulato: 611,2 Pa a 0 C. E' la costante di Bolton.
+        self.assertAlmostEqual(float(saturation_vapour_pressure_pa(0.0)), 611.2, places=1)
+
+    def test_saturazione_a_venti_gradi(self):
+        # Tabelle psicrometriche: circa 2339 Pa a 20 C.
+        self.assertAlmostEqual(
+            float(saturation_vapour_pressure_pa(20.0)), 2339.0, delta=15.0
+        )
+
+    def test_aria_satura_ha_bulbo_uguale_alla_temperatura(self):
+        # Con umidita' relativa al 100% non c'e' evaporazione, quindi non c'e'
+        # raffreddamento: il bulbo bagnato coincide con quello secco.
+        t = 12.0
+        e = saturation_vapour_pressure_pa(t)
+        p = 1000.0
+        q = 0.622 * e / (p * 100.0 - 0.378 * e)
+        self.assertAlmostEqual(float(wet_bulb_c(t, q, p)), t, delta=0.05)
+
+    def test_aria_secca_abbassa_il_bulbo(self):
+        secca = float(wet_bulb_c(20.0, 0.002, 1000.0))
+        umida = float(wet_bulb_c(20.0, 0.012, 1000.0))
+        self.assertLess(secca, umida)
+        self.assertLess(secca, 20.0)
+
+    def test_bulbo_fra_rugiada_e_temperatura(self):
+        # Proprieta' che deve valere sempre, ed e' il motivo per cui la
+        # bisezione ha un intervallo sicuro.
+        rng = np.random.default_rng(3)
+        t = rng.uniform(-15.0, 35.0, 400)
+        q = rng.uniform(0.0005, 0.018, 400)
+        p = rng.uniform(700.0, 1020.0, 400)
+        tw = wet_bulb_c(t, q, p)
+        e = vapour_pressure_pa(q, p)
+        ratio = np.log(e / 611.2)
+        rugiada = 243.5 * ratio / (17.67 - ratio)
+        self.assertTrue(np.all(tw <= t + 1e-6))
+        self.assertTrue(np.all(tw >= np.minimum(rugiada, t) - 1e-6))
+
+    def test_caso_psicrometrico_noto(self):
+        # 25 C con rugiada 10 C a 1000 hPa: le tavole danno un bulbo bagnato
+        # intorno a 15,5 C.
+        e = saturation_vapour_pressure_pa(10.0)
+        q = 0.622 * e / (1000.0 * 100.0 - 0.378 * e)
+        self.assertAlmostEqual(float(wet_bulb_c(25.0, q, 1000.0)), 15.5, delta=0.6)
+
+
+class TestQuotaNeve(unittest.TestCase):
+    def quota(self, bulbi, quote=(762.0, 1457.0, 3012.0), suolo=0.0, bulbo_suolo=None):
+        w = [np.array([v], dtype=float) for v in bulbi]
+        z = [np.array([v]) for v in quote]
+        return float(snow_line_m(z, w, np.array([suolo]),
+                                 np.array([bulbo_suolo]))[0])
+
+    def test_attraversamento_semplice(self):
+        # Bulbo bagnato che passa da +4 al suolo a -2 a 1457 m: lo zero cade
+        # a due terzi del tratto, cioe' circa 1225 m.
+        q = self.quota((2.0, -2.0, -10.0), bulbo_suolo=4.0)
+        self.assertAlmostEqual(q, 762.0 + (0.0 - 2.0) / (-2.0 - 2.0) * (1457.0 - 762.0), delta=1.0)
+
+    def test_neve_fino_a_terra(self):
+        # Sotto zero gia' al suolo: la quota neve e' la quota del terreno.
+        self.assertEqual(self.quota((-1.0, -5.0, -12.0), suolo=300.0, bulbo_suolo=-0.5), 300.0)
+
+    def test_sopra_soglia_ovunque_resta_ignota(self):
+        # Affermare una quota fuori dai dati sarebbe inventarla.
+        self.assertTrue(np.isnan(self.quota((8.0, 5.0, 2.0), bulbo_suolo=12.0)))
+
+    def test_prende_l_attraversamento_piu_alto(self):
+        # Con due attraversamenti conta quello che si incontra scendendo.
+        q = self.quota((-1.0, 2.0, -3.0), bulbo_suolo=3.0)
+        self.assertGreater(q, 1457.0)
+
+    def test_la_quota_neve_sta_sotto_lo_zero_termico(self):
+        """La proprieta' fisica per cui il modulo usa il bulbo bagnato.
+
+        Stessa colonna, stessa temperatura: in aria secca la quota neve deve
+        risultare piu' bassa dello zero termico, perche' la fusione raffredda.
+        """
+        quote = [np.array([v]) for v in (762.0, 1457.0, 3012.0)]
+        t = np.array([6.0]), np.array([2.0]), np.array([-8.0])
+        pressioni = (925.0, 850.0, 700.0)
+        secco = [wet_bulb_c(t[i], 0.0012, pressioni[i]) for i in range(3)]
+        umido = [wet_bulb_c(t[i], 0.0075, pressioni[i]) for i in range(3)]
+        suolo, t_suolo = np.array([0.0]), np.array([9.0])
+        neve_secca = snow_line_m(quote, secco, suolo,
+                                 wet_bulb_c(t_suolo, 0.0012, 1013.0))
+        neve_umida = snow_line_m(quote, umido, suolo,
+                                 wet_bulb_c(t_suolo, 0.0075, 1013.0))
+        # Zero termico del bulbo secco, per confronto.
+        zero_secco = 1457.0 + (0.0 - 2.0) / (-8.0 - 2.0) * (3012.0 - 1457.0)
+        self.assertLess(float(neve_secca[0]), zero_secco)
+        self.assertLess(float(neve_secca[0]), float(neve_umida[0]))
 
 
 if __name__ == "__main__":

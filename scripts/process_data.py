@@ -69,7 +69,9 @@ from meteo_analysis.core.neighbourhood import (
 )
 from meteo_analysis.core.vertical_profile import (
     LEVELS_HPA,
+    snow_line_m,
     temperature_profile,
+    wet_bulb_c,
 )
 from meteo_analysis.ml.icon2i import Icon2IStore
 from meteo_analysis.ml.model import FrontModel
@@ -1306,7 +1308,8 @@ def build_exceedance_probabilities(header, rain, wind_gust_10m):
 PROFILE_COARSEN = 8
 
 
-def build_vertical_profile(header, mslp_hpa, t2m_c, terrain_m, t925, t850, t700):
+def build_vertical_profile(header, mslp_hpa, t2m_c, terrain_m, t925, t850, t700,
+                           levels_q=None, surface_q=None):
     """Quote e temperature di 925, 850 e 700 hPa, su griglia diradata.
 
     Serve al browser per spostare la temperatura dalla quota che il modello
@@ -1333,9 +1336,29 @@ def build_vertical_profile(header, mslp_hpa, t2m_c, terrain_m, t925, t850, t700)
     if not any(np.any(np.isfinite(h)) for h in heights):
         return None
 
+    # Quota neve: stesso profilo, ma con il bulbo bagnato. E' un campo di
+    # grande scala, quindi lo stesso diradamento va bene; dove nevica davvero
+    # lo decide il browser confrontandola con il terreno vero del DEM.
+    snow = None
+    if levels_q is not None and surface_q is not None and not any(
+        v is None for v in levels_q
+    ):
+        wet_bulbs = [
+            wet_bulb_c(as_grid(t), as_grid(q), level)
+            for t, q, level in zip((t925, t850, t700), levels_q, LEVELS_HPA)
+        ]
+        line = snow_line_m(
+            heights, wet_bulbs, as_grid(terrain_m),
+            wet_bulb_c(as_grid(t2m_c), as_grid(surface_q), as_grid(mslp_hpa)),
+        )
+        if np.any(np.isfinite(line)):
+            snow = clean_for_json(coarsen(line, PROFILE_COARSEN, "mean"), 0)
+
     return {
         "method": "hypsometric-925-850-700",
         "semantics": "model-own-profile-not-standard-lapse-rate",
+        "snowLevelMethod": "wet-bulb-zero-not-dry-bulb",
+        "snowLevel": snow,
         "levelsHpa": list(LEVELS_HPA),
         "nx": -(-nx // PROFILE_COARSEN),
         "ny": -(-ny // PROFILE_COARSEN),
@@ -2123,6 +2146,27 @@ def process_data():
                     if q700_syn is None:
                         q700_syn = front_field("q700")
 
+                    # Campi che servono a piu' prodotti: calcolati una volta.
+                    hzerocl_field = (
+                        icon_hazard_fields.field("hzerocl", step_hours, lat, lon)
+                        if icon_hazard_fields is not None else None
+                    )
+                    terrain_field = (
+                        icon_hazard_fields.field("hsurf", step_hours, lat, lon)
+                        if icon_hazard_fields is not None else None
+                    )
+                    # Umidita' specifica a 2 m dall'umidita' relativa, per
+                    # chiudere il profilo del bulbo bagnato al suolo.
+                    specific_humidity_2m = None
+                    if rh_val is not None and np.any(np.isfinite(rh_val)):
+                        _t = np.asarray(temp_c, dtype=float)
+                        _es = 611.2 * np.exp(17.67 * _t / (_t + 243.5))
+                        _e = np.clip(np.asarray(rh_val, dtype=float), 0.0, 100.0) / 100.0 * _es
+                        _p = np.asarray(press, dtype=float) * 100.0
+                        specific_humidity_2m = 0.622 * _e / np.maximum(
+                            _p - 0.378 * _e, 1.0
+                        )
+
                     def hazard_field(name):
                         return (
                             icon_hazard_fields.field(name, step_hours, lat, lon)
@@ -2272,12 +2316,13 @@ def process_data():
                         header, rain, wind_gust_10m
                     ),
                     # Il profilo del modello: serve al browser per correggere
-                    # la temperatura sulla quota vera del terreno.
+                    # la temperatura sulla quota vera del terreno, e porta con
+                    # se' la quota neve, che dallo stesso profilo si ricava.
                     "profile": build_vertical_profile(
-                        header, press, temp_c,
-                        icon_hazard_fields.field("hsurf", step_hours, lat, lon)
-                        if icon_hazard_fields is not None else None,
+                        header, press, temp_c, terrain_field,
                         t925, t850, t700,
+                        levels_q=(q925_syn, q850_syn, q700_syn),
+                        surface_q=specific_humidity_2m,
                     ),
                     "nlg_bulletin": nlg_bulletin,
                     "nlg_bulletin_details": nlg_details,
