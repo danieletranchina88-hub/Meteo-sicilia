@@ -6849,6 +6849,8 @@
         return lowT + (highT - lowT) / span * (metres - low);
       }
 
+      let lastElevationDelta = 0;
+
       function elevationCorrection(profile, modelTerrain, longitude, latitude) {
         if (!terrainSampler) return 0;
         const trueHeight = terrainSampler.heightAt(longitude, latitude);
@@ -6859,6 +6861,7 @@
         const modelHeight = sampleBilinear(modelTerrain, mx, my, meta.nx, meta.ny);
         if (!Number.isFinite(modelHeight)) return 0;
         const delta = trueHeight - modelHeight;
+        lastElevationDelta = delta;
         // Sotto il mezzo metro non c'e' niente da correggere, e sopra i 2500 m
         // di scarto non c'e' piu' orografia ma un errore: meglio fermarsi.
         if (!(Math.abs(delta) > 0.5) || Math.abs(delta) > 2500) return 0;
@@ -7059,6 +7062,9 @@
         const correctElevation = Boolean(
           terrainKey && terrainSamplerKey === terrainKey && terrainSampler
         );
+        // Statistiche della correzione, per dire nel pannello quanto pesa
+        // invece di limitarsi ad annunciare che e' accesa.
+        let corrPixel = 0, corrDelta = 0, corrMax = 0;
 
         for (let y = 0; y < height; y += 1) {
           const fraction = height > 1 ? y / (height - 1) : 0;
@@ -7079,9 +7085,15 @@
               value = rasterSampler(fieldGrid, gx, gy, fieldMeta.nx, fieldMeta.ny);
             }
             if (correctElevation && Number.isFinite(value)) {
-              value += elevationCorrection(
+              const shift = elevationCorrection(
                 profile, modelTerrain, longitude, latitude
               );
+              if (shift) {
+                value += shift;
+                corrPixel += 1;
+                corrDelta += Math.abs(lastElevationDelta);
+                if (Math.abs(shift) > Math.abs(corrMax)) corrMax = shift;
+              }
             }
             const pixel = (y * width + x) * 4;
 
@@ -7100,6 +7112,17 @@
             pixels[pixel + 3] = Math.round(color[3] * 255);
           }
         }
+
+        // Quanto ha pesato la correzione di quota su questa vista: serve al
+        // pannello per dire un numero invece di un aggettivo.
+        lastElevationStat = correctElevation
+          ? {
+              corrected: corrPixel,
+              medianDelta: corrPixel ? Math.round(corrDelta / corrPixel) : 0,
+              maxCorrection: corrMax
+            }
+          : null;
+        if (showFusion) updateDownscalingStatus();
 
         rasterContext.putImageData(image, 0, 0);
 
@@ -10911,16 +10934,70 @@
         if (!currentData._fused[layerKey])
           currentData._fused[layerKey] = cressmanFused(baseGrid, meta, layerKey);
         const result=currentData._fusionStats && currentData._fusionStats[layerKey];
-        if(result) {
         const selectedKey=activeLayer==='wind'?'wind_u':activeLayer;
-        if(layerKey===selectedKey || (activeLayer==='wind' && layerKey==='wind_v')) {
-          const percent=(100*result.correctedCells/result.totalCells).toFixed(1);
-          document.getElementById('map-downscaling-status').textContent=
-            result.correctedCells ? 'Sperimentale · '+result.stationCount+' stazioni · '+percent+'% celle corrette'
-              : 'Nessuna cella correggibile: resta la mappa ICON originale.';
-        }
+        if(result && (layerKey===selectedKey || (activeLayer==='wind' && layerKey==='wind_v'))) {
+          lastFusionStat=result;
+          updateDownscalingStatus();
         }
         return currentData._fused[layerKey];
+      }
+
+      // Le due correzioni rispondono a domande diverse e vivono in tempi
+      // diversi, quindi il pannello le tiene separate.
+      //
+      // La quota del terreno non invecchia: la montagna e' alta uguale fra tre
+      // giorni, e il profilo termico che serve a spostarci sopra la temperatura
+      // il modello lo calcola per ogni scadenza. Vale a +0 come a +72 ore.
+      //
+      // Le stazioni misurano adesso. Applicarle a una previsione di domani
+      // significherebbe spacciare per previsione il tempo di oggi, quindi
+      // valgono solo entro 45 minuti dalla validita' della scadenza mostrata.
+      // Quando la timeline entra nella previsione la fusione si spegne da se':
+      // non e' un guasto, ed e' giusto che il pannello lo dica cosi'.
+      let lastFusionStat = null;
+      let lastElevationStat = null;
+
+      function leadHoursFromNow() {
+        if (!currentData || !currentData.meta) return null;
+        const validTime = Date.parse(currentData.meta.validTime);
+        if (!Number.isFinite(validTime)) return null;
+        return (validTime - Date.now()) / 3600000;
+      }
+
+      function updateDownscalingStatus() {
+        const node = document.getElementById('map-downscaling-status');
+        if (!node) return;
+        if (!showFusion) {
+          node.textContent = 'quota vera del terreno + osservazioni · T · vento · UR · MSLP · pressione stazione ≠ MSLP';
+          return;
+        }
+        const parti = [];
+        if (lastElevationStat && lastElevationStat.corrected) {
+          parti.push('quota vera del terreno · scarto medio '
+            + lastElevationStat.medianDelta + ' m · fino a '
+            + lastElevationStat.maxCorrection.toFixed(1) + ' °C');
+        } else if (elevationDownscalingActive()) {
+          parti.push('quota del terreno: in caricamento');
+        }
+        if (lastFusionStat && lastFusionStat.correctedCells) {
+          const percent = (100 * lastFusionStat.correctedCells
+            / lastFusionStat.totalCells).toFixed(1);
+          parti.push(lastFusionStat.stationCount + ' stazioni · ' + percent
+            + '% celle corrette');
+        } else {
+          const lead = leadHoursFromNow();
+          if (lead !== null && Math.abs(lead) > 0.75) {
+            const ore = Math.abs(lead) < 1.5
+              ? "un'ora"
+              : Math.round(Math.abs(lead)) + ' ore';
+            parti.push('osservazioni non applicabili: la scadenza è '
+              + (lead > 0 ? 'fra ' + ore : ore + ' fa')
+              + ', le stazioni misurano adesso');
+          } else {
+            parti.push('nessuna osservazione compatibile in questo momento');
+          }
+        }
+        node.textContent = 'Sperimentale · ' + parti.join(' · ');
       }
 
       function buildStationFeatures(layerKey, info) {

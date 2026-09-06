@@ -1502,4 +1502,21 @@ assert.match(html, /const CAPE_STOPS = \[\s*\{ v: 0, c: \[238, 244, 240\], a: 0 
   assert.match(html, /if\(gia\(station\)\) continue;/,
     "le stazioni sovrapposte non vengono piu' scartate");
 }
+// --- Le due correzioni non sono la stessa cosa ---
+// La quota del terreno non invecchia e vale a ogni scadenza; le stazioni
+// misurano adesso e valgono solo vicino all'ora corrente. Il pannello deve
+// dirlo, perche' "nessuna cella correggibile" in previsione sembrava un guasto
+// mentre e' il comportamento corretto.
+{
+  assert.match(html, /const FUSION_TIME_TOLERANCE_MS = 45 \* 60 \* 1000;/,
+    "la fusione non e' piu' vincolata alla validita' della scadenza");
+  assert.match(html, /Math\.abs\(station\.obsTime - validTime\) <= FUSION_TIME_TOLERANCE_MS/,
+    "un'osservazione di adesso finirebbe su una previsione di domani");
+  assert.match(html, /le stazioni misurano adesso/,
+    "il pannello non spiega perche' in previsione la fusione si spegne");
+  assert.match(html, /function updateDownscalingStatus\(\)/,
+    "manca lo stato che distingue quota e osservazioni");
+  assert.match(html, /quota vera del terreno · scarto medio/,
+    "lo stato non riporta quanto pesa la correzione di quota");
+}
 console.log("3D map regression checks: OK");
