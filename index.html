@@ -1392,78 +1392,13 @@
         background: rgba(53, 179, 197, 0.1);
       }
 
-      .ai-agent-block {
-        margin-bottom: 14px;
-        padding: 11px;
-        border: 1px solid rgba(116, 225, 203, 0.25);
-        border-radius: 11px;
-        background: linear-gradient(145deg, rgba(25, 91, 91, 0.18), rgba(13, 36, 51, 0.42));
-      }
-
-      .ai-agent-label,
-      .ai-period-label {
+      /* Etichetta breve sopra un dato di stato: la usano le schede degli
+         agenti e la lettura del downscaling locale. */
+      .ai-agent-label {
         margin: 0 0 7px;
         color: #8aeee0;
         font-size: 9px;
         font-weight: 920;
-        letter-spacing: 0.07em;
-        text-transform: uppercase;
-      }
-
-      .ai-agent-block h3 {
-        margin: 0 0 9px;
-        color: #f5ffff;
-        font-size: 14px;
-        line-height: 1.25;
-      }
-
-      .ai-period-label {
-        margin-top: 12px;
-        padding-top: 10px;
-        border-top: 1px solid rgba(140, 228, 215, 0.16);
-      }
-
-      #nlg-bulletin-content .ai-claim {
-        margin-bottom: 8px;
-        color: #dceff1;
-      }
-
-      .ai-claim-confidence {
-        display: inline-flex;
-        margin: 0 5px 2px 0;
-        padding: 2px 5px;
-        border: 1px solid rgba(140, 228, 215, 0.22);
-        border-radius: 999px;
-        color: #9ceadf;
-        font-size: 8px;
-        font-weight: 850;
-        letter-spacing: 0.02em;
-        vertical-align: 1px;
-      }
-
-      .ai-evidence {
-        margin: -3px 0 8px;
-        color: #9cb6c3;
-        font-size: 9px;
-      }
-
-      .ai-evidence summary {
-        color: #80cfc9;
-        cursor: pointer;
-        font-weight: 800;
-      }
-
-      .ai-evidence ul {
-        margin: 6px 0 0;
-        padding-left: 18px;
-        line-height: 1.4;
-      }
-
-      .deterministic-analysis-label {
-        margin: 15px 0 3px;
-        color: #75e1eb;
-        font-size: 9px;
-        font-weight: 900;
         letter-spacing: 0.07em;
         text-transform: uppercase;
       }
@@ -2268,10 +2203,10 @@
 
     <dialog id="meteorological-agents" aria-labelledby="agents-title">
       <form method="dialog"><button type="submit" style="float:right">Chiudi</button></form>
-      <h2 id="agents-title">Agenti meteorologici AI</h2>
-      <p>Ruoli meteorologici, contributi al run e stato effettivo dei modelli.</p>
+      <h2 id="agents-title">Stato dell’analisi</h2>
+      <p>Che cosa ha prodotto questo run e con quali dati: diagnosi dei fronti e correzione locale dalle osservazioni.</p>
       <div id="agents-content" aria-live="polite"></div>
-      <p>I moduli di ricerca diventano operativi solo dopo addestramento, validazione e integrazione nei prodotti.</p>
+      <p>Ogni voce riporta lo stato reale nel run corrente, non una capacità dichiarata.</p>
     </dialog>
     <header id="app-header">
       <div class="brand-panel surface">
@@ -2286,7 +2221,7 @@
         <div class="brand-copy">
           <div class="eyebrow">Italia · dominio ICON-2I completo</div>
           <h1>METEOHUB</h1>
-          <button type="button" class="agent-presence-button" id="agents-open" aria-haspopup="dialog" aria-controls="meteorological-agents">Agenti meteorologici AI</button>
+          <button type="button" class="agent-presence-button" id="agents-open" aria-haspopup="dialog" aria-controls="meteorological-agents">Stato dell’analisi</button>
           <p id="brand-subtitle" class="brand-subtitle">ICON-2I · deterministico · ≈2,2 km</p>
           <!-- Corsa e validita' in una riga sola, dentro l'intestazione. Sul
                telefono la scheda dei metadati era un secondo blocco sotto il
@@ -2701,7 +2636,7 @@
       <div id="readout-details">
       <div id="point-sampling">--</div>
       <details id="local-downscaling-card" class="front-guide">
-        <summary>AI Downscaling · temperatura locale</summary>
+        <summary>Downscaling locale · temperatura</summary>
         <p>Correzione sperimentale tramite osservazioni e strumenti fisici. ICON originale resta il riferimento.</p>
         <label for="local-elevation">Quota locale verificata (m, opzionale con rilievo 3D)</label>
         <input id="local-elevation" type="number" min="-500" max="5000" step="1" placeholder="Es. 120" style="width:100%;box-sizing:border-box;min-height:44px">
@@ -3753,7 +3688,6 @@
       let toastTimer = null;
       let pointBulletinManifestPromise = null;
       let expertBulletinPromise = null;
-      let aiExpertBulletinPromise = null;
       let bulletinMode = "general";
       let bulletinRequestToken = 0;
 
@@ -5626,30 +5560,22 @@
         content.textContent = "Verifica dello stato del run…";
         const directory = MODEL_INFO[activeModel].directory;
         const results = await Promise.allSettled([
-          loadAgentResource("ai_agent_status.json", directory),
           loadAgentResource("front_qc.json", directory),
           loadDownscalingProduct(directory, currentData && currentData.meta.runTime),
           loadAgentResource("live/observations.json", "data_weather")
         ]);
         content.replaceChildren();
-        const ai = results[0].status === "fulfilled" ? results[0].value : null;
-        const front = results[1].status === "fulfilled" ? results[1].value : null;
-        const validated = ai && ai.status === "validated";
-        agentCard(content, "AI Bollettini · analista sinottico", validated ? "Sintesi validata" : ai ? "Fallback deterministico" : "Stato non disponibile",
-          "Interpreta le evidenze ICON-2I. " + (ai ? (ai.primaryModel || "Generatore") + " · " + (ai.reason || "Esito non specificato") : "Impossibile verificare l’ultima esecuzione: nessuna attività AI è confermata."));
-        agentCard(content, "AI Revisore · controllo delle evidenze", validated ? "Revisione completata" : "Revisione non confermata",
-          (ai && ai.reviewerModel || "Revisore indipendente") + ": controlla i claim e le prove meteorologiche. La pubblicazione AI richiede anche i controlli deterministici.");
+        const front = results[0].status === "fulfilled" ? results[0].value : null;
         const summary = front && front.analysisSummary;
-        agentCard(content, "Agente Fronti · diagnosi fisica e supporto ML", summary ? (summary.mlFusion === true ? "Fusione ML presente nel run" : "Diagnosi fisica operativa") : "Stato non disponibile",
-          summary ? "Run " + front.runTime + ". " + (summary.analysisMessage || "") + " Il modello ML supporta l’analisi fisica e il tracciamento temporale; non è il modello neurale U-Net." : "Diagnostica del run non raggiungibile.");
-        const local = results[2].status === "fulfilled" ? results[2].value : null;
-        const observed = results[3].status === "fulfilled" ? results[3].value : null;
+        agentCard(content, "Analisi dei fronti · diagnosi fisica e supporto ML", summary ? (summary.mlFusion === true ? "Fusione ML presente nel run" : "Diagnosi fisica operativa") : "Stato non disponibile",
+          summary ? "Run " + front.runTime + ". " + (summary.analysisMessage || "") + " Il modello ML conferma la diagnosi fisica e il tracciamento temporale; non scrive testo e non sostituisce l’analisi." : "Diagnostica del run non raggiungibile.");
+        const local = results[1].status === "fulfilled" ? results[1].value : null;
+        const observed = results[2].status === "fulfilled" ? results[2].value : null;
         const mh = observed && Array.isArray(observed.sourceStatus)
           ? observed.sourceStatus.find(function (item) { return String(item.source).indexOf("MeteoHub") >= 0; }) : null;
-        agentCard(content, "Agente Downscaling · analisi oggettiva osservazioni–ICON", local && local.status === "active-experimental" ? "Operativo · correzione prudenziale" : "Correzioni sospese o dati insufficienti",
+        agentCard(content, "Downscaling locale · analisi oggettiva osservazioni–ICON", local && local.status === "active-experimental" ? "Operativo · correzione prudenziale" : "Correzioni sospese o dati insufficienti",
           "Rete corrente: " + (mh && mh.count || 0) + " stazioni MeteoHub siciliane, più METAR. Temperatura, vento, umidità e MSLP vengono corretti solo alla scadenza osservata e soltanto dove almeno tre stazioni vicine sono coerenti; altrove resta ICON. " + (local && local.reason || "Prodotto non disponibile.") + " Non richiede una rete neurale addestrata né anni di archivio.");
-        if (ai && ai.runTime) appendBulletinParagraph(content, "Run bollettino: " + ai.runTime);
-        if (ai && ai.generatedAt) appendBulletinParagraph(content, "Stato aggiornato: " + ai.generatedAt);
+        if (front && front.runTime) appendBulletinParagraph(content, "Run analizzato: " + front.runTime);
       });
 
       async function loadExpertBulletin() {
@@ -5662,18 +5588,6 @@
           });
         }
         return expertBulletinPromise;
-      }
-
-      async function loadAiExpertBulletin() {
-        if (!aiExpertBulletinPromise) {
-          aiExpertBulletinPromise = fetchJsonResource(
-            MODEL_INFO[activeModel].directory + "/ai_expert_bulletin.json.gz"
-          ).catch(function (error) {
-            aiExpertBulletinPromise = null;
-            throw error;
-          });
-        }
-        return aiExpertBulletinPromise;
       }
 
       function appendBulletinParagraph(parent, text, className) {
@@ -5723,76 +5637,6 @@
         return container;
       }
 
-      function appendAiClaim(parent, claim, evidenceById) {
-        const paragraph = document.createElement("p");
-        paragraph.className = "ai-claim";
-        const confidence = document.createElement("span");
-        confidence.className = "ai-claim-confidence";
-        confidence.textContent = claim.confidence;
-        paragraph.appendChild(confidence);
-        paragraph.appendChild(document.createTextNode(claim.text));
-        parent.appendChild(paragraph);
-
-        const evidence = (claim.evidenceIds || []).map(function (id) {
-          return evidenceById.get(id);
-        }).filter(Boolean);
-        if (!evidence.length) return;
-        const details = document.createElement("details");
-        details.className = "ai-evidence";
-        const summary = document.createElement("summary");
-        summary.textContent = "Prove utilizzate · " + evidence.length;
-        details.appendChild(summary);
-        const list = document.createElement("ul");
-        evidence.forEach(function (item) {
-          const row = document.createElement("li");
-          row.textContent = "+" + item.leadHours + " h · " + item.section + " · " + item.text;
-          list.appendChild(row);
-        });
-        details.appendChild(list);
-        parent.appendChild(details);
-      }
-
-      function renderAiAgentBrief(aiBulletin, leadHours) {
-        const container = document.createElement("section");
-        container.className = "ai-agent-block";
-        const evidenceById = new Map((aiBulletin.evidenceCatalog || []).map(function (item) {
-          return [item.id, item];
-        }));
-        const label = document.createElement("p");
-        label.className = "ai-agent-label";
-        label.textContent = "Sintesi IA · doppia verifica completata";
-        container.appendChild(label);
-        const heading = document.createElement("h3");
-        heading.textContent = aiBulletin.overview.headline;
-        container.appendChild(heading);
-        (aiBulletin.overview.claims || []).forEach(function (claim) {
-          appendAiClaim(container, claim, evidenceById);
-        });
-
-        const period = (aiBulletin.periods || []).find(function (candidate) {
-          return leadHours >= Number(candidate.fromHour) && leadHours <= Number(candidate.toHour);
-        });
-        if (period) {
-          const periodLabel = document.createElement("p");
-          periodLabel.className = "ai-period-label";
-          periodLabel.textContent = "Periodo +" + period.fromHour + " → +" + period.toHour + " h";
-          container.appendChild(periodLabel);
-          const periodHeading = document.createElement("h3");
-          periodHeading.textContent = period.headline;
-          container.appendChild(periodHeading);
-          (period.sections || []).forEach(function (section) {
-            const sectionLabel = document.createElement("p");
-            sectionLabel.className = "ai-agent-label";
-            sectionLabel.textContent = section.title;
-            container.appendChild(sectionLabel);
-            (section.claims || []).forEach(function (claim) {
-              appendAiClaim(container, claim, evidenceById);
-            });
-          });
-        }
-        return container;
-      }
-
       async function updateExpertBulletinUi(token) {
         ui.bulletinKicker.textContent = "Motore sinottico multi-livello ICON-2I";
         ui.bulletinTitle.textContent = "Analisi meteorologica tecnica";
@@ -5804,13 +5648,6 @@
         );
         try {
           const bulletin = await loadExpertBulletin();
-          const agentStatus = await loadAgentResource("ai_agent_status.json", MODEL_INFO[activeModel].directory).catch(function () { return null; });
-          let aiBulletin = null;
-          try {
-            aiBulletin = await loadAiExpertBulletin();
-          } catch (aiError) {
-            console.info("Sintesi IA non disponibile: uso il motore deterministico", aiError);
-          }
           if (token !== bulletinRequestToken) return;
           const item = catalog[currentIndex] || {};
           const lead = Number(item.leadHours === undefined ? item.hour : item.leadHours);
@@ -5824,37 +5661,12 @@
           ui.bulletinValidity.textContent =
             "Run " + formatDateTime(runDate) + " · validità " +
             formatDateTime(validDate) + " · +" + analysis.leadHours + " h";
-          const aiValidated = Boolean(
-            agentStatus && agentStatus.status === "validated" &&
-            (!agentStatus.runTime || agentStatus.runTime === bulletin.runTime) &&
-            aiBulletin && aiBulletin.status === "validated" &&
-            aiBulletin.runTime === bulletin.runTime
-          );
-          ui.bulletinKicker.textContent = aiValidated
-            ? "Agente meteorologico verificato · ICON-2I"
-            : "Motore sinottico multi-livello ICON-2I";
-          ui.bulletinStatus.textContent = aiValidated
-            ? (agentStatus.primaryModel || "modello autore") + " · revisione "
-              + (agentStatus.reviewerModel || "secondo modello") + " · prove verificabili"
-            : bulletin.model + " · " + bulletin.spatialResolutionKm + " km · passo " +
-              bulletin.temporalResolutionHours + " h · " + analysis.signalConfidence;
-          ui.bulletinDisclaimer.textContent = aiValidated
-            ? aiBulletin.disclaimer + " " + bulletin.disclaimer
-            : bulletin.disclaimer;
+          ui.bulletinKicker.textContent = "Motore sinottico multi-livello ICON-2I";
+          ui.bulletinStatus.textContent =
+            bulletin.model + " · " + bulletin.spatialResolutionKm + " km · passo " +
+            bulletin.temporalResolutionHours + " h · " + analysis.signalConfidence;
+          ui.bulletinDisclaimer.textContent = bulletin.disclaimer;
           ui.bulletinContent.replaceChildren();
-
-          if (!aiValidated) {
-            appendBulletinParagraph(ui.bulletinContent,
-              "AI Bollettini · fallback deterministico. " + (agentStatus && agentStatus.status !== "validated" ? agentStatus.reason || "Sintesi non validata." : "Sintesi AI non disponibile o non coerente con questo run."),
-              "ai-agent-block");
-          }
-          if (aiValidated) {
-            ui.bulletinContent.appendChild(renderAiAgentBrief(aiBulletin, lead));
-            const deterministicLabel = document.createElement("p");
-            deterministicLabel.className = "deterministic-analysis-label";
-            deterministicLabel.textContent = "Diagnostica numerica della scadenza";
-            ui.bulletinContent.appendChild(deterministicLabel);
-          }
 
           (analysis.operationalSummary || []).forEach(function (text) {
             appendBulletinParagraph(ui.bulletinContent, text, "expert-summary");

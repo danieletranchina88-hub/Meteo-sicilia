@@ -190,14 +190,13 @@ assert.match(html, /Perché\? /,
   "manca la catena causale verificabile nel bollettino");
 assert.match(html, /docs\/motore_bollettino\.md/,
   "l'interfaccia non collega la documentazione del motore esperto");
-assert.match(html, /ai_expert_bulletin\.json\.gz/,
-  "il sito non tenta di caricare la sintesi IA verificata");
-assert.match(html, /aiBulletin\.runTime === bulletin\.runTime/,
-  "una sintesi IA di un altro run potrebbe essere mostrata");
-assert.match(html, /function renderAiAgentBrief\(aiBulletin, leadHours\)/,
-  "la sintesi IA non viene rappresentata con il proprio periodo");
-assert.match(html, /Prove utilizzate · /,
-  "i claim IA non espongono le prove citate");
+// Il bollettino e' deterministico e basta: nessuna sintesi da modello
+// linguistico, nessun percorso che la carichi. Se rientra, deve rientrare per
+// una decisione esplicita, non di nascosto.
+assert.doesNotMatch(html, /ai_expert_bulletin|ai_agent_status/,
+  "il sito e' tornato a caricare un prodotto IA");
+assert.doesNotMatch(html, /renderAiAgentBrief|appendAiClaim/,
+  "il sito e' tornato a rappresentare una sintesi IA");
 assert.match(html, /docs\/agente_meteorologico\.md/,
   "l'interfaccia non collega il protocollo verificabile dell'agente");
 assert.doesNotMatch(html, /GEMINI_API_KEY|GROQ_API_KEY/,

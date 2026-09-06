@@ -67,27 +67,3 @@ dichiara un miglioramento previsionale dimostrato. Pioggia, temporali,
 fronti e livelli isobarici non sono modificati da questa analisi superficiale.
 La stima puntuale di temperatura fino a sei ore resta un prodotto distinto,
 con il proprio controllo spaziale e attenuazione temporale.
-
-## Qualità e costo del meteorologo AI
-
-La mappa non chiama gli LLM. Il bollettino viene generato centralmente e
-condiviso tra i visitatori, con un autore AI, un revisore distinto e controlli
-numerici e temporali. Le riscritture dei claim non validi sono limitate a una
-per claim e otto complessive. I test automatici sui push non duplicano la
-verifica live della pipeline; la verifica API dedicata resta avviabile a mano.
-
-Una cache riusa solo bollettini validati con identica impronta delle evidenze,
-metodo e modelli. Un errore 429 produce una pausa di un'ora nei tentativi della
-pipeline. Non si attiva alcun abbonamento o modifica della fatturazione.
-Se la quota del provider resta esaurita, il sito mostra esplicitamente il
-bollettino deterministico di riserva: non viene presentato come bollettino AI.
-
-Configurazione dal 5 settembre 2026: GPT-OSS 120B su Groq come meteorologo
-autore e GPT-OSS 20B come revisore con modello distinto. Se Groq non autorizza
-la richiesta, il percorso passa a Gemini 3.5 Flash per la redazione e Gemini
-3.5 Flash-Lite per la revisione. Il file di stato pubblicato riporta sempre i
-modelli realmente usati. Il prodotto resta pubblicabile soltanto dopo i
-controlli deterministici su riferimenti, numeri e finestre temporali. Prezzi
-ufficiali verificati su https://ai.google.dev/gemini-api/docs/pricing e
-https://console.groq.com/docs/models; nessuna stima mensile è affidabile senza
-misurare token e frequenza reali.

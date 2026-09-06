@@ -130,13 +130,6 @@ L'interfaccia seleziona automaticamente l'analisi corrispondente all'ora della
 timeline. Il tab “Punto selezionato” rimane un prodotto distinto, costruito
 sulla serie locale di 72 ore.
 
-Quando i due segreti API sono disponibili, il workflow produce anche
-`ai_expert_bulletin.json.gz`. È una sintesi sovrapposta e non una sostituzione:
-ogni claim deve citare prove del presente prodotto, superare il controllo
-numerico locale ed essere approvato da un revisore indipendente. Il dettaglio
-del protocollo e del fallback è documentato in
-[agente_meteorologico.md](agente_meteorologico.md).
-
 ## Riferimenti essenziali
 
 - Bolton, 1980: *The Computation of Equivalent Potential Temperature*,

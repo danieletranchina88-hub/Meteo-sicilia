@@ -55,25 +55,6 @@ class Tests(unittest.TestCase):
     def test_sparse_network_is_withheld(self):
         f,o=fixtures();o['stations']=o['stations'][:2]
         self.assertEqual(build(f,o,NOW)['status'],'withheld')
-    def test_observations_reach_agent_only_at_matching_time(self):
-        import json
-        import tempfile
-        from scripts.generate_ai_bulletin import attach_local_evidence
-        from meteo_analysis.agents.meteorologist import build_evidence_packet
-        f,o=fixtures();product=build(f,o,NOW)
-        bulletin=dict(runTime=f['runTime'], analyses=[
-            dict(leadHours=i,validTime=f'2026-09-05T0{i}:00:00Z',
-                 operationalSummary=['Diagnostica ICON'],sections=[]) for i in range(3)])
-        with tempfile.TemporaryDirectory() as directory:
-            Path(directory,'downscaling.json').write_text(json.dumps(product))
-            attach_local_evidence(bulletin,Path(directory))
-        self.assertEqual(bulletin['analyses'][0]['sections'],[])
-        self.assertEqual(bulletin['analyses'][2]['sections'],[])
-        packet=build_evidence_packet(bulletin)
-        measurements=[e for e in packet['evidence'] if e['section']=='observations']
-        self.assertTrue(measurements)
-        self.assertTrue(all(e['leadHours']==1 for e in measurements))
-
     def test_bad_time_axis(self):
         f,o=fixtures();f['times'].reverse()
         self.assertIsNone(sample(f,'temperature2m',0,NOW))

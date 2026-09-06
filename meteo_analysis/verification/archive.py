@@ -52,8 +52,6 @@ def source_asset_record(
 
 
 def _output_role(relative_path: str) -> str:
-    if relative_path == "ai_agent_status.json":
-        return "quality-control"
     if relative_path.startswith("verification/"):
         return "verification-sample"
     if relative_path.startswith("meteograms/"):

@@ -23,8 +23,6 @@ VERIFICATION_PATHS = {
     "observations.json",
     "front_qc.json",
     "hazard_qc.json",
-    "ai_agent_status.json",
-    "ai_expert_bulletin.json.gz",
     "verification/forecast_samples.json.gz",
 }
 

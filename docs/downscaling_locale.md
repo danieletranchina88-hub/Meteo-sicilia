@@ -2,19 +2,18 @@
 
 ## Cosa viene pubblicato
 
-La scheda **AI Downscaling · temperatura locale**, dentro il punto selezionato
+La scheda **Downscaling locale · temperatura**, dentro il punto selezionato
 sulla mappa, confronta ICON originale con una stima locale sperimentale. La
 quota locale arriva dal DEM della vista 3D o da un valore inserito dall'utente.
 La quota ICON è campionata dalla griglia HSURF dello stesso run.
 
-Il coordinamento è una pipeline di strumenti deterministici, senza pesi neurali.
-L'agente LLM dei bollettini riceve esempi METAR–ICON controllati e contemporanei
-come prove distinte dalle previsioni. Il LLM non produce né decide liberamente
-correzioni numeriche; non può cambiare i limiti di questo strumento.
+Il coordinamento è una pipeline di strumenti deterministici, senza pesi neurali
+e senza modelli linguistici: le correzioni escono da regole esplicite su
+osservazioni contemporanee, e sono ispezionabili una per una.
 
 Questa versione riguarda esclusivamente la temperatura puntuale. Non crea una
 nuova simulazione atmosferica, non modifica le griglie originali, pioggia, vento,
-fronti o meteogrammi. La U-Net e il downscaler neurale restano progetti separati.
+fronti o meteogrammi.
 
 ## Metodo e limiti
 
