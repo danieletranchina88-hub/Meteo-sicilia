@@ -136,16 +136,22 @@ velocità e la freccia ne mostrerebbe un'altra.
 `data_weather/step_N.json.gz`, blocco `profile`:
 
 ```
-profile.method       hypsometric-925-850-700
-profile.semantics    model-own-profile-not-standard-lapse-rate
-profile.levelsHpa    [925, 850, 700]
+profile.method           hypsometric-925-850-700
+profile.semantics        model-own-profile-not-standard-lapse-rate
+profile.snowLevelMethod  wet-bulb-zero-not-dry-bulb
+profile.levelsHpa        [925, 850, 700]
 profile.nx, ny, lo1, la1, dx, dy    griglia diradata di 8 (~17 km)
-profile.z[0..2]      quote dei livelli, in metri sul mare
-profile.t[0..2]      temperature dei livelli, in gradi
+profile.z[0..2]          quote dei livelli, in metri sul mare
+profile.t[0..2]          temperature dei livelli, in gradi
+profile.wind.u[0..2]     componente zonale ai tre livelli, m/s
+profile.wind.v[0..2]     componente meridiana ai tre livelli, m/s
+profile.snowLevel        quota neve dal bulbo bagnato, in metri
 ```
 
 Il campo è sinottico: diradarlo di 8 costa in media 0,003 °C sulla correzione e
-al massimo 0,06, e pesa 51 KB compressi per scadenza (l'1,6% del file del passo).
+al massimo 0,06. Il blocco pesa 128 KB compressi per scadenza, il 4% del file
+del passo — 51 KB per il solo profilo termico, 18 per la quota neve, 59 per il
+vento ai tre livelli.
 
 Fisica in `meteo_analysis/core/vertical_profile.py`, prove in
 `scripts/tests/test_vertical_profile.py`; lettura del DEM e applicazione in
