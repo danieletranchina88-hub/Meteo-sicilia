@@ -4283,10 +4283,27 @@
             };
           }
         }
-        return {
-          u: sample(windField() && windField().u, gx, gy),
-          v: sample(windField() && windField().v, gx, gy)
-        };
+        const field = windField();
+        let u = sample(field && field.u, gx, gy);
+        let v = sample(field && field.v, gx, gy);
+        // La stessa correzione di quota che vede la mappa, applicata qui
+        // perche' frecce, linee di corrente e lettura del punto passano tutte
+        // di qui: se la applicasse solo il raster, il colore direbbe una
+        // velocita' e la freccia ne mostrerebbe un'altra.
+        if (Number.isFinite(u) && Number.isFinite(v)
+            && activeLayer === "wind" && elevationDownscalingActive()) {
+          const terrain = localDownscalingCache && localDownscalingCache.terrain;
+          if (terrain && terrain.runTime === currentData.meta.runTime) {
+            const meta = currentData.meta;
+            const factor = windElevationFactor(
+              profilePayload(), getGrid(terrain.terrainHeight),
+              meta.lo1 + gx * meta.dx, meta.la1 - gy * meta.dy
+            );
+            u *= factor;
+            v *= factor;
+          }
+        }
+        return { u: u, v: v };
       }
 
       function windField() {
@@ -6958,10 +6975,11 @@
       }
 
       function elevationDownscalingActive() {
-        return Boolean(
-          showFusion && activeLayer === "temp"
-          && selectedLevel === "surface" && profilePayload()
-        );
+        const payload = profilePayload();
+        if (!showFusion || selectedLevel !== "surface" || !payload) return false;
+        if (activeLayer === "temp") return true;
+        // Il vento si sposta in quota solo se il profilo porta anche il vento.
+        return activeLayer === "wind" && Boolean(payload.wind);
       }
 
       function requestTerrainSampler(west, east, south, north, width, key) {
@@ -7002,6 +7020,72 @@
       }
 
       let lastElevationDelta = 0;
+
+      // Fattore con cui il vento del modello va riportato sulla quota vera.
+      //
+      // Stesso ragionamento della temperatura, e stessa assenza di parametri
+      // liberi: al Gran Sasso il modello calcola il vento a 10 m sopra i suoi
+      // 2078 m, non sopra i 2912 veri, e la vetta vera sporge di 834 m in un
+      // flusso piu' veloce. Misurato sul run: fra 925 e 850 hPa, cioe' su 695
+      // m, il vento del modello cambia di 5,6 km/h in mediana -- il 37% del
+      // vento tipico -- con punte oltre 11 al novantesimo percentile.
+      //
+      // Si usa il RAPPORTO fra il vento del profilo alle due quote, non la
+      // differenza: il rapporto e' adimensionale e cancella a primo ordine lo
+      // scarto fra il vento a 10 m, che sente l'attrito del suolo, e quello
+      // dell'aria libera. Sommare una differenza li' confonderebbe.
+      const WIND_ELEVATION_LIMITS = [0.5, 2.0];
+
+      function windElevationFactor(profile, modelTerrain, longitude, latitude) {
+        if (!terrainSampler || !profile || !profile.wind) return 1;
+        const trueHeight = terrainSampler.heightAt(longitude, latitude);
+        if (!Number.isFinite(trueHeight)) return 1;
+        const meta = currentData.meta;
+        const modelHeight = sampleBilinear(
+          modelTerrain, (longitude - meta.lo1) / meta.dx,
+          (meta.la1 - latitude) / meta.dy, meta.nx, meta.ny
+        );
+        if (!Number.isFinite(modelHeight)) return 1;
+        const delta = trueHeight - modelHeight;
+        lastElevationDelta = delta;
+        if (!(Math.abs(delta) > 0.5) || Math.abs(delta) > 2500) return 1;
+        const px = (longitude - profile.lo1) / profile.dx;
+        const py = (profile.la1 - latitude) / profile.dy;
+        const speedAt = function (metres) {
+          const u = profileVectorAt(profile.wind.u, profile, px, py, metres);
+          const v = profileVectorAt(profile.wind.v, profile, px, py, metres);
+          return Number.isFinite(u) && Number.isFinite(v) ? Math.hypot(u, v) : NaN;
+        };
+        const high = speedAt(trueHeight), low = speedAt(modelHeight);
+        // Con vento quasi nullo alla quota del modello il rapporto esplode:
+        // sotto un metro al secondo non c'e' un rapporto da calcolare.
+        if (!Number.isFinite(high) || !Number.isFinite(low) || low < 1) return 1;
+        return clamp(high / low, WIND_ELEVATION_LIMITS[0], WIND_ELEVATION_LIMITS[1]);
+      }
+
+      // Componente del vento interpolata in quota sul profilo, con la stessa
+      // regola della temperatura: fra i livelli si interpola, oltre si
+      // prolunga il gradiente del segmento estremo.
+      function profileVectorAt(components, profile, gx, gy, metres) {
+        const at = function (index) {
+          return {
+            z: sampleCoarseBilinear(getGrid(profile.z[index]), gx, gy,
+                                    profile.nx, profile.ny),
+            value: sampleCoarseBilinear(getGrid(components[index]), gx, gy,
+                                        profile.nx, profile.ny)
+          };
+        };
+        const a = at(0), b = at(1);
+        if (!Number.isFinite(a.z) || !Number.isFinite(b.z)) return NaN;
+        let low = a, high = b;
+        if (metres >= b.z) {
+          const c = at(2);
+          if (Number.isFinite(c.z)) { low = b; high = c; }
+        }
+        const span = high.z - low.z;
+        if (!(Math.abs(span) > 1)) return low.value;
+        return low.value + (high.value - low.value) / span * (metres - low.z);
+      }
 
       function elevationCorrection(profile, modelTerrain, longitude, latitude) {
         if (!terrainSampler) return 0;
@@ -7221,7 +7305,10 @@
         );
         // Statistiche della correzione, per dire nel pannello quanto pesa
         // invece di limitarsi ad annunciare che e' accesa.
-        let corrPixel = 0, corrDelta = 0, corrMax = 0;
+        let corrPixel = 0, corrDelta = 0;
+        // Per la temperatura e' una differenza in gradi (parte da 0), per il
+        // vento un fattore moltiplicativo (parte da 1).
+        let corrMax = isWindField ? 1 : 0;
 
         for (let y = 0; y < height; y += 1) {
           const fraction = height > 1 ? y / (height - 1) : 0;
@@ -7241,7 +7328,17 @@
             } else {
               value = rasterSampler(fieldGrid, gx, gy, fieldMeta.nx, fieldMeta.ny);
             }
-            if (correctElevation && Number.isFinite(value)) {
+            if (correctElevation && isWindField && Number.isFinite(value)) {
+              const factor = windElevationFactor(
+                profile, modelTerrain, longitude, latitude
+              );
+              if (factor !== 1) {
+                value *= factor;
+                corrPixel += 1;
+                corrDelta += Math.abs(lastElevationDelta);
+                if (Math.abs(factor - 1) > Math.abs(corrMax - 1)) corrMax = factor;
+              }
+            } else if (correctElevation && Number.isFinite(value)) {
               const shift = elevationCorrection(
                 profile, modelTerrain, longitude, latitude
               );
@@ -7276,7 +7373,8 @@
           ? {
               corrected: corrPixel,
               medianDelta: corrPixel ? Math.round(corrDelta / corrPixel) : 0,
-              maxCorrection: corrMax
+              maxCorrection: corrMax,
+              kind: isWindField ? "wind" : "temp"
             }
           : null;
         if (showFusion) updateDownscalingStatus();
@@ -11130,9 +11228,12 @@
         }
         const parti = [];
         if (lastElevationStat && lastElevationStat.corrected) {
+          const entita = lastElevationStat.kind === "wind"
+            ? 'fino a ' + (lastElevationStat.maxCorrection >= 1 ? '+' : '')
+              + Math.round((lastElevationStat.maxCorrection - 1) * 100) + '%'
+            : 'fino a ' + lastElevationStat.maxCorrection.toFixed(1) + ' °C';
           parti.push('quota vera del terreno · scarto medio '
-            + lastElevationStat.medianDelta + ' m · fino a '
-            + lastElevationStat.maxCorrection.toFixed(1) + ' °C');
+            + lastElevationStat.medianDelta + ' m · ' + entita);
         } else if (elevationDownscalingActive()) {
           parti.push('quota del terreno: in caricamento');
         }

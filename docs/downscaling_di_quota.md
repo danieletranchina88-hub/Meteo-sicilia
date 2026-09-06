@@ -83,6 +83,36 @@ L'interruttore è quello già presente, «Ricalcola mappa · Downscaling». Non 
 spegne più quando mancano le osservazioni: la correzione di quota non ne ha
 bisogno, e spegnersi lascerebbe scoperta proprio la montagna.
 
+## Anche il vento
+
+Lo stesso ragionamento vale per il vento, e senza parametri liberi: al Gran
+Sasso il modello calcola il vento a 10 m sopra i suoi 2078 m, non sopra i 2912
+veri, e la vetta vera sporge di 834 m in un flusso più veloce.
+
+Misurato sul run: fra 925 e 850 hPa, cioè su 695 m, il vento del modello cambia
+di 5,6 km/h in mediana — il 37% del vento tipico — con punte oltre 11 km/h al
+novantesimo percentile. Non è un dettaglio.
+
+Si usa il **rapporto** fra il vento del profilo alle due quote, non la
+differenza:
+
+    V(z_vero) = V(z_modello) × [ |V_profilo(z_vero)| / |V_profilo(z_modello)| ]
+
+Il rapporto è adimensionale e cancella a primo ordine lo scarto fra il vento a
+10 m, che sente l'attrito del suolo, e quello dell'aria libera; sommare una
+differenza confonderebbe le due cose. È limitato fra 0,5 e 2, e sotto un metro
+al secondo alla quota del modello non si calcola affatto, perché un rapporto
+con un denominatore quasi nullo esplode.
+
+Verificato nel browser: fattore 1,131 al Gran Sasso (+13% di vento), 0,999
+nella pianura padana e 1,000 sul mare. La correzione agisce dove il terreno del
+modello è sbagliato e sparisce dove è giusto, che è esattamente il
+comportamento voluto.
+
+Colore della mappa, frecce, linee di corrente e lettura del punto passano tutti
+dalla stessa funzione: se la applicasse solo il raster, il colore direbbe una
+velocità e la freccia ne mostrerebbe un'altra.
+
 ## Limiti
 
 - il DEM è smussato quanto lo zoom scelto. A zoom 8 il passo è ~600 m e il Gran
@@ -95,7 +125,11 @@ bisogno, e spegnersi lascerebbe scoperta proprio la montagna.
   ICON-2I non ha: non inventa brezze di valle, ristagni d'aria fredda,
   incanalamenti, né l'effetto dell'esposizione dei versanti. Quelli sono altri
   pezzi di fisica, e restano da fare;
-- si applica alla temperatura a 2 m al suolo. Gli altri campi restano com'erano.
+- si applica a temperatura e vento a 10 m. Pioggia, umidità e nuvolosità
+  restano com'erano;
+- per il vento, il rapporto fra i venti del profilo è una semplificazione: nella
+  realtà il vento vicino al suolo segue un profilo logaritmico che dipende dalla
+  rugosità, e quella non è nota. Vale come correzione di prim'ordine.
 
 ## Dati e codice
 

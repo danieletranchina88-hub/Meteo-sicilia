@@ -1550,4 +1550,26 @@ assert.match(html, /const CAPE_STOPS = \[\s*\{ v: 0, c: \[238, 244, 240\], a: 0 
   assert.match(html, /usesProfileData\(activeLayer\) \? sampleCoarseBilinear : sampleBilinear/,
     "il raster non usa il campionatore tollerante sulle griglie diradate");
 }
+// --- Vento riportato sulla quota vera ---
+// Stesso ragionamento della temperatura e stessa assenza di parametri liberi:
+// al Gran Sasso il modello calcola il vento sopra i suoi 2078 m, non sopra i
+// 2912 veri. Si usa il RAPPORTO fra il vento del profilo alle due quote, non
+// la differenza, perche' il rapporto cancella a primo ordine lo scarto fra il
+// vento a 10 m -- che sente l'attrito -- e quello dell'aria libera.
+{
+  assert.match(html, /function windElevationFactor\(profile, modelTerrain, longitude, latitude\)/,
+    "manca il fattore di quota per il vento");
+  assert.match(html, /return clamp\(high \/ low, WIND_ELEVATION_LIMITS\[0\], WIND_ELEVATION_LIMITS\[1\]\);/,
+    "il fattore del vento non e' piu' un rapporto limitato");
+  assert.match(html, /const WIND_ELEVATION_LIMITS = \[0\.5, 2\.0\];/,
+    "senza limiti un profilo quasi calmo farebbe esplodere il rapporto");
+  assert.match(html, /if \(!Number\.isFinite\(high\) \|\| !Number\.isFinite\(low\) \|\| low < 1\) return 1;/,
+    "con vento quasi nullo alla quota del modello il rapporto va evitato");
+  // Colore della mappa e freccia devono raccontare la stessa velocita'.
+  assert.match(html, /activeLayer === "wind" && elevationDownscalingActive\(\)/,
+    "le frecce mostrerebbero una velocita' diversa dal colore");
+  // Il vento si sposta solo se il profilo porta davvero il vento.
+  assert.match(html, /return activeLayer === "wind" && Boolean\(payload\.wind\);/,
+    "il vento verrebbe corretto anche senza il profilo del vento");
+}
 console.log("3D map regression checks: OK");

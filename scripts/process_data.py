@@ -1309,7 +1309,7 @@ PROFILE_COARSEN = 8
 
 
 def build_vertical_profile(header, mslp_hpa, t2m_c, terrain_m, t925, t850, t700,
-                           levels_q=None, surface_q=None):
+                           levels_q=None, surface_q=None, levels_wind=None):
     """Quote e temperature di 925, 850 e 700 hPa, su griglia diradata.
 
     Serve al browser per spostare la temperatura dalla quota che il modello
@@ -1354,11 +1354,27 @@ def build_vertical_profile(header, mslp_hpa, t2m_c, terrain_m, t925, t850, t700,
         if np.any(np.isfinite(line)):
             snow = clean_for_json(coarsen(line, PROFILE_COARSEN, "mean"), 0)
 
+    # Vento ai livelli: serve a portare anche il vento sulla quota vera. Al
+    # Gran Sasso il modello lo calcola a 2078 m e non a 2912, e su 695 m di
+    # dislivello il vento del modello cambia di 5,6 km/h in mediana -- il 37%
+    # del vento tipico -- con punte oltre 11 al novantesimo percentile.
+    wind = None
+    if levels_wind is not None and not any(
+        v is None for pair in levels_wind for v in pair
+    ):
+        wind = {
+            "u": [clean_for_json(coarsen(as_grid(u), PROFILE_COARSEN, "mean"), 1)
+                  for u, _ in levels_wind],
+            "v": [clean_for_json(coarsen(as_grid(v), PROFILE_COARSEN, "mean"), 1)
+                  for _, v in levels_wind],
+        }
+
     return {
         "method": "hypsometric-925-850-700",
         "semantics": "model-own-profile-not-standard-lapse-rate",
         "snowLevelMethod": "wet-bulb-zero-not-dry-bulb",
         "snowLevel": snow,
+        "wind": wind,
         "levelsHpa": list(LEVELS_HPA),
         "nx": -(-nx // PROFILE_COARSEN),
         "ny": -(-ny // PROFILE_COARSEN),
@@ -1949,6 +1965,9 @@ def process_data():
                 # sottovento. Il campo è confinato all'arco alpino.
                 foehn = None
                 foehn_message = "Vento 700 hPa o gradiente alpino non disponibile."
+                # Inizializzati fuori dal try: servono anche al profilo del
+                # vento, e un foehn fallito non deve lasciarli indefiniti.
+                u700 = v700 = None
                 try:
                     u700 = (
                         icon_hazard_fields.field("u700", step_hours, lat, lon)
@@ -2323,6 +2342,11 @@ def process_data():
                         t925, t850, t700,
                         levels_q=(q925_syn, q850_syn, q700_syn),
                         surface_q=specific_humidity_2m,
+                        levels_wind=(
+                            (front_field("u925"), front_field("v925")),
+                            (front_field("u850"), front_field("v850")),
+                            (u700, v700),
+                        ),
                     ),
                     "nlg_bulletin": nlg_bulletin,
                     "nlg_bulletin_details": nlg_details,
