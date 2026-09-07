@@ -998,6 +998,11 @@ assert.doesNotMatch(streamlineRenderer[0], /colorFor\(/,
   const numerical = new Function(
     "const STREAMLINE_CONFIG={minSpeedMps:0.22,screenStepPx:4.8," +
       "minStepMetres:650,maxStepMetres:30000};\n" +
+    // Nessun DEM in questo sandbox numerico: orographicWindDeflection deve
+    // ritornare subito null, e l'integratore resta quello sul campo grezzo
+    // che il resto del test verifica analiticamente.
+    "let flowTerrainSampler=null;\n" +
+    "let selectedLevel='surface';\n" +
     "function clamp(v,a,b){return Math.max(a,Math.min(b,v));}\n" +
     "function sampleBilinear(array,gx,gy,nx,ny){" +
       "const x=Math.max(0,Math.min(nx-1,gx));" +
@@ -1007,6 +1012,7 @@ assert.doesNotMatch(streamlineRenderer[0], /colorFor\(/,
       "const fx=x-x0,fy=y-y0,i=y0*nx+x0;" +
       "return array[i]*(1-fx)*(1-fy)+array[i+1]*fx*(1-fy)+" +
         "array[i+nx]*(1-fx)*fy+array[i+nx+1]*fx*fy;}\n" +
+    functionSource("orographicWindDeflection") + "\n" +
     functionSource("sampleWindVector") + "\n" +
     functionSource("offsetWindLocation") + "\n" +
     functionSource("advanceWindStreamline") + "\n" +
@@ -1067,6 +1073,81 @@ assert.doesNotMatch(streamlineRenderer[0], /colorFor\(/,
   const highLatitudeStep = numerical.streamlineStepMetres(50, 6);
   assert.ok(highLatitudeStep < lowLatitudeStep,
     "il passo metrico non corregge la risoluzione zonale con la latitudine");
+}
+
+// La deflessione orografica: verso piegato verso le isoipse su un versante
+// ripido, nessuna correzione in pianura, velocita' sempre conservata.
+{
+  function functionSource(name) {
+    const start = html.indexOf("function " + name + "(");
+    assert.ok(start >= 0, "funzione non trovata: " + name);
+    const open = html.indexOf("{", start);
+    let depth = 0;
+    for (let index = open; index < html.length; index += 1) {
+      if (html[index] === "{") depth += 1;
+      if (html[index] === "}") depth -= 1;
+      if (depth === 0) return html.slice(start, index + 1);
+    }
+    throw new Error("funzione non delimitabile: " + name);
+  }
+
+  const deflection = new Function(
+    "const OROGRAPHIC_DEFLECTION={minSlope:0.02,fullSlope:0.35,maxWeight:0.55," +
+      "calmSpeedMps:3,strongSpeedMps:15,minWeightAtStrongWind:0.15," +
+      "sampleOffsetMetres:[300,3000]};\n" +
+    "let selectedLevel='surface';\n" +
+    "let flowTerrainSampler=null;\n" +
+    "function clamp(v,a,b){return Math.max(a,Math.min(b,v));}\n" +
+    functionSource("offsetWindLocation") + "\n" +
+    functionSource("orographicWindDeflection") + "\n" +
+    "return {\n" +
+    "  run: orographicWindDeflection,\n" +
+    "  useSampler: function(sampler){ flowTerrainSampler = sampler; },\n" +
+    "  useLevel: function(level){ selectedLevel = level; }\n" +
+    "};"
+  )();
+
+  // Versante ripido che sale solo verso est: le isoipse corrono nord-sud, e
+  // un vento che punta dritto in salita (verso est) deve piegare verso nord
+  // o sud senza cambiare velocita'.
+  deflection.useSampler({
+    metresPerPixel: 100,
+    heightAt: function (longitude) { return longitude * 100000; }
+  });
+  const upslope = deflection.run(5, 0, 5, 10, 45);
+  assert.ok(upslope, "nessuna deflessione su un pendio marcato");
+  assert.ok(Math.abs(upslope.v) > 0.5,
+    "il vento in salita diretta non viene incanalato lungo le isoipse");
+  assert.ok(Math.abs(Math.hypot(upslope.u, upslope.v) - 5) < 1e-6,
+    "la deflessione altera la velocita' invece del solo verso");
+  assert.ok(Math.abs(upslope.u) < 5,
+    "il verso non si sposta affatto verso le isoipse");
+
+  // Stesso versante, vento forte: il sinottico deve prevalere di piu' sul
+  // rilievo, quindi la deviazione angolare deve essere minore che a vento
+  // debole a parita' di pendenza.
+  const weakDeviation = Math.atan2(upslope.v, upslope.u);
+  const strong = deflection.run(20, 0, 20, 10, 45);
+  const strongDeviation = Math.atan2(strong.v, strong.u);
+  assert.ok(Math.abs(strongDeviation) < Math.abs(weakDeviation),
+    "il vento forte viene deviato quanto quello debole");
+
+  // Pianura: gradiente nullo, nessuna correzione da applicare.
+  deflection.useSampler({
+    metresPerPixel: 100,
+    heightAt: function () { return 0; }
+  });
+  assert.equal(deflection.run(5, 0, 5, 10, 45), null,
+    "la pianura genera una deflessione che non dovrebbe esistere");
+
+  // In quota (livello diverso da "surface") il rilievo non deve intervenire.
+  deflection.useSampler({
+    metresPerPixel: 100,
+    heightAt: function (longitude) { return longitude * 100000; }
+  });
+  deflection.useLevel("850hPa");
+  assert.equal(deflection.run(5, 0, 5, 10, 45), null,
+    "la deflessione al suolo agisce anche sul vento in quota");
 }
 
 // Il bollettino sale dal basso invece di coprire la mappa dall'alto.

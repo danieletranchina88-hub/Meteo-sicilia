@@ -3523,9 +3523,9 @@
         },
         wind: {
           nature: "Campo vettoriale prognostico ICON-2I",
-          method: "|V| = √(U²+V²); streamline bidirezionali RK2 sul versore U/V",
-          scale: "Griglia nativa ≈2,2 km; passo grafico metrico adattivo a latitudine e zoom",
-          limit: "Le streamline descrivono il flusso istantaneo, non traiettorie nel tempo; raffiche e canalizzazioni sub-griglia richiedono prodotti dedicati."
+          method: "|V| = √(U²+V²); streamline bidirezionali RK2 sul versore U/V; verso deflesso verso le isoipse del DEM dove il pendio è marcato e il vento a 10 m è debole",
+          scale: "Griglia nativa ≈2,2 km; passo grafico metrico adattivo a latitudine e zoom; pendio dal DEM Terrarium con passo adattivo alla vista",
+          limit: "Le streamline descrivono il flusso istantaneo, non traiettorie nel tempo. La deflessione orografica è geometrica, non un modello di massa consistente: pesa meno con vento forte, non supera un peso di 0,55 sul verso e non altera la velocità; raffiche e canalizzazioni sub-griglia restano non rappresentate dove serve un prodotto dedicato."
         },
         gust: {
           nature: "Massimo prognostico nell'intervallo",
@@ -3691,6 +3691,21 @@
         minimumLengthPx: 46,
         arrowSpacingMobile: 54,
         arrowSpacingDesktop: 64
+      };
+
+      // Deflessione orografica del vento a 10 m (vedi ensureFlowTerrainSampler
+      // e orographicWindDeflection piu' sotto): pendio minimo perche' scatti,
+      // pendio oltre il quale il peso satura, peso massimo sul verso, e la
+      // finestra di velocita' fra "calmo" (deflessione piena) e "sinottico"
+      // (deflessione residua) entro cui il peso scende linearmente.
+      const OROGRAPHIC_DEFLECTION = {
+        minSlope: 0.02,
+        fullSlope: 0.35,
+        maxWeight: 0.55,
+        calmSpeedMps: 3,
+        strongSpeedMps: 15,
+        minWeightAtStrongWind: 0.15,
+        sampleOffsetMetres: [300, 3000]
       };
 
       const RASTER_CONFIG = {
@@ -8522,6 +8537,7 @@
         if (!showParticles || particleFrame) return;
         lastParticleTime = performance.now();
         lastParticleFrame = 0;
+        ensureFlowTerrainSampler();
         particleFrame = requestAnimationFrame(animateParticles);
       }
 
@@ -8557,6 +8573,10 @@
         // pixel CSS del contenitore per tornare a pixel di schermo.
         syncProjectionViewport();
         particleFrameCount += 1;
+        // Non ad ogni frame: la vista si sposta lentamente rispetto ai 30-60
+        // fps dell'animazione, e la chiave di cache rende il controllo extra
+        // comunque economico.
+        if (particleFrameCount % 20 === 0) ensureFlowTerrainSampler();
 
         if (isMapMoving) {
           drawingContext.clearRect(0, 0, drawingWidth, drawingHeight);
@@ -8627,8 +8647,8 @@
             return;
           }
 
-          const u = sampleBilinear(wind.u, gx, gy, meta.nx, meta.ny);
-          const v = sampleBilinear(wind.v, gx, gy, meta.nx, meta.ny);
+          let u = sampleBilinear(wind.u, gx, gy, meta.nx, meta.ny);
+          let v = sampleBilinear(wind.v, gx, gy, meta.nx, meta.ny);
           const speed = Math.hypot(u, v);
           const speedKmh = speed * 3.6;
 
@@ -8636,6 +8656,13 @@
             particle.age = particle.maxAge + 1;
             return;
           }
+
+          // Il verso, non la velocita' gia' usata per stile e colore, si piega
+          // verso le isoipse quando il pendio locale lo giustifica.
+          const deflected = orographicWindDeflection(
+            u, v, speed, particle.lng, particle.lat
+          );
+          if (deflected) { u = deflected.u; v = deflected.v; }
 
           // Quota della particella. In quota vale l'altezza del livello barico;
           // al suolo quella del terreno, che rileggo solo ogni tanto: mentre la
@@ -10032,12 +10059,14 @@
         const gx = (longitude - meta.lo1) / meta.dx;
         const gy = (meta.la1 - latitude) / meta.dy;
         if (gx < 0 || gy < 0 || gx >= meta.nx - 1 || gy >= meta.ny - 1) return null;
-        const u = sampleBilinear(wind.u, gx, gy, meta.nx, meta.ny);
-        const v = sampleBilinear(wind.v, gx, gy, meta.nx, meta.ny);
+        let u = sampleBilinear(wind.u, gx, gy, meta.nx, meta.ny);
+        let v = sampleBilinear(wind.v, gx, gy, meta.nx, meta.ny);
         const speedMps = Math.hypot(u, v);
         if (!Number.isFinite(speedMps) || speedMps < STREAMLINE_CONFIG.minSpeedMps) {
           return null;
         }
+        const deflected = orographicWindDeflection(u, v, speedMps, longitude, latitude);
+        if (deflected) { u = deflected.u; v = deflected.v; }
         return { u: u, v: v, speedMps: speedMps, speedKmh: speedMps * 3.6 };
       }
 
@@ -10048,6 +10077,121 @@
         return {
           lng: point.lng + eastMetres / (111320 * cosineLatitude),
           lat: point.lat + northMetres / 111320
+        };
+      }
+
+      // ---- DEFLESSIONE OROGRAFICA DEL VENTO A 10 M --------------------------
+      //
+      // Il vento del modello vive su una griglia di ~2 km e non conosce le
+      // valli e i crinali sotto quella scala: una streamline o una particella
+      // possono attraversare un versante in linea retta dove l'aria vera lo
+      // aggirerebbe o vi si incanalerebbe. Qui si legge il DEM -- le stesse
+      // tessere Terrarium della quota vera usata altrove in questo file, non
+      // un nuovo dato -- per stimare il gradiente del terreno vicino al punto,
+      // e si piega il *verso* del vento (mai la velocita') verso le isoipse.
+      //
+      // E' una deflessione geometrica, non un modello di massa consistente:
+      // non risolve equazioni del moto, non sa dove l'aria e' bloccata da un
+      // crinale sopravento ne' se una valle e' in ombra dal vento. Il peso
+      // cresce con la pendenza del terreno e cala con la velocita' del vento
+      // -- un vento sinottico forte il rilievo non riesce a deviarlo quanto
+      // una brezza debole -- e resta comunque sotto OROGRAPHIC_DEFLECTION.
+      // maxWeight: la direzione del modello non viene mai sostituita del
+      // tutto. Vale solo per il vento a 10 m (selectedLevel "surface"): in
+      // quota il flusso e' libero e non risente del terreno in questo modo.
+      // Senza DEM caricato non si corregge nulla, come per la quota vera.
+      let flowTerrainSampler = null;
+      let flowTerrainSamplerKey = "";
+      let flowTerrainSamplerPending = "";
+
+      function requestFlowTerrainSampler(west, east, south, north, width, key) {
+        if (flowTerrainSamplerPending === key) return;
+        flowTerrainSamplerPending = key;
+        buildTerrainSampler(west, east, south, north, width).then(function (sampler) {
+          if (flowTerrainSamplerPending !== key) return;
+          flowTerrainSamplerPending = "";
+          flowTerrainSampler = sampler;
+          flowTerrainSamplerKey = sampler ? key : "";
+        });
+      }
+
+      // Da richiamare quando la vista o le streamline/particelle cambiano:
+      // avvia il caricamento del DEM per la deflessione se la vista si e'
+      // spostata abbastanza da cambiare tessere. Le tessere vere e proprie
+      // sono in cache in demTiles, quindi una vista gia' vista non ricarica
+      // nulla dalla rete.
+      function ensureFlowTerrainSampler() {
+        if (selectedLevel !== "surface" || !map || !mapLoaded) return;
+        if (!(showParticles || (showVectors && activeLayer === "wind"))) return;
+        const bounds = map.getBounds();
+        const width = window.innerWidth;
+        const key = [
+          bounds.getWest().toFixed(3), bounds.getEast().toFixed(3),
+          bounds.getSouth().toFixed(3), bounds.getNorth().toFixed(3), width
+        ].join("|");
+        if (flowTerrainSamplerKey === key || flowTerrainSamplerPending === key) return;
+        requestFlowTerrainSampler(
+          bounds.getWest(), bounds.getEast(), bounds.getSouth(), bounds.getNorth(),
+          width, key
+        );
+      }
+
+      function orographicWindDeflection(u, v, speedMps, longitude, latitude) {
+        if (selectedLevel !== "surface" || !flowTerrainSampler) return null;
+        if (!(speedMps > 0.1)) return null;
+        const offset = clamp(
+          flowTerrainSampler.metresPerPixel * 3,
+          OROGRAPHIC_DEFLECTION.sampleOffsetMetres[0],
+          OROGRAPHIC_DEFLECTION.sampleOffsetMetres[1]
+        );
+        const point = { lng: longitude, lat: latitude };
+        const east = offsetWindLocation(point, offset, 0);
+        const west = offsetWindLocation(point, -offset, 0);
+        const north = offsetWindLocation(point, 0, offset);
+        const south = offsetWindLocation(point, 0, -offset);
+        const hE = flowTerrainSampler.heightAt(east.lng, east.lat);
+        const hW = flowTerrainSampler.heightAt(west.lng, west.lat);
+        const hN = flowTerrainSampler.heightAt(north.lng, north.lat);
+        const hS = flowTerrainSampler.heightAt(south.lng, south.lat);
+        if (![hE, hW, hN, hS].every(Number.isFinite)) return null;
+        const gradEast = (hE - hW) / (2 * offset);
+        const gradNorth = (hN - hS) / (2 * offset);
+        const slope = Math.hypot(gradEast, gradNorth);
+        if (!(slope > OROGRAPHIC_DEFLECTION.minSlope)) return null;
+
+        // Le isoipse sono perpendicolari al gradiente: dei due versi possibili
+        // si tiene quello che non inverte il flusso originale, cioe' quello
+        // con proiezione positiva sul vento del modello.
+        let contourEast = -gradNorth, contourNorth = gradEast;
+        if (contourEast * u + contourNorth * v < 0) {
+          contourEast = -contourEast;
+          contourNorth = -contourNorth;
+        }
+        const contourMagnitude = Math.hypot(contourEast, contourNorth);
+        if (!(contourMagnitude > 0)) return null;
+        contourEast /= contourMagnitude;
+        contourNorth /= contourMagnitude;
+
+        const slopeWeight = clamp(
+          (slope - OROGRAPHIC_DEFLECTION.minSlope)
+            / (OROGRAPHIC_DEFLECTION.fullSlope - OROGRAPHIC_DEFLECTION.minSlope),
+          0, 1
+        );
+        const speedWeight = clamp(
+          1 - (speedMps - OROGRAPHIC_DEFLECTION.calmSpeedMps)
+            / (OROGRAPHIC_DEFLECTION.strongSpeedMps - OROGRAPHIC_DEFLECTION.calmSpeedMps),
+          OROGRAPHIC_DEFLECTION.minWeightAtStrongWind, 1
+        );
+        const weight = OROGRAPHIC_DEFLECTION.maxWeight * slopeWeight * speedWeight;
+        if (!(weight > 0.01)) return null;
+
+        const blendEast = (u / speedMps) * (1 - weight) + contourEast * weight;
+        const blendNorth = (v / speedMps) * (1 - weight) + contourNorth * weight;
+        const blendMagnitude = Math.hypot(blendEast, blendNorth);
+        if (!(blendMagnitude > 0)) return null;
+        return {
+          u: (blendEast / blendMagnitude) * speedMps,
+          v: (blendNorth / blendMagnitude) * speedMps
         };
       }
 
@@ -10295,7 +10439,10 @@
         // devono restare gerarchicamente sopra le streamline.
         if (showVectors) {
           const wind = windField();
-          if (wind && wind.u && wind.v) drawWindStreamlines(wind);
+          if (wind && wind.u && wind.v) {
+            ensureFlowTerrainSampler();
+            drawWindStreamlines(wind);
+          }
         }
         drawSynopticCanvas();
         drawFrontsCanvas();
