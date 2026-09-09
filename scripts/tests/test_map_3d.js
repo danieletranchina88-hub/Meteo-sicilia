@@ -1636,9 +1636,69 @@ assert.match(html, /const CAPE_STOPS = \[\s*\{ v: 0, c: \[238, 244, 240\], a: 0 
     "manca il campionatore per le griglie diradate");
   assert.match(html, /return weight >= 0\.25 \? sum \/ weight : NaN;/,
     "un valore stiracchiato da un angolo solo passerebbe per buono");
-  assert.match(html, /usesProfileData\(activeLayer\) \? sampleCoarseBilinear : sampleBilinear/,
-    "il raster non usa il campionatore tollerante sulle griglie diradate");
+  // Il raster sceglie il campionatore per nome (serve al worker, che non
+  // puo' ricevere una funzione via postMessage) e lo risolve dentro
+  // fillRasterPixels: le due meta' della stessa garanzia vanno controllate
+  // insieme, altrimenti il nome potrebbe non corrispondere a nulla.
+  assert.match(html, /usesProfileData\(activeLayer\) \? "coarseBilinear" : "bilinear"/,
+    "il raster non sceglie il campionatore tollerante sulle griglie diradate");
+  assert.match(html, /samplerKind === "coarseBilinear" \? sampleCoarseBilinear : sampleBilinear/,
+    "il nome del campionatore tollerante non viene piu' risolto alla funzione vera");
 }
+
+// --- Il riempimento del raster fuori dal thread principale -----------------
+// fillRasterPixels deve restare pura (nessuna lettura di stato esterno):
+// e' la sua stessa fonte, non una copia, a diventare lo script del worker.
+{
+  const fillPure = html.match(/function fillRasterPixels\([\s\S]*?\n {6}\}/);
+  assert.ok(fillPure, "fillRasterPixels assente");
+  ["map\\.", "currentData\\.", "terrainSampler\\.", "window\\."].forEach((pattern) => {
+    assert.doesNotMatch(fillPure[0], new RegExp(pattern),
+      "fillRasterPixels non e' piu' pura: legge " + pattern + " dal thread principale");
+  });
+  assert.match(fillPure[0], /new Uint8ClampedArray\(width \* height \* 4\)/,
+    "fillRasterPixels non produce piu' un buffer di pixel autonomo");
+
+  // La correzione di quota resta sul thread principale: usa il DEM, che il
+  // worker non ha.
+  const fillElevated = html.match(/function fillRasterPixelsWithElevation\([\s\S]*?\n {6}\}/);
+  assert.ok(fillElevated, "fillRasterPixelsWithElevation assente");
+  assert.match(fillElevated[0], /windElevationFactor\(/,
+    "la correzione di quota del vento e' sparita dal percorso con DEM");
+  assert.match(fillElevated[0], /elevationCorrection\(/,
+    "la correzione di quota della temperatura e' sparita dal percorso con DEM");
+
+  // Il worker si costruisce concatenando le funzioni vere, non una copia:
+  // se fillRasterPixels cambia, il worker cambia con lei.
+  const buildWorker = html.match(/function buildRasterWorker\([\s\S]*?\n {6}\}/);
+  assert.ok(buildWorker, "buildRasterWorker assente");
+  ["clamp", "getGrid", "sampleNearest", "sampleBilinear", "sampleCoarseBilinear",
+   "colorFor", "fillRasterPixels"].forEach((name) => {
+    assert.match(buildWorker[0], new RegExp("\\b" + name + "\\b"),
+      "il worker del raster non porta con se' " + name);
+  });
+  assert.match(buildWorker[0], /\.toString\(\)/,
+    "il worker copia le funzioni a mano invece di estrarne la fonte vera");
+
+  // Un raster superato da uno piu' recente non deve mai arrivare sullo
+  // schermo: stesso principio del loadingToken di loadStep.
+  const dispatch = html.match(/function dispatchRasterFill\([\s\S]*?\n {6}\}/);
+  assert.ok(dispatch, "dispatchRasterFill assente");
+  assert.match(dispatch[0], /\+\+rasterRenderToken/,
+    "dispatchRasterFill non genera un token per scartare i risultati superati");
+  assert.match(buildWorker[0], /event\.data\.token !== rasterRenderToken/,
+    "il worker non scarta piu' i risultati di un raster superato");
+
+  // renderWeather deve smistare fra i due percorsi in base a correctElevation,
+  // non disegnare sempre sullo stesso.
+  const render = html.match(/function renderWeather\(\) \{[\s\S]*?\n {6}\}/);
+  assert.ok(render, "renderWeather assente");
+  assert.match(render[0], /if \(correctElevation\) \{/,
+    "renderWeather non distingue piu' il percorso con correzione di quota");
+  assert.match(render[0], /dispatchRasterFill\(/,
+    "renderWeather non manda piu' il caso comune al worker");
+}
+
 // --- Vento riportato sulla quota vera ---
 // Stesso ragionamento della temperatura e stessa assenza di parametri liberi:
 // al Gran Sasso il modello calcola il vento sopra i suoi 2078 m, non sopra i

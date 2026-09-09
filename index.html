@@ -4257,6 +4257,67 @@
         return Number.isFinite(value) ? value : NaN;
       }
 
+      // Il riempimento pixel del raster meteo: la parte che pesa davvero di
+      // renderWeather, isolata come funzione pura (solo i parametri, nessuna
+      // variabile esterna) apposta perche' la sua stessa definizione -- non
+      // una copia scritta a mano -- possa girare identica dentro il worker
+      // che la esegue fuori dal thread principale (vedi buildRasterWorker).
+      // Non gestisce la correzione di quota: quella richiede il DEM, che
+      // vive solo sul thread principale, ed e' un'opzione secondaria
+      // (downscaling puntuale acceso) non il percorso comune che rende
+      // lenta la barra del tempo.
+      function fillRasterPixels(params) {
+        const width = params.width, height = params.height;
+        const leftLongitude = params.leftLongitude, rightLongitude = params.rightLongitude;
+        const topMercator = params.topMercator, bottomMercator = params.bottomMercator;
+        const fieldMeta = params.fieldMeta;
+        const rasterSampler = params.samplerKind === "nearest" ? sampleNearest
+          : (params.samplerKind === "coarseBilinear" ? sampleCoarseBilinear : sampleBilinear);
+        const isWindField = params.isWindField;
+        const fieldGrid = params.fieldGrid;
+        const windUGrid = params.windUGrid, windVGrid = params.windVGrid;
+        const info = params.info;
+        const activeLayer = params.activeLayer;
+
+        const pixels = new Uint8ClampedArray(width * height * 4);
+        for (let y = 0; y < height; y += 1) {
+          const fraction = height > 1 ? y / (height - 1) : 0;
+          const mercatorY = topMercator + fraction * (bottomMercator - topMercator);
+          const latitude = (2 * Math.atan(Math.exp(mercatorY)) - Math.PI / 2) * 180 / Math.PI;
+          const gy = (fieldMeta.la1 - latitude) / fieldMeta.dy;
+
+          for (let x = 0; x < width; x += 1) {
+            const longitude = leftLongitude + (x / Math.max(width - 1, 1)) * (rightLongitude - leftLongitude);
+            const gx = (longitude - fieldMeta.lo1) / fieldMeta.dx;
+            let value;
+
+            if (isWindField) {
+              const u = rasterSampler(windUGrid, gx, gy, fieldMeta.nx, fieldMeta.ny);
+              const v = rasterSampler(windVGrid, gx, gy, fieldMeta.nx, fieldMeta.ny);
+              value = Number.isFinite(u) && Number.isFinite(v) ? Math.hypot(u, v) * 3.6 : NaN;
+            } else {
+              value = rasterSampler(fieldGrid, gx, gy, fieldMeta.nx, fieldMeta.ny);
+            }
+
+            if (
+              !Number.isFinite(value) ||
+              (activeLayer === "rain" && value < 0.08) ||
+              (activeLayer === "cloud" && value < 4)
+            ) {
+              continue;
+            }
+
+            const pixel = (y * width + x) * 4;
+            const color = colorFor(value, info);
+            pixels[pixel] = Math.round(color[0]);
+            pixels[pixel + 1] = Math.round(color[1]);
+            pixels[pixel + 2] = Math.round(color[2]);
+            pixels[pixel + 3] = Math.round(color[3] * 255);
+          }
+        }
+        return pixels;
+      }
+
       function sample(array, gx, gy) {
         if (!currentData) return NaN;
         const meta = currentData.meta;
@@ -7239,6 +7300,80 @@
         return warm - cold;
       }
 
+      // ---- RASTER FUORI DAL THREAD PRINCIPALE --------------------------------
+      //
+      // fillRasterPixels e' pura apposta: la sua stessa fonte -- non una
+      // copia -- diventa lo script del worker, insieme alle funzioni pure da
+      // cui dipende. Un file solo, senza build step, quindi niente import:
+      // si concatenano i .toString() delle funzioni vere in un Blob. Se una
+      // di queste cambia qui, il worker cambia con lei, sempre.
+      let rasterWorker = null;
+      let rasterWorkerSupported = typeof Worker !== "undefined"
+        && typeof Blob !== "undefined"
+        && typeof URL !== "undefined" && typeof URL.createObjectURL === "function";
+      let rasterRenderToken = 0;
+      let pendingRasterCallback = null;
+
+      function buildRasterWorker() {
+        const source = [
+          clamp, getGrid, sampleNearest, sampleBilinear, sampleCoarseBilinear,
+          colorFor, fillRasterPixels
+        ].map(function (fn) { return fn.toString(); }).join("\n\n") +
+          "\n\nself.onmessage = function (event) {" +
+          "  const pixels = fillRasterPixels(event.data);" +
+          "  self.postMessage({ token: event.data.token, pixels: pixels.buffer }, [pixels.buffer]);" +
+          "};";
+        let worker;
+        try {
+          const url = URL.createObjectURL(
+            new Blob([source], { type: "application/javascript" })
+          );
+          worker = new Worker(url);
+        } catch (error) {
+          console.warn("Raster worker non disponibile, disegno sul thread principale", error);
+          rasterWorkerSupported = false;
+          return null;
+        }
+        worker.onmessage = function (event) {
+          if (event.data.token !== rasterRenderToken || !pendingRasterCallback) return;
+          const callback = pendingRasterCallback;
+          pendingRasterCallback = null;
+          callback(new Uint8ClampedArray(event.data.pixels));
+        };
+        worker.onerror = function (error) {
+          console.warn("Raster worker in errore, si torna al disegno sincrono", error);
+          rasterWorkerSupported = false;
+          if (pendingRasterCallback) {
+            const callback = pendingRasterCallback;
+            pendingRasterCallback = null;
+            callback(fillRasterPixels(lastRasterFillParams));
+          }
+        };
+        return worker;
+      }
+
+      // L'ultimo pacchetto di parametri mandato al worker: solo per poterlo
+      // rifare sul thread principale se il worker fallisce a runtime.
+      let lastRasterFillParams = null;
+
+      // Un solo raster alla volta: il token scarta il risultato di una
+      // richiesta superata da una piu' recente, cosi' come loadStep scarta
+      // un passo arrivato in ritardo.
+      function dispatchRasterFill(params, onDone) {
+        const token = ++rasterRenderToken;
+        params.token = token;
+        lastRasterFillParams = params;
+        if (rasterWorkerSupported) {
+          if (!rasterWorker) rasterWorker = buildRasterWorker();
+          if (rasterWorker) {
+            pendingRasterCallback = onDone;
+            rasterWorker.postMessage(params);
+            return;
+          }
+        }
+        onDone(fillRasterPixels(params));
+      }
+
       function renderWeather() {
         if (!mapLoaded || !currentData || !map.getSource("weather")) return;
 
@@ -7370,11 +7505,9 @@
         rasterCanvas.width = width;
         rasterCanvas.height = height;
 
-        const image = rasterContext.createImageData(width, height);
-        const pixels = image.data;
-        const rasterSampler = useNearestCell || info.categorical
-          ? sampleNearest
-          : (usesProfileData(activeLayer) ? sampleCoarseBilinear : sampleBilinear);
+        const rasterSamplerKind = useNearestCell || info.categorical
+          ? "nearest"
+          : (usesProfileData(activeLayer) ? "coarseBilinear" : "bilinear");
         const isWindField = activeLayer === "wind";
         const fieldKey = activeLayer === "feels" ? "feels_like" : activeLayer;
         let fieldGrid = isWindField
@@ -7433,12 +7566,74 @@
         const correctElevation = Boolean(
           terrainKey && terrainSamplerKey === terrainKey && terrainSampler
         );
-        // Statistiche della correzione, per dire nel pannello quanto pesa
-        // invece di limitarsi ad annunciare che e' accesa.
+
+        function finishRaster(pixels, elevationStat) {
+          rasterContext.putImageData(new ImageData(pixels, width, height), 0, 0);
+          lastElevationStat = elevationStat || null;
+          if (showFusion) updateDownscalingStatus();
+          publishWeatherRaster([
+            [leftLongitude, topLatitude],
+            [rightLongitude, topLatitude],
+            [rightLongitude, bottomLatitude],
+            [leftLongitude, bottomLatitude]
+          ]);
+        }
+
+        if (correctElevation) {
+          // Il worker non ha accesso al DEM: la correzione di quota, che lo
+          // consulta a ogni pixel, resta sul thread principale. E' una
+          // funzione opzionale (downscaling puntuale acceso), non il
+          // percorso comune che rende lenta la barra del tempo.
+          const elevated = fillRasterPixelsWithElevation({
+            width: width, height: height,
+            leftLongitude: leftLongitude, rightLongitude: rightLongitude,
+            topMercator: topMercator, bottomMercator: bottomMercator,
+            fieldMeta: fieldMeta, samplerKind: rasterSamplerKind,
+            isWindField: isWindField, fieldGrid: fieldGrid,
+            windUGrid: windUGrid, windVGrid: windVGrid,
+            info: info, activeLayer: activeLayer
+          }, profile, modelTerrain);
+          finishRaster(elevated[0], elevated[1]);
+        } else {
+          dispatchRasterFill({
+            width: width, height: height,
+            leftLongitude: leftLongitude, rightLongitude: rightLongitude,
+            topMercator: topMercator, bottomMercator: bottomMercator,
+            fieldMeta: {
+              lo1: fieldMeta.lo1, la1: fieldMeta.la1,
+              dx: fieldMeta.dx, dy: fieldMeta.dy,
+              nx: fieldMeta.nx, ny: fieldMeta.ny
+            },
+            samplerKind: rasterSamplerKind, isWindField: isWindField,
+            fieldGrid: fieldGrid, windUGrid: windUGrid, windVGrid: windVGrid,
+            info: { stops: info.stops, discrete: Boolean(info.discrete) },
+            activeLayer: activeLayer
+          }, function (pixels) { finishRaster(pixels, null); });
+        }
+      }
+
+      // Copia di fillRasterPixels con la correzione di quota innestata nel
+      // ciclo: qui, non nella funzione pura per il worker, perche' legge
+      // windElevationFactor/elevationCorrection e il DEM del thread
+      // principale. Restituisce anche le statistiche della correzione, per
+      // il pannello che dice quanto ha pesato invece di limitarsi a
+      // dichiararla accesa.
+      function fillRasterPixelsWithElevation(params, profile, modelTerrain) {
+        const width = params.width, height = params.height;
+        const leftLongitude = params.leftLongitude, rightLongitude = params.rightLongitude;
+        const topMercator = params.topMercator, bottomMercator = params.bottomMercator;
+        const fieldMeta = params.fieldMeta;
+        const rasterSampler = params.samplerKind === "nearest" ? sampleNearest
+          : (params.samplerKind === "coarseBilinear" ? sampleCoarseBilinear : sampleBilinear);
+        const isWindField = params.isWindField;
+        const fieldGrid = params.fieldGrid;
+        const windUGrid = params.windUGrid, windVGrid = params.windVGrid;
+        const info = params.info;
+        const activeLayer = params.activeLayer;
+
         let corrPixel = 0, corrDelta = 0;
-        // Per la temperatura e' una differenza in gradi (parte da 0), per il
-        // vento un fattore moltiplicativo (parte da 1).
         let corrMax = isWindField ? 1 : 0;
+        const pixels = new Uint8ClampedArray(width * height * 4);
 
         for (let y = 0; y < height; y += 1) {
           const fraction = height > 1 ? y / (height - 1) : 0;
@@ -7458,7 +7653,7 @@
             } else {
               value = rasterSampler(fieldGrid, gx, gy, fieldMeta.nx, fieldMeta.ny);
             }
-            if (correctElevation && isWindField && Number.isFinite(value)) {
+            if (isWindField && Number.isFinite(value)) {
               const factor = windElevationFactor(
                 profile, modelTerrain, longitude, latitude
               );
@@ -7468,7 +7663,7 @@
                 corrDelta += Math.abs(lastElevationDelta);
                 if (Math.abs(factor - 1) > Math.abs(corrMax - 1)) corrMax = factor;
               }
-            } else if (correctElevation && Number.isFinite(value)) {
+            } else if (Number.isFinite(value)) {
               const shift = elevationCorrection(
                 profile, modelTerrain, longitude, latitude
               );
@@ -7497,26 +7692,12 @@
           }
         }
 
-        // Quanto ha pesato la correzione di quota su questa vista: serve al
-        // pannello per dire un numero invece di un aggettivo.
-        lastElevationStat = correctElevation
-          ? {
-              corrected: corrPixel,
-              medianDelta: corrPixel ? Math.round(corrDelta / corrPixel) : 0,
-              maxCorrection: corrMax,
-              kind: isWindField ? "wind" : "temp"
-            }
-          : null;
-        if (showFusion) updateDownscalingStatus();
-
-        rasterContext.putImageData(image, 0, 0);
-
-        publishWeatherRaster([
-          [leftLongitude, topLatitude],
-          [rightLongitude, topLatitude],
-          [rightLongitude, bottomLatitude],
-          [leftLongitude, bottomLatitude]
-        ]);
+        return [pixels, {
+          corrected: corrPixel,
+          medianDelta: corrPixel ? Math.round(corrDelta / corrPixel) : 0,
+          maxCorrection: corrMax,
+          kind: isWindField ? "wind" : "temp"
+        }];
       }
 
       // Il mondo con un buco a forma di dominio. Serve a dire dove finisce il
