@@ -946,12 +946,18 @@ assert.doesNotMatch(html, /data-toggle="windanim"/,
 const windToggle = html.match(/if \(name === "vectors"\)[\s\S]*?\} else if \(name === "isotherms"\)/);
 assert.ok(windToggle, "i due interruttori del vento non sono gestiti");
 assert.match(windToggle[0], /name === "flow"/, "le particelle non hanno un ramo proprio");
-const windLayer = html.match(/if \(nextLayer === "wind" && !synopticChart\)[\s\S]*?\n {8}\}/);
+const windLayer = html.match(/if \(layerShowsFlow\(nextLayer\) && !synopticChart\)[\s\S]*?\n {8}\}/);
 assert.ok(windLayer, "scelta del campo vento assente");
 assert.match(windLayer[0], /showVectors = true/,
   "il campo vento non attiva le linee di corrente");
 assert.doesNotMatch(windLayer[0], /showParticles = true/,
   "il campo vento accende ancora automaticamente le particelle");
+// La raffica e' uno scalare senza direzione propria: le linee di corrente
+// sopra il suo campo colorato sono quelle del vento medio a 10 m.
+const flowLayers = html.match(/function layerShowsFlow\([\s\S]*?\n {6}\}/);
+assert.ok(flowLayers, "manca la scelta dei campi con linee di corrente");
+assert.match(flowLayers[0], /key === "wind" \|\| key === "gust"/,
+  "le linee di corrente non coprono anche le raffiche");
 
 // Le linee non sono segmenti indipendenti: vengono integrate in entrambe le
 // direzioni con RK2 e passo metrico dipendente dalla risoluzione della vista.
@@ -965,18 +971,28 @@ assert.match(streamlineStep[0], /stepMetres \* 0\.5/,
   "l'integratore non valuta il vento al punto medio");
 assert.match(streamlineStep[0], /const middle = sampleWindVector/,
   "l'integratore e' tornato al passo di Eulero");
+const streamlineTracer = html.match(/function traceWindStreamlines\([\s\S]*?\n {6}\}/);
+assert.ok(streamlineTracer, "tracciatore delle linee di corrente assente");
+assert.match(streamlineTracer[0], /const backward = trace\(-1\)\.reverse\(\)/,
+  "le linee non vengono integrate controvento");
+assert.match(streamlineTracer[0], /const forward = trace\(1\)/,
+  "le linee non vengono integrate sottovento");
+assert.match(streamlineTracer[0], /new Uint8Array\(occupancyColumns \* occupancyRows\)/,
+  "manca il controllo di densita' e sovrapposizione");
 const streamlineRenderer = html.match(/function drawWindStreamlines\([\s\S]*?\n {6}\}/);
 assert.ok(streamlineRenderer, "renderer delle linee di corrente assente");
-assert.match(streamlineRenderer[0], /const backward = trace\(-1\)\.reverse\(\)/,
-  "le linee non vengono integrate controvento");
-assert.match(streamlineRenderer[0], /const forward = trace\(1\)/,
-  "le linee non vengono integrate sottovento");
-assert.match(streamlineRenderer[0], /new Uint8Array\(occupancyColumns \* occupancyRows\)/,
-  "manca il controllo di densita' e sovrapposizione");
-assert.match(streamlineRenderer[0], /strokeStreamlineHeads/,
-  "le linee non mostrano il verso del moto");
 assert.doesNotMatch(streamlineRenderer[0], /colorFor\(/,
   "la velocita' viene codificata due volte anche sulle linee");
+// Il tracciamento e' la parte cara: il renderer deve poterlo saltare quando
+// vista e scadenza non sono cambiate, e le punte restano il verso del moto.
+assert.match(streamlineRenderer[0], /streamlinePathCache\.get\(key\)/,
+  "il renderer ritraccia le linee anche quando nulla e' cambiato");
+assert.match(html, /function appendStreamlineHeads\(/,
+  "le linee non mostrano piu' il verso del moto");
+const pathBuilder = html.match(/function buildStreamlinePaths\([\s\S]*?\n {6}\}/);
+assert.ok(pathBuilder, "costruttore dei percorsi delle linee assente");
+assert.match(pathBuilder[0], /new Path2D\(\)/,
+  "le linee non diventano piu' un percorso riutilizzabile");
 
 // Verifica numerica dell'integratore su campi noti. In un vento uniforme il
 // passo deve avere verso e distanza corretti; in un vortice il punto medio RK2
@@ -998,10 +1014,10 @@ assert.doesNotMatch(streamlineRenderer[0], /colorFor\(/,
   const numerical = new Function(
     "const STREAMLINE_CONFIG={minSpeedMps:0.22,screenStepPx:4.8," +
       "minStepMetres:650,maxStepMetres:30000};\n" +
-    // Nessun DEM in questo sandbox numerico: orographicWindDeflection deve
-    // ritornare subito null, e l'integratore resta quello sul campo grezzo
-    // che il resto del test verifica analiticamente.
-    "let flowTerrainSampler=null;\n" +
+    // Nessun terreno in questo sandbox numerico: orographicWindDeflection
+    // deve ritornare subito null, e l'integratore resta quello sul campo
+    // grezzo che il resto del test verifica analiticamente.
+    "let flowTerrainGradient=null;\n" +
     "let selectedLevel='surface';\n" +
     "function clamp(v,a,b){return Math.max(a,Math.min(b,v));}\n" +
     "function sampleBilinear(array,gx,gy,nx,ny){" +
@@ -1095,14 +1111,20 @@ assert.doesNotMatch(streamlineRenderer[0], /colorFor\(/,
     "const OROGRAPHIC_DEFLECTION={minSlope:0.02,fullSlope:0.35,maxWeight:0.55," +
       "calmSpeedMps:3,strongSpeedMps:15,minWeightAtStrongWind:0.15," +
       "sampleOffsetMetres:[300,3000]};\n" +
+    "const FLOW_GRADIENT_MAX_SIDE=512;\n" +
     "let selectedLevel='surface';\n" +
-    "let flowTerrainSampler=null;\n" +
+    "let flowTerrainGradient=null;\n" +
     "function clamp(v,a,b){return Math.max(a,Math.min(b,v));}\n" +
     functionSource("offsetWindLocation") + "\n" +
+    functionSource("buildFlowGradientField") + "\n" +
     functionSource("orographicWindDeflection") + "\n" +
     "return {\n" +
     "  run: orographicWindDeflection,\n" +
-    "  useSampler: function(sampler){ flowTerrainSampler = sampler; },\n" +
+    // Si passa dal campionatore vero al reticolo, come in produzione: la
+    // prova copre la catena intera, non solo l'ultimo anello.
+    "  useSampler: function(sampler){\n" +
+    "    flowTerrainGradient = buildFlowGradientField(sampler, 9.5, 10.5, 44.5, 45.5);\n" +
+    "  },\n" +
     "  useLevel: function(level){ selectedLevel = level; }\n" +
     "};"
   )();
@@ -1439,9 +1461,9 @@ assert.match(html, /occupancyMobile: 8,/,
   "il controllo di occupazione impedisce la densita' della carta di riferimento");
 assert.match(html, /maxStepsMobile: 128,/,
   "le linee mobili restano troppo corte");
-assert.match(html, /strokeStreamline\(line, "rgba\(4,10,13,0\.84\)", 0\.62\)/,
+assert.match(html, /strokeStreamlinePath\(paths\.lines, "rgba\(4,10,13,0\.84\)", 0\.62\)/,
   "il tratto del vento non e' piu' sottile e uniforme");
-assert.match(html, /strokeStreamline\(line, "rgba\(255,255,255,0\.30\)", 1\.08\)/,
+assert.match(html, /strokeStreamlinePath\(paths\.lines, "rgba\(255,255,255,0\.30\)", 1\.08\)/,
   "l'alone discreto delle streamline e' assente");
 assert.doesNotMatch(html, /widthBySpeed/,
   "la velocita' viene codificata di nuovo nello spessore delle linee");

@@ -3529,9 +3529,9 @@
         },
         gust: {
           nature: "Massimo prognostico nell'intervallo",
-          method: "VMAX_10M ICON-2I; picco a 10 m, distinto dal vento medio",
+          method: "VMAX_10M ICON-2I; picco a 10 m, distinto dal vento medio. Le linee di corrente sovrapposte sono quelle del vento MEDIO a 10 m: la raffica è uno scalare e non ha una direzione propria nel modello",
           scale: "Intervallo temporale del passo pubblicato; classi Beaufort",
-          limit: "Non è una misura istantanea né risolve esposizione locale, edifici o alberature."
+          limit: "Non è una misura istantanea né risolve esposizione locale, edifici o alberature. Il verso disegnato è quello del vento medio: una raffica può arrivare da una direzione diversa, specie in convezione o sottovento a un rilievo."
         },
         rain: {
           nature: "Accumulo precipitativo deterministico",
@@ -3690,7 +3690,12 @@
         occupancyDesktop: 9,
         minimumLengthPx: 46,
         arrowSpacingMobile: 54,
-        arrowSpacingDesktop: 64
+        arrowSpacingDesktop: 64,
+        // Quante scadenze tenere gia' tracciate: abbastanza da coprire un
+        // giro di riproduzione senza ritracciare, non tante da occupare
+        // memoria per viste che non si rivedranno.
+        pathCacheMobile: 12,
+        pathCacheDesktop: 32
       };
 
       // Deflessione orografica del vento a 10 m (vedi ensureFlowTerrainSampler
@@ -4682,12 +4687,27 @@
         return start && date ? Math.round((date - start) / 3600000) : null;
       }
 
+      // Il velo di caricamento aspetta prima di comparire. Da quando il run
+      // intero sta in cache, cambiare passo e' quasi sempre istantaneo: se il
+      // velo si accendesse subito lampeggerebbe a ogni fotogramma della
+      // riproduzione e a ogni scatto della barra, che e' esattamente cio' che
+      // fa sembrare il movimento a scatti anche quando i dati ci sono gia'.
+      // Sopra questa soglia l'attesa e' vera e va dichiarata.
+      const LOADING_VEIL_DELAY_MS = 220;
+      let loadingVeilTimer = null;
+
       function showLoading(message) {
         ui.loadingText.textContent = message || "Elaborazione dati…";
-        ui.loading.classList.add("visible");
+        if (loadingVeilTimer || ui.loading.classList.contains("visible")) return;
+        loadingVeilTimer = setTimeout(function () {
+          loadingVeilTimer = null;
+          ui.loading.classList.add("visible");
+        }, LOADING_VEIL_DELAY_MS);
       }
 
       function hideLoading() {
+        clearTimeout(loadingVeilTimer);
+        loadingVeilTimer = null;
         ui.loading.classList.remove("visible");
       }
 
@@ -4763,6 +4783,14 @@
 
       function usesUpperData(key) {
         return selectedPressureLevel(key) !== "surface";
+      }
+
+      // Su quali campi ha senso disegnare le linee di corrente. La raffica e'
+      // uno scalare senza direzione propria: il verso da mostrare e' quello
+      // del vento medio a 10 m, esattamente come fanno le carte operative che
+      // sovrappongono le stesse streamline al campo delle raffiche.
+      function layerShowsFlow(key) {
+        return key === "wind" || key === "gust";
       }
 
       function upperLevelData(key) {
@@ -5364,7 +5392,12 @@
           renderWeather();
           updateIsobars();
           updateMapPresentation();
-          resetParticles();
+          // Le particelle NON si azzerano cambiando passo: campionano il
+          // campo a ogni fotogramma, quindi passano da sole alla scadenza
+          // nuova. Svuotare la tela le farebbe ripartire da zero a ogni
+          // fotogramma della riproduzione -- il salto che si vede. Il reset
+          // resta dove la geometria cambia davvero: mappa mossa, modello o
+          // livello diversi.
           if (showParticles) startParticles();
           requestVectorRender();
           refreshSelectedPoint();
@@ -6708,7 +6741,7 @@
         // abbastanza leggere da essere attive anche sul telefono. Le
         // particelle restano un livello animato facoltativo: sovrapporle in
         // automatico renderebbe il campo meno leggibile e consumerebbe di piu'.
-        if (nextLayer === "wind" && !synopticChart) {
+        if (layerShowsFlow(nextLayer) && !synopticChart) {
           showVectors = true;
         }
 
@@ -10396,18 +10429,93 @@
       // tutto. Vale solo per il vento a 10 m (selectedLevel "surface"): in
       // quota il flusso e' libero e non risente del terreno in questo modo.
       // Senza DEM caricato non si corregge nulla, come per la quota vera.
-      let flowTerrainSampler = null;
-      let flowTerrainSamplerKey = "";
-      let flowTerrainSamplerPending = "";
+      //
+      // Il gradiente del terreno non dipende dall'ora prevista: dipende solo
+      // da dove si guarda. Rileggerlo dal DEM a ogni campione -- due volte per
+      // passo RK2 di ogni streamline, e una volta per particella per
+      // fotogramma -- raddoppiava il costo del disegno del flusso: misurato,
+      // 84 ms contro 168 ms per fotogramma su una vista da scrivania. Qui si
+      // calcola una volta per vista su un reticolo e poi si interpola, che e'
+      // la stessa grandezza fisica letta a un passo dichiarato invece che a
+      // un passo diverso per ogni punto.
+      let flowTerrainGradient = null;
+      let flowTerrainKey = "";
+      let flowTerrainPending = "";
+      // Tetto al reticolo: oltre, il costo di costruirlo supererebbe quello
+      // che fa risparmiare. Alle viste larghe il passo cresce da solo, ed e'
+      // corretto che sia cosi': anche il DEM sotto e' piu' grosso.
+      const FLOW_GRADIENT_MAX_SIDE = 512;
+
+      function buildFlowGradientField(sampler, west, east, south, north) {
+        if (!sampler) return null;
+        // Stesso passo di campionamento della versione punto per punto: mai
+        // sotto la risoluzione del DEM, mai sopra la scala a cui una valle
+        // incanala il vento.
+        let spacingMetres = clamp(
+          sampler.metresPerPixel * 3,
+          OROGRAPHIC_DEFLECTION.sampleOffsetMetres[0],
+          OROGRAPHIC_DEFLECTION.sampleOffsetMetres[1]
+        );
+        const midLatitude = (north + south) / 2;
+        const cosineLatitude = Math.max(Math.cos(midLatitude * Math.PI / 180), 0.2);
+        let dx = spacingMetres / (111320 * cosineLatitude);
+        let dy = spacingMetres / 111320;
+        const columns = Math.ceil((east - west) / dx) + 1;
+        const rows = Math.ceil((north - south) / dy) + 1;
+        const excess = Math.max(
+          columns / FLOW_GRADIENT_MAX_SIDE, rows / FLOW_GRADIENT_MAX_SIDE, 1
+        );
+        const nx = Math.max(3, Math.ceil(columns / excess));
+        const ny = Math.max(3, Math.ceil(rows / excess));
+        dx = (east - west) / (nx - 1);
+        dy = (north - south) / (ny - 1);
+        spacingMetres = dy * 111320;
+
+        // Una lettura DEM per nodo, non quattro: il gradiente esce dalle
+        // differenze centrate fra nodi vicini del reticolo stesso.
+        const heights = new Float32Array(nx * ny);
+        for (let row = 0; row < ny; row += 1) {
+          const latitude = north - row * dy;
+          for (let column = 0; column < nx; column += 1) {
+            heights[row * nx + column] = sampler.heightAt(west + column * dx, latitude);
+          }
+        }
+
+        const gradientEast = new Float32Array(nx * ny);
+        const gradientNorth = new Float32Array(nx * ny);
+        const eastStepMetres = dx * 111320 * cosineLatitude;
+        for (let row = 0; row < ny; row += 1) {
+          for (let column = 0; column < nx; column += 1) {
+            const index = row * nx + column;
+            const left = heights[row * nx + Math.max(column - 1, 0)];
+            const right = heights[row * nx + Math.min(column + 1, nx - 1)];
+            const up = heights[Math.max(row - 1, 0) * nx + column];
+            const down = heights[Math.min(row + 1, ny - 1) * nx + column];
+            const columnSpan = (Math.min(column + 1, nx - 1) - Math.max(column - 1, 0))
+              * eastStepMetres;
+            const rowSpan = (Math.min(row + 1, ny - 1) - Math.max(row - 1, 0))
+              * spacingMetres;
+            gradientEast[index] = columnSpan > 0 ? (right - left) / columnSpan : NaN;
+            // La riga cresce verso sud: il gradiente verso nord ha il segno
+            // opposto della differenza fra riga successiva e precedente.
+            gradientNorth[index] = rowSpan > 0 ? (up - down) / rowSpan : NaN;
+          }
+        }
+
+        return {
+          east: gradientEast, north: gradientNorth,
+          lo1: west, la1: north, dx: dx, dy: dy, nx: nx, ny: ny
+        };
+      }
 
       function requestFlowTerrainSampler(west, east, south, north, width, key) {
-        if (flowTerrainSamplerPending === key) return;
-        flowTerrainSamplerPending = key;
+        if (flowTerrainPending === key) return;
+        flowTerrainPending = key;
         buildTerrainSampler(west, east, south, north, width).then(function (sampler) {
-          if (flowTerrainSamplerPending !== key) return;
-          flowTerrainSamplerPending = "";
-          flowTerrainSampler = sampler;
-          flowTerrainSamplerKey = sampler ? key : "";
+          if (flowTerrainPending !== key) return;
+          flowTerrainPending = "";
+          flowTerrainGradient = buildFlowGradientField(sampler, west, east, south, north);
+          flowTerrainKey = flowTerrainGradient ? key : "";
         });
       }
 
@@ -10418,14 +10526,14 @@
       // nulla dalla rete.
       function ensureFlowTerrainSampler() {
         if (selectedLevel !== "surface" || !map || !mapLoaded) return;
-        if (!(showParticles || (showVectors && activeLayer === "wind"))) return;
+        if (!(showParticles || (showVectors && layerShowsFlow(activeLayer)))) return;
         const bounds = map.getBounds();
         const width = window.innerWidth;
         const key = [
           bounds.getWest().toFixed(3), bounds.getEast().toFixed(3),
           bounds.getSouth().toFixed(3), bounds.getNorth().toFixed(3), width
         ].join("|");
-        if (flowTerrainSamplerKey === key || flowTerrainSamplerPending === key) return;
+        if (flowTerrainKey === key || flowTerrainPending === key) return;
         requestFlowTerrainSampler(
           bounds.getWest(), bounds.getEast(), bounds.getSouth(), bounds.getNorth(),
           width, key
@@ -10433,40 +10541,44 @@
       }
 
       function orographicWindDeflection(u, v, speedMps, longitude, latitude) {
-        if (selectedLevel !== "surface" || !flowTerrainSampler) return null;
+        const field = flowTerrainGradient;
+        if (selectedLevel !== "surface" || !field) return null;
         if (!(speedMps > 0.1)) return null;
-        const offset = clamp(
-          flowTerrainSampler.metresPerPixel * 3,
-          OROGRAPHIC_DEFLECTION.sampleOffsetMetres[0],
-          OROGRAPHIC_DEFLECTION.sampleOffsetMetres[1]
-        );
-        const point = { lng: longitude, lat: latitude };
-        const east = offsetWindLocation(point, offset, 0);
-        const west = offsetWindLocation(point, -offset, 0);
-        const north = offsetWindLocation(point, 0, offset);
-        const south = offsetWindLocation(point, 0, -offset);
-        const hE = flowTerrainSampler.heightAt(east.lng, east.lat);
-        const hW = flowTerrainSampler.heightAt(west.lng, west.lat);
-        const hN = flowTerrainSampler.heightAt(north.lng, north.lat);
-        const hS = flowTerrainSampler.heightAt(south.lng, south.lat);
-        if (![hE, hW, hN, hS].every(Number.isFinite)) return null;
-        const gradEast = (hE - hW) / (2 * offset);
-        const gradNorth = (hN - hS) / (2 * offset);
-        const slope = Math.hypot(gradEast, gradNorth);
+        const fx = (longitude - field.lo1) / field.dx;
+        const fy = (field.la1 - latitude) / field.dy;
+        if (fx < 0 || fy < 0 || fx > field.nx - 1 || fy > field.ny - 1) return null;
+        // Un solo calcolo di indici e pesi per le due componenti: sono lo
+        // stesso reticolo, e questa funzione gira due volte per ogni passo
+        // RK2 di ogni linea e una volta per particella per fotogramma.
+        // Un nodo mancante rende NaN il gradiente, e il confronto sulla
+        // pendenza qui sotto lo scarta da solo.
+        const nx = field.nx;
+        const x0 = Math.min(Math.floor(fx), nx - 2);
+        const y0 = Math.min(Math.floor(fy), field.ny - 2);
+        const tx = fx - x0, ty = fy - y0;
+        const index = y0 * nx + x0;
+        const w00 = (1 - tx) * (1 - ty), w10 = tx * (1 - ty);
+        const w01 = (1 - tx) * ty, w11 = tx * ty;
+        const east = field.east, north = field.north;
+        const gradEast = east[index] * w00 + east[index + 1] * w10
+          + east[index + nx] * w01 + east[index + nx + 1] * w11;
+        const gradNorth = north[index] * w00 + north[index + 1] * w10
+          + north[index + nx] * w01 + north[index + nx + 1] * w11;
+        const slope = Math.sqrt(gradEast * gradEast + gradNorth * gradNorth);
         if (!(slope > OROGRAPHIC_DEFLECTION.minSlope)) return null;
 
         // Le isoipse sono perpendicolari al gradiente: dei due versi possibili
         // si tiene quello che non inverte il flusso originale, cioe' quello
-        // con proiezione positiva sul vento del modello.
+        // con proiezione positiva sul vento del modello. Il perpendicolare e'
+        // una rotazione, quindi ha lo stesso modulo del gradiente: si
+        // normalizza con la pendenza gia' calcolata, che qui e' positiva.
         let contourEast = -gradNorth, contourNorth = gradEast;
         if (contourEast * u + contourNorth * v < 0) {
           contourEast = -contourEast;
           contourNorth = -contourNorth;
         }
-        const contourMagnitude = Math.hypot(contourEast, contourNorth);
-        if (!(contourMagnitude > 0)) return null;
-        contourEast /= contourMagnitude;
-        contourNorth /= contourMagnitude;
+        contourEast /= slope;
+        contourNorth /= slope;
 
         const slopeWeight = clamp(
           (slope - OROGRAPHIC_DEFLECTION.minSlope)
@@ -10483,7 +10595,9 @@
 
         const blendEast = (u / speedMps) * (1 - weight) + contourEast * weight;
         const blendNorth = (v / speedMps) * (1 - weight) + contourNorth * weight;
-        const blendMagnitude = Math.hypot(blendEast, blendNorth);
+        const blendMagnitude = Math.sqrt(
+          blendEast * blendEast + blendNorth * blendNorth
+        );
         if (!(blendMagnitude > 0)) return null;
         return {
           u: (blendEast / blendMagnitude) * speedMps,
@@ -10529,19 +10643,15 @@
         );
       }
 
-      function strokeStreamline(points, color, width) {
+      function appendStreamline(path, points) {
         if (!points || points.length < 2) return;
-        vectorContext.beginPath();
-        vectorContext.moveTo(points[0].x, points[0].y);
+        path.moveTo(points[0].x, points[0].y);
         for (let index = 1; index < points.length; index += 1) {
-          vectorContext.lineTo(points[index].x, points[index].y);
+          path.lineTo(points[index].x, points[index].y);
         }
-        vectorContext.strokeStyle = color;
-        vectorContext.lineWidth = width;
-        vectorContext.stroke();
       }
 
-      function strokeStreamlineHeads(line, color, width, spacing) {
+      function appendStreamlineHeads(path, line, spacing) {
         if (!line || line.length < 3 || line.totalLength < 52) return;
         let travelled = 0;
         let target = 22 + (line.seedHash % Math.max(14, spacing - 28));
@@ -10565,20 +10675,90 @@
             const leftY = y - (uy * cosine + ux * sine) * headSize;
             const rightX = x - (ux * cosine + uy * sine) * headSize;
             const rightY = y - (uy * cosine - ux * sine) * headSize;
-            vectorContext.beginPath();
-            vectorContext.moveTo(leftX, leftY);
-            vectorContext.lineTo(x, y);
-            vectorContext.lineTo(rightX, rightY);
-            vectorContext.strokeStyle = color;
-            vectorContext.lineWidth = width;
-            vectorContext.stroke();
+            path.moveTo(leftX, leftY);
+            path.lineTo(x, y);
+            path.lineTo(rightX, rightY);
             target += spacing;
           }
           travelled += segmentLength;
         }
       }
 
+      // Con la mappa ferma, le linee di una scadenza sono sempre le stesse:
+      // ritracciarle a ogni fotogramma della riproduzione costava, misurato,
+      // ~84 ms di sola integrazione RK2 su una vista da scrivania -- il
+      // motivo per cui il movimento non era fluido. Il risultato del
+      // tracciamento diventa due Path2D (le linee e le punte), che il canvas
+      // ridisegna in codice nativo e che restano in cache per vista e passo:
+      // il secondo giro della stessa animazione non traccia piu' nulla.
+      const streamlinePathCache = new Map();
+
+      function streamlineCacheKey() {
+        const center = map.getCenter();
+        return [
+          currentIndex, activeModel, selectedLevel, showFusion ? 1 : 0,
+          // Il campo in quota arriva dopo: finche' non c'e', windField()
+          // ripiega sul vento a 10 m, e le linee tracciate allora non
+          // valgono piu' quando il livello vero si carica.
+          upperIndex,
+          center.lng.toFixed(4), center.lat.toFixed(4),
+          map.getZoom().toFixed(3), map.getBearing().toFixed(1),
+          map.getPitch().toFixed(1), show3D ? 1 : 0,
+          window.innerWidth, window.innerHeight, flowTerrainKey
+        ].join("|");
+      }
+
+      function cacheStreamlinePaths(key, paths) {
+        streamlinePathCache.set(key, paths);
+        const limit = isMobile()
+          ? STREAMLINE_CONFIG.pathCacheMobile
+          : STREAMLINE_CONFIG.pathCacheDesktop;
+        while (streamlinePathCache.size > limit) {
+          streamlinePathCache.delete(streamlinePathCache.keys().next().value);
+        }
+      }
+
+      function buildStreamlinePaths(lines) {
+        const arrowSpacing = isMobile()
+          ? STREAMLINE_CONFIG.arrowSpacingMobile
+          : STREAMLINE_CONFIG.arrowSpacingDesktop;
+        const linePath = new Path2D();
+        const headPath = new Path2D();
+        lines.forEach(function (line) {
+          appendStreamline(linePath, line);
+          appendStreamlineHeads(headPath, line, arrowSpacing);
+        });
+        return { lines: linePath, heads: headPath };
+      }
+
+      function strokeStreamlinePath(path, color, width) {
+        vectorContext.strokeStyle = color;
+        vectorContext.lineWidth = width;
+        vectorContext.stroke(path);
+      }
+
       function drawWindStreamlines(wind) {
+        const key = streamlineCacheKey();
+        let paths = streamlinePathCache.get(key);
+        if (!paths) {
+          paths = buildStreamlinePaths(traceWindStreamlines(wind));
+          cacheStreamlinePaths(key, paths);
+        }
+
+        vectorContext.save();
+        vectorContext.lineCap = "round";
+        vectorContext.lineJoin = "round";
+        // Tratto cartografico quasi nero, sottile e uniforme come nella carta
+        // di riferimento. L'alone e' appena percettibile: serve soltanto sui
+        // rossi/viola scuri e non deve trasformare le linee in nastri chiari.
+        strokeStreamlinePath(paths.lines, "rgba(255,255,255,0.30)", 1.08);
+        strokeStreamlinePath(paths.lines, "rgba(4,10,13,0.84)", 0.62);
+        strokeStreamlinePath(paths.heads, "rgba(255,255,255,0.34)", 1.20);
+        strokeStreamlinePath(paths.heads, "rgba(4,10,13,0.90)", 0.64);
+        vectorContext.restore();
+      }
+
+      function traceWindStreamlines(wind) {
         const width = window.innerWidth;
         const height = window.innerHeight;
         const mobile = isMobile();
@@ -10702,28 +10882,7 @@
           lines.push(points);
         });
 
-        vectorContext.save();
-        vectorContext.lineCap = "round";
-        vectorContext.lineJoin = "round";
-        // Tratto cartografico quasi nero, sottile e uniforme come nella carta
-        // di riferimento. L'alone e' appena percettibile: serve soltanto sui
-        // rossi/viola scuri e non deve trasformare le linee in nastri chiari.
-        lines.forEach(function (line) {
-          strokeStreamline(line, "rgba(255,255,255,0.30)", 1.08);
-        });
-        lines.forEach(function (line) {
-          strokeStreamline(line, "rgba(4,10,13,0.84)", 0.62);
-        });
-        const arrowSpacing = mobile
-          ? STREAMLINE_CONFIG.arrowSpacingMobile
-          : STREAMLINE_CONFIG.arrowSpacingDesktop;
-        lines.forEach(function (line) {
-          strokeStreamlineHeads(line, "rgba(255,255,255,0.34)", 1.20, arrowSpacing);
-        });
-        lines.forEach(function (line) {
-          strokeStreamlineHeads(line, "rgba(4,10,13,0.90)", 0.64, arrowSpacing);
-        });
-        vectorContext.restore();
+        return lines;
       }
 
       function drawVectors() {
@@ -11439,6 +11598,9 @@
               stationPressureHpa: numberOrNull(s.stationPressureHpa)
             };
           }).filter(Boolean);
+          // Con la fusione accesa le osservazioni entrano nel campo del
+          // vento: le linee gia' tracciate non valgono piu'.
+          streamlinePathCache.clear();
           const observationsById = new Map(obsStations.map(function (station) {
             return [station.id, station];
           }));
