@@ -3912,9 +3912,13 @@
         return window.innerWidth < MOBILE_BREAKPOINT;
       }
 
+      // Senza limite per il run corrente: da quando lo step e' un
+      // contenitore binario quantizzato (vedi decodeBinaryStep) l'intero run
+      // pesa una frazione di quanto pesava in JSON, e tenerlo tutto in
+      // memoria e' quello che rende la barra del tempo immediata. Si azzera
+      // solo cambiando modello (setModel), un run genuinamente diverso.
       const stepCache = new Map();
       const pointBulletinTileCache = new Map();
-      const CACHE_LIMIT = isMobile() ? 2 : 3;
       const prefersReducedMotion = window.matchMedia && window.matchMedia("(prefers-reduced-motion: reduce)").matches;
 
       function clamp(value, minimum, maximum) {
@@ -4636,11 +4640,7 @@
       }
 
       function cacheStep(index, value) {
-        if (stepCache.has(index)) stepCache.delete(index);
         stepCache.set(index, value);
-        while (stepCache.size > CACHE_LIMIT) {
-          stepCache.delete(stepCache.keys().next().value);
-        }
       }
 
       function hasLayerData(key) {
@@ -5083,11 +5083,7 @@
       }
 
       async function fetchStep(index) {
-        if (stepCache.has(index)) {
-          const cached = stepCache.get(index);
-          cacheStep(index, cached);
-          return cached;
-        }
+        if (stepCache.has(index)) return stepCache.get(index);
 
         const data = await fetchStepResource(
           MODEL_INFO[activeModel].directory + "/" + catalog[index].file
@@ -5108,6 +5104,56 @@
         } catch (error) {
           console.warn("Prefetch non riuscito", error);
         }
+      }
+
+      // Vero solo mentre l'utente aspetta un passo preciso (loadStep): il
+      // prefetch di sottofondo si scansa per non contendere banda o CPU a
+      // una richiesta che l'utente sta guardando in questo istante.
+      let explicitLoadInFlight = false;
+      let backgroundPrefetchToken = 0;
+
+      function scheduleIdle(fn) {
+        if (typeof requestIdleCallback === "function") {
+          requestIdleCallback(fn, { timeout: 2000 });
+        } else {
+          setTimeout(fn, 60);
+        }
+      }
+
+      // L'intero run, non solo i vicini: da quando il passo e' un
+      // contenitore binario molto piu' leggero (Fase A) tenerlo tutto in
+      // cache e' sostenibile, ed e' quello che rende la barra del tempo
+      // immediata invece che un nuovo fetch a ogni scrub. Un passo alla
+      // volta, dal piu' vicino al piu' lontano da fromIndex, in idle time:
+      // non deve competere con il primo disegno né con una navigazione
+      // esplicita.
+      function prefetchWholeRun(fromIndex) {
+        const token = ++backgroundPrefetchToken;
+        const order = catalog
+          .map(function (_, index) { return index; })
+          .filter(function (index) { return !stepCache.has(index); })
+          .sort(function (a, b) {
+            return Math.abs(a - fromIndex) - Math.abs(b - fromIndex);
+          });
+        let cursor = 0;
+
+        function step() {
+          if (token !== backgroundPrefetchToken) return;
+          if (explicitLoadInFlight) {
+            scheduleIdle(step);
+            return;
+          }
+          while (cursor < order.length && stepCache.has(order[cursor])) {
+            cursor += 1;
+          }
+          if (cursor >= order.length) return;
+          const index = order[cursor];
+          cursor += 1;
+          prefetchStep(index).then(function () {
+            if (token === backgroundPrefetchToken) scheduleIdle(step);
+          });
+        }
+        scheduleIdle(step);
       }
 
       async function loadCatalog(silentFailure) {
@@ -5215,11 +5261,32 @@
         closeDrawerOnMobile();
       }
 
+      // Trascinare la barra genera piu' eventi "input" nativi di quanti
+      // fotogrammi il browser possa disegnare: senza questo, ognuno
+      // chiamerebbe loadStep per proprio conto e li si accoderebbe tutti,
+      // anche quelli superati un istante dopo. Un solo passo per
+      // fotogramma, sempre quello piu' recente.
+      let pendingSliderIndex = null;
+      let sliderFrameScheduled = false;
+
+      function requestSliderStep(index) {
+        pendingSliderIndex = index;
+        if (sliderFrameScheduled) return;
+        sliderFrameScheduled = true;
+        requestAnimationFrame(function () {
+          sliderFrameScheduled = false;
+          const nextIndex = pendingSliderIndex;
+          pendingSliderIndex = null;
+          loadStep(nextIndex);
+        });
+      }
+
       async function loadStep(index) {
         if (!catalog[index]) return;
 
         const token = ++loadingToken;
         showLoading("Aggiornamento del campo meteorologico…");
+        explicitLoadInFlight = true;
 
         try {
           const nextData = await fetchStep(index);
@@ -5241,14 +5308,14 @@
           requestVectorRender();
           refreshSelectedPoint();
 
-          prefetchStep(index + 1);
-          prefetchStep(index - 1);
+          prefetchWholeRun(index);
           return true;
         } catch (error) {
           console.error(error);
           toast("Errore nel caricamento del passo selezionato");
           return false;
         } finally {
+          explicitLoadInFlight = false;
           if (token === loadingToken) hideLoading();
         }
       }
@@ -12498,7 +12565,7 @@
             + " scorrere le scadenze");
           return;
         }
-        loadStep(Number(ui.slider.value));
+        requestSliderStep(Number(ui.slider.value));
       });
 
       ui.playButton.addEventListener("click", function () {
