@@ -5,6 +5,7 @@ import numpy as np
 import json
 import gzip
 import os
+import struct
 import sys
 import shutil
 import time
@@ -209,19 +210,9 @@ def write_json_atomic(path, payload):
             os.remove(partial)
 
 
-def write_json_gzip_atomic(path, payload, compresslevel=6):
-    """Write deterministic compressed JSON, atomically.
-
-    Full-domain ICON-2I fields are large.  Manual gzip decompression in the
-    browser keeps the gh-pages snapshot and mobile transfer size manageable
-    without reducing the 761 x 761 source domain.
-    """
+def write_gzip_atomic(path, raw_bytes, compresslevel=6):
+    """Write raw bytes as a gzip file, atomically."""
     partial = path + ".part"
-    encoded = json.dumps(
-        payload,
-        separators=(",", ":"),
-        allow_nan=False,
-    ).encode("utf-8")
     try:
         with open(partial, "wb") as raw:
             with gzip.GzipFile(
@@ -231,11 +222,115 @@ def write_json_gzip_atomic(path, payload, compresslevel=6):
                 compresslevel=int(compresslevel),
                 mtime=0,
             ) as output:
-                output.write(encoded)
+                output.write(raw_bytes)
         os.replace(partial, path)
     finally:
         if os.path.exists(partial):
             os.remove(partial)
+
+
+def write_json_gzip_atomic(path, payload, compresslevel=6):
+    """Write deterministic compressed JSON, atomically.
+
+    Full-domain ICON-2I fields are large.  Manual gzip decompression in the
+    browser keeps the gh-pages snapshot and mobile transfer size manageable
+    without reducing the 761 x 761 source domain.
+    """
+    encoded = json.dumps(
+        payload,
+        separators=(",", ":"),
+        allow_nan=False,
+    ).encode("utf-8")
+    write_gzip_atomic(path, encoded, compresslevel=compresslevel)
+
+
+# ---- STEP BINARIO: griglie quantizzate invece di testo JSON ----------------
+#
+# Un passo pubblica ~13 griglie 761x761 (579.121 celle): come testo JSON sono
+# numeri in ASCII, pesanti da scaricare e lenti da fare il parse anche dopo
+# gzip. Qui si scrivono come interi a 16 bit (value = raw*scale + offset), che
+# occupano un quarto dello spazio e si leggono nel browser come vista diretta
+# sul buffer, senza JSON.parse. La scala non e' una misura: ricalca il
+# massimo delle palette operative in generate_palettes.py con margine, ed e'
+# sempre piu' fine dell'arrotondamento che clean_for_json applica gia' oggi,
+# quindi non si perde nulla che il sito mostri davvero.
+BINARY_NODATA = -32768
+
+BINARY_FIELD_SCALE = {
+    "temp": (0.05, 0.0),            # clean_for_json arrotondava a 0,1 degC
+    "rain": (0.02, 0.0),             # arrotondava a 0,01 mm; range fino a 640 mm
+    "press": (0.1, 1000.0),          # arrotondava a 0,1 hPa attorno a 1000
+    "geopot500": (1.0, 5000.0),      # arrotondava a 1 m attorno a 5000 gpm
+    "rh": (1.0, 0.0),                # percento intero
+    "cloud": (1.0, 0.0),             # percento intero
+    "gust": (1.0, 0.0),              # km/h intero; GUST_STOPS arriva a 140
+    "convection_prob": (0.1, 0.0),   # arrotondava a 0,1 %
+    "visibility": (10.0, 0.0),       # arrotondava a 10 m, fino a 320 km
+    "freezing_rain": (1.0, 0.0),     # categoria/intensita' intera
+    "foehn": (1.0, 0.0),             # categoria 0/1/2
+    "wind_u": (0.02, 0.0),           # arrotondava a 0,1 m/s
+    "wind_v": (0.02, 0.0),
+}
+
+
+def quantize_field(values, scale, offset):
+    """Quantizza una griglia a interi a 16 bit little-endian, NaN incluso.
+
+    ``value = raw * scale + offset``; il mancante e' BINARY_NODATA, il
+    codice piu' negativo rappresentabile, fuori da qualunque intervallo
+    fisico usato in ``BINARY_FIELD_SCALE``.
+    """
+    if scale <= 0:
+        raise ValueError("scala non positiva per la quantizzazione")
+    arr = np.asarray(values, dtype=np.float64).flatten()
+    raw = np.full(arr.shape, BINARY_NODATA, dtype=np.int64)
+    finite = np.isfinite(arr)
+    coded = np.clip(np.round((arr[finite] - offset) / scale), -32000, 32000)
+    raw[finite] = coded.astype(np.int64)
+    return raw.astype("<i2").tobytes()
+
+
+def write_binary_step(path, meta_payload, grid_fields, compresslevel=6):
+    """Scrive uno step come header + griglie int16 + JSON finale, atomico.
+
+    ``grid_fields`` e' un dict nome -> array; un valore ``None`` significa
+    che il campo e' assente in questo step (non diventa zero). Tutto il
+    resto dello step -- meta, probabilita', profilo, bollettino, fronti --
+    e' troppo piccolo ed eterogeneo per un contenitore a griglia fissa e
+    viaggia come JSON in coda allo stesso file.
+    """
+    present = [(name, arr) for name, arr in grid_fields.items() if arr is not None]
+
+    field_table = b""
+    payload = b""
+    for name, arr in present:
+        scale, offset = BINARY_FIELD_SCALE[name]
+        encoded_name = name.encode("ascii")
+        field_table += struct.pack("<B", len(encoded_name)) + encoded_name
+        field_table += struct.pack("<ff", scale, offset)
+        payload += quantize_field(arr, scale, offset)
+
+    json_bytes = json.dumps(
+        meta_payload, separators=(",", ":"), allow_nan=False
+    ).encode("utf-8")
+
+    nx = int(meta_payload["meta"]["nx"])
+    ny = int(meta_payload["meta"]["ny"])
+
+    fixed_header = struct.pack("<4sBBHH", b"MSB1", 1, len(present), nx, ny)
+    header_len = len(fixed_header) + 4 + 4 + 4 + len(field_table)
+    # Allineato a 2 byte: il browser legge la griglia con una vista
+    # Int16Array senza copia, che richiede un offset pari.
+    data_offset = header_len + (header_len % 2)
+    json_offset = data_offset + len(payload)
+
+    offsets = struct.pack("<III", data_offset, json_offset, len(json_bytes))
+    padding = b"\x00" * (data_offset - header_len)
+
+    raw_bytes = (
+        fixed_header + offsets + field_table + padding + payload + json_bytes
+    )
+    write_gzip_atomic(path, raw_bytes, compresslevel=compresslevel)
 
 
 def collect_observations():
@@ -2293,44 +2388,37 @@ def process_data():
                             "source": "ICON-2I HSURF; quota della griglia, non DEM locale",
                         })
 
-                step_data = {
-                    "meta": header,
-                    "wind_u": { "header": {**header, "parameterCategory": 2, "parameterNumber": 2}, "data": np.round(u_val, 1).flatten().tolist() },
-                    "wind_v": { "header": {**header, "parameterCategory": 2, "parameterNumber": 3}, "data": np.round(v_val, 1).flatten().tolist() },
-                    "temp": clean_for_json(temp_c, 1),
-                    # Il browser ricava la temperatura percepita dalla stessa
-                    # formula, evitando una grande matrice duplicata.
-                    "feels_like": None,
-                    "rain": clean_for_json(rain, 2),
-                    "press": clean_for_json(press, 1),
-                    "geopot500": (
-                        clean_for_json(geopot500, 0)
-                        if geopot500 is not None else None
-                    ),
-                    "rh": clean_for_json(rh_val, 0),
-                    "cloud": clean_for_json(cloud, 0),
+                # Le griglie 761x761 vanno nel contenitore binario (vedi
+                # write_binary_step): niente clean_for_json qui, la
+                # quantizzazione arrotonda gia' a una precisione piu' fine.
+                # feels_like e hail_threat non erano mai popolati (il primo
+                # si calcola nel browser dalla stessa formula, il secondo era
+                # un campo morto): semplicemente non compaiono piu'.
+                grid_fields = {
+                    "wind_u": u_val,
+                    "wind_v": v_val,
+                    "temp": temp_c,
+                    "rain": rain,
+                    "press": press,
+                    "geopot500": geopot500,
+                    "rh": rh_val,
+                    "cloud": cloud,
                     # Raffica massima a 10 m. Il campo era gia' scaricato per
                     # la diagnostica convettiva e per i meteogrammi, ma non
                     # arrivava alla mappa: e' la raffica a fare i danni, non il
                     # vento medio. Pubblicata in km/h, come viene mostrata.
                     "gust": (
-                        clean_for_json(np.asarray(wind_gust_10m) * 3.6, 0)
+                        np.asarray(wind_gust_10m) * 3.6
                         if wind_gust_10m is not None else None
                     ),
-                    "convection_prob": (
-                        clean_for_json(convection_prob, 1)
-                        if convection_prob is not None else None
-                    ),
-                    "hail_threat": None,
-                    "visibility": clean_for_json(visibility.values, 0),
-                    "freezing_rain": (
-                        clean_for_json(freezing_rain, 0)
-                        if freezing_rain is not None else None
-                    ),
-                    "foehn": (
-                        clean_for_json(foehn, 0)
-                        if foehn is not None else None
-                    ),
+                    "convection_prob": convection_prob,
+                    "visibility": visibility.values,
+                    "freezing_rain": freezing_rain,
+                    "foehn": foehn,
+                }
+
+                step_meta = {
+                    "meta": header,
                     "prob": build_exceedance_probabilities(
                         header, rain, wind_gust_10m
                     ),
@@ -2353,8 +2441,8 @@ def process_data():
                     "fronts": fronts
                 }
 
-                out_name = f"step_{step_hours}.json.gz"
-                write_json_gzip_atomic(f"{TEMP_DIR}/{out_name}", step_data)
+                out_name = f"step_{step_hours}.bin.gz"
+                write_binary_step(f"{TEMP_DIR}/{out_name}", step_meta, grid_fields)
 
                 # Sezione temporali: il payload è già stato calcolato prima del
                 # bollettino, affinché ogni prodotto usi lo stesso algoritmo.

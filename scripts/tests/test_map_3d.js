@@ -1477,15 +1477,23 @@ assert.match(html, /const CAPE_STOPS = \[\s*\{ v: 0, c: \[238, 244, 240\], a: 0 
     "manca la scheda delle raffiche nel pannello dei livelli");
   assert.match(html, /id="detail-gust"/,
     "manca la riga delle raffiche nella lettura del punto");
-  assert.match(html, /"temp", "feels_like", "rain", "press", "rh", "cloud", "gust",/,
-    "il campo delle raffiche non viene compattato come gli altri");
+  // Le griglie non passano piu' per un elenco di nomi scritto a mano (dove
+  // la raffica una volta mancava): decodeBinaryStep tratta ogni campo
+  // dichiarato nell'header del contenitore binario allo stesso modo,
+  // qualunque sia il suo nome.
+  const decodeStep = html.match(/function decodeBinaryStep\([\s\S]*?\n {6}\}/);
+  assert.ok(decodeStep, "decodeBinaryStep assente");
+  assert.match(decodeStep[0], /fields\.forEach/,
+    "la decodifica dello step non tratta piu' tutti i campi allo stesso modo");
+  assert.doesNotMatch(decodeStep[0], /"temp"[\s\S]*?"gust"/,
+    "la decodifica torna a un elenco di campi scritto a mano");
 }
 // Il campo deve anche esistere: la scala serve a poco se la pipeline non lo
 // pubblica. Le raffiche arrivano da vmax_10m, in m/s, e vanno in km/h.
 {
   const pipeline = fs.readFileSync(
     path.join(__dirname, "..", "process_data.py"), "utf8");
-  assert.match(pipeline, /"gust": \(\s*\n\s*clean_for_json\(np\.asarray\(wind_gust_10m\) \* 3\.6, 0\)/,
+  assert.match(pipeline, /"gust": \(\s*\n\s*np\.asarray\(wind_gust_10m\) \* 3\.6/,
     "la pipeline non pubblica le raffiche in km/h");
 }
 // --- Probabilita' di vicinato ---

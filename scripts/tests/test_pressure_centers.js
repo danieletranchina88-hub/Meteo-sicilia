@@ -16,14 +16,17 @@ const consts = ["CENTER_ANALYSIS_KM", "CENTER_SMOOTHING_KM",
                 "ISOBAR_MAJOR_EVERY", "PRESSURE_ANALYSIS_RADIUS_KM",
                 "PRESSURE_ANALYSIS_PASSES"]
   .map((n) => html.match(new RegExp("const " + n + " = [^;]+;"))[0]).join("\n");
-const src = consts + "\n" + ["smoothPressureGrid", "parabolicCenterOffset",
+const binaryConsts = ["BINARY_STEP_MAGIC", "BINARY_STEP_NODATA"]
+  .map((n) => html.match(new RegExp("const " + n + " = [^;]+;"))[0]).join("\n");
+const src = consts + "\n" + binaryConsts + "\n" + ["smoothPressureGrid", "parabolicCenterOffset",
   "pressureAnalysisGrid", "sampleBilinear", "coarsenPressureGrid",
   "closedContourProminence", "detectPressureCenters", "isobarPointKey",
   "interpolateIsobarPoint", "stitchIsobarSegments", "smoothIsobarLine",
-  "createIsobarFeatures", "createContourFeatures"].map(grab).join("\n");
+  "createIsobarFeatures", "createContourFeatures",
+  "decodeBinaryStep"].map(grab).join("\n");
 const api = new Function("clamp", "getGrid", src +
   "\nreturn { detectPressureCenters, closedContourProminence, coarsenPressureGrid,"
-  + " pressureAnalysisGrid, createIsobarFeatures,"
+  + " pressureAnalysisGrid, createIsobarFeatures, decodeBinaryStep,"
   + " ISOBAR_INTERVAL_HPA, ISOBAR_MAJOR_EVERY };")(
   (v, a, b) => Math.min(Math.max(v, a), b), (a) => a);
 
@@ -194,10 +197,14 @@ check(isobars.every((f) =>
 
 // 8) Campo PMSL vero del run pubblicato.
 console.log("8) campo PMSL reale");
-const stepFile = process.env.PRESSURE_TEST_STEP || "data_weather/step_0.json.gz";
+const stepFile = process.env.PRESSURE_TEST_STEP || "data_weather/step_0.bin.gz";
 if (fs.existsSync(stepFile)) {
-  const data = JSON.parse(zlib.gunzipSync(fs.readFileSync(stepFile)));
-  const press = Float32Array.from(data.press.map((v) => (v === null ? NaN : v)));
+  const gunzipped = zlib.gunzipSync(fs.readFileSync(stepFile));
+  const buffer = gunzipped.buffer.slice(
+    gunzipped.byteOffset, gunzipped.byteOffset + gunzipped.byteLength
+  );
+  const data = api.decodeBinaryStep(buffer);
+  const press = data.press;
   const realMeta = data.meta;
   const t0 = process.hrtime.bigint();
   const realAnalysis = api.pressureAnalysisGrid(

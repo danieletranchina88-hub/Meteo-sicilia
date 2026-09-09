@@ -3925,20 +3925,94 @@
         return field && field.data ? field.data : field;
       }
 
-      async function fetchJsonResource(url) {
+      async function fetchDecompressedResponse(url) {
         const response = await fetch(url);
         if (!response.ok) throw new Error("Risorsa dati non disponibile");
-        if (!url.split("?")[0].endsWith(".gz")) return response.json();
+        if (!url.split("?")[0].endsWith(".gz")) return response;
         // Alcuni CDN marcano il file come Content-Encoding: gzip e fetch lo
         // restituisce già decompresso. GitHub Pages normalmente lo serve come
         // application/gzip e richiede invece la decompressione esplicita.
         const encoding = (response.headers.get("content-encoding") || "").toLowerCase();
-        if (encoding.includes("gzip")) return response.json();
+        if (encoding.includes("gzip")) return response;
         if (!response.body || typeof DecompressionStream === "undefined") {
           throw new Error("Il browser non supporta i dati ICON-2I compressi");
         }
         const stream = response.body.pipeThrough(new DecompressionStream("gzip"));
-        return new Response(stream).json();
+        return new Response(stream);
+      }
+
+      async function fetchJsonResource(url) {
+        const response = await fetchDecompressedResponse(url);
+        return response.json();
+      }
+
+      // Uno step e' un contenitore binario, non JSON: header fisso, tabella
+      // campi (nome + scala + offset), le griglie quantizzate a 16 bit, poi
+      // il resto dello step (meta, probabilità, profilo, fronti) come JSON
+      // in coda -- piccolo ed eterogeneo, non vale la pena renderlo binario.
+      // Vedi write_binary_step in scripts/process_data.py per lo scrittore.
+      const BINARY_STEP_MAGIC = "MSB1";
+      const BINARY_STEP_NODATA = -32768;
+
+      async function fetchStepResource(url) {
+        const response = await fetchDecompressedResponse(url);
+        return decodeBinaryStep(await response.arrayBuffer());
+      }
+
+      function decodeBinaryStep(buffer) {
+        const view = new DataView(buffer);
+        const magic = String.fromCharCode(
+          view.getUint8(0), view.getUint8(1), view.getUint8(2), view.getUint8(3)
+        );
+        if (magic !== BINARY_STEP_MAGIC) {
+          throw new Error("Formato step non riconosciuto");
+        }
+        const version = view.getUint8(4);
+        if (version !== 1) throw new Error("Versione step non supportata: " + version);
+        const fieldCount = view.getUint8(5);
+        const nx = view.getUint16(6, true);
+        const ny = view.getUint16(8, true);
+        const dataOffset = view.getUint32(10, true);
+        const jsonOffset = view.getUint32(14, true);
+        const jsonLength = view.getUint32(18, true);
+
+        let cursor = 22;
+        const fields = [];
+        for (let index = 0; index < fieldCount; index += 1) {
+          const nameLength = view.getUint8(cursor);
+          cursor += 1;
+          let name = "";
+          for (let c = 0; c < nameLength; c += 1) {
+            name += String.fromCharCode(view.getUint8(cursor + c));
+          }
+          cursor += nameLength;
+          const scale = view.getFloat32(cursor, true);
+          const offset = view.getFloat32(cursor + 4, true);
+          cursor += 8;
+          fields.push({ name: name, scale: scale, offset: offset });
+        }
+
+        const count = nx * ny;
+        const grids = {};
+        let fieldStart = dataOffset;
+        fields.forEach(function (field) {
+          // Vista senza copia: write_binary_step allinea dataOffset a 2 byte
+          // apposta perché questo funzioni.
+          const raw = new Int16Array(buffer, fieldStart, count);
+          const decoded = new Float32Array(count);
+          for (let index = 0; index < count; index += 1) {
+            const code = raw[index];
+            decoded[index] = code === BINARY_STEP_NODATA
+              ? NaN : code * field.scale + field.offset;
+          }
+          grids[field.name] = decoded;
+          fieldStart += count * 2;
+        });
+
+        const jsonText = new TextDecoder("utf-8").decode(
+          new Uint8Array(buffer, jsonOffset, jsonLength)
+        );
+        return Object.assign(JSON.parse(jsonText), grids);
       }
 
       function nearestArrayIndex(values, target) {
@@ -4030,31 +4104,6 @@
           });
         });
         return series;
-      }
-
-      function compactNumericFields(data) {
-        if (!data || !data.meta) return;
-        const keys = [
-          "temp", "feels_like", "rain", "press", "rh", "cloud", "gust",
-          "convection_prob", "hail_threat", "visibility",
-          "freezing_rain", "foehn"
-        ];
-        keys.forEach(function (key) {
-          if (Array.isArray(data[key])) {
-            data[key] = Float32Array.from(
-              data[key],
-              function (value) { return value === null ? NaN : Number(value); }
-            );
-          }
-        });
-        ["wind_u", "wind_v"].forEach(function (key) {
-          if (data[key] && Array.isArray(data[key].data)) {
-            data[key].data = Float32Array.from(
-              data[key].data,
-              function (value) { return value === null ? NaN : Number(value); }
-            );
-          }
-        });
       }
 
       function compactUpperData(data) {
@@ -5002,7 +5051,6 @@
 
       function prepareData(data) {
         if (!data || !data.meta) return;
-        compactNumericFields(data);
         deriveWetBulb(data);
 
         const meta = data.meta;
@@ -5041,7 +5089,7 @@
           return cached;
         }
 
-        const data = await fetchJsonResource(
+        const data = await fetchStepResource(
           MODEL_INFO[activeModel].directory + "/" + catalog[index].file
         );
         prepareData(data);
@@ -5052,7 +5100,7 @@
       async function prefetchStep(index) {
         if (!catalog[index] || stepCache.has(index)) return;
         try {
-          const next = await fetchJsonResource(
+          const next = await fetchStepResource(
             MODEL_INFO[activeModel].directory + "/" + catalog[index].file
           );
           prepareData(next);
