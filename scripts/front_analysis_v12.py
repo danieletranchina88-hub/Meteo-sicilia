@@ -167,10 +167,13 @@ MIN_BRANCH_LENGTH_KM = 100.0
 # form; it stays available but is no longer applied to what is published.
 REFINE_PUBLISHED_GEOMETRY = False
 
-# A front shorter than this at a 150 km analysis scale is not resolved as a
-# synoptic boundary.  Hewson-style climatologies discard below ~250 km; the
-# margin here is deliberate, since the engine no longer scores length.
-ENGINE_MIN_LENGTH_KM = 300.0
+# La soglia della letteratura: le climatologie frontali oggettive scartano
+# sotto i ~250 km.  Il primo valore, 300, era un margine aggiunto qui, e
+# misurato sul run vero costava quasi tutta la copertura -- la linea grezza
+# piu' lunga del motore ha una mediana di 276 km per ora.  Abbassarlo non
+# riapre la porta alle geometrie storte, perche' la garanzia di curvatura nel
+# motore vale comunque.
+ENGINE_MIN_LENGTH_KM = 250.0
 
 # How far a track may be carried across hours where it was not detected.  The
 # published run measured on 2026-09-12 00Z had candidates accepted in 52 of 73

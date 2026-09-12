@@ -480,6 +480,7 @@ def admissible_mask(
     min_strength: float = 0.5,
     min_probability: float = 0.5,
     min_support: float = 0.90,
+    neighbourhood_km: float = 50.0,
 ) -> np.ndarray:
     """Where a ridge is allowed to be a front at all.
 
@@ -494,14 +495,27 @@ def admissible_mask(
     """
     reference = evidence["reference"]["gradientKPerKm"]
     strength = evidence["gradientMagnitude"] / max(reference, 1.0e-12)
-    # The *raw* probability, deliberately.  Re-smoothing belongs in the
-    # locating field, whose Hessian is taken and which therefore must stay low
-    # order; here the question is only "what does the evidence say at this
-    # point", and smoothing it just spreads a front's evidence over the calm
-    # air around it.  Measured on the real field, the smoothed version peaked
-    # at 0.033 where the raw one peaked at 0.132: a factor of four thrown away
-    # for no reason.
-    gate = np.nan_to_num(evidence["probability"], nan=0.0)
+    # The probability averaged over a *neighbourhood*, not over the analysis
+    # scale and not at a single point.  Both extremes were measured and both
+    # are wrong.  Smoothing at the full 150 km spreads a front's evidence over
+    # the calm air beside it -- the peak fell from 0.132 to 0.033, a factor of
+    # four thrown away.  Testing a single point instead lets a momentary dip
+    # below even odds punch a pinhole in the mask, and a pinhole cuts the
+    # ridge in two: on the real field the engine's longest line had a median
+    # of 276 km against a 300 km publication minimum, so a boundary that was
+    # found was still not publishable.  A front does not stop existing for
+    # 20 km, so the question is asked over a neighbourhood the size of the
+    # frontal zone itself.
+    point_gate = np.nan_to_num(evidence["probability"], nan=0.0)
+    # Union, not replacement.  Smoothing then thresholding erodes the edges of
+    # the band as much as it fills the holes inside it -- measured, it cut the
+    # ridge points by more than a third.  Taking the union keeps every cell
+    # the pointwise test already accepted and only *adds* the ones where the
+    # neighbourhood average holds, which is exactly the pinhole-filling that
+    # was wanted and nothing else.
+    gate = np.maximum(point_gate, fl.smooth_km(
+        point_gate, float(neighbourhood_km), evidence["metrics"]
+    ))
     support = smoothing_support(
         np.isfinite(evidence["thetaW"]).astype(float),
         evidence["sigmaKm"], evidence["metrics"],
@@ -1172,7 +1186,14 @@ def line_length_km(line: np.ndarray) -> float:
 # pass moves those vertices.  ``synopticSupport``, ``sinuosity``,
 # ``locatorConfidence``, ``medianTfpStrength`` and ``medianAbzGradient``
 # default to zero downstream when absent, and zero fails every gate.
-MIN_LENGTH_KM = 300.0
+# Il minimo della letteratura, non uno piu' prudente inventato qui.  Le
+# climatologie frontali oggettive scartano sotto i ~250 km; i 300 km della
+# prima versione erano un margine mio, e misurato sul campo vero costavano
+# quasi tutto: la linea grezza piu' lunga del motore ha una mediana di 276 km
+# per ora, cioe' cadeva appena sotto la soglia.  Abbassarlo e' sicuro solo
+# perche' esiste MAX_PUBLISHED_TURN_DEG_PER_20KM: una linea corta non puo'
+# rientrare dalla finestra portandosi dietro una geometria ruvida.
+MIN_LENGTH_KM = 250.0
 # Curvatura massima di una linea pubblicabile, nel metro del progetto (gradi
 # di svolta ogni 20 km).  La documentazione dichiara 6,77 dopo la fase E e un
 # fronte disegnato a mano sta fra 3 e 6; sopra i 10 la linea non e' piu' un
