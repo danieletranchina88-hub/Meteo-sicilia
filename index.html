@@ -5,7 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
     <meta name="theme-color" content="#0a1b2a" />
     <meta name="color-scheme" content="light" />
-    <title>Italia MeteoHub · ICON-2I</title>
+    <title>Sicilia Meteo · Mappa e previsioni</title>
     <link rel="stylesheet" href="https://unpkg.com/maplibre-gl@5.24.0/dist/maplibre-gl.css" />
     <script src="https://unpkg.com/maplibre-gl@5.24.0/dist/maplibre-gl.js"></script>
     <style>
@@ -2201,6 +2201,7 @@
       #meteorological-agents button { min-height: 44px; padding: 8px 14px; cursor: pointer; }
       .agent-presence-button { cursor: pointer; border: 0; background: transparent; color: inherit; padding: 4px 0; min-height: 32px; font: inherit; font-weight: 700; text-decoration: underline; }
     </style>
+    <link rel="stylesheet" href="modern-ui.css" />
   </head>
   <body>
     <div id="map" aria-label="Mappa meteorologica interattiva"></div>
@@ -2229,8 +2230,8 @@
           </svg>
         </div>
         <div class="brand-copy">
-          <div class="eyebrow">Italia · dominio ICON-2I completo</div>
-          <h1>METEOHUB</h1>
+          <div class="eyebrow">Previsioni · ICON-2I</div>
+          <h1>Sicilia Meteo<span class="brand-dot">.</span></h1>
           <button type="button" class="agent-presence-button" id="agents-open" aria-haspopup="dialog" aria-controls="meteorological-agents">Stato dell’analisi</button>
           <p id="brand-subtitle" class="brand-subtitle">ICON-2I · deterministico · ≈2,2 km</p>
           <!-- Corsa e validita' in una riga sola, dentro l'intestazione. Sul
@@ -2299,6 +2300,10 @@
       </div>
     </header>
 
+    <div id="place-search" class="surface"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><circle cx="10" cy="10" r="6"></circle><path d="m15 15 5 5"></path></svg><input id="place-query" type="search" placeholder="Cerca una località" aria-label="Cerca una località" autocomplete="off" /><div id="place-results" hidden></div></div>
+    <nav id="quick-layers" aria-label="Campi principali"></nav>
+    <div id="view-switch" class="surface" aria-label="Vista della mappa"><button id="forecast-view" type="button" aria-pressed="true">Previsioni</button><button id="satellite-view" type="button" aria-pressed="false">Satellite</button></div>
+    <section id="satellite-status" class="surface" hidden><b>Satellite · osservazione</b><span id="satellite-time">Ultima immagine disponibile</span><div id="satellite-controls"></div></section>
     <section id="meta-card" class="surface" aria-label="Metadati della previsione">
       <div class="meta-item">
         <div class="micro-label">Run del modello</div>
@@ -2423,7 +2428,7 @@
                 <option value="850">850 hPa</option>
               </select>
             </div>
-            <details id="field-method-card" class="field-method-card" open>
+            <details id="field-method-card" class="field-method-card">
               <summary>Scheda scientifica del campo</summary>
               <dl>
                 <dt>Natura</dt><dd id="field-science-nature">--</dd>
@@ -2749,11 +2754,13 @@
         </svg>
       </button>
       <div class="timeline-main">
+        <div id="timeline-days" aria-label="Giorni di previsione"></div>
+        <div id="timeline-buffer" aria-hidden="true"></div>
         <input id="time-slider" type="range" min="0" max="0" value="0" aria-label="Orario della previsione" />
         <div class="timeline-meta">
           <span id="time-label">In attesa dei dati</span>
           <span id="satellite-lock" hidden>ancorato al satellite</span>
-          <span id="lead-label">--</span>
+          <span id="buffer-status" role="status">Preparazione sequenza</span><span id="lead-label">--</span>
         </div>
       </div>
       <div class="speed-controls" aria-label="Velocità animazione">
@@ -2768,6 +2775,7 @@
     </div>
     <div id="toast" role="status" aria-live="polite"></div>
 
+    <script src="forecast-cache.js"></script>
     <script src="point_bulletin.js"></script>
     <script src="local_downscaling.js"></script>
     <script>
@@ -3717,8 +3725,8 @@
         padding: 0.2,
         maxDensityMobile: 1.75,
         maxDensityDesktop: 2.35,
-        pixelLimitMobile: 1900000,
-        pixelLimitDesktop: 3000000
+        pixelLimitMobile: 550000,
+        pixelLimitDesktop: 1000000
       };
 
       const FEELS_LIKE_METHOD = "heat-index-wind-chill-v1";
@@ -3806,6 +3814,7 @@
       };
 
       const rasterCanvas = document.createElement("canvas");
+      rasterCanvas.width = 2; rasterCanvas.height = 2;
       const rasterContext = rasterCanvas.getContext("2d");
       const particleCanvas = document.getElementById("particle-canvas");
       const particleContext = particleCanvas.getContext("2d", { alpha: true });
@@ -3922,7 +3931,16 @@
       // pesa una frazione di quanto pesava in JSON, e tenerlo tutto in
       // memoria e' quello che rende la barra del tempo immediata. Si azzera
       // solo cambiando modello (setModel), un run genuinamente diverso.
-      const stepCache = new Map();
+      const stepResources = new ForecastCache.ResourceCache();
+      const stepCache = stepResources.values;
+      const extraResources = new ForecastCache.ResourceCache();
+      const weatherFrames = new ForecastCache.FrameCache(isMobile() ? 64 * 1024 * 1024 : 128 * 1024 * 1024);
+      let weatherView = "forecast";
+      let forecastRestore = null;
+      let weatherFrameEpoch = 0;
+      let warmFrameTimer = null;
+      let warmFrameBusy = false;
+      let warmRasterWorker = null;
       const pointBulletinTileCache = new Map();
       const prefersReducedMotion = window.matchMedia && window.matchMedia("(prefers-reduced-motion: reduce)").matches;
 
@@ -4999,37 +5017,16 @@
       }
 
       function requestStormData() {
-        if (stormPromise) return;
-        const targetIndex = currentIndex;
-        const item = catalog[targetIndex];
-        if (!item) return;
-        // Il catalogo dice se per quella scadenza il file esiste: senza
-        // questo controllo si chiederebbe un file assente a ogni passo.
-        if (item.storm === false) {
-          toast("Diagnostica temporali non disponibile per questa scadenza");
-          setLayer("temp");
-          return;
-        }
-        const hour = item.hour !== undefined ? item.hour : item.leadHours;
-        stormPromise = fetchJsonResource(
-          MODEL_INFO[activeModel].directory + "/storm_" + hour + ".json.gz"
-        )
-          .then(function (data) {
-            stormData = data;
-            stormIndex = targetIndex;
-          })
-          .catch(function () {
-            toast("Diagnostica temporali non disponibile per questo run");
-            if (usesStormData(activeLayer)) setLayer("temp");
-          })
-          .finally(function () {
-            stormPromise = null;
-            if (usesStormData(activeLayer)) {
-              updateLegend();
-              renderWeather();
-            }
-            refreshSelectedPoint();
-          });
+        const index = currentIndex, model = activeModel;
+        fetchExtra(index,"storm").then(function(data) {
+          if(index !== currentIndex || model !== activeModel) return;
+          if(!data) throw new Error("Campo assente");
+          stormData = data; stormIndex = index;
+          renderWeather(); updateLegend(); refreshSelectedPoint(); scheduleFrameWarmup();
+        }).catch(function() {
+          if(index !== currentIndex || model !== activeModel) return;
+          toast("Campo non disponibile per questa scadenza"); selectedLevel = "surface"; setLayer("temp");
+        });
       }
 
       // Il file dei temporali ha una griglia sua, dimezzata rispetto a quella
@@ -5048,38 +5045,16 @@
       }
 
       function requestUpperData() {
-        if (upperPromise) return;
-        const targetIndex = currentIndex;
-        const item = catalog[targetIndex];
-        if (!item) return;
-        const hour = item.hour !== undefined ? item.hour : item.leadHours;
-        upperPromise = fetchJsonResource(
-          MODEL_INFO[activeModel].directory + "/upper_" + hour + ".json.gz"
-        )
-          .then(function (data) {
-            const requestedLevel = selectedPressureLevel(activeLayer);
-            if (requestedLevel !== "surface" && requestedLevel !== "850" &&
-              (!data.levels || !data.levels[requestedLevel])) {
-              throw new Error("Livello " + requestedLevel + " hPa assente");
-            }
-            compactUpperData(data);
-            upperData = data;
-            upperIndex = targetIndex;
-          })
-          .catch(function () {
-            toast("Campi in quota non disponibili per questo modello o run");
-            if (usesUpperData(activeLayer)) {
-              selectedLevel = "surface";
-              setLayer("temp");
-            }
-          })
-          .finally(function () {
-            upperPromise = null;
-            if (usesUpperData(activeLayer)) {
-              renderWeather();
-              refreshSelectedPoint();
-            }
-          });
+        const index = currentIndex, model = activeModel;
+        fetchExtra(index,"upper").then(function(data) {
+          if(index !== currentIndex || model !== activeModel) return;
+          if(!data) throw new Error("Campo assente");
+          upperData = data; upperIndex = index;
+          renderWeather(); updateLegend(); refreshSelectedPoint(); scheduleFrameWarmup();
+        }).catch(function() {
+          if(index !== currentIndex || model !== activeModel) return;
+          toast("Campo non disponibile per questa scadenza"); selectedLevel = "surface"; setLayer("temp");
+        });
       }
 
       // Pressione di vapore saturo, Bolton (1980) eq. 10: la stessa relazione
@@ -5171,78 +5146,112 @@
         }
       }
 
-      async function fetchStep(index) {
-        if (stepCache.has(index)) return stepCache.get(index);
-
-        const data = await fetchStepResource(
-          MODEL_INFO[activeModel].directory + "/" + catalog[index].file
-        );
-        prepareData(data);
-        cacheStep(index, data);
-        return data;
-      }
-
-      async function prefetchStep(index) {
-        if (!catalog[index] || stepCache.has(index)) return;
-        try {
-          const next = await fetchStepResource(
-            MODEL_INFO[activeModel].directory + "/" + catalog[index].file
-          );
-          prepareData(next);
-          cacheStep(index, next);
-        } catch (error) {
-          console.warn("Prefetch non riuscito", error);
+      let dataWorker = null;
+      let dataWorkerFailed = false;
+      let dataRequestId = 0;
+      const dataRequests = new Map();
+      function requestPreparedStep(url) {
+        if (!dataWorker && !dataWorkerFailed && typeof Worker !== "undefined") {
+          try {
+            const source = "const BINARY_STEP_MAGIC='MSB1', BINARY_STEP_NODATA=-32768, FEELS_LIKE_METHOD=" + JSON.stringify(FEELS_LIKE_METHOD) + ";\n" +
+              [clamp, getGrid, fetchDecompressedResponse, decodeBinaryStep, saturationVapourHpa,
+               wetBulbCelsius, deriveWetBulb, heatIndexCelsius, windChillCelsius,
+               calculateFeelsLike, prepareData].map(fn => fn.toString()).join("\n") +
+              "\nself.onmessage=async function(e){try {const r=await fetchDecompressedResponse(e.data.url); const data=decodeBinaryStep(await r.arrayBuffer()); prepareData(data); const buffers=new Set(); const visit=v=>{if(ArrayBuffer.isView(v)) buffers.add(v.buffer);else if(v&&typeof v==='object') Object.values(v).forEach(visit);};visit(data);self.postMessage({id:e.data.id,data:data},Array.from(buffers));}catch(error){self.postMessage({id:e.data.id,error:error.message});}};";
+            const workerUrl = URL.createObjectURL(new Blob([source], {type:"application/javascript"}));
+            dataWorker = new Worker(workerUrl); URL.revokeObjectURL(workerUrl);
+            dataWorker.onmessage = function(e) {
+              const task = dataRequests.get(e.data.id); if (!task) return;
+              dataRequests.delete(e.data.id);
+              if (e.data.error) task.reject(new Error(e.data.error)); else task.resolve(e.data.data);
+            };
+            dataWorker.onerror = function() {
+              dataWorkerFailed = true; dataWorker.terminate(); dataWorker = null;
+              for (const task of dataRequests.values()) task.reject(new Error("Decoder non disponibile"));
+              dataRequests.clear();
+            };
+          } catch (_) { dataWorkerFailed = true; }
         }
+        if (!dataWorker) return fetchStepResource(url).then(function(data) { prepareData(data); return data; });
+        return new Promise(function(resolve,reject) {
+          const id = ++dataRequestId; dataRequests.set(id,{resolve,reject});
+          dataWorker.postMessage({id:id,url:new URL(url,location.href).href});
+        });
       }
-
-      // Vero solo mentre l'utente aspetta un passo preciso (loadStep): il
-      // prefetch di sottofondo si scansa per non contendere banda o CPU a
-      // una richiesta che l'utente sta guardando in questo istante.
+      function fetchStep(index) {
+        const item = catalog[index];
+        if (!item) return Promise.reject(new Error("Scadenza assente"));
+        const url = MODEL_INFO[activeModel].directory + "/" + item.file;
+        return stepResources.load(index, function() { return requestPreparedStep(url); });
+      }
+      function extraKey(index,kind) {
+        const item = catalog[index];
+        const hour = item.hour !== undefined ? item.hour : item.leadHours;
+        return MODEL_INFO[activeModel].directory + "/" + kind + "_" + hour + ".json.gz";
+      }
+      function fetchExtra(index,kind) {
+        if (kind === "storm" && catalog[index].storm === false) return Promise.resolve(null);
+        const key = extraKey(index,kind);
+        return extraResources.load(key,function() {
+          return fetchJsonResource(key).then(function(data) { if(kind === "upper") compactUpperData(data); return data; });
+        });
+      }
+      function activeExtraKind() { return usesUpperData(activeLayer) ? "upper" : usesStormData(activeLayer) ? "storm" : null; }
+      const prefetchFailures = new Map();
+      async function prefetchStep(index) {
+        try {
+          await fetchStep(index);
+          const kind = activeExtraKind(); if (kind) await fetchExtra(index,kind);
+          updateBufferUi(); scheduleFrameWarmup();
+        } catch (_) { prefetchFailures.set(index,Date.now()); updateBufferUi(); }
+      }
       let explicitLoadInFlight = false;
       let backgroundPrefetchToken = 0;
-
+      let prefetchActive = 0;
+      const prefetchPending = new Set();
       function scheduleIdle(fn) {
-        if (typeof requestIdleCallback === "function") {
-          requestIdleCallback(fn, { timeout: 2000 });
-        } else {
-          setTimeout(fn, 60);
+        if (typeof requestIdleCallback === "function") requestIdleCallback(fn,{timeout:500});
+        else setTimeout(fn,30);
+      }
+      function prefetchWholeRun(fromIndex) {
+        if (document.hidden) return;
+        const limit = navigator.connection && navigator.connection.saveData ? 1 : 3;
+        const kind = activeExtraKind();
+        const order = catalog.map((_,i)=>i).filter(i => !prefetchPending.has(i) && (!prefetchFailures.has(i) || Date.now()-prefetchFailures.get(i)>30000) &&
+          (!stepCache.has(i) || (kind && !extraResources.has(extraKey(i,kind)) && !(kind === "storm" && catalog[i].storm === false))))
+          .sort((a,b)=>Math.abs(a-fromIndex)-Math.abs(b-fromIndex));
+        while (prefetchActive < limit && order.length) {
+          const index = order.shift(); prefetchPending.add(index); prefetchActive++;
+          prefetchStep(index).finally(function() { prefetchPending.delete(index); prefetchActive--; });
         }
       }
-
-      // L'intero run, non solo i vicini: da quando il passo e' un
-      // contenitore binario molto piu' leggero (Fase A) tenerlo tutto in
-      // cache e' sostenibile, ed e' quello che rende la barra del tempo
-      // immediata invece che un nuovo fetch a ogni scrub. Un passo alla
-      // volta, dal piu' vicino al piu' lontano da fromIndex, in idle time:
-      // non deve competere con il primo disegno né con una navigazione
-      // esplicita.
-      function prefetchWholeRun(fromIndex) {
-        const token = ++backgroundPrefetchToken;
-        const order = catalog
-          .map(function (_, index) { return index; })
-          .filter(function (index) { return !stepCache.has(index); })
-          .sort(function (a, b) {
-            return Math.abs(a - fromIndex) - Math.abs(b - fromIndex);
-          });
-        let cursor = 0;
-
-        function step() {
-          if (token !== backgroundPrefetchToken) return;
-          if (explicitLoadInFlight) {
-            scheduleIdle(step);
-            return;
-          }
-          while (cursor < order.length && stepCache.has(order[cursor])) {
-            cursor += 1;
-          }
-          if (cursor >= order.length) return;
-          const index = order[cursor];
-          cursor += 1;
-          prefetchStep(index).then(function () {
-            if (token === backgroundPrefetchToken) scheduleIdle(step);
-          });
-        }
-        scheduleIdle(step);
+      // Fixed pump: scrubbing reprioritises the next free slot without duplicating requests.
+      setInterval(function() { if (!document.hidden && catalog.length) prefetchWholeRun(currentIndex); },600);
+      function updateBufferUi() {
+        const el = document.getElementById("timeline-buffer");
+        const status = document.getElementById("buffer-status");
+        if (!el || !catalog.length) return;
+        const kind = activeExtraKind();
+        let ready = 0;
+        el.replaceChildren(...catalog.map(function(_,i) {
+          const mark = document.createElement("i");
+          const cached = stepCache.has(i) && (!kind || extraResources.has(extraKey(i,kind)) || (kind === "storm" && catalog[i].storm === false));
+          mark.className = cached ? "ready" : ""; if(cached) ready++; return mark;
+        }));
+        status.textContent = ready === catalog.length ? "Sequenza scaricata" : "Sequenza " + ready + "/" + catalog.length;
+      }
+      function buildTimelineDays() {
+        const el = document.getElementById("timeline-days"); el.replaceChildren();
+        let previous = "";
+        catalog.forEach(function(item,i) {
+          const date = parseCatalogDate(item); if (!date) return;
+          const key = date.toLocaleDateString("it-IT"); if(key === previous) return; previous = key;
+          const button = document.createElement("button"); button.type="button";
+          button.textContent = date.toLocaleDateString("it-IT",{weekday:"short",day:"numeric"});
+          button.style.left = (i / Math.max(1,catalog.length-1)*100) + "%";
+          button.addEventListener("click",function(){setPlaying(false);requestSliderStep(i);});
+          el.append(button);
+        });
       }
 
       async function loadCatalog(silentFailure) {
@@ -5254,6 +5263,8 @@
           catalog = await response.json();
           if (!Array.isArray(catalog) || catalog.length === 0) throw new Error("Catalogo vuoto");
 
+          stepResources.clear(); extraResources.clear(); weatherFrames.clear(); prefetchFailures.clear();
+          buildTimelineDays(); updateBufferUi();
           ui.slider.max = Math.max(catalog.length - 1, 0);
           ui.slider.min = 0;
 
@@ -5317,7 +5328,7 @@
         catalog = [];
         currentData = null;
         currentIndex = 0;
-        stepCache.clear();
+        stepResources.clear(); extraResources.clear(); weatherFrames.clear();
         upperData = null;
         stormData = null;
         stormIndex = -1;
@@ -5335,7 +5346,7 @@
           catalog = previous.catalog;
           currentData = previous.data;
           currentIndex = previous.index;
-          stepCache.clear();
+          stepResources.clear(); extraResources.clear(); weatherFrames.clear();
           updateModelUi();
           updateTimeUi();
           updateLayerUi();
@@ -5374,43 +5385,40 @@
         if (!catalog[index]) return;
 
         const token = ++loadingToken;
-        showLoading("Aggiornamento del campo meteorologico…");
+        ++rasterRenderToken; pendingRasterCallback = null; lastRasterSignature = "";
+        if (!currentData) showLoading("Caricamento della previsione…");
+        else document.getElementById("buffer-status").textContent = "Preparazione ora selezionata…";
         explicitLoadInFlight = true;
 
         try {
-          const nextData = await fetchStep(index);
+          const kind = activeExtraKind();
+          const values = await Promise.all([fetchStep(index), kind ? fetchExtra(index,kind) : Promise.resolve(null)]);
+          const nextData = values[0];
           if (token !== loadingToken) return;
 
+          if (kind !== activeExtraKind() || weatherView !== "forecast") return;
+          if (kind === "upper") { upperData = values[1]; upperIndex = index; }
+          if (kind === "storm") { stormData = values[1]; stormIndex = index; }
           currentData = nextData;
           currentIndex = index;
           ui.slider.value = String(index);
 
-          updateTimeUi();
-          updateLayerUi();
-          updateBulletinUi();
-          updateLegend();
-          renderWeather();
-          updateIsobars();
-          updateMapPresentation();
-          // Le particelle NON si azzerano cambiando passo: campionano il
-          // campo a ogni fotogramma, quindi passano da sole alla scadenza
-          // nuova. Svuotare la tela le farebbe ripartire da zero a ogni
-          // fotogramma della riproduzione -- il salto che si vede. Il reset
-          // resta dove la geometria cambia davvero: mappa mossa, modello o
-          // livello diversi.
-          if (showParticles) startParticles();
-          requestVectorRender();
-          refreshSelectedPoint();
-
-          prefetchWholeRun(index);
+          const commitUi = function() {
+            if(token !== loadingToken) return;
+            updateTimeUi(); updateLayerUi(); updateBulletinUi(); updateLegend();
+            updateIsobars(); updateMapPresentation();
+            if(showParticles) startParticles();
+            requestVectorRender(); refreshSelectedPoint();
+            prefetchWholeRun(index); updateBufferUi(); scheduleFrameWarmup();
+          };
+          renderWeather(false,commitUi);
           return true;
         } catch (error) {
           console.error(error);
           toast("Errore nel caricamento del passo selezionato");
           return false;
         } finally {
-          explicitLoadInFlight = false;
-          if (token === loadingToken) hideLoading();
+          if (token === loadingToken) { explicitLoadInFlight = false; hideLoading(); }
         }
       }
 
@@ -5425,8 +5433,7 @@
         ui.timeLabel.textContent = formatDateTime(date);
         ui.leadLabel.textContent = lead === null ? "--" : "+" + lead + " h";
         // La stessa cosa, in una riga sola, per l'intestazione del telefono.
-        ui.brandMeta.textContent = formatDateTime(date)
-          + (lead === null ? "" : " · +" + lead + " h");
+        ui.brandMeta.textContent = "Run " + formatRun(item);
         ui.brandMeta.classList.toggle(
           "stale", ui.runValue.classList.contains("stale")
         );
@@ -5856,7 +5863,7 @@
           try {
             source.updateImage({ url: url, coordinates: corners });
             map.setPaintProperty(
-              "satellite-clouds-layer", "raster-opacity", product.opacity || 0.94
+              "satellite-clouds-layer", "raster-opacity", 1
             );
             cloudLoadedBox = box;
             cloudLoadedMetres = size.metres;
@@ -5875,79 +5882,8 @@
           }
         };
 
-        // Le RGB ufficiali sono gia' immagini pronte: pubblicare direttamente
-        // l'URL conserva ogni pixel e lascia lavorare la cache HTTP del WMS.
-        // Solo i canali singoli richiedono la maschera alfa sulla canvas.
-        if (product.mode !== "grey") {
-          update(image.src, false);
-          return;
-        }
-        if (!cloudCanvas) cloudCanvas = document.createElement("canvas");
-        cloudCanvas.width = size.width;
-        cloudCanvas.height = size.height;
-        const context = cloudCanvas.getContext("2d", { willReadFrequently: true });
-        if (!context) return;
-        context.imageSmoothingEnabled = true;
-        context.imageSmoothingQuality = "high";
-        context.clearRect(0, 0, size.width, size.height);
-        context.drawImage(image, 0, 0, size.width, size.height);
-
-        // I canali singoli IR/VIS vengono trasformati in una maschera di
-        // nube trasparente. Le RGB ufficiali, invece, sono prodotti
-        // diagnostici gia' calibrati: conservarne integralmente i colori e'
-        // parte dell'informazione scientifica.
-        let pixels = null;
-        if (product.mode === "grey") {
-          const frame = context.getImageData(0, 0, size.width, size.height);
-          pixels = frame.data;
-          const span = product.solid - product.clear;
-          const coldSpan = (product.cold || product.solid) - product.clear;
-          for (let i = 0; i < pixels.length; i += 4) {
-            const red = pixels[i], green = pixels[i + 1], blue = pixels[i + 2];
-            const luminance = 0.299 * red + 0.587 * green + 0.114 * blue;
-            let level = (luminance - product.clear) / span;
-            level = level < 0 ? 0 : (level > 1 ? 1 : level);
-            const alpha = level * level * (3 - 2 * level);
-            // Nube tiepida (bassa) grigio-azzurra, cima fredda bianca: e' la
-            // lettura classica dei canali in scala di grigi, e distingue a
-            // colpo d'occhio lo strato dal cumulonembo.
-            let cold = (luminance - product.clear) / coldSpan;
-            cold = cold < 0 ? 0 : (cold > 1 ? 1 : cold);
-            const tone = 196 + 59 * cold;
-            pixels[i] = tone;
-            pixels[i + 1] = tone + 8 > 255 ? 255 : tone + 8;
-            pixels[i + 2] = tone + 18 > 255 ? 255 : tone + 18;
-            pixels[i + 3] = Math.round(alpha * 255);
-          }
-          context.putImageData(frame, 0, 0);
-        }
-
-        // Di notte il visibile non riceve luce: l'immagine e' nera e il
-        // livello resterebbe vuoto senza spiegazione. Meglio dirlo e
-        // indicare i canali che di notte funzionano.
-        if (product.dayOnly && pixels) {
-          let lit = 0;
-          for (let i = 3; i < pixels.length; i += 4) {
-            if (pixels[i] > 10) lit++;
-          }
-          if (lit < pixels.length / 4 * 0.002) {
-            toast("Su questa zona e' notte: il visibile non vede nulla, usa"
-              + " infrarosso o GeoColour");
-          }
-        }
-
-        // Stessa scelta del raster del modello: toBlob non blocca il thread
-        // principale come farebbe la codifica base64 di qualche milione di
-        // pixel, che su telefono si vedeva.
-        if (typeof cloudCanvas.toBlob === "function"
-          && typeof URL.createObjectURL === "function") {
-          cloudCanvas.toBlob(function (blob) {
-            if (!blob) return;
-            update(URL.createObjectURL(blob), true);
-          }, "image/png");
-        } else {
-          update(cloudCanvas.toDataURL("image/png"), false);
-        }
+        // Preserve the complete observed image, including clear sky and original IR tones.
+        update(image.src, false);
       }
 
       // ---------------------------------------------------------------
@@ -5999,18 +5935,8 @@
       // scadenza piu' vicina resta la stessa e non si ricarica nulla: solo
       // quando cambia davvero si muove la timeline.
       function syncTimelineToSatellite(slot) {
-        if (!showSatelliteClouds || !catalog.length) return;
-        const target = nearestStepTo(slot.date.getTime());
-        updateSatelliteLockUi(slot);
-        if (target.index < 0) return;
-        // Se la scadenza piu' vicina e' lontana piu' di un'ora e mezza,
-        // l'ancoraggio non ha piu' senso fisico: il modello e' vecchio o non
-        // copre l'adesso, e va detto invece di far credere a una coincidenza.
-        if (target.distance > 90 * 60 * 1000) {
-          toast("Il modello non copre l'ora del satellite: le nubi sono di"
-            + " adesso, il campo e' la scadenza piu' vicina");
-        }
-        if (target.index !== currentIndex) loadStep(target.index);
+        const el = document.getElementById("satellite-time");
+        if(el) el.textContent = slot.latest ? "Ultima immagine disponibile" : formatDateTime(slot.date);
       }
 
       function loadSatelliteClouds(force) {
@@ -6097,7 +6023,7 @@
           (product.slotMs || CLOUD_SLOT_MS) / 2);
         const selectedProduct = CLOUD_PRODUCTS[cloudProduct] || CLOUD_PRODUCTS.geocolour;
         toast("Satellite MTG · " + selectedProduct.name
-          + " · la timeline resta ancorata all'ora dell'immagine");
+          + " · osservazione satellitare");
       }
 
       // La foschia esiste solo se c'è un orizzonte da velare: cresce con
@@ -6697,6 +6623,8 @@
       }
 
       function setLayer(nextLayer) {
+        if (weatherView === "satellite") setWeatherView("forecast");
+        ++loadingToken; weatherFrameEpoch++;
         if (nextLayer !== "none" && !LAYER_INFO[nextLayer]) return;
         if (currentData && !hasLayerData(nextLayer)) {
           toast(unavailableLayerMessage(nextLayer));
@@ -6755,10 +6683,12 @@
         updateMapPresentation();
         requestVectorRender();
         refreshSelectedPoint();
+        updateBufferUi(); scheduleFrameWarmup();
         closeDrawerOnMobile();
       }
 
       function setLevel(nextLevel) {
+        ++loadingToken; weatherFrameEpoch++; lastRasterSignature = "";
         if (!["surface", "925", "850"].includes(nextLevel)) return;
         if (activeModel !== "icon2i" && nextLevel !== "surface") {
           selectedLevel = "surface";
@@ -6777,6 +6707,8 @@
       }
 
       function setToggle(name) {
+        weatherFrameEpoch++; lastRasterSignature = "";
+        if(weatherView === "satellite" && name !== "satclouds") setWeatherView("forecast");
         if (name === "vectors") {
           showVectors = !showVectors;
           requestVectorRender();
@@ -6835,8 +6767,7 @@
             toast("Radar spento · il satellite resta visibile");
           }
         } else if (name === "satclouds") {
-          showSatelliteClouds = !showSatelliteClouds;
-          updateSatelliteClouds();
+          setWeatherView(weatherView === "satellite" ? "forecast" : "satellite");
         } else if (name === "fusion") {
           if (!showFusion && (!fusionSupported(activeLayer) || selectedLevel !== "surface")) {
             toast(
@@ -7025,45 +6956,11 @@
       }
 
       function publishWeatherRaster(coordinates) {
-        const token = ++rasterPublishToken;
-        const source = map.getSource("weather");
-        if (!source) return;
-
-        const update = function (url, objectUrl) {
-          if (token !== rasterPublishToken) {
-            if (objectUrl) URL.revokeObjectURL(url);
-            return;
-          }
-          try {
-            source.updateImage({ url: url, coordinates: coordinates });
-            if (rasterObjectUrl) {
-              const previousUrl = rasterObjectUrl;
-              setTimeout(function () { URL.revokeObjectURL(previousUrl); }, 1600);
-            }
-            rasterObjectUrl = objectUrl ? url : "";
-          } catch (error) {
-            if (objectUrl) URL.revokeObjectURL(url);
-            lastRasterSignature = "";
-            console.error("Aggiornamento raster non riuscito", error);
-          }
-        };
-
-        // toDataURL codifica milioni di pixel in base64 sul thread principale
-        // e causava blocchi visibili soprattutto su iPhone. toBlob è asincrono
-        // e l'URL binario evita anche la copia base64; il fallback copre i
-        // browser più vecchi.
-        if (typeof rasterCanvas.toBlob === "function" && typeof URL.createObjectURL === "function") {
-          rasterCanvas.toBlob(function (blob) {
-            if (!blob) {
-              lastRasterSignature = "";
-              return;
-            }
-            const url = URL.createObjectURL(blob);
-            update(url, true);
-          }, "image/png");
-        } else {
-          update(rasterCanvas.toDataURL("image/png"), false);
-        }
+        const source = map.getSource("weather"); if (!source) return;
+        source.setCoordinates(coordinates);
+        source.play();
+        map.once("render",function() { source.pause(); });
+        map.triggerRepaint();
       }
 
       // ---- QUOTA VERA DEL TERRENO: lettura diretta delle tessere DEM -------
@@ -7368,6 +7265,11 @@
           return null;
         }
         worker.onmessage = function (event) {
+          rasterWorkerBusy = false;
+          if (queuedRasterParams) {
+            const latest = queuedRasterParams; queuedRasterParams = null;
+            rasterWorkerBusy = true; worker.postMessage(latest);
+          }
           if (event.data.token !== rasterRenderToken || !pendingRasterCallback) return;
           const callback = pendingRasterCallback;
           pendingRasterCallback = null;
@@ -7388,6 +7290,8 @@
       // L'ultimo pacchetto di parametri mandato al worker: solo per poterlo
       // rifare sul thread principale se il worker fallisce a runtime.
       let lastRasterFillParams = null;
+      let rasterWorkerBusy = false;
+      let queuedRasterParams = null;
 
       // Un solo raster alla volta: il token scarta il risultato di una
       // richiesta superata da una piu' recente, cosi' come loadStep scarta
@@ -7400,17 +7304,21 @@
           if (!rasterWorker) rasterWorker = buildRasterWorker();
           if (rasterWorker) {
             pendingRasterCallback = onDone;
-            rasterWorker.postMessage(params);
+            if (rasterWorkerBusy) queuedRasterParams = params;
+            else { rasterWorkerBusy = true; rasterWorker.postMessage(params); }
             return;
           }
         }
         onDone(fillRasterPixels(params));
       }
 
-      function renderWeather() {
+      function renderWeather(prewarm, onReady) {
+        prewarm = prewarm === true;
+        if (weatherView !== "forecast") return;
         if (!mapLoaded || !currentData || !map.getSource("weather")) return;
 
         if (activeLayer === "none") {
+          if (onReady) onReady();
           if (map.getLayer("weather-layer")) {
             map.setLayoutProperty("weather-layer", "visibility", "none");
           }
@@ -7506,9 +7414,11 @@
         // Il budget resta alto sul desktop, ma è limitato su mobile: oltre
         // circa due milioni di pixel il guadagno visivo è minimo mentre memoria
         // e tempo di codifica crescono rapidamente.
-        const pixelLimit = mobileRaster
+        // Reserve enough room for the complete active-field timeline, not just nearby hours.
+        const frameBudgetPixels = Math.floor(weatherFrames.budget * 0.9 / (4 * Math.max(catalog.length, 1)));
+        const pixelLimit = Math.min(frameBudgetPixels, mobileRaster
           ? RASTER_CONFIG.pixelLimitMobile
-          : RASTER_CONFIG.pixelLimitDesktop;
+          : RASTER_CONFIG.pixelLimitDesktop);
 
         if (width * height > pixelLimit) {
           const reduction = Math.sqrt(pixelLimit / (width * height));
@@ -7529,14 +7439,20 @@
           bottomLatitude.toFixed(4), topLatitude.toFixed(4)
         ].join("|");
         const sameRaster = renderSignature === lastRasterSignature;
+        const epoch = weatherFrameEpoch;
 
-        applyWeatherPaint(info);
-
-        if (sameRaster) return;
-        lastRasterSignature = renderSignature;
-
-        rasterCanvas.width = width;
-        rasterCanvas.height = height;
+        if (!prewarm) applyWeatherPaint(info);
+        if (sameRaster || (prewarm && weatherFrames.has(renderSignature))) { if(onReady) onReady(); return; }
+        const cachedFrame = !showFusion && weatherFrames.get(renderSignature);
+        if (cachedFrame && !prewarm) {
+          ++rasterRenderToken; pendingRasterCallback = null;
+          rasterCanvas.width = cachedFrame.width; rasterCanvas.height = cachedFrame.height;
+          rasterContext.putImageData(new ImageData(cachedFrame.pixels,cachedFrame.width,cachedFrame.height),0,0);
+          publishWeatherRaster(cachedFrame.coordinates); lastRasterSignature = renderSignature;
+          if(onReady) onReady();
+          return;
+        }
+        if (!prewarm) lastRasterSignature = renderSignature;
 
         const rasterSamplerKind = useNearestCell || info.categorical
           ? "nearest"
@@ -7600,16 +7516,18 @@
           terrainKey && terrainSamplerKey === terrainKey && terrainSampler
         );
 
+        const frameCoordinates = [[leftLongitude,topLatitude],[rightLongitude,topLatitude],[rightLongitude,bottomLatitude],[leftLongitude,bottomLatitude]];
         function finishRaster(pixels, elevationStat) {
-          rasterContext.putImageData(new ImageData(pixels, width, height), 0, 0);
+          if (epoch !== weatherFrameEpoch) return;
+          if (!showFusion) weatherFrames.set(renderSignature,{pixels:pixels,width:width,height:height,coordinates:frameCoordinates});
+          if (prewarm || weatherView !== "forecast") return;
+          rasterCanvas.width = width; rasterCanvas.height = height;
+          rasterContext.putImageData(new ImageData(pixels,width,height),0,0);
           lastElevationStat = elevationStat || null;
-          if (showFusion) updateDownscalingStatus();
-          publishWeatherRaster([
-            [leftLongitude, topLatitude],
-            [rightLongitude, topLatitude],
-            [rightLongitude, bottomLatitude],
-            [leftLongitude, bottomLatitude]
-          ]);
+          if(showFusion) updateDownscalingStatus();
+          publishWeatherRaster(frameCoordinates);
+          if(onReady) onReady();
+          scheduleFrameWarmup();
         }
 
         if (correctElevation) {
@@ -7628,7 +7546,7 @@
           }, profile, modelTerrain);
           finishRaster(elevated[0], elevated[1]);
         } else {
-          dispatchRasterFill({
+          (prewarm ? dispatchWarmRaster : dispatchRasterFill)({
             width: width, height: height,
             leftLongitude: leftLongitude, rightLongitude: rightLongitude,
             topMercator: topMercator, bottomMercator: bottomMercator,
@@ -10905,8 +10823,11 @@
         if (synopticChart) drawChartFurniture();
       }
 
+      let vectorRenderScheduled = false;
       function requestVectorRender() {
-        requestAnimationFrame(drawVectors);
+        if(vectorRenderScheduled) return;
+        vectorRenderScheduled = true;
+        requestAnimationFrame(function() { vectorRenderScheduled = false; drawVectors(); });
       }
 
       function pointFromCoordinates(lng, lat) {
@@ -10940,6 +10861,7 @@
       }
 
       function showPoint(lng, lat, title) {
+        if(weatherView !== "forecast") return;
         if (activeLayer === "none") {
           toast("Solo carta attivo: seleziona un campo per leggere il punto");
           return;
@@ -11424,16 +11346,14 @@
       }
 
       function setDrawer(open) {
-        const mobile = isMobile();
-        if (!mobile) return;
         ui.drawer.classList.toggle("open", open);
         document.body.classList.toggle("drawer-open", open);
         ui.drawerButton.setAttribute("aria-expanded", open ? "true" : "false");
-        if (open) setMoreMenu(false);
+        if (open) { setMoreMenu(false); ui.drawerClose.focus({preventScroll:true}); }
       }
 
       function closeDrawerOnMobile() {
-        if (isMobile()) setDrawer(false);
+        setDrawer(false);
       }
 
       function setBulletin(open) {
@@ -12257,8 +12177,9 @@
           loadPlaceNames();
 
           map.addSource("weather", {
-            type: "image",
-            url: "data:image/gif;base64,R0lGODlhAQABAAD/ACwAAAAAAQABAAACADs=",
+            type: "canvas",
+            canvas: rasterCanvas,
+            animate: false,
             coordinates: [[6, 48], [20, 48], [20, 35], [6, 35]]
           });
 
@@ -12697,7 +12618,7 @@
           }
 
           map.on("movestart", function () {
-            isMapMoving = true;
+            isMapMoving = true; weatherFrameEpoch++; lastRasterSignature = "";
             resetParticles();
             clearVectors();
           });
@@ -12708,7 +12629,7 @@
           });
 
           map.on("moveend", function () {
-            isMapMoving = false;
+            isMapMoving = false; scheduleFrameWarmup();
             syncTerrainExaggeration();
             resetParticles();
             updateHazeStrength();
@@ -12959,6 +12880,7 @@
       });
 
       document.addEventListener("keydown", function (event) {
+        if (event.key === "Escape" && ui.drawer.classList.contains("open")) { setDrawer(false); ui.drawerButton.focus(); }
         if (event.key === "Escape" && ui.bulletinCard.classList.contains("open")) {
           setBulletin(false);
         }
@@ -12968,5 +12890,7 @@
       updateModelUi();
       setupMap();
     </script>
+    <script src="modern-ui.js"></script>
   </body>
 </html>
+

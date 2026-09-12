@@ -9,6 +9,7 @@ const path = require("node:path");
 
 const root = path.resolve(__dirname, "../..");
 const html = fs.readFileSync(path.join(root, "index.html"), "utf8");
+const modernUi = fs.readFileSync(path.join(root, "modern-ui.js"), "utf8");
 const radarHtml = fs.readFileSync(path.join(root, "radar.html"), "utf8");
 const meteogramHtml = fs.readFileSync(path.join(root, "meteograms.html"), "utf8");
 
@@ -139,7 +140,7 @@ assert.match(meteogramHtml, /label:"Raffica", values:s\.gust10/,
   "il meteogramma del vento ignora le raffiche");
 
 // Il sito deve distinguere variabili, diagnostiche e probabilita' calibrate.
-assert.match(html, /id="field-method-card" class="field-method-card" open/,
+assert.match(html, /id="field-method-card" class="field-method-card"/,
   "manca la scheda scientifica del campo attivo");
 assert.match(html, /const LAYER_SCIENCE = \{/,
   "i layer non dichiarano natura, metodo, scala e limite d'uso");
@@ -207,8 +208,11 @@ assert.doesNotMatch(html, /map\.transform\b/, "uso di API MapLibre interna e fra
 assert.match(html, /map\.setSky\(/, "cielo MapLibre nativo assente");
 assert.match(html, /function terrainExaggerationForZoom\(/,
   "esagerazione verticale adattiva assente");
-assert.match(html, /rasterCanvas\.toBlob\(/,
-  "pubblicazione raster asincrona assente");
+// The canvas source now uploads pixels directly; PNG encoding was the scrub bottleneck.
+assert.match(html, /type: "canvas",\s*canvas: rasterCanvas,\s*animate: false/,
+  "pubblicazione diretta canvas assente");
+assert.doesNotMatch(html, /rasterCanvas\.toBlob\(/,
+  "la timeline ricodifica ancora PNG per ogni fotogramma");
 
 const projectParticle = html.match(
   /function projectParticle\([\s\S]*?\n {6}\}/
@@ -541,8 +545,8 @@ assert.match(html, /memory >= 8\s*\n\s*\? CLOUD_MAX_SIDE \* CLOUD_MAX_SIDE/,
   "i dispositivi potenti non ricevono la risoluzione satellitare massima");
 assert.match(html, /const sideLimitedWidth = Math\.floor\(CLOUD_MAX_SIDE \/ Math\.max\(aspect, 1\)\);/,
   "il lato verticale del WMS puo' superare i 4096 px");
-assert.match(html, /context\.imageSmoothingQuality = "high";/,
-  "la ricampionatura delle immagini satellitari non e' in alta qualita'");
+assert.match(html, /update\(image\.src, false\);/,
+  "il satellite non conserva il prodotto originale del fornitore");
 assert.match(html, /function cloudRequestBox\(pad\)/, "il riquadro non segue la vista");
 // Il margine serve a non ricaricare a ogni panoramica: quindi il confronto
 // deve usare il riquadro visibile, non quello gia' allargato.
@@ -558,21 +562,12 @@ assert.match(
 assert.match(html, /return cloudLoadedMetres > size\.metres \* 1\.35;/,
   "la soglia di ricarica non lascia raggiungere il pixel nativo");
 
-// Le RGB ufficiali sono già diagnostiche calibrate: modificarne i colori
-// distruggerebbe la legenda. Solo i canali singoli diventano maschere.
-assert.match(html, /if \(product\.mode === "grey"\) \{/,
-  "i canali IR e VIS non vengono trattati come maschere di nube");
-assert.match(html, /mode: "diagnostic"/,
-  "le RGB scientifiche non sono conservate come prodotti diagnostici");
-// Di notte il visibile e' cieco: va detto invece di mostrare un livello vuoto.
-assert.match(html, /if \(product\.dayOnly && pixels\) \{[\s\S]{0,420}?e' notte: il visibile non vede nulla/,
-  "di notte il visibile resta vuoto senza spiegazione");
-assert.match(html, /image\.crossOrigin = "anonymous";/,
-  "senza CORS la canvas resta sporca e getImageData fallisce");
-assert.match(html, /const alpha = level \* level \* \(3 - 2 \* level\);/,
-  "manca la rampa di opacita' che rende trasparente il cielo sereno");
-assert.match(html, /pixels\[i \+ 3\] = Math\.round\(alpha \* 255\);/,
-  "l'opacita' calcolata non finisce nel canale alfa");
+// In the standalone satellite view IR/VIS and RGB retain the original pixels.
+const publishClouds = html.match(/function publishSatelliteClouds\([\s\S]*?\n {6}\}/)[0];
+assert.match(publishClouds, /update\(image\.src, false\)/, "immagine satellitare originale assente");
+assert.doesNotMatch(publishClouds, /getImageData|putImageData/, "il satellite viene ancora trasformato in maschera");
+assert.match(html, /mode: "diagnostic"/, "RGB scientifiche assenti");
+assert.match(html, /solo di giorno/, "i canali diurni non dichiarano il limite");
 assert.match(html, /id: "satellite-clouds-layer"/, "layer delle nubi assente");
 assert.match(
   html,
@@ -588,8 +583,8 @@ assert.match(html, /data-toggle="radar"[\s\S]{0,220}?<b>Radar precipitazioni<\/b
   "manca il controllo radar indipendente");
 assert.match(html, /radar: showRadar,[\s\S]{0,120}?satclouds: showSatelliteClouds,/,
   "gli stati indipendenti non sono riportati nell'interfaccia");
-assert.match(html, /} else if \(name === "satclouds"\) \{\s*\n\s*showSatelliteClouds = !showSatelliteClouds;/,
-  "il satellite non si accende senza il radar");
+assert.match(html, /setWeatherView\(weatherView === "satellite"/,
+  "il satellite non usa la vista indipendente");
 assert.match(
   html,
   /cloudTimer = setInterval\(function \(\) \{ loadSatelliteClouds\(false\); \},\s*\n\s*\(product\.slotMs \|\| CLOUD_SLOT_MS\) \/ 2\);/,
@@ -622,8 +617,11 @@ assert.match(html, /maxzoom: 7,/,
   "RainViewer riceverebbe ancora richieste oltre lo zoom nativo supportato");
 assert.match(html, /function nearestStepTo\(when\)/,
   "manca la ricerca della scadenza piu' vicina all'immagine");
-assert.match(html, /if \(target\.index !== currentIndex\) loadStep\(target\.index\);/,
-  "la timeline non si sposta sulla scadenza del satellite");
+const satelliteTime = html.match(/function syncTimelineToSatellite\([\s\S]*?\n {6}\}/)[0];
+assert.doesNotMatch(satelliteTime, /loadStep/, "il satellite cambia ancora la scadenza del modello");
+assert.match(satelliteTime, /satellite-time/, "ora osservata non visibile nella vista satellite");
+assert.match(modernUi, /weatherView = 'satellite'; clearMeteorologicalLayers\(\);/,
+  "la vista satellite conserva sovrapposizioni previste");
 assert.match(html, /if \(locked && isPlaying\) setPlaying\(false\);/,
   "con il livello acceso l'animazione continuerebbe a scorrere");
 assert.match(html, /if \(ui\.slider\) ui\.slider\.disabled = locked;/,
@@ -643,8 +641,7 @@ assert.match(
   /ui\.playButton\.addEventListener\("click"[\s\S]{0,300}?if \(showSatelliteClouds\) \{/,
   "il tasto di riproduzione sfuggirebbe all'ancoraggio"
 );
-assert.match(html, /if \(target\.distance > 90 \* 60 \* 1000\)/,
-  "un modello che non copre l'ora del satellite passerebbe per una coincidenza");
+assert.match(modernUi, /activeLayer=saved.layer/, "uscendo dal satellite non torna il campo scelto");
 
 // --- Sezione temporali ---
 // I campi stanno in un file proprio, su griglia dimezzata: cercarli in
@@ -683,7 +680,7 @@ assert.match(html, /document\.body\.classList\.toggle\("map-only-layer", nextLay
   "lo stato Solo carta non e' persistito nell'interfaccia");
 assert.match(html, />Schermo intero<\/span>/,
   "il vecchio pulsante che nasconde solo la UI resta chiamato Solo mappa");
-assert.match(html, /if \(item\.storm === false\) \{/,
+assert.match(html, /kind === "storm" && catalog\[index\]\.storm === false/,
   "senza il controllo sul catalogo si chiederebbe un file inesistente");
 assert.match(html, /!upperActive && !stormActive\s*\n\s*&& !probActive && !profileActive && fieldGrid/,
   "la fusione con le stazioni si applicherebbe anche ai campi derivati");
@@ -1713,11 +1710,11 @@ assert.match(html, /const CAPE_STOPS = \[\s*\{ v: 0, c: \[238, 244, 240\], a: 0 
 
   // renderWeather deve smistare fra i due percorsi in base a correctElevation,
   // non disegnare sempre sullo stesso.
-  const render = html.match(/function renderWeather\(\) \{[\s\S]*?\n {6}\}/);
+  const render = html.match(/function renderWeather\(prewarm, onReady\) \{[\s\S]*?\n {6}\}/);
   assert.ok(render, "renderWeather assente");
   assert.match(render[0], /if \(correctElevation\) \{/,
     "renderWeather non distingue piu' il percorso con correzione di quota");
-  assert.match(render[0], /dispatchRasterFill\(/,
+  assert.match(render[0], /dispatchRasterFill/,
     "renderWeather non manda piu' il caso comune al worker");
 }
 
@@ -1744,3 +1741,4 @@ assert.match(html, /const CAPE_STOPS = \[\s*\{ v: 0, c: \[238, 244, 240\], a: 0 
     "il vento verrebbe corretto anche senza il profilo del vento");
 }
 console.log("3D map regression checks: OK");
+
