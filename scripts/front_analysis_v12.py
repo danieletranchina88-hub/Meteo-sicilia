@@ -33,7 +33,11 @@ import thermodynamics as thermo
 from front_analysis import SynopticFrontAnalyzer, _blend_lines, _line_length_km, _rdp
 
 
-FRONT_METHOD = "icon2i-ofa-physics-guided-v19-auditable"
+# La geometria non nasce piu' dal contorno zero di una derivata terza del
+# campo termico ma dalla cresta di un campo di evidenza fuso, a scala
+# sinottica dichiarata: e' un metodo diverso, non una taratura diversa, e
+# chi confronta run archiviati deve poterlo distinguere dalla stringa.
+FRONT_METHOD = "icon2i-ofa-evidence-ridge-v20-auditable"
 ANALYSIS_PRESSURE_PA = 85_000.0
 LOWER_PRESSURE_PA = 92_500.0
 UPPER_PRESSURE_PA = 70_000.0

@@ -1,4 +1,4 @@
-# Analisi oggettiva dei fronti ICON-2I (v19-auditable)
+# Analisi oggettiva dei fronti ICON-2I (v20-auditable)
 
 ## Scopo e limite fondamentale
 
@@ -12,7 +12,7 @@ Meteorologico. `qualityScore` e `uncertaintyIndex` descrivono la coerenza
 interna delle prove in un singolo run deterministico: non sono probabilità
 calibrate e non misurano l'errore previsionale assoluto.
 
-Il metodo operativo è `icon2i-ofa-physics-guided-v19-auditable`.
+Il metodo operativo è `icon2i-ofa-evidence-ridge-v20-auditable`.
 
 ## Dati usati
 
@@ -102,6 +102,172 @@ moto geometrico misurato resta prioritario: un fronte non è una particella
 trasportata integralmente dal vento in quota. FI500 descrive l'onda associata
 e viene archiviato nei diagnostici, senza spostare la linea termica.
 
+### Revisione v20: scala, prove, geometria
+
+La v20 nasce da una misura sul prodotto vero, non da un'idea di miglioramento.
+Sul run 2026-09-12 00Z, scaricando le scadenze pubblicate e misurandole:
+
+| grandezza misurata | valore | riferimento |
+|---|---|---|
+| curvatura media della linea | **12,5 gradi ogni 20 km** | 6,77 dichiarati qui sotto dopo la fase E |
+| scadenze senza alcun fronte | **16 su 25**, tutte consecutive da +30h | — |
+| ore con candidati accettati | **52 su 73** (`front_qc.json` del run) | — |
+| fronte più lungo e persistente | linea "stationary" di **1730 km** dall'Albania alla Provenza | — |
+
+Le due righe centrali insieme dicono che il buco di 42 ore non era assenza di
+fronti: il rilevatore li vedeva e la pubblicazione li cancellava. La quarta
+riga descrive il bordo alpino: frontogenesi 0,0116 K/100 km/3 h, convergenza
+−0,23, moto 4,2 km/h, accordo fra metodi 1 su 3, qualità 0,61 contro una
+soglia di 0,61 e incertezza 0,39 contro un massimo di 0,39. Era passato per
+zero su entrambe le soglie perché il punteggio premiava lunghezza e
+persistenza, che sono le proprietà di un artefatto ancorato al terreno.
+
+#### Scala dichiarata
+
+I fronti sono oggetti sinottici, e la geometria pubblicata nasceva invece dal
+passaggio a 45 km. Il nuovo motore analizza a **sigma 150 km**, e quel numero
+non è scelto a occhio: si ricava per equivalenza di varianza dai filtri delle
+climatologie frontali peer-reviewed. Un passaggio di media a 5 punti su una
+griglia di passo *d* ha varianza 2d²/5 per asse, quindi *n* passaggi valgono
+sigma = √(2n/5)·d. Sansom e Catto (2024) usano 8 passaggi su ERA-Interim
+(~79 km) e 96 su ERA5 (~28 km):
+
+- ERA-Interim: √(2·8/5) · 79 km = **141 km**
+- ERA5: √(2·96/5) · 28 km = **174 km**
+
+Due scelte indipendenti, fatte su griglie che differiscono di un fattore tre,
+convergono sulla stessa scala fisica. 150 km sta in mezzo. La derivazione è
+eseguibile: `front_engine.five_point_pass_sigma_km`, verificata nei test.
+
+Il ricampionamento verso la griglia d'analisi passa inoltre dallo *stride* alla
+**media d'area**, con gli assi delle coordinate decimati allo stesso modo. Un
+blocco medio sta al centro del blocco, non sul suo primo punto: prendere una
+coordinata ogni due avrebbe sfalsato ogni campo di mezza cella nativa.
+
+#### Fusione delle prove in log-odds
+
+Un unico campo continuo combina testimoni fisici quasi indipendenti in
+log-odds, ciascuno con una rampa monotona dichiarata: baroclinicità |∇θw|,
+nitidezza della zona (la variabile di localizzazione di Hewson), frontogenesi
+di Petterssen, vorticità ciclonica, convergenza, salto di direzione del vento
+attraverso la linea, saccatura barica, coerenza verticale 925→850→700 hPa,
+ascendenza a 700 hPa e una penalità di ancoraggio al terreno.
+
+La differenza sostanziale rispetto alla v19: frontogenesi, coerenza verticale e
+assenza di ancoraggio orografico entrano come **condizioni necessarie** —
+vicino a zero contribuiscono log-odds fortemente negativi — mentre lunghezza e
+persistenza **escono del tutto** dal punteggio di esistenza. Resta dichiarato,
+come sempre in questo documento, che è un punteggio di evidenza in forma
+probabilistica e **non una probabilità calibrata**.
+
+La penalità del terreno è condizionata, e la ragione è geometrica: la barriera
+alpina corre est-ovest, quindi la sua pendenza punta a nord, e un fronte freddo
+disteso sulla pianura padana ha il gradiente termico che punta a nord anche
+lui. Il solo allineamento non li distingue, e misurato costava 1,1 di log-odds
+a un confine autentico. La penalità morde perciò solo dove il contrasto segue
+la pendenza **e** nessuno lo sta affilando: è la formulazione della frase
+«questo contrasto appartiene alla montagna, non al flusso».
+
+#### La geometria come problema variazionale
+
+Mai più il contorno zero di una derivata terza, mai più un cammino di griglia a
+8 connessioni: entrambi quantizzano la direzione, ed erano la causa misurata
+del serpeggiamento.
+
+1. **Punti di cresta dall'Hessiano con localizzazione sub-pixel**
+   (Steger 1998): in ogni cella si diagonalizza H, la normale alla cresta è
+   l'autovettore dell'autovalore più negativo, e lo scostamento sub-cella
+   −(∇P·n)/(nᵀHn) colloca il punto senza scalini di griglia.
+2. **Soppressione dei non massimi lungo la normale, su tutto il corridoio**:
+   due fronti più vicini di 120 km non sono separabili a questa scala, quindi
+   dentro il corridoio sopravvive solo la cresta dominante.
+3. **Collegamento guidato dall'orientazione**, con la curvatura limitata *per
+   chilometro* e non per passo di griglia: 40 gradi su un passo di 9 km
+   sarebbero 89 gradi ogni 20 km. Il limite agisce sulla tangente della
+   cresta, che è un autovettore dell'Hessiano di un campo già lisciato a scala
+   sinottica e quindi non può girare in fretta; il passo fra due punti
+   sub-pixel sì, e testarlo con la stessa tolleranza spezzava le creste
+   oblique.
+4. **Ricucitura dei frammenti** collineari dello stesso confine — l'operazione
+   che nella v19 mancava del tutto.
+5. **Rifinitura variazionale**: passaggio elastico alternato a una
+   riproiezione sulla cresta dell'evidenza, con guadagno minore di uno. A
+   guadagno pieno la riproiezione disfa il passaggio elastico e la linea resta
+   ruvida quanto era; sotto, le due forze trovano un equilibrio, che è il
+   punto stazionario dell'energia che si sta minimizzando.
+
+Tre difetti di condizionamento sono stati trovati misurando e corretti, e vale
+la pena scriverli perché sono facili da reintrodurre:
+
+- la rampa cubica `smoothstep` ha la **derivata seconda discontinua**, e la
+  geometria è fatta di derivate seconde: ogni nodo di rampa diventava una
+  linea di curvatura enorme. Si usa la quintica 6t⁵−15t⁴+10t³, che è C²;
+- **derivare il campo di evidenza fuso** rendeva la geometria una derivata
+  quarta della temperatura, perché fra i testimoni ci sono già derivate
+  seconde. Misurato: curvatura di cresta dodici volte quella analitica e due
+  terzi dei punti di cresta fantasma. Il campo che si deriva porta ora solo
+  |∇θw|, con l'evidenza rilisciata alla scala d'analisi come cancello che può
+  spegnere la cresta ma non piegarla;
+- il **margine di lisciamento** al bordo del dominio a area limitata: dove il
+  nucleo gaussiano pesca fuori dominio il campo lisciato resta una media
+  pesata corretta, ma il suo nucleo è sbilanciato e le derivate sono distorte.
+  Si richiede che almeno il 90% della massa del nucleo stia su dati veri.
+  A 150 km quel margine vale circa 200 km, che è quasi esattamente il
+  cuscinetto fra il bordo di ICON-2I e la costa: sulle nove località
+  controllate nei test, da Lampedusa a Tarvisio, il supporto minimo è 0,913.
+
+#### Continuità temporale
+
+Il cancello di sopravvivenza tutto-o-niente è sostituito da uno smoother. Fra
+due osservazioni lo spostamento non osservato è un **ponte browniano**, quindi
+la sua deviazione standard vale s·√(t(T−t)/T) — esattamente zero sulle due
+osservazioni e massima a metà — con *s* la dispersione oraria del moto della
+traccia stessa. Quel numero viene pubblicato in `positionUncertaintyKm`, ed è
+ciò che rende onesto colmare il buco invece che inventarlo. Oltre sei ore il
+salto resta un salto.
+
+La copertura, inoltre, smette di essere un veto: entra già in `qualityScore`
+dentro la componente temporale con peso 0,38, e vietarla una seconda volta
+contava due volte la stessa prova. Resta un pavimento a 0,40 — sotto, una
+traccia sarebbe quasi tutta interpolazione — non un secondo giudizio.
+
+#### Un solo seme
+
+Il localizzatore su theta secca non genera più fronti per conto suo. Due
+localizzatori sulla stessa zona baroclina di larghezza finita ne seguono i
+bordi opposti, e il risultato erano due identità di tracciamento per un unico
+confine. Restano entrambi, insieme a quello direzionale e a quello a 925 hPa,
+come conferma indipendente di posizione e come accordo fra metodi.
+
+#### Cosa è stato verificato, e cosa no
+
+I test analitici (`scripts/tests/test_front_engine.py`) costruiscono i campi in
+**coordinate conformi**, che è l'unico modo perché un fronte obliquo abbia la
+normale costante a ogni latitudine su una griglia lon/lat: costruito in modo
+ingenuo, il fronte sintetico ruota da solo di qualche grado attraverso il
+dominio e il test finisce per misurare l'errore del generatore invece che
+quello del motore. Con quella costruzione:
+
+- la frontogenesi misurata coincide con ½|∇θ|(E + convergenza) entro lo 0,6% a
+  quattro orientazioni;
+- un getto di puro taglio la lascia invariata entro il 7% del termine che si
+  deve cancellare, e il residuo è spiegato e misurato: il lisciamento a sigma
+  per riga introduce in un getto puramente zonale un dv/dy che vale l'1,6% di
+  dv/dx;
+- l'asse ritrovato sta entro 31 km da quello vero, con curvatura fra 0,01 e
+  2,44 gradi ogni 20 km contro i 12,5 misurati sul prodotto v19;
+- il confine termico orografico viene respinto con probabilità 0,006 e zero
+  linee, mentre un fronte che attraversa la stessa barriera non perde nulla.
+
+**Il limite onesto resta quello dichiarato all'inizio del documento, e la v20
+non lo tocca**: `benchmarks/fronts/` è vuoto — nessuna etichetta, nessun caso,
+solo il README e un manifest d'esempio. Il metro (`front_benchmark.py`) è
+scritto ma non ha mai misurato niente. Si può quindi dimostrare la correttezza
+analitica, la sparizione dell'artefatto orografico e il miglioramento
+geometrico misurato; **non** si può dimostrare che i fronti nuovi siano più
+vicini a un'analisi manuale ufficiale, perché quell'archivio non esiste nel
+repository.
+
 ## 1. Variabili termiche indipendenti
 
 Da pressione, temperatura e umidità specifica si calcolano:
@@ -120,6 +286,13 @@ stessi controlli incrociati di temperatura secca, `theta_w` e densità
 virtuale. Un confine di sola umidità viene quindi respinto.
 
 ## 2. Localizzazione OFA
+
+> **Dalla v20 questo non è più il generatore della geometria pubblicata.** La
+> linea nasce dalla cresta del campo di evidenza fuso descritto sopra; il
+> localizzatore TFL qui descritto, quello direzionale e quello a 925 hPa
+> restano attivi come conferma indipendente di posizione e come accordo fra
+> metodi, e le loro soglie continuano a valere per quel ruolo. Quanto segue
+> descrive come funzionano.
 
 Il nucleo segue Hewson (1998) nella formulazione portabile verificata da
 Sansom e Catto (2024):
@@ -686,6 +859,15 @@ degenere ripiega sul contorno originale, quindi la pubblicazione non può mai
 regredire a una linea vuota o rotta. Il numero di fronti, i tipi e i segmenti
 restano invariati: cambia solo la posizione della linea.
 
+> **Dalla v20 questo raffinamento è spento** (`REFINE_PUBLISHED_GEOMETRY =
+> False`). La ragione è quella descritta sopra: il suo ripiego protettivo
+> ripubblicava il contorno grezzo ogni volta che il controllo di sicurezza
+> respingeva il percorso lisciato, cioè faceva uscire proprio le geometrie
+> peggiori nella forma più cruda. La rifinitura ora è variazionale e sta dentro
+> il motore, ancorata alla cresta dell'evidenza a ogni passo, quindi non ha un
+> ripiego da esercitare. Il modulo e l'interruttore restano, e quanto segue
+> descrive come si comportavano quando era acceso.
+
 L'attivazione originaria (`REFINE_PUBLISHED_GEOMETRY = True`) è avvenuta dopo
 il **benchmark Fase E** su 3 run reali (24 linee, metrica equa a passo uniforme):
 supporto medio lungo la linea 0.43 → 0.50, frazione su supporto forte 0.50 →
@@ -801,6 +983,45 @@ La workflow blocca la pubblicazione se falliscono i test sintetici:
   semicerchi per freddo, caldo, occluso e stazionario) e scala cartografica
   che lega dimensione, spessore e passo.
 
+### Test analitici della v20
+
+Tre file nuovi, tutti in CI. Quello che li distingue dal resto della suite è
+che l'esito atteso si calcola in forma chiusa, quindi un fallimento indica un
+errore di implementazione e non una taratura da rivedere.
+
+`test_front_engine.py` — il motore da solo, su fronti analitici costruiti in
+coordinate conformi:
+
+- l'equivalenza di varianza dei filtri climatologici (141 e 174 km) e sigma
+  sinottico fra i due;
+- il gradiente di picco del fronte di riferimento contro la forma chiusa,
+  scarto +0,15%;
+- frontogenesi di Petterssen contro ½|∇θ|(E + convergenza) a quattro
+  orientazioni, e invarianza rispetto a un getto di puro taglio;
+- vorticità del getto contro il taglio analitico;
+- asse ritrovato dritto (sotto i 6 gradi/20 km) e sulla posizione giusta;
+- una sola linea pubblicabile da un solo confine, e rifinitura che non
+  allontana la linea dalla cresta;
+- la rampa è C² agli estremi e la curvatura misurata della cresta resta
+  vicina a quella analitica: sono le due sentinelle che impediscono di
+  reintrodurre una derivata alta nel campo che si deriva;
+- il confine orografico respinto, il testimone del terreno impegnato al 94%
+  del suo peso su un caso marginale, e nessuna penalità a un fronte che
+  attraversa la stessa barriera.
+
+`test_front_engine_graft.py` — il vero `_detect_hour` con campi sintetici: un
+fronte baroclino con confluenza e getto parallelo esce con curvatura 2,6
+gradi/20 km e con `warmNormal` e `hewsonDir` della lunghezza dei vertici
+finali; lo stesso contrasto termico saldato a una catena montuosa, senza
+dinamica, non esce affatto; il cancello sul supporto del lisciamento non
+esclude nessuna delle nove località italiane controllate.
+
+`test_front_continuity.py` — costruito sul profilo orario vero del run
+misurato: le 25 ore osservate fra +32h e +71h diventano 30 ore pubblicabili, il
+buco autentico di dieci ore fra +53h e +62h resta aperto perché è oltre il
+limite dichiarato, e l'incertezza a metà di un buco di sei ore coincide con la
+forma analitica del ponte browniano.
+
 ## Riferimenti primari
 
 - Hewson, 1998, *Objective fronts*:
@@ -810,6 +1031,12 @@ La workflow blocca la pubblicazione se falliscono i test sintetici:
   [Geoscientific Model Development](https://gmd.copernicus.org/articles/17/6137/2024/gmd-17-6137-2024.html)
 - Codice ufficiale collegato all'articolo:
   [phil-sansom/front_id](https://github.com/phil-sansom/front_id)
+- Steger, 1998, *An unbiased detector of curvilinear structures*, rilevamento
+  sub-pixel delle creste dall'Hessiano:
+  [IEEE TPAMI 20(2), 113-125](https://doi.org/10.1109/34.659930)
+- Renard e Clarke, 1965, *Experiments in numerical objective frontal analysis*,
+  parametro frontale termico:
+  [Monthly Weather Review 93, 547-556](https://doi.org/10.1175/1520-0493(1965)093<0547:EINOFA>2.3.CO;2)
 - Beckert et al., 2023, rilevamento tridimensionale e filtri fuzzy:
   [Geoscientific Model Development](https://gmd.copernicus.org/articles/16/4427/2023/gmd-16-4427-2023.html)
 - Jenkner et al., 2010, fronti ad alta risoluzione e orografia alpina:
