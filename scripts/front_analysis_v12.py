@@ -128,7 +128,15 @@ TRACK_WINDOW_HOURS = 2
 TRACK_GATE_KM = 170.0
 TRACK_MIN_LIFETIME_HOURS = 3
 TRACK_MIN_DETECTIONS = 4
-TRACK_MIN_COVERAGE = 0.72
+# Coverage -- the share of the hours in a track's span where the boundary was
+# actually detected -- already enters qualityScore through its temporal
+# component, so a hard veto at the same quantity counts the same evidence
+# twice: once as a graded penalty and once as a death sentence.  The published
+# run of 2026-09-12 00Z is what that costs: candidates accepted in 52 of 73
+# hours, fronts on the map in none after +30h.  What remains here is a floor,
+# not a judgement -- below it a track would be mostly interpolation, and the
+# gap filler above refuses to bridge more than MAX_INFERRED_GAP_HOURS anyway.
+TRACK_MIN_COVERAGE = 0.40
 MIN_PUBLISH_QUALITY = 0.61
 MAX_PUBLISH_UNCERTAINTY = 0.39
 MAX_FRONTS_PER_HOUR = 4
@@ -159,6 +167,13 @@ REFINE_PUBLISHED_GEOMETRY = False
 # synoptic boundary.  Hewson-style climatologies discard below ~250 km; the
 # margin here is deliberate, since the engine no longer scores length.
 ENGINE_MIN_LENGTH_KM = 300.0
+
+# How far a track may be carried across hours where it was not detected.  The
+# published run measured on 2026-09-12 00Z had candidates accepted in 52 of 73
+# hours and published fronts in none after +30h: the boundary was seen, then
+# erased by an all-or-nothing survival rule.  Six hours is the tracking window
+# doubled -- beyond it the interpolation would be stating more than the data.
+MAX_INFERRED_GAP_HOURS = 6
 GEOMETRY_CORRIDOR_KM = 120.0
 BOUNDARY_MARGIN_KM = 25.0
 
@@ -337,6 +352,67 @@ def deconflict_shared_front_trunks(
         published.append((fragment, properties))
         changed += 1
     return published, changed
+
+
+def fill_track_gaps(
+    track: dict, available_hours, max_gap_hours: int = MAX_INFERRED_GAP_HOURS
+) -> tuple[dict, dict, dict]:
+    """Carry a track across the hours where it was not detected.
+
+    The survival rule this replaces was all or nothing: a boundary seen in
+    most hours of its life was published in all of them, one seen in fewer was
+    published in none.  Neither answer uses the information actually
+    available, which is that the front was *here* at one hour and *there* a
+    few hours later, and therefore somewhere in between meanwhile.
+
+    Between two observations the unobserved displacement is a Brownian bridge,
+    so its standard deviation is ``s sqrt(t (T - t) / T)``: exactly zero at
+    both observations and widest in the middle, with ``s`` the hour-to-hour
+    spread of the track's own motion.  That number is returned per hour and
+    published as position uncertainty, which is what makes filling the gap an
+    honest statement rather than an invention.
+
+    Returns the geometry by hour, the local classifications by hour, and the
+    bridge standard deviation in km for each hour that was inferred.
+    """
+    expanded = dict(track["lines"])
+    local = dict(track.get("localClassifications", {}))
+    inferred_position_km: dict[int, float] = {}
+    detected = sorted(track["lines"])
+    motion_spread = float(track.get("motionMadKmh", 0.0) or 0.0)
+    for first, second in zip(detected[:-1], detected[1:]):
+        gap = second - first
+        if gap < 2 or gap - 1 > int(max_gap_hours):
+            continue
+        first_type = local.get(first, {}).get("frontType")
+        second_type = local.get(second, {}).get("frontType")
+        # Both ends ambiguous means there is no type to carry; one ambiguous
+        # end is fine, the other end and the track's dominant type decide.
+        if first_type == "uncertain" and second_type == "uncertain":
+            continue
+        first_line = np.asarray(track["lines"][first], dtype=float)
+        second_line = np.asarray(track["lines"][second], dtype=float)
+        for missing in range(first + 1, second):
+            if missing not in available_hours:
+                continue
+            elapsed = missing - first
+            weight = elapsed / float(gap)
+            expanded[missing] = _blend_lines(first_line, second_line, weight)
+            inferred_position_km[missing] = motion_spread * float(
+                np.sqrt(elapsed * (gap - elapsed) / float(gap))
+            )
+            nearer = first if weight <= 0.5 else second
+            other = second if nearer == first else first
+            source = local.get(nearer) or local.get(other) or {}
+            local[missing] = dict(source)
+            certainties = [
+                float(local[end].get("classificationCertainty", 0.0))
+                for end in (first, second) if end in local
+            ]
+            local[missing]["classificationCertainty"] = round(
+                (min(certainties) if certainties else 0.0) * (0.92 ** elapsed), 2
+            )
+    return expanded, local, inferred_position_km
 
 
 class IconSynopticFrontAnalyzer(SynopticFrontAnalyzer):
@@ -1626,34 +1702,10 @@ class IconSynopticFrontAnalyzer(SynopticFrontAnalyzer):
             hour: [] for hour in self.available_hours
         }
         for track in tracks:
-            expanded = dict(track["lines"])
-            local = dict(track.get("localClassifications", {}))
+            expanded, local, inferred_position_km = fill_track_gaps(
+                track, self.hour_to_index, MAX_INFERRED_GAP_HOURS
+            )
             detected = sorted(track["lines"])
-            for first, second in zip(detected[:-1], detected[1:]):
-                gap = second - first
-                if gap != 2:
-                    continue
-                missing = first + 1
-                first_type = local.get(first, {}).get("frontType")
-                second_type = local.get(second, {}).get("frontType")
-                if (
-                    missing in self.hour_to_index
-                    and first_type == second_type
-                    and first_type != "uncertain"
-                ):
-                    expanded[missing] = _blend_lines(
-                        np.asarray(track["lines"][first], dtype=float),
-                        np.asarray(track["lines"][second], dtype=float),
-                        0.5,
-                    )
-                    local[missing] = dict(local[first])
-                    local[missing]["classificationCertainty"] = round(
-                        min(
-                            float(local[first].get("classificationCertainty", 0.0)),
-                            float(local[second].get("classificationCertainty", 0.0)),
-                        ) * 0.92,
-                        2,
-                    )
             # A published track is a single continuous boundary. An isolated
             # hour whose local motion is ambiguous ("uncertain") must NOT punch
             # a hole in the middle of the track: that is the "front disappears
@@ -1693,9 +1745,29 @@ class IconSynopticFrontAnalyzer(SynopticFrontAnalyzer):
                     hour_properties["segmentTypes"] = segments
                 hour_properties["interpolated"] = hour not in track["lines"]
                 if hour_properties["interpolated"]:
-                    hour_properties["uncertaintyIndex"] = round(
-                        min(1.0, hour_properties["uncertaintyIndex"] + 0.06), 2
+                    distance_hours = min(
+                        (abs(hour - observed) for observed in detected),
+                        default=1,
                     )
+                    hour_properties["uncertaintyIndex"] = round(
+                        min(1.0, hour_properties["uncertaintyIndex"]
+                            + 0.06 * distance_hours),
+                        2,
+                    )
+                    hour_properties["inferredHoursFromObservation"] = int(
+                        distance_hours
+                    )
+                    bridge_km = inferred_position_km.get(hour)
+                    if bridge_km:
+                        existing = hour_properties.get("positionUncertaintyKm")
+                        existing = (
+                            float(existing)
+                            if existing is not None and np.isfinite(float(existing))
+                            else 0.0
+                        )
+                        hour_properties["positionUncertaintyKm"] = round(
+                            float(np.hypot(existing, bridge_km)), 1
+                        )
                 geometry = self._refine_geometry(
                     hour, np.asarray(coordinates, dtype=float)
                 )
