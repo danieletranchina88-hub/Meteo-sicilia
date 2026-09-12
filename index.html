@@ -6956,11 +6956,45 @@
       }
 
       function publishWeatherRaster(coordinates) {
-        const source = map.getSource("weather"); if (!source) return;
-        source.setCoordinates(coordinates);
-        source.play();
-        map.once("render",function() { source.pause(); });
-        map.triggerRepaint();
+        const token = ++rasterPublishToken;
+        const source = map.getSource("weather");
+        if (!source) return;
+
+        const update = function (url, objectUrl) {
+          if (token !== rasterPublishToken) {
+            if (objectUrl) URL.revokeObjectURL(url);
+            return;
+          }
+          try {
+            source.updateImage({ url: url, coordinates: coordinates });
+            if (rasterObjectUrl) {
+              const previousUrl = rasterObjectUrl;
+              setTimeout(function () { URL.revokeObjectURL(previousUrl); }, 1600);
+            }
+            rasterObjectUrl = objectUrl ? url : "";
+          } catch (error) {
+            if (objectUrl) URL.revokeObjectURL(url);
+            lastRasterSignature = "";
+            console.error("Aggiornamento raster non riuscito", error);
+          }
+        };
+
+        // toDataURL codifica milioni di pixel in base64 sul thread principale
+        // e causava blocchi visibili soprattutto su iPhone. toBlob è asincrono
+        // e l'URL binario evita anche la copia base64; il fallback copre i
+        // browser più vecchi.
+        if (typeof rasterCanvas.toBlob === "function" && typeof URL.createObjectURL === "function") {
+          rasterCanvas.toBlob(function (blob) {
+            if (!blob) {
+              lastRasterSignature = "";
+              return;
+            }
+            const url = URL.createObjectURL(blob);
+            update(url, true);
+          }, "image/png");
+        } else {
+          update(rasterCanvas.toDataURL("image/png"), false);
+        }
       }
 
       // ---- QUOTA VERA DEL TERRENO: lettura diretta delle tessere DEM -------
@@ -12176,10 +12210,19 @@
           mapLoaded = true;
           loadPlaceNames();
 
+          // Sorgente immagine, non canvas.  La sorgente canvas di MapLibre
+          // sembra la scelta piu' diretta -- niente codifica PNG a ogni
+          // fotogramma -- ma in questa versione della libreria non riesce a
+          // caricare la texture da un canvas fuori documento: misurato in
+          // Chromium, ogni aggiornamento del livello meteo lanciava
+          // "InvalidStateError: The source image could not be decoded" e sulla
+          // mappa non arrivava un solo pixel colorato, pur avendo il canvas i
+          // suoi colori giusti.  Attaccare il canvas al documento e ricreare
+          // la sorgente non bastano.  La codifica in blob costa qualche
+          // millisecondo per fotogramma ed e' il percorso che funziona.
           map.addSource("weather", {
-            type: "canvas",
-            canvas: rasterCanvas,
-            animate: false,
+            type: "image",
+            url: "data:image/gif;base64,R0lGODlhAQABAAD/ACwAAAAAAQABAAACADs=",
             coordinates: [[6, 48], [20, 48], [20, 35], [6, 35]]
           });
 

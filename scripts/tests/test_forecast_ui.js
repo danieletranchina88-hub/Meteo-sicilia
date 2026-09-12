@@ -63,11 +63,30 @@ async function test(name,fn) {await fn();console.log('PASS '+name);}
   context.dispatchRasterFill({hour:1},()=>{});context.dispatchRasterFill({hour:2},()=>{});context.dispatchRasterFill({hour:3},()=>{});
   assert.equal(sent.length,1);assert.equal(context.queuedRasterParams.hour,3);
  });
- await test('canvas publishing skips PNG encoding and stops continuous GPU uploads',()=>{
-  const calls=[];const source={setCoordinates:()=>calls.push('coords'),play:()=>calls.push('play'),pause:()=>calls.push('pause')};
-  const ctx={map:{getSource:()=>source,once:(event,fn)=>fn(),triggerRepaint:()=>calls.push('repaint')}};
-  vm.createContext(ctx);vm.runInContext(implementation('publishWeatherRaster'),ctx);ctx.publishWeatherRaster([]);
-  assert.deepEqual(calls,['coords','play','pause','repaint']);
+ // La sorgente canvas eviterebbe la codifica PNG, ma in MapLibre 5.24 non
+ // carica la texture da un canvas fuori documento: misurato in Chromium,
+ // "InvalidStateError: The source image could not be decoded" a ogni
+ // aggiornamento e mappa nera. Il raster si pubblica come immagine, e ogni
+ // pubblicazione deve annullare quella precedente: senza il contatore, due
+ // codifiche in volo possono consegnare i fotogrammi in ordine invertito e
+ // lasciare sulla mappa l'ora sbagliata.
+ await test('il raster si pubblica come immagine e la pubblicazione vecchia viene annullata',async()=>{
+  const aggiornamenti=[],revocati=[];
+  const source={updateImage:o=>aggiornamenti.push(o.url)};
+  let daChiamare=null;
+  const ctx={map:{getSource:()=>source},console,setTimeout:fn=>fn(),
+   URL:{createObjectURL:b=>'blob:'+b.tag,revokeObjectURL:u=>revocati.push(u)},
+   rasterCanvas:{toBlob:(fn)=>{daChiamare=fn;},toDataURL:()=>'data:,x'},
+   rasterPublishToken:0,rasterObjectUrl:'',lastRasterSignature:'firma'};
+  vm.createContext(ctx);vm.runInContext(implementation('publishWeatherRaster'),ctx);
+  ctx.publishWeatherRaster([[0,1],[1,1],[1,0],[0,0]]);
+  const primaCodifica=daChiamare;
+  ctx.publishWeatherRaster([[0,1],[1,1],[1,0],[0,0]]);
+  const secondaCodifica=daChiamare;
+  // La prima codifica termina per ultima: non deve arrivare sulla mappa.
+  secondaCodifica({tag:'nuovo'});primaCodifica({tag:'vecchio'});
+  assert.deepEqual(aggiornamenti,['blob:nuovo']);
+  assert.deepEqual(revocati,['blob:vecchio']);
  });
  await test('generated decoder worker is self-contained, including derived fields',async()=>{
   const blobs=[];const Worker=function(){this.postMessage=()=>{};};
