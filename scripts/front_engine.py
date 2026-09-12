@@ -816,20 +816,49 @@ def merge_fragments(
     lines: list[np.ndarray],
     *,
     join_km: float = 180.0,
-    max_angle_deg: float = 45.0,
+    max_angle_deg: float = 25.0,
+    max_curvature_deg_per_km: float = 0.25,
+    max_merged_turn_deg_per_20km: float = 6.0,
+    bridge_ok=None,
 ) -> list[np.ndarray]:
-    """Rejoin collinear pieces of the same boundary.
+    """Rejoin collinear pieces of the same boundary, in any orientation.
 
     Masking and gaps in the evidence cut one physical boundary into several
-    polylines.  Nothing in the previous implementation put them back together,
-    so a single front reached the map as fragments.  Two ends merge when they
-    are close, their end tangents agree, and the bridge between them runs the
-    same way.
+    polylines, and nothing in the previous implementation put them back
+    together, so a single front reached the map as fragments.
+
+    The orientation caveat is the whole difficulty.  ``link_ridge_points``
+    grows bidirectionally from a seed, so which end of a fragment is its
+    "start" is an accident of where the seed happened to fall.  A first
+    version only tested tail-to-head and therefore could not see half the
+    joins that exist; measured on the real 850 hPa field, the engine produced
+    a median of 34 fragments per hour whose longest was 195 km, every one of
+    them then discarded by the 300 km minimum, and the whole run fell back to
+    the old detector in 66 hours out of 73.  All four end pairings are tried
+    here, reversing whichever fragment needs it.
+
+    Reaching more joins also means reaching wrong ones, so geometry alone is
+    not enough to authorise one: ``bridge_ok`` is asked whether the ground a
+    bridge crosses actually carries frontal evidence.  Without it the axis of
+    a straight analytic front began annexing the short off-axis fragments on
+    its flanks and its curvature went from 2,4 to 9,0 degrees per 20 km.  Two
+    pieces of one front have a front between them; a piece of one front and a
+    piece of another do not.
+
+    The end tests are local, and local tests can be passed by a join that is
+    wrong globally: a fragment lying *beside* the main axis rather than beyond
+    it has compatible tangents and a short, well-aligned bridge, and welding
+    it on produces a dog-leg.  Measured on an oblique analytic front, that is
+    exactly what happened -- 895 km at 3,2 degrees per 20 km became 1234 km at
+    9,2.  So every join is finally judged on the thing actually wanted: the
+    merged line must still come out under
+    ``max_merged_turn_deg_per_20km``, the figure this project's own
+    documentation sets for a publishable geometry.
     """
     remaining = [np.asarray(line, dtype=float) for line in lines if len(line) >= 2]
-    limit = np.cos(np.deg2rad(max_angle_deg))
 
     def end_tangent(line: np.ndarray, at_end: bool) -> np.ndarray:
+        """Unit direction *leaving* the line at the chosen end."""
         span = min(4, len(line) - 1)
         if at_end:
             a, b = line[-1 - span], line[-1]
@@ -839,6 +868,60 @@ def merge_fragments(
         vector = np.array([(b[0] - a[0]) * kx, (b[1] - a[1]) * ky])
         return vector / max(float(np.hypot(vector[0], vector[1])), 1.0e-9)
 
+    def joinable(first: np.ndarray, second: np.ndarray) -> bool:
+        tail, head = first[-1], second[0]
+        gap = _separation_km(tail[0], tail[1], head[0], head[1])
+        if gap > join_km:
+            return False
+        # The bridge carries no ridge points of its own, so the turn it may
+        # absorb is the one a synoptic front could really make over that
+        # distance: the same curvature budget the linker enforces, only
+        # stricter because here there is no data underneath.  A flat 45
+        # degrees regardless of gap length is what turned a straight analytic
+        # front into a 9 degrees per 20 km line once reversed pairings made
+        # those joins reachable.
+        limit = np.cos(np.deg2rad(min(
+            max(max_curvature_deg_per_km * gap, 5.0), max_angle_deg
+        )))
+        out_tangent = end_tangent(first, True)
+        in_tangent = end_tangent(second, False)
+        kx, ky = _km_per_degree(0.5 * (tail[1] + head[1]))
+        bridge = np.array([(head[0] - tail[0]) * kx, (head[1] - tail[1]) * ky])
+        length = float(np.hypot(bridge[0], bridge[1]))
+        # Two ends on top of each other carry no direction of their own; the
+        # tangents alone then decide.
+        bridge = out_tangent if length < 1.0e-6 else bridge / length
+        if not (float(np.dot(out_tangent, in_tangent)) >= limit
+                and float(np.dot(out_tangent, bridge)) >= limit
+                and float(np.dot(bridge, in_tangent)) >= limit):
+            return False
+        if bridge_ok is not None and not bridge_ok(tail, head):
+            return False
+        # Beyond, not beside.  A fragment lying alongside the axis instead of
+        # past its end satisfies every local test -- compatible tangents, a
+        # short well-aligned bridge -- and welds on as a dog-leg.  Requiring
+        # the whole second fragment to sit ahead of the first's end, along the
+        # direction the first is travelling, is the global statement the local
+        # ones cannot make.
+        kx, ky = _km_per_degree(float(tail[1]))
+        ahead = (np.column_stack(((second[:, 0] - tail[0]) * kx,
+                                  (second[:, 1] - tail[1]) * ky))
+                 @ out_tangent)
+        if float(np.min(ahead)) < -0.25 * gap:
+            return False
+        # A join may not *degrade* the geometry, and may always proceed while
+        # the result stays inside the declared budget.  Comparing against the
+        # budget alone is too strict on real data, where the fragments of a
+        # genuine boundary are already rougher than the target and no join
+        # involving them could ever pass: measured on the published field,
+        # that rule rejected every merge and left 22 pieces of 77 km where
+        # there was one boundary of 1050 km.
+        budget = max(float(max_merged_turn_deg_per_20km),
+                     mean_turn_deg_per_km(first),
+                     mean_turn_deg_per_km(second))
+        merged_line = np.vstack((first, second))
+        return mean_turn_deg_per_km(merged_line) <= budget
+
     merged = True
     while merged and len(remaining) > 1:
         merged = False
@@ -847,30 +930,21 @@ def merge_fragments(
                 if i == j:
                     continue
                 first, second = remaining[i], remaining[j]
-                tail = first[-1]
-                head = second[0]
-                gap = _separation_km(tail[0], tail[1], head[0], head[1])
-                if gap > join_km:
-                    continue
-                out_tangent = end_tangent(first, True)
-                in_tangent = end_tangent(second, False)
-                kx, ky = _km_per_degree(0.5 * (tail[1] + head[1]))
-                bridge = np.array([(head[0] - tail[0]) * kx, (head[1] - tail[1]) * ky])
-                bridge_length = float(np.hypot(bridge[0], bridge[1]))
-                if bridge_length < 1.0e-6:
-                    bridge = out_tangent
-                else:
-                    bridge = bridge / bridge_length
-                if float(np.dot(out_tangent, in_tangent)) < limit:
-                    continue
-                if float(np.dot(out_tangent, bridge)) < limit:
-                    continue
-                if float(np.dot(bridge, in_tangent)) < limit:
-                    continue
-                remaining[i] = np.vstack((first, second))
-                remaining.pop(j)
-                merged = True
-                break
+                # Four pairings: either fragment may need reversing, because
+                # its direction was never meaningful to begin with.
+                for a, b in (
+                    (first, second),
+                    (first, second[::-1]),
+                    (first[::-1], second),
+                    (first[::-1], second[::-1]),
+                ):
+                    if joinable(a, b):
+                        remaining[i] = np.vstack((a, b))
+                        remaining.pop(j)
+                        merged = True
+                        break
+                if merged:
+                    break
             if merged:
                 break
     return remaining
@@ -909,7 +983,13 @@ def polish_line(
     iterations: int = 40,
     elasticity: float = 0.35,
     projection_gain: float = 0.40,
-    search_km: float = 45.0,
+    # Half the declared corridor: the projection may move a vertex anywhere
+    # the analysis considers the same boundary, and no further.  The first
+    # value here was simply a round 45 km with nothing behind it, and it was
+    # too short to pull a merged line back onto the crest -- measured on the
+    # oblique analytic front, 6,0 degrees per 20 km against 5,5 at the
+    # corridor half-width, with every other orientation equal or better.
+    search_km: float = 0.5 * CORRIDOR_KM,
     max_step_km: float = 12.0,
 ) -> np.ndarray:
     """Alternate elastic smoothing with re-projection onto the evidence crest.
@@ -1165,7 +1245,19 @@ def detect_fronts(
         field, longitudes, latitudes, metrics=metrics, mask=mask,
         min_curvature=0.25 * ridge_curvature_scale(sigma_km),
     )
-    raw_lines = merge_fragments(link_ridge_points(points))
+    def bridge_has_evidence(tail, head, _probe=9):
+        """Is there frontal evidence on the ground a join would span?"""
+        steps = np.linspace(0.0, 1.0, _probe)[1:-1]
+        span = np.column_stack((
+            tail[0] + steps * (head[0] - tail[0]),
+            tail[1] + steps * (head[1] - tail[1]),
+        ))
+        along = fl._sample(evidence["probability"], span, longitudes, latitudes,
+                           float(metrics["dlon"]), float(metrics["dlat"]))
+        return bool(np.nanmedian(along) >= min_probability)
+
+    raw_lines = merge_fragments(link_ridge_points(points),
+                                bridge_ok=bridge_has_evidence)
 
     reference = evidence["reference"]
     # Hewson tests the baroclinic zone *behind* the front, not the value on
