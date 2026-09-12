@@ -385,6 +385,7 @@
         *, *::before, *::after { scroll-behavior: auto !important; transition: none !important; }
       }
     </style>
+    <link rel="stylesheet" href="meteograms-ui.css" />
   </head>
   <body>
     <header class="topbar">
@@ -393,8 +394,8 @@
           <svg viewBox="0 0 24 24"><path d="M3 13c2.2 0 2.2-2 4.4-2s2.2 2 4.4 2 2.2-2 4.4-2 2.2 2 4.4 2"></path><path d="M4 17c2 0 2-1.8 4-1.8s2 1.8 4 1.8 2-1.8 4-1.8 2 1.8 4 1.8"></path><path d="M11.8 3.5v4.2"></path><path d="M9.7 5.6h4.2"></path></svg>
         </div>
         <div>
-          <div class="eyebrow">MeteoHub · ICON-2I</div>
-          <h1>Meteogrammi tecnici</h1>
+          <div class="eyebrow">Sicilia Meteo · ICON-2I</div>
+          <h1>Meteogrammi</h1>
         </div>
       </div>
       <a class="map-button map-link" href="index.html">
@@ -407,8 +408,8 @@
       <section class="hero">
         <div class="hero-copy">
           <span class="hero-kicker">Serie oraria completa · 0–72 h</span>
-          <h2>Serie puntuali ICON-2I, ora per ora.</h2>
-          <p>Un solo run deterministico: temperatura, precipitazione, vento, umidità, MSLP, convezione, visibilità e diagnostiche derivate, con unità e limiti espliciti.</p>
+          <h2>Il tempo, ora per ora.</h2>
+          <p>Scegli una località e confronta temperatura, pioggia e vento lungo tutta la previsione.</p>
           <div class="run-line">
             <span id="run-time">Run in caricamento</span>
             <span id="forecast-range">73 scadenze previste</span>
@@ -443,7 +444,7 @@
       <div id="content" hidden>
         <section id="summary" class="summary-grid" aria-label="Sintesi delle 72 ore"></section>
 
-        <section id="point-bulletin" class="forecast-bulletin" aria-live="polite">
+        <details id="point-bulletin" class="forecast-bulletin" aria-live="polite"><summary>Leggi il bollettino della località</summary>
           <div class="bulletin-top">
             <div>
               <div class="panel-label" style="color:#7fdbe4">Analisi automatica puntuale</div>
@@ -454,10 +455,10 @@
           </div>
           <div id="point-bulletin-copy" class="bulletin-copy"></div>
           <p id="point-bulletin-note" class="bulletin-note"></p>
-        </section>
+        </details>
 
         <section class="weather-strip-card" aria-label="Sequenza meteorologica sintetica">
-          <div class="chart-head"><div><h3>Colpo d’occhio sulle 72 ore</h3><p>Condizione prevalente ogni tre ore, con temperatura e fenomeni principali</p></div><span class="chart-badge">3 h</span></div>
+          <div class="chart-head"><div><h3>Le prossime ore</h3><p>Condizione prevalente ogni tre ore, con temperatura e fenomeni principali</p></div><span class="chart-badge">3 h</span></div>
           <div id="weather-strip" class="weather-strip"></div>
         </section>
 
@@ -467,8 +468,8 @@
             <p>Grafici sincronizzati sull’intero orizzonte del run.</p>
           </div>
           <div class="tabs" role="tablist" aria-label="Filtra i grafici">
-            <button class="tab active" data-group="all" type="button">Tutti</button>
-            <button class="tab" data-group="surface" type="button">Suolo</button>
+            <button class="tab active" data-group="surface" type="button">Previsione</button>
+            <button class="tab" data-group="all" type="button">Tutti i grafici</button>
             <button class="tab" data-group="convection" type="button">Convezione</button>
             <button class="tab" data-group="hazards" type="button">Rischi</button>
           </div>
@@ -882,10 +883,9 @@
         const svgNode = container.querySelector("svg");
         const cursor = container.querySelector(".chart-cursor");
         const tooltip = container.querySelector(".chart-tooltip");
-        function point(event) {
-          const rectangle = svgNode.getBoundingClientRect();
-          const ratio = clamp((event.clientX - rectangle.left) / rectangle.width, 0, 1);
-          const index = Math.round(ratio * (count - 1));
+        function showHour(index) {
+          if (index === null) { cursor.style.opacity = "0"; tooltip.style.display = "none"; return; }
+          const ratio = xScale(index) / width;
           const x = xScale(index);
           cursor.setAttribute("x1", x); cursor.setAttribute("x2", x); cursor.style.opacity = "1";
           tooltip.innerHTML = `<b>${escapeHtml(dateLabel(state.series.times[index].validTime, true))} · +${state.series.times[index].leadHours}h</b>` +
@@ -893,10 +893,28 @@
           tooltip.style.display = "block";
           tooltip.style.left = clamp(ratio * container.clientWidth - 78, 4, container.clientWidth - 194) + "px";
         }
+        // One shared hour across all charts; SVG margins are excluded from the hit test.
+        container.showForecastHour = showHour;
+        function point(event) {
+          const rectangle = svgNode.getBoundingClientRect();
+          const chartX = (event.clientX - rectangle.left) / rectangle.width * width;
+          const ratio = clamp((chartX - left) / plotWidth, 0, 1);
+          const index = Math.round(ratio * (count - 1));
+          document.querySelectorAll(".chart-wrap").forEach(chart => chart.showForecastHour?.(index));
+        }
+        svgNode.setAttribute("tabindex","0");
+        svgNode.setAttribute("aria-label", (options.aria || "Grafico meteo") + ". Frecce per scorrere le ore.");
+        let keyboardHour = 0;
+        svgNode.addEventListener("keydown",event=>{
+          if(!["ArrowLeft","ArrowRight","Home","End"].includes(event.key)) return;
+          event.preventDefault();
+          keyboardHour = event.key === "Home" ? 0 : event.key === "End" ? count-1 : clamp(keyboardHour + (event.key === "ArrowRight" ? 1 : -1),0,count-1);
+          document.querySelectorAll(".chart-wrap").forEach(chart=>chart.showForecastHour?.(keyboardHour));
+        });
         svgNode.addEventListener("pointermove", point);
         svgNode.addEventListener("pointerdown", point);
         svgNode.addEventListener("pointerleave", () => {
-          cursor.style.opacity = "0"; tooltip.style.display = "none";
+          document.querySelectorAll(".chart-wrap").forEach(chart => chart.showForecastHour?.(null));
         });
       }
 
@@ -1153,6 +1171,8 @@
         });
       });
 
+      document.querySelectorAll("[data-chart-group]").forEach(card => { card.hidden = card.dataset.chartGroup !== "surface"; });
+
       async function initialize() {
         initializeCities();
         try {
@@ -1170,3 +1190,4 @@
     </script>
   </body>
 </html>
+
