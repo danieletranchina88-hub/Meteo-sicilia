@@ -208,11 +208,19 @@ assert.doesNotMatch(html, /map\.transform\b/, "uso di API MapLibre interna e fra
 assert.match(html, /map\.setSky\(/, "cielo MapLibre nativo assente");
 assert.match(html, /function terrainExaggerationForZoom\(/,
   "esagerazione verticale adattiva assente");
-// The canvas source now uploads pixels directly; PNG encoding was the scrub bottleneck.
-assert.match(html, /type: "canvas",\s*canvas: rasterCanvas,\s*animate: false/,
-  "pubblicazione diretta canvas assente");
-assert.doesNotMatch(html, /rasterCanvas\.toBlob\(/,
-  "la timeline ricodifica ancora PNG per ogni fotogramma");
+// La sorgente canvas sembra la scelta ovvia -- niente codifica PNG per
+// fotogramma -- ma in MapLibre 5.24 non carica la texture da un canvas fuori
+// documento: provato in Chromium, ogni aggiornamento del livello meteo
+// lanciava "InvalidStateError: The source image could not be decoded" e sulla
+// mappa non arrivava un pixel colorato, pur avendo il canvas i colori giusti.
+// Attaccare il canvas al documento e ricreare la sorgente non bastano.
+assert.match(html, /map\.addSource\("weather", \{\s*[^}]*type: "image"/,
+  "il livello meteo non usa piu' la sorgente immagine, l'unica che disegna");
+assert.doesNotMatch(html, /type: "canvas",\s*canvas: rasterCanvas/,
+  "sorgente canvas reintrodotta: in questa versione di MapLibre lascia la "
+  + "mappa nera");
+assert.match(html, /rasterCanvas\.toBlob\(/,
+  "la pubblicazione del raster non passa piu' da un blob");
 
 const projectParticle = html.match(
   /function projectParticle\([\s\S]*?\n {6}\}/
