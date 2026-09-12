@@ -90,7 +90,20 @@ def five_point_pass_sigma_km(passes: int, spacing_km: float) -> float:
 # REFERENCE_HALF_WIDTH_KM.  Smoothing at sigma widens it in quadrature, so the
 # peak gradient of the smoothed front is analytic and the ramps follow from
 # it.  These are prudential design assumptions, not calibrated parameters.
-REFERENCE_DELTA_K = 8.0
+# Ancorato alle soglie che questo progetto ha gia' tarato sul proprio dominio,
+# non a un fronte da manuale.  ``front_locator`` maschera con la zona baroclina
+# adiacente fra 0,65 e 1,10 K/100 km a sigma 100 km, ed e' la calibrazione che
+# sul run del 12 settembre produceva 81 candidati.  Il picco di gradiente di un
+# fronte erf scala come 1/w', quindi passando da sigma 100 a sigma 150 quelle
+# soglie diventano 1,10 * hypot(80,100)/hypot(80,150) = 0,83 K/100 km, e il
+# DELTA_K che le riproduce e' 0,0083 * sqrt(2 pi) * 170 = 3,5 K.
+#
+# Misurato sul campo ICON-2I pubblicato: a sigma 150 km il gradiente termico
+# piu' forte di tutto il dominio vale 2,4 K/100 km e la mediana 0,67.  Con
+# DELTA_K = 8 il fronte di riferimento aveva un picco di 1,88 K/100 km, cioe'
+# piu' forte del 99esimo percentile del dominio: ogni rampa saturava solo
+# nell'1% piu' estremo e il motore non pubblicava nulla.
+REFERENCE_DELTA_K = 3.5
 REFERENCE_HALF_WIDTH_KM = 80.0
 # Relief of a reference mountain barrier (Alps, Apennines, Dinarides seen at
 # synoptic scale).  Like the thermal reference it fixes a ramp instead of a
@@ -176,8 +189,29 @@ def _smoothstep(values: np.ndarray, weak: float, strong: float) -> np.ndarray:
 
 
 def _signed(values: np.ndarray, weak: float, strong: float) -> np.ndarray:
-    """Evidence in [-1, +1]: -1 is positive evidence *against*, not absence."""
+    """Evidence in [-1, +1]: -1 is positive evidence *against*, not absence.
+
+    Only for the **necessary** witnesses.  A front without a baroclinic zone,
+    without frontogenesis or without depth is not a front, so for those three
+    a value below the ramp really is an argument against.
+    """
     return 2.0 * _smoothstep(values, weak, strong) - 1.0
+
+
+def _support(values: np.ndarray, weak: float, strong: float) -> np.ndarray:
+    """Evidence in [0, +1] for the **supportive** witnesses: help, never veto.
+
+    The design always said some witnesses are necessary and the rest merely
+    supportive; the first implementation then put every one of them through
+    the signed ramp, which let a supportive witness veto.  The consequence was
+    measured on the real field: with cyclonic vorticity, convergence and the
+    cross-front wind shift each contributing a full negative simply for being
+    below a synoptic-scale threshold, the strongest baroclinic zone in the
+    whole domain reached a probability of 0.13 against a gate of 0.5, and the
+    published run produced zero candidates in all 73 hours.  A quiet front is
+    still a front; only the necessary conditions may argue against one.
+    """
+    return _smoothstep(values, weak, strong)
 
 
 def frontal_evidence(
@@ -242,7 +276,7 @@ def frontal_evidence(
     # ridge -- a large negative second derivative across the zone -- which is
     # exactly Hewson's locating variable and peaks on the axis.
     zone_curvature = -fl.directional_curvature(grad_mag, grad_e, grad_n, metrics)
-    witnesses["zone"] = _signed(
+    witnesses["zone"] = _support(
         zone_curvature,
         0.25 * reference["zoneCurvatureKPerKm3"],
         reference["zoneCurvatureKPerKm3"],
@@ -256,8 +290,8 @@ def frontal_evidence(
         frontogenesis, 0.15 * reference_frontogenesis, reference_frontogenesis
     )
 
-    witnesses["vorticity"] = _signed(vorticity, 0.5, 4.0)
-    witnesses["convergence"] = _signed(convergence, 0.3, 3.0)
+    witnesses["vorticity"] = _support(vorticity, 0.5, 4.0)
+    witnesses["convergence"] = _support(convergence, 0.3, 3.0)
 
     # Cross-front wind shift: the wind turns through a front.  Measured as the
     # component of the wind shear along the thermal gradient direction.
@@ -271,7 +305,7 @@ def frontal_evidence(
     shear_u = (u_e * normal_e + u_n * normal_n) * 100.0
     shear_v = (v_e * normal_e + v_n * normal_n) * 100.0
     wind_shift = np.hypot(shear_u, shear_v)
-    witnesses["windShift"] = _signed(wind_shift, 1.5, 8.0)
+    witnesses["windShift"] = _support(wind_shift, 1.5, 8.0)
 
     # Vertical coherence.  An orographic thermal boundary is a shallow pool of
     # air trapped against a slope and fades upward; a front does not.  With no
@@ -299,13 +333,13 @@ def frontal_evidence(
             fl.smooth_km(np.asarray(pressure, dtype=float), sigma_km, metrics),
             metrics,
         ) * 1.0e4  # hPa per (100 km)^2
-        witnesses["pressure"] = _signed(trough, 0.05, 0.60)
+        witnesses["pressure"] = _support(trough, 0.05, 0.60)
     else:
         witnesses["pressure"] = np.zeros_like(grad_mag)
 
     if omega is not None:
         ascent = -fl.smooth_km(np.asarray(omega, dtype=float), sigma_km, metrics)
-        witnesses["ascent"] = _signed(ascent, 0.0, 0.35)  # Pa/s upward
+        witnesses["ascent"] = _support(ascent, 0.0, 0.35)  # Pa/s upward
     else:
         witnesses["ascent"] = np.zeros_like(grad_mag)
 
@@ -460,10 +494,14 @@ def admissible_mask(
     """
     reference = evidence["reference"]["gradientKPerKm"]
     strength = evidence["gradientMagnitude"] / max(reference, 1.0e-12)
-    gate = fl.smooth_km(
-        np.nan_to_num(evidence["probability"], nan=0.0),
-        evidence["sigmaKm"], evidence["metrics"],
-    )
+    # The *raw* probability, deliberately.  Re-smoothing belongs in the
+    # locating field, whose Hessian is taken and which therefore must stay low
+    # order; here the question is only "what does the evidence say at this
+    # point", and smoothing it just spreads a front's evidence over the calm
+    # air around it.  Measured on the real field, the smoothed version peaked
+    # at 0.033 where the raw one peaked at 0.132: a factor of four thrown away
+    # for no reason.
+    gate = np.nan_to_num(evidence["probability"], nan=0.0)
     support = smoothing_support(
         np.isfinite(evidence["thetaW"]).astype(float),
         evidence["sigmaKm"], evidence["metrics"],
@@ -1012,6 +1050,78 @@ def _line_pieces(line: np.ndarray, keep: np.ndarray) -> list[np.ndarray]:
     return pieces
 
 
+def _build_candidate(
+    line: np.ndarray, evidence: dict, abz_gradient: np.ndarray,
+    longitudes, latitudes, metrics: dict, *,
+    min_probability: float, source: str,
+) -> dict:
+    """Assemble one candidate in the contract shape, scored on the evidence.
+
+    ``warmNormal`` and ``hewsonDir`` are recomputed on the vertices that are
+    actually published -- never carried over from wherever the line came from,
+    because the variational pass moves them and the caller silently drops a
+    candidate whose three arrays disagree in length.
+    """
+    dlon, dlat = float(metrics["dlon"]), float(metrics["dlat"])
+
+    def sample(values):
+        return fl._sample(values, line, longitudes, latitudes, dlon, dlat)
+
+    reference = evidence["reference"]
+    east = sample(evidence["gradientEast"])
+    north = sample(evidence["gradientNorth"])
+    magnitude = np.maximum(np.hypot(east, north), 1.0e-12)
+    hewson_e = sample(evidence["hewsonEast"])
+    hewson_n = sample(evidence["hewsonNorth"])
+    hewson_mag = np.maximum(np.hypot(hewson_e, hewson_n), 1.0e-12)
+    line_tfp = sample(evidence["tfp"])
+    line_abz = sample(abz_gradient)
+    line_probability = sample(evidence["probability"])
+    sinuosity, net_turn, closure, total_turn = _shape_metrics(line)
+
+    return {
+        "coordinates": line,
+        "warmNormal": np.column_stack((east / magnitude, north / magnitude)),
+        "hewsonDir": np.column_stack((hewson_e / hewson_mag,
+                                      hewson_n / hewson_mag)),
+        "medianTfp": float(np.nanmedian(line_tfp)),
+        "medianTfpStrength": float(np.nanmedian(-line_tfp * 10_000.0)),
+        "medianThetaWGradient": float(
+            np.nanmedian(sample(evidence["gradientMagnitude"])) * 100.0
+        ),
+        "medianAbzGradient": float(np.nanmedian(line_abz)),
+        "peakAbzGradient": float(np.nanmax(line_abz)),
+        "lengthKm": line_length_km(line),
+        # Evidence in probabilistic form along the line, not a calibrated
+        # probability: no labelled archive exists here.
+        "locatorConfidence": float(np.nanmedian(line_probability)),
+        # The share of the line the physics actually supports.  In the old
+        # two-scale detector this was the fraction lying inside a separate
+        # synoptic corridor; here the line *is* the synoptic ridge, so the
+        # honest analogue is the share of it where the fused evidence stands
+        # at even odds or better.
+        "synopticSupport": round(float(np.nanmean(
+            np.where(np.isfinite(line_probability), line_probability, 0.0)
+            >= min_probability
+        )), 2),
+        "corroborated": True,
+        "sinuosity": round(sinuosity, 2),
+        "netTurnDeg": round(net_turn, 1),
+        "closureRatio": round(closure, 2),
+        "totalTurnDeg": round(total_turn, 1),
+        "meanTurnDegPer20Km": round(mean_turn_deg_per_km(line), 2),
+        "effectiveTfpThreshold": -reference["tfpKPerKm2"],
+        "effectiveGradientThreshold": reference["gradientK100Km"],
+        "locatorMethod": source,
+        "analysisSigmaKm": float(evidence["sigmaKm"]),
+    }
+
+
+def _shape_metrics(line: np.ndarray):
+    import front_detection as fd
+    return fd._shape_metrics(line)
+
+
 def detect_fronts(
     theta_w: np.ndarray,
     u_wind: np.ndarray,
@@ -1076,6 +1186,30 @@ def detect_fronts(
     def sample(values, line):
         return fl._sample(values, line, longitudes, latitudes, dlon, dlat)
 
+    # Un imbuto che si chiude in silenzio non e' diagnosticabile: il run del 12
+    # settembre ha pubblicato "0 candidati" per 73 ore di fila senza lasciare
+    # un solo numero che dicesse quale passaggio li avesse fermati.  Ogni
+    # stadio conta cio' che gli entra e cio' che ne esce.
+    funnel = {
+        "admissibleCells": int(np.count_nonzero(mask)),
+        "gridCells": int(mask.size),
+        "peakProbability": round(float(np.nanmax(evidence["probability"]))
+                                 if np.any(np.isfinite(evidence["probability"]))
+                                 else 0.0, 3),
+        "peakGradientK100Km": round(float(
+            np.nanmax(evidence["gradientMagnitude"]) * 100.0
+        ), 2), 
+        "referenceGradientK100Km": round(
+            evidence["reference"]["gradientK100Km"], 2
+        ),
+        "ridgePoints": int(points["rows"].size),
+        "rawLines": len(raw_lines),
+        "longestRawKm": round(max((line_length_km(line) for line in raw_lines),
+                                  default=0.0), 1),
+        "droppedTooShort": 0,
+        "droppedShape": 0,
+    }
+
     candidates: list[dict] = []
     for raw in raw_lines:
         polished = polish_line(
@@ -1092,61 +1226,20 @@ def detect_fronts(
             line = resample_km(piece, vertex_spacing_km)
             length = line_length_km(line)
             if length < min_length_km or len(line) < 4:
+                funnel["droppedTooShort"] += 1
                 continue
             sinuosity, net_turn, closure, total_turn = fd._shape_metrics(line)
             # A closed or hairpin thermal anomaly is a pool of air, not an
             # interface between two extended air masses.
             if (sinuosity > max_sinuosity or closure < min_closure_ratio
                     or net_turn > max_net_turn_deg):
+                funnel["droppedShape"] += 1
                 continue
 
-            east = sample(evidence["gradientEast"], line)
-            north = sample(evidence["gradientNorth"], line)
-            magnitude = np.maximum(np.hypot(east, north), 1.0e-12)
-            hewson_e = sample(evidence["hewsonEast"], line)
-            hewson_n = sample(evidence["hewsonNorth"], line)
-            hewson_mag = np.maximum(np.hypot(hewson_e, hewson_n), 1.0e-12)
-            line_tfp = sample(evidence["tfp"], line)
-            line_abz = sample(abz_gradient, line)
-            line_probability = sample(evidence["probability"], line)
-
-            candidates.append({
-                "coordinates": line,
-                "warmNormal": np.column_stack((east / magnitude,
-                                               north / magnitude)),
-                "hewsonDir": np.column_stack((hewson_e / hewson_mag,
-                                              hewson_n / hewson_mag)),
-                "medianTfp": float(np.nanmedian(line_tfp)),
-                "medianTfpStrength": float(np.nanmedian(-line_tfp * 10_000.0)),
-                "medianThetaWGradient": float(
-                    np.nanmedian(sample(evidence["gradientMagnitude"], line)) * 100.0
-                ),
-                "medianAbzGradient": float(np.nanmedian(line_abz)),
-                "peakAbzGradient": float(np.nanmax(line_abz)),
-                "lengthKm": length,
-                # Evidence in probabilistic form along the line, not a
-                # calibrated probability: no labelled archive exists here.
-                "locatorConfidence": float(np.nanmedian(line_probability)),
-                # The share of the line the physics actually supports.  In the
-                # old two-scale detector this was the fraction lying inside a
-                # separate synoptic corridor; here the line *is* the synoptic
-                # ridge, so the honest analogue is the share of it where the
-                # fused evidence stands at even odds or better.
-                "synopticSupport": round(float(np.nanmean(
-                    np.where(np.isfinite(line_probability), line_probability, 0.0)
-                    >= min_probability
-                )), 2),
-                "corroborated": True,
-                "sinuosity": round(sinuosity, 2),
-                "netTurnDeg": round(net_turn, 1),
-                "closureRatio": round(closure, 2),
-                "totalTurnDeg": round(total_turn, 1),
-                "meanTurnDegPer20Km": round(mean_turn_deg_per_km(line), 2),
-                "effectiveTfpThreshold": -reference["tfpKPerKm2"],
-                "effectiveGradientThreshold": reference["gradientK100Km"],
-                "locatorMethod": LOCATOR_NAME,
-                "analysisSigmaKm": float(sigma_km),
-            })
+            candidates.append(_build_candidate(
+                line, evidence, abz_gradient, longitudes, latitudes, metrics,
+                min_probability=min_probability, source=LOCATOR_NAME,
+            ))
 
     candidates.sort(
         key=lambda item: (item["locatorConfidence"], item["lengthKm"]),
@@ -1162,8 +1255,85 @@ def detect_fronts(
             continue
         unique.append(candidate)
     unique.sort(key=lambda item: item["lengthKm"], reverse=True)
+    funnel["published"] = len(unique)
+    for candidate in unique:
+        candidate["engineFunnel"] = funnel
 
     if return_fields:
         return unique, {"evidence": evidence, "locating": field, "mask": mask,
-                        "ridgePoints": points, "abzGradient": abz_gradient}
+                        "ridgePoints": points, "abzGradient": abz_gradient,
+                        "funnel": funnel, "longitudes": longitudes,
+                        "latitudes": latitudes}
+    if not unique:
+        return _EmptyWithFunnel(funnel)
     return unique
+
+
+class _EmptyWithFunnel(list):
+    """An empty candidate list that still carries why it is empty."""
+
+    def __init__(self, funnel: dict):
+        super().__init__()
+        self.funnel = funnel
+
+
+def score_lines(
+    lines,
+    fields: dict,
+    *,
+    min_length_km: float = MIN_LENGTH_KM,
+    vertex_spacing_km: float = VERTEX_SPACING_KM,
+    min_probability: float = 0.5,
+    min_supported_fraction: float = 0.6,
+    source: str = "external-line",
+) -> list[dict]:
+    """Judge lines produced elsewhere with this engine's own evidence.
+
+    The point of separating *where* from *whether* is that the two can come
+    from different places.  A fallback detector may supply the geometry when
+    the ridge search finds nothing, but the verdict must stay here, or the
+    fallback quietly reinstates what the engine exists to remove: measured,
+    the two-scale detector handed back the 1730 km Alpine thermal boundary the
+    moment it was allowed to publish unchecked.
+
+    A supplied line is kept only where the fused evidence stands at even odds
+    or better, is cut where it does not, and must still clear the length it
+    was asked for *after* the cut.
+    """
+    evidence = fields["evidence"]
+    abz_gradient = fields["abzGradient"]
+    metrics = evidence["metrics"]
+    longitudes = fields["longitudes"]
+    latitudes = fields["latitudes"]
+    dlon, dlat = float(metrics["dlon"]), float(metrics["dlat"])
+
+    kept: list[dict] = []
+    for raw in lines:
+        line = resample_km(np.asarray(raw, dtype=float), vertex_spacing_km)
+        if len(line) < 4:
+            continue
+        probability = fl._sample(evidence["probability"], line,
+                                 longitudes, latitudes, dlon, dlat)
+        supported = np.isfinite(probability) & (probability >= min_probability)
+        if float(np.mean(supported)) < min_supported_fraction:
+            continue
+        for piece in _line_pieces(line, supported):
+            piece = resample_km(piece, vertex_spacing_km)
+            if line_length_km(piece) < min_length_km or len(piece) < 4:
+                continue
+            kept.append(_build_candidate(
+                piece, evidence, abz_gradient, longitudes, latitudes, metrics,
+                min_probability=min_probability, source=source,
+            ))
+    kept.sort(key=lambda item: item["lengthKm"], reverse=True)
+    return kept
+
+
+def last_funnel(candidates: list[dict], fallback: dict | None = None) -> dict:
+    """The funnel counters, readable even when nothing was published."""
+    if isinstance(candidates, _EmptyWithFunnel):
+        return candidates.funnel
+    for candidate in candidates:
+        if "engineFunnel" in candidate:
+            return candidate["engineFunnel"]
+    return fallback or {}
