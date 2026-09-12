@@ -20,6 +20,7 @@ import numpy as np
 
 import front_consensus as fcon
 import front_detection as fd
+import front_engine as fe
 import front_locator as fl
 import front_occlusion as focc
 import front_physics as fp
@@ -147,7 +148,17 @@ MIN_BRANCH_LENGTH_KM = 100.0
 # (least-cost path in front_ridge), non piu' il solo contorno TFL. Attivato
 # dopo il benchmark Fase E (supporto medio 0.43->0.50, tortuosita' non
 # peggiore). Un solo interruttore, reversibile: False torna ai contorni.
-REFINE_PUBLISHED_GEOMETRY = True
+# The published geometry now comes from the variational pass inside the
+# engine, which is anchored to the evidence crest at every step.  The older
+# ridge refinement republished the raw contour whenever its own safety check
+# rejected the smoothed path, so the worst geometries came out in the crudest
+# form; it stays available but is no longer applied to what is published.
+REFINE_PUBLISHED_GEOMETRY = False
+
+# A front shorter than this at a 150 km analysis scale is not resolved as a
+# synoptic boundary.  Hewson-style climatologies discard below ~250 km; the
+# margin here is deliberate, since the engine no longer scores length.
+ENGINE_MIN_LENGTH_KM = 300.0
 GEOMETRY_CORRIDOR_KM = 120.0
 BOUNDARY_MARGIN_KM = 25.0
 
@@ -789,19 +800,43 @@ class IconSynopticFrontAnalyzer(SynopticFrontAnalyzer):
     def _detect_hour(self, hour: int) -> list[dict]:
         thermodynamics = self._thermodynamics(hour)
         theta_w = thermodynamics["theta_w"]
-        wet_candidates = fd.detect_fronts_two_scale(
+
+        # Wind, pressure, omega and the levels above and below are read here
+        # rather than after the candidates, because the geometry no longer
+        # comes from the thermal field alone: the evidence fusion needs them
+        # to decide where a ridge is allowed to be a front at all.
+        grid_metrics = fl.grid_metrics(self.longitudes, self.latitudes)
+        raw_u, raw_v = self._field("u", hour), self._field("v", hour)
+        raw_pressure = self._pressure_hpa(hour)
+        raw_omega = (
+            self._field("omega700", hour) if "omega700" in self.datasets else None
+        )
+        lower_level_valid = self._level_valid_mask(hour, LOWER_PRESSURE_PA)
+        theta_w_925 = None
+        if self.has_lower_level:
+            theta_w_925 = self._theta_w(hour, 925).copy()
+            theta_w_925[~lower_level_valid] = np.nan
+        theta_w_700 = self._theta_w(hour, 700) if self.has_upper_level else None
+
+        # Primary geometry: the ridge of the fused evidence field at the
+        # synoptic scale.  The two-scale Laplacian detector below is kept, but
+        # only as an independent confirmation of position -- it can no longer
+        # seed a front on its own, because two locators following opposite
+        # edges of one finite-width zone create two identities for one
+        # boundary.
+        wet_candidates = fe.detect_fronts(
             theta_w,
+            raw_u,
+            raw_v,
             self.longitudes,
             self.latitudes,
-            synoptic_sigma_km=SYNOPTIC_SIGMA_KM,
-            refine_sigma_km=REFINE_SIGMA_KM,
-            derivative_sigma_km=DERIVATIVE_SIGMA_KM,
-            corridor_km=110.0,
-            min_synoptic_support=0.60,
-            synoptic_min_length_km=350.0,
-            refine_min_length_km=220.0,
-            boundary_margin_km=BOUNDARY_MARGIN_KM,
-            **(self._threshold_climatology or {}),
+            metrics=grid_metrics,
+            theta_w_lower=theta_w_925,
+            theta_w_upper=theta_w_700,
+            pressure=raw_pressure,
+            omega=raw_omega,
+            terrain=self.terrain,
+            min_length_km=ENGINE_MIN_LENGTH_KM,
         )
         # Independent directional ridge geometry.  It confirms position and
         # method agreement, but it is deliberately NOT an autonomous seed:
@@ -826,7 +861,6 @@ class IconSynopticFrontAnalyzer(SynopticFrontAnalyzer):
         lower_candidates = self._lower_candidates(hour)
         lower_lines = [np.asarray(item["coordinates"], dtype=float) for item in lower_candidates]
 
-        grid_metrics = fl.grid_metrics(self.longitudes, self.latitudes)
         raw_temperature = self._field("t", hour)
         temperature = fl.smooth_km(raw_temperature, REFINE_SIGMA_KM, grid_metrics)
         humidity = fl.smooth_km(self._field("q", hour), REFINE_SIGMA_KM, grid_metrics)
@@ -852,21 +886,20 @@ class IconSynopticFrontAnalyzer(SynopticFrontAnalyzer):
         # intrusion that humidity can partly cancel.  Neither source can
         # publish alone: the strict cross-front gates below still require
         # independent dry, moist and density contrasts.
-        wet_lines = [np.asarray(c["coordinates"], dtype=float) for c in wet_candidates]
         directional_lines = [
             np.asarray(c["coordinates"], dtype=float)
             for c in directional_candidates
         ]
         dry_lines = [np.asarray(c["coordinates"], dtype=float) for c in dry_candidates]
         combined = []
+        # One seed source only.  Two locators on the same finite-width zone
+        # follow its opposite edges, and the published result was two track
+        # identities for one boundary; the dry-theta and directional locators
+        # now confirm position and contribute method agreement instead.
         for source_name, source_items, other_lines, alternate_lines in (
             (
-                "thetaW-laplacian", wet_candidates, dry_lines,
-                dry_lines + directional_lines,
-            ),
-            (
-                "dryTheta-laplacian", dry_candidates, wet_lines,
-                wet_lines + directional_lines,
+                "thetaW-evidence-ridge", wet_candidates, dry_lines,
+                dry_lines + directional_lines + lower_lines,
             ),
         ):
             for item in source_items:
@@ -963,7 +996,6 @@ class IconSynopticFrontAnalyzer(SynopticFrontAnalyzer):
         temp_east, temp_north = fl.gradient(temperature, grid_metrics)
         dry_gradient = np.hypot(temp_east, temp_north) * 100.0
 
-        raw_u, raw_v = self._field("u", hour), self._field("v", hour)
         u_wind = fl.smooth_km(raw_u, REFINE_SIGMA_KM, grid_metrics)
         v_wind = fl.smooth_km(raw_v, REFINE_SIGMA_KM, grid_metrics)
         lower_u_wind = lower_v_wind = None
@@ -977,9 +1009,10 @@ class IconSynopticFrontAnalyzer(SynopticFrontAnalyzer):
         kinematics = fp.kinematic_fields(
             theta_w, raw_u, raw_v, grid_metrics, smoothing_km=REFINE_SIGMA_KM
         )
-        pressure = self._pressure_hpa(hour)
-        if pressure is not None:
-            pressure = fl.smooth_km(pressure, 80.0, grid_metrics)
+        pressure = (
+            fl.smooth_km(raw_pressure, 80.0, grid_metrics)
+            if raw_pressure is not None else None
+        )
         pressure_tendency = (
             self._central_tendency(
                 lambda h: fl.smooth_km(
@@ -995,17 +1028,10 @@ class IconSynopticFrontAnalyzer(SynopticFrontAnalyzer):
             ),
             hour,
         )
-        omega = None
-        if "omega700" in self.datasets:
-            omega = fl.smooth_km(
-                self._field("omega700", hour), 80.0, grid_metrics
-            )
-        theta_w_925 = None
-        lower_level_valid = self._level_valid_mask(hour, LOWER_PRESSURE_PA)
-        if self.has_lower_level:
-            theta_w_925 = self._theta_w(hour, 925).copy()
-            theta_w_925[~lower_level_valid] = np.nan
-        theta_w_700 = self._theta_w(hour, 700) if self.has_upper_level else None
+        omega = (
+            fl.smooth_km(raw_omega, 80.0, grid_metrics)
+            if raw_omega is not None else None
+        )
         upper_u_wind = upper_v_wind = None
         if self.has_upper_wind:
             upper_u_wind = fl.smooth_km(

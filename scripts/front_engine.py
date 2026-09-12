@@ -311,8 +311,19 @@ def frontal_evidence(
 
     # Terrain locking.  A thermal contrast created by the orography has its
     # gradient aligned with the slope: warm air on the plain, cool air up the
-    # mountain.  A front crossing the same terrain has no reason to align.
-    # Pure penalty -- it can only ever argue against.
+    # mountain.  Pure penalty -- it can only ever argue against.
+    #
+    # Alignment alone will not do, and the reason is geometric: the Alpine
+    # barrier runs east-west, so its slope gradient points north, and a real
+    # cold front lying east-west across the Po valley has a north-pointing
+    # thermal gradient too.  Measured on a synthetic front crossing such a
+    # barrier, an alignment-only penalty cost a genuine boundary 1.1 of
+    # log-odds and kept it off the map.  What actually distinguishes the
+    # mountain's own contrast is that nothing is sharpening it: the penalty is
+    # therefore conditioned on the frontogenesis witness, so it can only bite
+    # where the boundary is aligned with the slope *and* is not being
+    # maintained.  That conjunction is the statement "this contrast belongs to
+    # the terrain, not to the flow".
     if terrain is not None:
         height = fl.smooth_km(np.asarray(terrain, dtype=float), sigma_km, metrics)
         terrain_e, terrain_n = fl.gradient(height, metrics)
@@ -322,9 +333,11 @@ def frontal_evidence(
             / np.maximum(terrain_mag, 1.0e-9)
         )
         relief = reference["reliefSlopeMPerKm"]
+        maintained = 0.5 * (witnesses["frontogenesis"] + 1.0)   # back to [0, 1]
         locked = (
             _smoothstep(terrain_mag, 0.40 * relief, relief)
             * _smoothstep(alignment, 0.55, 0.90)
+            * (1.0 - maintained)
         )
         witnesses["terrain"] = -locked
     else:
@@ -347,6 +360,10 @@ def frontal_evidence(
         "gradientMagnitude": grad_mag,
         "tfp": tfp,
         "zoneCurvature": zone_curvature,
+        # grad|grad theta_w|: the Hewson frontal-speed direction, which the
+        # published schema carries per vertex.
+        "hewsonEast": gm_e,
+        "hewsonNorth": gm_n,
         "frontogenesis": frontogenesis,
         "vorticity1e5": vorticity,
         "convergence1e5": convergence,
@@ -961,3 +978,192 @@ def line_length_km(line: np.ndarray) -> float:
     return float(np.sum(np.hypot(
         np.diff(points[:, 0]) * kx, np.diff(points[:, 1]) * ky
     )))
+
+
+# --------------------------------------------------------------------------
+# Entry point: the same contract as front_detection.detect_fronts_two_scale
+# --------------------------------------------------------------------------
+#
+# The keys below are not decoration.  ``coordinates``, ``warmNormal`` and
+# ``hewsonDir`` must be three arrays of the same length or the caller drops
+# the candidate in silence, and they are recomputed on the final vertices
+# rather than carried along from the ridge points, because the variational
+# pass moves those vertices.  ``synopticSupport``, ``sinuosity``,
+# ``locatorConfidence``, ``medianTfpStrength`` and ``medianAbzGradient``
+# default to zero downstream when absent, and zero fails every gate.
+MIN_LENGTH_KM = 300.0
+VERTEX_SPACING_KM = 8.0
+LOCATOR_NAME = "thetaW-evidence-ridge"
+
+
+def _line_pieces(line: np.ndarray, keep: np.ndarray) -> list[np.ndarray]:
+    """Split a polyline where the mask fails, dropping one-point pieces."""
+    pieces: list[np.ndarray] = []
+    start = None
+    for index, good in enumerate(keep):
+        if good and start is None:
+            start = index
+        elif not good and start is not None:
+            if index - start >= 2:
+                pieces.append(line[start:index])
+            start = None
+    if start is not None and len(keep) - start >= 2:
+        pieces.append(line[start:])
+    return pieces
+
+
+def detect_fronts(
+    theta_w: np.ndarray,
+    u_wind: np.ndarray,
+    v_wind: np.ndarray,
+    longitudes: np.ndarray,
+    latitudes: np.ndarray,
+    *,
+    metrics: dict | None = None,
+    sigma_km: float = SYNOPTIC_SIGMA_KM,
+    theta_w_lower: np.ndarray | None = None,
+    theta_w_upper: np.ndarray | None = None,
+    pressure: np.ndarray | None = None,
+    omega: np.ndarray | None = None,
+    terrain: np.ndarray | None = None,
+    min_length_km: float = MIN_LENGTH_KM,
+    vertex_spacing_km: float = VERTEX_SPACING_KM,
+    min_probability: float = 0.5,
+    max_sinuosity: float = 2.35,
+    min_closure_ratio: float = 0.42,
+    max_net_turn_deg: float = 165.0,
+    return_fields: bool = False,
+):
+    """Locate fronts and return candidates in the established contract shape.
+
+    The geometry is the ridge of the locating field; the fused evidence
+    decides which parts of that ridge may be published and supplies the
+    per-candidate scores.  Length and persistence play no part in either.
+    """
+    import front_detection as fd
+
+    metrics = metrics or fl.grid_metrics(longitudes, latitudes)
+    evidence = frontal_evidence(
+        theta_w, u_wind, v_wind, longitudes, latitudes,
+        metrics=metrics, sigma_km=sigma_km,
+        theta_w_lower=theta_w_lower, theta_w_upper=theta_w_upper,
+        pressure=pressure, omega=omega, terrain=terrain,
+    )
+    field = locating_field(evidence)
+    mask = admissible_mask(evidence, min_probability=min_probability)
+    points = ridge_points(
+        field, longitudes, latitudes, metrics=metrics, mask=mask,
+        min_curvature=0.25 * ridge_curvature_scale(sigma_km),
+    )
+    raw_lines = merge_fragments(link_ridge_points(points))
+
+    reference = evidence["reference"]
+    # Hewson tests the baroclinic zone *behind* the front, not the value on
+    # the line.  The walk takes K/km in and returns K/100 km; the first-order
+    # extrapolation stays as a floor, exactly as front_locator combines them.
+    grad_magnitude = evidence["gradientMagnitude"]
+    abz_gradient = fl.adjacent_baroclinic_zone(
+        grad_magnitude, evidence["gradientEast"], evidence["gradientNorth"],
+        longitudes, latitudes, search_km=float(sigma_km),
+    )
+    local_grid_km = np.sqrt(metrics["dx_km_col"] * metrics["dy_km"])
+    abz_gradient = np.fmax(abz_gradient, (
+        grad_magnitude + (local_grid_km / np.sqrt(2.0))
+        * np.hypot(evidence["hewsonEast"], evidence["hewsonNorth"])
+    ) * 100.0)
+    dlon, dlat = float(metrics["dlon"]), float(metrics["dlat"])
+
+    def sample(values, line):
+        return fl._sample(values, line, longitudes, latitudes, dlon, dlat)
+
+    candidates: list[dict] = []
+    for raw in raw_lines:
+        polished = polish_line(
+            resample_km(raw, vertex_spacing_km), field,
+            longitudes, latitudes, metrics=metrics,
+        )
+        # The variational pass can walk a vertex out of the admissible area;
+        # split there rather than publishing a tail with no evidence behind
+        # it, and re-check the length afterwards -- checking it before the
+        # cut is how a 300 km rule ends up publishing a 120 km stub.
+        probability = sample(evidence["probability"], polished)
+        for piece in _line_pieces(polished, np.isfinite(probability)
+                                  & (probability >= min_probability)):
+            line = resample_km(piece, vertex_spacing_km)
+            length = line_length_km(line)
+            if length < min_length_km or len(line) < 4:
+                continue
+            sinuosity, net_turn, closure, total_turn = fd._shape_metrics(line)
+            # A closed or hairpin thermal anomaly is a pool of air, not an
+            # interface between two extended air masses.
+            if (sinuosity > max_sinuosity or closure < min_closure_ratio
+                    or net_turn > max_net_turn_deg):
+                continue
+
+            east = sample(evidence["gradientEast"], line)
+            north = sample(evidence["gradientNorth"], line)
+            magnitude = np.maximum(np.hypot(east, north), 1.0e-12)
+            hewson_e = sample(evidence["hewsonEast"], line)
+            hewson_n = sample(evidence["hewsonNorth"], line)
+            hewson_mag = np.maximum(np.hypot(hewson_e, hewson_n), 1.0e-12)
+            line_tfp = sample(evidence["tfp"], line)
+            line_abz = sample(abz_gradient, line)
+            line_probability = sample(evidence["probability"], line)
+
+            candidates.append({
+                "coordinates": line,
+                "warmNormal": np.column_stack((east / magnitude,
+                                               north / magnitude)),
+                "hewsonDir": np.column_stack((hewson_e / hewson_mag,
+                                              hewson_n / hewson_mag)),
+                "medianTfp": float(np.nanmedian(line_tfp)),
+                "medianTfpStrength": float(np.nanmedian(-line_tfp * 10_000.0)),
+                "medianThetaWGradient": float(
+                    np.nanmedian(sample(evidence["gradientMagnitude"], line)) * 100.0
+                ),
+                "medianAbzGradient": float(np.nanmedian(line_abz)),
+                "peakAbzGradient": float(np.nanmax(line_abz)),
+                "lengthKm": length,
+                # Evidence in probabilistic form along the line, not a
+                # calibrated probability: no labelled archive exists here.
+                "locatorConfidence": float(np.nanmedian(line_probability)),
+                # The share of the line the physics actually supports.  In the
+                # old two-scale detector this was the fraction lying inside a
+                # separate synoptic corridor; here the line *is* the synoptic
+                # ridge, so the honest analogue is the share of it where the
+                # fused evidence stands at even odds or better.
+                "synopticSupport": round(float(np.nanmean(
+                    np.where(np.isfinite(line_probability), line_probability, 0.0)
+                    >= min_probability
+                )), 2),
+                "corroborated": True,
+                "sinuosity": round(sinuosity, 2),
+                "netTurnDeg": round(net_turn, 1),
+                "closureRatio": round(closure, 2),
+                "totalTurnDeg": round(total_turn, 1),
+                "meanTurnDegPer20Km": round(mean_turn_deg_per_km(line), 2),
+                "effectiveTfpThreshold": -reference["tfpKPerKm2"],
+                "effectiveGradientThreshold": reference["gradientK100Km"],
+                "locatorMethod": LOCATOR_NAME,
+                "analysisSigmaKm": float(sigma_km),
+            })
+
+    candidates.sort(
+        key=lambda item: (item["locatorConfidence"], item["lengthKm"]),
+        reverse=True,
+    )
+    unique: list[dict] = []
+    for candidate in candidates:
+        if any(
+            fd._overlap_fraction(candidate["coordinates"],
+                                 kept["coordinates"], 55.0) >= 0.72
+            for kept in unique
+        ):
+            continue
+        unique.append(candidate)
+    unique.sort(key=lambda item: item["lengthKm"], reverse=True)
+
+    if return_fields:
+        return unique, {"evidence": evidence, "locating": field, "mask": mask,
+                        "ridgePoints": points, "abzGradient": abz_gradient}
+    return unique

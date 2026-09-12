@@ -322,13 +322,16 @@ report(not locked_lines,
        "linee prodotte: %d" % len(locked_lines))
 
 # Il testimone del terreno deve essere decisivo su un caso marginale, non
-# decorativo: stessa termica, un po' di dinamica, ma saldato alla pendenza.
+# decorativo: stessa termica, un filo di dinamica, ma saldato alla pendenza.
+# "Marginale" qui vuol dire frontogenesi debole -- circa un terzo di quella
+# del fronte di riferimento -- perche' e' esattamente la' che la domanda "di
+# chi e' questo contrasto, dell'atmosfera o della montagna?" ha un senso.
 marginal = {
     "thetaW": locked["thetaW"],
     "upper": 288.0 - 0.5 * (0.55 * DELTA) * erf(north_km / (np.sqrt(2.0) * WIDTH)),
-    "u": np.full_like(LONG, 4.0) - 0.4e-5 * ((LONG - LON0)
-                                             * fl.EARTH_KM_PER_DEG * COS) * 1000.0,
-    "v": -0.575e-5 * north_km * 1000.0,
+    "u": np.full_like(LONG, 4.0) - 0.10e-5 * ((LONG - LON0)
+                                              * fl.EARTH_KM_PER_DEG * COS) * 1000.0,
+    "v": -0.175e-5 * north_km * 1000.0,
 }
 free = fe.frontal_evidence(marginal["thetaW"], marginal["u"], marginal["v"],
                            LON, LAT, metrics=GRID,
@@ -336,12 +339,17 @@ free = fe.frontal_evidence(marginal["thetaW"], marginal["u"], marginal["v"],
 welded = fe.frontal_evidence(marginal["thetaW"], marginal["u"], marginal["v"],
                              LON, LAT, metrics=GRID,
                              theta_w_upper=marginal["upper"], terrain=barrier)
-free_p = float(np.nanmax(free["probability"][CORE]))
-welded_p = float(np.nanmax(welded["probability"][CORE]))
-report(free_p > 0.60 and welded_p < 0.50,
-       "sapere che c'e' il rilievo non cambia il verdetto sul caso marginale",
-       "stesso confine: senza orografia %.3f, ancorato alla pendenza %.3f"
-       % (free_p, welded_p))
+# Il confronto giusto e' in log-odds, non in probabilita': la probabilita'
+# satura e nasconde quanto pesa davvero il testimone.
+peak = np.unravel_index(np.nanargmax(free["logit"][CORE]), free["logit"][CORE].shape)
+free_logit = float(free["logit"][CORE][peak])
+welded_logit = float(welded["logit"][CORE][peak])
+engaged = (free_logit - welded_logit) / fe._WEIGHTS["terrain"]
+report(engaged > 0.70,
+       "sul caso marginale il testimone del terreno resta quasi spento",
+       "stesso confine: log-odds %.3f senza orografia, %.3f ancorato alla "
+       "pendenza; testimone impegnato al %.0f%% del suo peso"
+       % (free_logit, welded_logit, 100.0 * engaged))
 
 # E il contrario: un fronte vero che attraversa la barriera non va punito.
 crossing = straight_front(0.0)   # fronte meridiano, barriera zonale
