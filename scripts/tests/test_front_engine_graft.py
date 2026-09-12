@@ -170,6 +170,29 @@ report(not locked_detected,
                item.get("lengthKm", 0.0) for item in locked_detected))
            if locked_detected else ""))
 
+# Il ripiego deve essersi acceso davvero, e deve essere stato respinto
+# dall'evidenza: se non si accendesse, questo test passerebbe per il motivo
+# sbagliato e non direbbe niente sul ripiego.
+diagnostics = locked_analyzer._pipeline_diag.get(0, {})
+funnel = diagnostics.get("engineFunnel") or {}
+report(diagnostics.get("candidateSource") == "two-scale-fallback"
+       and funnel.get("fallbackOffered", 0) > 0
+       and funnel.get("fallbackAccepted", 1) == 0,
+       "il ripiego non si e' acceso, oppure ha pubblicato senza il vaglio "
+       "dell'evidenza",
+       "sorgente %s: il rilevatore a due scale ha offerto %s linee, "
+       "l'evidenza ne ha accettate %s"
+       % (diagnostics.get("candidateSource"),
+          funnel.get("fallbackOffered"), funnel.get("fallbackAccepted")))
+
+# E sul fronte vero il ripiego non deve essere servito affatto.
+front_diagnostics = analyzer._pipeline_diag.get(0, {})
+report(front_diagnostics.get("candidateSource") == "engine",
+       "il fronte vero e' stato trovato dal ripiego invece che dal motore",
+       "sorgente sul fronte vero: %s, candidati dal motore: %s"
+       % (front_diagnostics.get("candidateSource"),
+          front_diagnostics.get("engineCandidates")))
+
 # --------------------------------------------------------------------------
 print("\n3) Il cancello di supporto non deve mangiarsi l'Italia")
 # --------------------------------------------------------------------------

@@ -216,6 +216,62 @@ la pena scriverli perché sono facili da reintrodurre:
   cuscinetto fra il bordo di ICON-2I e la costa: sulle nove località
   controllate nei test, da Lampedusa a Tarvisio, il supporto minimo è 0,913.
 
+#### La taratura del fronte di riferimento, e come è stata sbagliata
+
+La prima messa in linea della v20 ha pubblicato **zero fronti su tutte le 73
+scadenze**, ed è utile scrivere perché, perché l'errore è facile da rifare.
+
+Il fronte di riferimento era dichiarato con Δθw = 8 K attraverso una zona di
+semilarghezza 80 km, cioè un fronte da manuale. Misurato sul campo ICON-2I
+pubblicato, a sigma 150 km il gradiente termico **più forte di tutto il
+dominio** vale 2,4 K/100 km e la mediana 0,67; il fronte di riferimento ne
+aveva 1,88, più del 99esimo percentile del dominio. Tutte le rampe saturavano
+solo nell'1% più estremo.
+
+Il riferimento è ora ancorato alle soglie che questo progetto ha **già tarato
+sul proprio dominio**: `front_locator` maschera con la zona baroclina adiacente
+fra 0,65 e 1,10 K/100 km a sigma 100 km, ed è la calibrazione che sul run del
+12 settembre produceva 81 candidati. Il picco di un fronte erf scala come 1/w',
+quindi a sigma 150 km quelle soglie diventano 1,10 · hypot(80,100)/hypot(80,150)
+= 0,83 K/100 km, e il Δθw che le riproduce è **3,5 K**.
+
+Nello stesso controllo sono emersi altri due difetti, entrambi di struttura e
+non di taratura:
+
+- **i testimoni di sostegno potevano porre il veto.** Il disegno diceva da
+  sempre che alcuni testimoni sono necessari e gli altri solo di sostegno, ma
+  l'implementazione li faceva passare tutti per la stessa rampa con segno,
+  quindi vorticità, convergenza e salto del vento contribuivano un negativo
+  pieno solo per stare sotto una soglia di scala sinottica. Misurato sul campo
+  vero: la zona baroclina più forte dell'intero dominio arrivava a probabilità
+  0,13 contro un cancello di 0,50. Ora i testimoni di sostegno stanno in
+  [0, +1] e possono solo aiutare; solo baroclinicità, frontogenesi, profondità
+  verticale e ancoraggio al terreno possono argomentare contro;
+- **il cancello di ammissibilità leggeva la probabilità lisciata.** Il
+  rilisciamento serve nel campo di localizzazione, che viene derivato e deve
+  restare di ordine basso; il cancello invece chiede solo «cosa dice l'evidenza
+  in questo punto», e lisciarla spalma l'evidenza di un fronte sull'aria calma
+  attorno. Misurato: massimo 0,033 lisciata contro 0,132 grezza, un fattore
+  quattro buttato via.
+
+#### Ripiego dichiarato, e perché non basta a rimettere l'artefatto
+
+Finché la resa del motore sul campo vero non è dimostrata, un'ora che il motore
+lascia vuota torna al rilevatore a due scale della v19. Il ripiego fornisce però
+solo la **geometria**: le sue linee passano comunque al vaglio dell'evidenza del
+motore, sono tagliate dove l'evidenza non regge e devono superare la lunghezza
+minima *dopo* il taglio. Senza quel vaglio il ripiego rimetterebbe in pagina
+esattamente ciò che il motore esiste per togliere — misurato: il rilevatore a
+due scale restituisce la linea alpina di 1730 km nel momento in cui gli si
+lascia pubblicare da solo. `candidateSource` nel file di qualità dice, ora per
+ora, quale dei due ha prodotto la geometria.
+
+Ogni ora registra inoltre l'**imbuto** del motore — celle ammissibili, punti di
+cresta, linee grezze, linea grezza più lunga, quante ne cadono per lunghezza e
+quante per forma — perché un imbuto che si chiude in silenzio non è
+diagnosticabile: la prima v20 ha pubblicato «0 candidati» per 73 ore senza
+lasciare un numero che dicesse quale passaggio li avesse fermati.
+
 #### Continuità temporale
 
 Il cancello di sopravvivenza tutto-o-niente è sostituito da uno smoother. Fra

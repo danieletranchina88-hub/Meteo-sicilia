@@ -917,7 +917,50 @@ class IconSynopticFrontAnalyzer(SynopticFrontAnalyzer):
             omega=raw_omega,
             terrain=self.terrain,
             min_length_km=ENGINE_MIN_LENGTH_KM,
+            return_fields=True,
         )
+        wet_candidates, engine_fields = wet_candidates
+        engine_funnel = dict(fe.last_funnel(wet_candidates,
+                                            engine_fields.get("funnel")))
+        engine_count = len(wet_candidates)
+        candidate_source = "engine"
+        # Ripiego dichiarato.  Il motore e' nuovo e la sua resa sul campo vero
+        # non e' ancora dimostrata: il 12 settembre ha prodotto zero candidati
+        # per 73 ore di fila, e un sito senza alcun fronte e' peggio di un sito
+        # con i fronti imperfetti di prima.  Finche' l'imbuto qui sopra non
+        # dimostra il contrario, un'ora che il motore lascia vuota torna al
+        # rilevatore a due scale, e il diagnostico registra quale dei due ha
+        # prodotto la geometria di quell'ora.
+        if not wet_candidates:
+            candidate_source = "two-scale-fallback"
+            fallback = fd.detect_fronts_two_scale(
+                theta_w,
+                self.longitudes,
+                self.latitudes,
+                synoptic_sigma_km=SYNOPTIC_SIGMA_KM,
+                refine_sigma_km=REFINE_SIGMA_KM,
+                derivative_sigma_km=DERIVATIVE_SIGMA_KM,
+                corridor_km=110.0,
+                min_synoptic_support=0.60,
+                synoptic_min_length_km=350.0,
+                refine_min_length_km=220.0,
+                boundary_margin_km=BOUNDARY_MARGIN_KM,
+                **(self._threshold_climatology or {}),
+            )
+            # La geometria di riserva passa comunque al vaglio dell'evidenza
+            # del motore, altrimenti il ripiego rimette in pagina proprio il
+            # confine termico orografico che il motore esiste per togliere:
+            # misurato, il rilevatore a due scale restituisce la linea alpina
+            # di 1730 km nel momento in cui gli si lascia pubblicare da solo.
+            wet_candidates = fe.score_lines(
+                [np.asarray(item["coordinates"], dtype=float)
+                 for item in fallback],
+                engine_fields,
+                min_length_km=ENGINE_MIN_LENGTH_KM,
+                source="thetaW-laplacian-fallback",
+            )
+            engine_funnel["fallbackOffered"] = len(fallback)
+            engine_funnel["fallbackAccepted"] = len(wet_candidates)
         # Independent directional ridge geometry.  It confirms position and
         # method agreement, but it is deliberately NOT an autonomous seed:
         # both Hewson and Laplacian geometry can follow opposite edges of the
@@ -978,7 +1021,9 @@ class IconSynopticFrontAnalyzer(SynopticFrontAnalyzer):
         # now confirm position and contribute method agreement instead.
         for source_name, source_items, other_lines, alternate_lines in (
             (
-                "thetaW-evidence-ridge", wet_candidates, dry_lines,
+                "thetaW-evidence-ridge" if candidate_source == "engine"
+                else "thetaW-laplacian-fallback",
+                wet_candidates, dry_lines,
                 dry_lines + directional_lines + lower_lines,
             ),
         ):
@@ -1596,6 +1641,9 @@ class IconSynopticFrontAnalyzer(SynopticFrontAnalyzer):
             "finalPolylines": len(accepted),
             "rejectedLines": len(rejected),
             "rejected": reject_counts,
+            "candidateSource": candidate_source,
+            "engineCandidates": engine_count,
+            "engineFunnel": engine_funnel,
         }
         return accepted
 
