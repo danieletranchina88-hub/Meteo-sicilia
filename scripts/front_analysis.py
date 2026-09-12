@@ -269,6 +269,45 @@ def _rdp(points: np.ndarray, tolerance_degrees: float) -> np.ndarray:
     return np.vstack((left[:-1], right))
 
 
+def _decimate_axis(axis: np.ndarray, factor: int) -> np.ndarray:
+    """Block-mean a coordinate axis, matching :func:`_decimate_area_mean`."""
+    factor = max(1, int(factor))
+    values = np.asarray(axis, dtype=float)
+    if factor == 1:
+        return values
+    count = len(values) // factor
+    if count < 1:
+        return values[::factor]
+    return values[:count * factor].reshape(count, factor).mean(axis=1)
+
+
+def _decimate_area_mean(values: np.ndarray, factor: int) -> np.ndarray:
+    """Decimate by averaging each block, not by throwing points away.
+
+    Plain striding (``values[::f, ::f]``) samples a field that still carries
+    everything the native grid resolved, so anything finer than the new
+    Nyquist limit folds back into the retained scales instead of being
+    removed.  Averaging the block is the cheapest correct antialiasing filter
+    and costs nothing measurable here.  The block mean is NaN-aware, because
+    a pressure level that intersects terrain is masked and a single missing
+    cell must not delete the whole block.
+    """
+    factor = max(1, int(factor))
+    if factor == 1:
+        return values
+    rows = (values.shape[0] // factor) * factor
+    cols = (values.shape[1] // factor) * factor
+    if rows < factor or cols < factor:
+        return values[::factor, ::factor]
+    blocks = values[:rows, :cols].reshape(
+        rows // factor, factor, cols // factor, factor
+    )
+    with np.errstate(invalid="ignore"):
+        counted = np.sum(np.isfinite(blocks), axis=(1, 3))
+        total = np.nansum(np.where(np.isfinite(blocks), blocks, 0.0), axis=(1, 3))
+    return np.where(counted > 0, total / np.maximum(counted, 1), np.nan)
+
+
 class SynopticFrontAnalyzer:
     """Extract a few high-confidence, large-scale fronts for each forecast step.
 
@@ -347,8 +386,12 @@ class SynopticFrontAnalyzer:
             source_longitudes = source_longitudes[
                 (source_longitudes >= lon_min) & (source_longitudes <= lon_max)
             ]
-        self.latitudes = source_latitudes[::factor]
-        self.longitudes = source_longitudes[::factor]
+        # The coordinates must be decimated the same way as the values: a
+        # block mean sits at the centre of its block, not at its first point,
+        # and taking every f-th coordinate instead would shift every field by
+        # half a native cell against its own grid.
+        self.latitudes = _decimate_axis(source_latitudes, factor)
+        self.longitudes = _decimate_axis(source_longitudes, factor)
         if len(self.latitudes) < 3 or len(self.longitudes) < 3:
             raise ValueError("Dominio insufficiente per l'analisi dei fronti")
         self.delta_latitude = float(abs(self.latitudes[1] - self.latitudes[0]))
@@ -480,7 +523,7 @@ class SynopticFrontAnalyzer:
             )
         data = data.transpose("latitude", "longitude")
         values = np.asarray(data.values, dtype=float)
-        return values[:: self.factor, :: self.factor]
+        return _decimate_area_mean(values, self.factor)
 
     def _theta_e(self, hour: int) -> np.ndarray:
         if hour in self.theta_cache:
