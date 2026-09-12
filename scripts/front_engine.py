@@ -816,9 +816,10 @@ def merge_fragments(
     lines: list[np.ndarray],
     *,
     join_km: float = 180.0,
-    max_angle_deg: float = 25.0,
+    max_angle_deg: float = 45.0,
+    max_junction_turn_deg: float = 25.0,
+    end_tangent_km: float = 40.0,
     max_curvature_deg_per_km: float = 0.25,
-    max_merged_turn_deg_per_20km: float = 6.0,
     bridge_ok=None,
 ) -> list[np.ndarray]:
     """Rejoin collinear pieces of the same boundary, in any orientation.
@@ -858,12 +859,19 @@ def merge_fragments(
     remaining = [np.asarray(line, dtype=float) for line in lines if len(line) >= 2]
 
     def end_tangent(line: np.ndarray, at_end: bool) -> np.ndarray:
-        """Unit direction *leaving* the line at the chosen end."""
-        span = min(4, len(line) - 1)
-        if at_end:
-            a, b = line[-1 - span], line[-1]
-        else:
-            a, b = line[span], line[0]
+        """Unit direction *leaving* the line, over a fixed physical window.
+
+        Taking a fixed *number* of vertices instead makes this as noisy as the
+        grid: on a real field a fragment's vertices are one grid cell apart,
+        so four of them span 18 km and the direction they imply wobbles.
+        Measured on the published field, that noise was what rejected the
+        joins -- 579 candidate pairs failed the angle test and not one
+        survived, leaving 22 pieces of 77 km where a boundary should have
+        been.  A window in kilometres asks the question at the scale the
+        answer exists at.
+        """
+        segment = _trim_to_km(line, end_tangent_km, at_end)
+        a, b = (segment[0], segment[-1]) if at_end else (segment[-1], segment[0])
         kx, ky = _km_per_degree(0.5 * (a[1] + b[1]))
         vector = np.array([(b[0] - a[0]) * kx, (b[1] - a[1]) * ky])
         return vector / max(float(np.hypot(vector[0], vector[1])), 1.0e-9)
@@ -916,11 +924,20 @@ def merge_fragments(
         # involving them could ever pass: measured on the published field,
         # that rule rejected every merge and left 22 pieces of 77 km where
         # there was one boundary of 1050 km.
-        budget = max(float(max_merged_turn_deg_per_20km),
-                     mean_turn_deg_per_km(first),
-                     mean_turn_deg_per_km(second))
-        merged_line = np.vstack((first, second))
-        return mean_turn_deg_per_km(merged_line) <= budget
+        #
+        # Judged at the junction, and only there.  Two whole-line statistics
+        # were tried first and both were wrong for the same reason: a join is
+        # a local event, and a statistic over the whole line answers a
+        # different question.  The mean dilutes an elbow -- a right-angle
+        # inside a 900 km line barely moves it, so bad welds passed and the
+        # published geometry went from 5 to 27 degrees per 20 km.  The worst
+        # turn over the whole line then rejected good joins instead, because a
+        # longer line is resampled into more vertices and so has a larger
+        # maximum for purely statistical reasons.  Measured on the published
+        # field, a mean-based budget threw out 41 of the 57 geometrically
+        # plausible pairs, on fragments of 70 km where a statistic quoted per
+        # 20 km rests on three samples and means nothing.
+        return junction_turn_deg(first, second) <= float(max_junction_turn_deg)
 
     merged = True
     while merged and len(remaining) > 1:
@@ -1075,6 +1092,52 @@ def polish_line(
     return points
 
 
+def turn_profile_deg(line: np.ndarray, spacing_km: float = 20.0) -> np.ndarray:
+    """Heading change at every vertex of the line resampled at ``spacing_km``."""
+    points = resample_km(np.asarray(line, dtype=float), spacing_km)
+    if len(points) < 3:
+        return np.zeros(0)
+    kx, ky = _km_per_degree(float(np.mean(points[:, 1])))
+    xy = np.column_stack((points[:, 0] * kx, points[:, 1] * ky))
+    deltas = np.diff(xy, axis=0)
+    headings = np.degrees(np.arctan2(deltas[:, 1], deltas[:, 0]))
+    return np.abs((np.diff(headings) + 180.0) % 360.0 - 180.0)
+
+
+def _trim_to_km(line: np.ndarray, window_km: float, from_end: bool) -> np.ndarray:
+    """The last (or first) ``window_km`` of a polyline."""
+    points = np.asarray(line, dtype=float)
+    if len(points) < 2:
+        return points
+    kx, ky = _km_per_degree(float(np.mean(points[:, 1])))
+    steps = np.hypot(np.diff(points[:, 0]) * kx, np.diff(points[:, 1]) * ky)
+    walked = np.concatenate(([0.0], np.cumsum(steps)))
+    if from_end:
+        keep = walked >= walked[-1] - window_km
+    else:
+        keep = walked <= window_km
+    trimmed = points[keep]
+    return trimmed if len(trimmed) >= 2 else points[-2:] if from_end else points[:2]
+
+
+def junction_turn_deg(
+    first: np.ndarray, second: np.ndarray, window_km: float = 80.0
+) -> float:
+    """The sharpest turn a join would introduce, measured at the join.
+
+    Measuring the worst turn of the *whole* merged line is not a fair test:
+    a longer line is resampled into more vertices and so has a larger maximum
+    for purely statistical reasons, which rejects good joins simply because
+    they make the line longer.  A join only changes the geometry near the
+    junction, so that is where it is judged.
+    """
+    profile = turn_profile_deg(np.vstack((
+        _trim_to_km(first, window_km, True),
+        _trim_to_km(second, window_km, False),
+    )))
+    return float(np.max(profile)) if profile.size else 0.0
+
+
 def mean_turn_deg_per_km(line: np.ndarray, spacing_km: float = 20.0) -> float:
     """Mean heading change per ``spacing_km``: the tortuosity metric in use."""
     points = resample_km(np.asarray(line, dtype=float), spacing_km)
@@ -1110,6 +1173,12 @@ def line_length_km(line: np.ndarray) -> float:
 # ``locatorConfidence``, ``medianTfpStrength`` and ``medianAbzGradient``
 # default to zero downstream when absent, and zero fails every gate.
 MIN_LENGTH_KM = 300.0
+# Curvatura massima di una linea pubblicabile, nel metro del progetto (gradi
+# di svolta ogni 20 km).  La documentazione dichiara 6,77 dopo la fase E e un
+# fronte disegnato a mano sta fra 3 e 6; sopra i 10 la linea non e' piu' un
+# fronte sinottico ma un percorso.  E' un limite volutamente largo, perche'
+# serve da garanzia e non da taratura: nessuna regola a monte puo' aggirarlo.
+MAX_PUBLISHED_TURN_DEG_PER_20KM = 10.0
 VERTEX_SPACING_KM = 8.0
 LOCATOR_NAME = "thetaW-evidence-ridge"
 
@@ -1219,6 +1288,7 @@ def detect_fronts(
     min_length_km: float = MIN_LENGTH_KM,
     vertex_spacing_km: float = VERTEX_SPACING_KM,
     min_probability: float = 0.5,
+    max_turn_deg_per_20km: float = MAX_PUBLISHED_TURN_DEG_PER_20KM,
     max_sinuosity: float = 2.35,
     min_closure_ratio: float = 0.42,
     max_net_turn_deg: float = 165.0,
@@ -1300,6 +1370,7 @@ def detect_fronts(
                                   default=0.0), 1),
         "droppedTooShort": 0,
         "droppedShape": 0,
+        "droppedTooRough": 0,
     }
 
     candidates: list[dict] = []
@@ -1326,6 +1397,16 @@ def detect_fronts(
             if (sinuosity > max_sinuosity or closure < min_closure_ratio
                     or net_turn > max_net_turn_deg):
                 funnel["droppedShape"] += 1
+                continue
+            # Last line of defence on the promise this engine exists to keep.
+            # Every geometric rule upstream is a rule about how a line is
+            # *built*; this one is about what it *is*, and it cannot be
+            # defeated by a rule interacting badly with another.  It was
+            # added after a merge welded elbows into 500 km lines and put 27
+            # degrees per 20 km on the map -- twice as rough as the product
+            # this work set out to replace.
+            if mean_turn_deg_per_km(line) > float(max_turn_deg_per_20km):
+                funnel["droppedTooRough"] += 1
                 continue
 
             candidates.append(_build_candidate(
@@ -1377,6 +1458,7 @@ def score_lines(
     vertex_spacing_km: float = VERTEX_SPACING_KM,
     min_probability: float = 0.5,
     min_supported_fraction: float = 0.6,
+    max_turn_deg_per_20km: float = MAX_PUBLISHED_TURN_DEG_PER_20KM,
     source: str = "external-line",
 ) -> list[dict]:
     """Judge lines produced elsewhere with this engine's own evidence.
@@ -1412,6 +1494,8 @@ def score_lines(
         for piece in _line_pieces(line, supported):
             piece = resample_km(piece, vertex_spacing_km)
             if line_length_km(piece) < min_length_km or len(piece) < 4:
+                continue
+            if mean_turn_deg_per_km(piece) > float(max_turn_deg_per_20km):
                 continue
             kept.append(_build_candidate(
                 piece, evidence, abz_gradient, longitudes, latitudes, metrics,

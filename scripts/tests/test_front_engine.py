@@ -245,6 +245,36 @@ for angle in (0.0, 30.0, 60.0, 90.0):
            "punti di cresta sull'asse %.0f%%"
            % (angle, fe.line_length_km(polished), turn, offset, 100.0 * on_axis))
 
+# Garanzia strutturale: nessuna linea sopra il limite di curvatura dichiarato
+# puo' arrivare alla mappa, qualunque cosa facciano le regole a monte.  Serve
+# perche' e' successo: una ricucitura ha saldato gomiti in linee da 500 km e
+# ha pubblicato 27 gradi ogni 20 km, il doppio del prodotto che questo lavoro
+# sostituisce.  Il controllo si fa su una linea costruita apposta ruvida, non
+# su un campo, cosi' non dipende da quale regola a monte l'abbia prodotta.
+elbow = np.array([[10.0, 41.0], [10.0, 42.0], [11.0, 42.0], [11.0, 43.0],
+                  [12.0, 43.0], [12.0, 44.0], [13.0, 44.0], [13.0, 45.0]])
+report(fe.mean_turn_deg_per_km(elbow) > fe.MAX_PUBLISHED_TURN_DEG_PER_20KM,
+       "la linea di prova a gomiti non e' abbastanza ruvida per il test",
+       "linea a gomiti: %.1f gr/20km contro un limite di %.1f"
+       % (fe.mean_turn_deg_per_km(elbow), fe.MAX_PUBLISHED_TURN_DEG_PER_20KM))
+rough_case = straight_front(0.0)
+rough_evidence = fe.frontal_evidence(
+    rough_case["thetaW"], rough_case["u"], rough_case["v"], LON, LAT,
+    metrics=GRID, theta_w_upper=rough_case["upper"],
+)
+rough_fields = {
+    "evidence": rough_evidence,
+    "abzGradient": fl.adjacent_baroclinic_zone(
+        rough_evidence["gradientMagnitude"], rough_evidence["gradientEast"],
+        rough_evidence["gradientNorth"], LON, LAT, search_km=fe.SYNOPTIC_SIGMA_KM,
+    ),
+    "longitudes": LON, "latitudes": LAT,
+}
+report(not fe.score_lines([elbow], rough_fields, min_length_km=100.0),
+       "una linea a gomiti supera la garanzia di curvatura",
+       "linee accettate da score_lines: %d"
+       % len(fe.score_lines([elbow], rough_fields, min_length_km=100.0)))
+
 # Un solo confine deve dare una sola linea: senza soppressione dei non massimi
 # e senza rivendicare il vicinato della catena ne usciva una gemella.
 case = straight_front(0.0)
