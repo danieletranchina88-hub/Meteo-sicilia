@@ -58,7 +58,8 @@ async function test(name,fn) {await fn();console.log('PASS '+name);}
  });
  await test('raster worker coalesces obsolete jobs instead of queuing every hour',()=>{
   const sent=[],context={rasterRenderToken:0,rasterWorkerSupported:true,rasterWorkerBusy:false,
-    queuedRasterParams:null,rasterWorker:{postMessage:p=>sent.push(p)},pendingRasterCallback:null};
+    queuedRasterParams:null,rasterWorker:{postMessage:p=>sent.push(p)},pendingRasterCallback:null,
+    rasterWorkerState:{terrainKey:''},rasterMessage:(p)=>p};
   vm.createContext(context);vm.runInContext(implementation('dispatchRasterFill'),context);
   context.dispatchRasterFill({hour:1},()=>{});context.dispatchRasterFill({hour:2},()=>{});context.dispatchRasterFill({hour:3},()=>{});
   assert.equal(sent.length,1);assert.equal(context.queuedRasterParams.hour,3);

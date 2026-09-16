@@ -4303,6 +4303,15 @@
         const windUGrid = params.windUGrid, windVGrid = params.windVGrid;
         const info = params.info;
         const activeLayer = params.activeLayer;
+        // Correzione di quota: il campo delle quote e il profilo del modello
+        // arrivano insieme ai dati, quindi il disegno corretto e' lo stesso
+        // disegno, non un percorso a parte sul thread principale.
+        const elevation = params.elevation || null;
+        const trueHeight = elevation ? elevation.trueHeight : null;
+        const modelHeight = elevation ? elevation.modelHeight : null;
+        const profile = elevation ? elevation.profile : null;
+        let corrPixel = 0, corrDelta = 0;
+        let corrMax = isWindField ? 1 : 0;
 
         const pixels = new Uint8ClampedArray(width * height * 4);
         for (let y = 0; y < height; y += 1) {
@@ -4314,6 +4323,7 @@
           for (let x = 0; x < width; x += 1) {
             const longitude = leftLongitude + (x / Math.max(width - 1, 1)) * (rightLongitude - leftLongitude);
             const gx = (longitude - fieldMeta.lo1) / fieldMeta.dx;
+            const index = y * width + x;
             let value;
 
             if (isWindField) {
@@ -4324,6 +4334,27 @@
               value = rasterSampler(fieldGrid, gx, gy, fieldMeta.nx, fieldMeta.ny);
             }
 
+            if (elevation && Number.isFinite(value)) {
+              const high = trueHeight[index], low = modelHeight[index];
+              if (isWindField) {
+                const factor = windElevationFactor(profile, high, low, longitude, latitude);
+                if (factor !== 1) {
+                  value *= factor;
+                  corrPixel += 1;
+                  corrDelta += Math.abs(high - low);
+                  if (Math.abs(factor - 1) > Math.abs(corrMax - 1)) corrMax = factor;
+                }
+              } else {
+                const shift = elevationCorrection(profile, high, low, longitude, latitude);
+                if (shift) {
+                  value += shift;
+                  corrPixel += 1;
+                  corrDelta += Math.abs(high - low);
+                  if (Math.abs(shift) > Math.abs(corrMax)) corrMax = shift;
+                }
+              }
+            }
+
             if (
               !Number.isFinite(value) ||
               (activeLayer === "rain" && value < 0.08) ||
@@ -4332,7 +4363,7 @@
               continue;
             }
 
-            const pixel = (y * width + x) * 4;
+            const pixel = index * 4;
             const color = colorFor(value, info);
             pixels[pixel] = Math.round(color[0]);
             pixels[pixel + 1] = Math.round(color[1]);
@@ -4340,7 +4371,15 @@
             pixels[pixel + 3] = Math.round(color[3] * 255);
           }
         }
-        return pixels;
+        return {
+          pixels: pixels,
+          stat: elevation ? {
+            corrected: corrPixel,
+            medianDelta: corrPixel ? Math.round(corrDelta / corrPixel) : 0,
+            maxCorrection: corrMax,
+            kind: isWindField ? "wind" : "temp"
+          } : null
+        };
       }
 
       function sample(array, gx, gy) {
@@ -7008,7 +7047,42 @@
       const DEM_TILE_PIXELS = 256;
       const DEM_MAX_ZOOM = 13;
       const DEM_TILE_BUDGET = 48;
+      // Quante tessere restano in memoria. Una tessera e' 256x256 float, cioe'
+      // 256 KB: il tetto vale circa 48 MB, poco piu' di tre inquadrature piene.
+      // Serve perche' adesso la copertura del terreno non si azzera piu' a
+      // ogni spostamento, quindi senza un limite crescerebbe all'infinito.
+      const DEM_TILE_CACHE_LIMIT = 192;
       const demTiles = new Map();
+      // Le stesse tessere gia' risolte, leggibili senza attendere: e' da qui
+      // che il campionatore di quota legge, un pixel alla volta.
+      const demTileData = new Map();
+
+      // Map conserva l'ordine d'inserimento: reinserire una chiave la porta in
+      // fondo, e lo sfratto parte sempre dalla testa. E' una LRU sulle
+      // richieste, che e' esattamente cio' che conta qui.
+      function touchDemTile(key) {
+        if (demTiles.has(key)) {
+          const entry = demTiles.get(key);
+          demTiles.delete(key);
+          demTiles.set(key, entry);
+        }
+        if (demTileData.has(key)) {
+          const heights = demTileData.get(key);
+          demTileData.delete(key);
+          demTileData.set(key, heights);
+        }
+      }
+
+      function trimDemTiles() {
+        while (demTiles.size > DEM_TILE_CACHE_LIMIT) {
+          const oldest = demTiles.keys().next().value;
+          demTiles.delete(oldest);
+          demTileData.delete(oldest);
+          // Il memo potrebbe puntare proprio a quella: si azzera e basta.
+          demMemoZoom = -1;
+          demMemoTile = null;
+        }
+      }
 
       function demTileHeights(z, x, y) {
         const key = z + "/" + x + "/" + y;
@@ -7044,8 +7118,17 @@
           image.onerror = function () { resolve(null); };
           image.src = "https://s3.amazonaws.com/elevation-tiles-prod/terrarium/"
             + z + "/" + x + "/" + y + ".png";
+        }).then(function (heights) {
+          // Sfrattata mentre era in volo: non la si rimette in cache, o
+          // resterebbe li' senza che nessuno la possa piu' liberare.
+          if (demTiles.has(key)) {
+            demTileData.set(key, heights);
+            if (heights) terrainCoverageStamp += 1;
+          }
+          return heights;
         });
         demTiles.set(key, promise);
+        trimDemTiles();
         return promise;
       }
 
@@ -7123,35 +7206,224 @@
       }
 
       // ---- CORREZIONE DI QUOTA ---------------------------------------------
-      let terrainSampler = null;
-      let terrainSamplerKey = "";
-      let terrainSamplerPending = "";
+      //
+      // La quota vera non e' piu' un mosaico legato al riquadro del raster.
+      // Legarcelo aveva un difetto preciso e visibile: ogni spostamento della
+      // mappa cambiava la chiave del mosaico, buttava via la richiesta in volo
+      // e ridisegnava senza correzione. Il downscaling si spegneva appena si
+      // muoveva la mappa, e tornava solo quando l'intero mosaico era stato
+      // riscaricato -- se nel frattempo si muoveva ancora, non tornava affatto.
+      //
+      // Adesso la copertura e' una proprieta' della cache delle tessere, e
+      // cresce soltanto: si legge dalla tessera piu' fine gia' in memoria e
+      // quelle che mancano si chiedono senza spegnere niente. Spostandosi di
+      // poco la vista nuova e' gia' quasi tutta coperta, quindi non c'e' piu'
+      // alcun ritorno alla mappa non corretta.
+      const TERRAIN_ZOOM_LEVELS = 4;
+      let terrainZooms = [];
+      let terrainSampleZooms = [];
+      let terrainCoverageStamp = 0;
+      let terrainRequestKey = "";
+      let terrainRedrawTimer = 0;
 
       function profilePayload() {
         return currentData && currentData.profile ? currentData.profile : null;
       }
 
+      // Gli zoom si ricordano per ordine di richiesta, ma si leggono dal piu'
+      // fine: allontanando la vista le tessere grosse restano disponibili come
+      // ripiego, e avvicinandola quelle fini prendono subito il posto. In
+      // mezzo non c'e' mai un istante scoperto.
+      function noteTerrainZoom(zoom) {
+        const kept = terrainZooms.filter(function (z) { return z !== zoom; });
+        kept.unshift(zoom);
+        terrainZooms = kept.slice(0, TERRAIN_ZOOM_LEVELS);
+        terrainSampleZooms = terrainZooms.slice().sort(function (a, b) {
+          return b - a;
+        });
+      }
+
+      // Il raster si percorre per righe, quindi due letture vicine cadono
+      // quasi sempre nella stessa tessera: ricordare l'ultima evita di
+      // ricomporre una chiave di testo e di interrogare la mappa a ogni
+      // campione. Misurato sul percorso vero: 357 ms per milione di campioni
+      // senza, 55 con.
+      let demMemoZoom = -1, demMemoX = -1, demMemoY = -1, demMemoTile = null;
+
+      function demTileAt(zoom, tx, ty) {
+        if (zoom === demMemoZoom && tx === demMemoX && ty === demMemoY) {
+          return demMemoTile;
+        }
+        const tile = demTileData.get(zoom + "/" + tx + "/" + ty) || null;
+        demMemoZoom = zoom; demMemoX = tx; demMemoY = ty; demMemoTile = tile;
+        return tile;
+      }
+
+      function demHeightAtZoom(zoom, longitude, latitude) {
+        const scale = Math.pow(2, zoom);
+        const span = scale * DEM_TILE_PIXELS;
+        const px = (longitude + 180) / 360 * span;
+        const py = mercatorPixelY(latitude, scale) * DEM_TILE_PIXELS;
+        const at = function (x, y) {
+          const iy = Math.floor(y);
+          if (iy < 0 || iy >= span) return NaN;
+          const ix = ((Math.floor(x) % span) + span) % span;
+          const tile = demTileAt(
+            zoom,
+            Math.floor(ix / DEM_TILE_PIXELS),
+            Math.floor(iy / DEM_TILE_PIXELS)
+          );
+          if (!tile) return NaN;
+          return tile[(iy % DEM_TILE_PIXELS) * DEM_TILE_PIXELS
+            + (ix % DEM_TILE_PIXELS)];
+        };
+        const a = at(px, py);
+        if (!Number.isFinite(a)) return NaN;
+        const fx = px - Math.floor(px), fy = py - Math.floor(py);
+        const b = at(px + 1, py), c = at(px, py + 1), d = at(px + 1, py + 1);
+        const top = a + (Number.isFinite(b) ? (b - a) * fx : 0);
+        const bottom = Number.isFinite(c)
+          ? c + (Number.isFinite(d) ? (d - c) * fx : 0)
+          : top;
+        return top + (bottom - top) * fy;
+      }
+
+      function terrainHeightAt(longitude, latitude) {
+        for (let i = 0; i < terrainSampleZooms.length; i += 1) {
+          const height = demHeightAtZoom(terrainSampleZooms[i], longitude, latitude);
+          if (Number.isFinite(height)) return height;
+        }
+        return NaN;
+      }
+
+      function terrainHasCoverage() {
+        return terrainSampleZooms.length > 0 && demTileData.size > 0;
+      }
+
+      // Quota vera e quota del modello, un valore per pixel del raster.
+      //
+      // E' la parte cara della correzione -- 389 ms per milione di pixel fra
+      // DEM e terreno del modello -- ed e' anche l'unica che NON dipende
+      // dall'ora mostrata: la stessa vista, scorrendo la barra del tempo,
+      // riusa questo campo senza ricalcolarlo. Cambia solo quando cambiano il
+      // riquadro, la risoluzione, la copertura del DEM o il run.
+      let terrainFieldCache = null;
+
+      function terrainHeightField(geometry, modelTerrain) {
+        const meta = currentData.meta;
+        const key = [
+          geometry.width, geometry.height,
+          geometry.leftLongitude.toFixed(4), geometry.rightLongitude.toFixed(4),
+          geometry.topMercator.toFixed(6), geometry.bottomMercator.toFixed(6),
+          terrainCoverageStamp, meta.runTime
+        ].join("|");
+        if (terrainFieldCache && terrainFieldCache.key === key) {
+          return terrainFieldCache;
+        }
+        const width = geometry.width, height = geometry.height;
+        const trueHeight = new Float32Array(width * height);
+        const modelHeight = new Float32Array(width * height);
+        const longitudeSpan = geometry.rightLongitude - geometry.leftLongitude;
+        const lastColumn = Math.max(width - 1, 1);
+        for (let y = 0; y < height; y += 1) {
+          const fraction = height > 1 ? y / (height - 1) : 0;
+          const mercatorY = geometry.topMercator
+            + fraction * (geometry.bottomMercator - geometry.topMercator);
+          const latitude = (2 * Math.atan(Math.exp(mercatorY)) - Math.PI / 2)
+            * 180 / Math.PI;
+          const my = (meta.la1 - latitude) / meta.dy;
+          const row = y * width;
+          for (let x = 0; x < width; x += 1) {
+            const longitude = geometry.leftLongitude
+              + (x / lastColumn) * longitudeSpan;
+            trueHeight[row + x] = terrainHeightAt(longitude, latitude);
+            modelHeight[row + x] = sampleBilinear(
+              modelTerrain, (longitude - meta.lo1) / meta.dx, my,
+              meta.nx, meta.ny
+            );
+          }
+        }
+        terrainFieldCache = {
+          key: key, width: width, height: height,
+          trueHeight: trueHeight, modelHeight: modelHeight
+        };
+        return terrainFieldCache;
+      }
+
+      // Il riquadro di tessere che copre la vista, con lo stesso tetto di
+      // spesa di prima: se a quello zoom servirebbero troppe tessere si
+      // scende di un livello finche' non ci si sta.
+      function terrainTileBox(west, east, south, north, width) {
+        let zoom = demZoomFor(west, east, width);
+        let x0 = 0, x1 = 0, y0 = 0, y1 = 0;
+        for (; zoom >= 4; zoom -= 1) {
+          const scale = Math.pow(2, zoom);
+          x0 = Math.floor((west + 180) / 360 * scale);
+          x1 = Math.floor((east + 180) / 360 * scale);
+          y0 = Math.floor(mercatorPixelY(north, scale));
+          y1 = Math.floor(mercatorPixelY(south, scale));
+          if ((x1 - x0 + 1) * (y1 - y0 + 1) <= DEM_TILE_BUDGET) break;
+        }
+        return { zoom: zoom, x0: x0, x1: x1, y0: y0, y1: y1 };
+      }
+
+      // Un solo ridisegno per ondata di tessere: arrivano a decine e a poca
+      // distanza l'una dall'altra, e ridisegnare a ognuna sarebbe lavoro buttato.
+      function scheduleTerrainRedraw() {
+        if (terrainRedrawTimer) return;
+        terrainRedrawTimer = setTimeout(function () {
+          terrainRedrawTimer = 0;
+          if (!elevationDownscalingActive()) return;
+          lastRasterSignature = "";
+          renderWeather();
+        }, 60);
+      }
+
+      function requestTerrainTiles(west, east, south, north, width) {
+        const box = terrainTileBox(west, east, south, north, width);
+        const key = [box.zoom, box.x0, box.x1, box.y0, box.y1].join("/");
+        noteTerrainZoom(box.zoom);
+        if (terrainRequestKey === key) return;
+        terrainRequestKey = key;
+        const missing = [];
+        for (let ty = box.y0; ty <= box.y1; ty += 1) {
+          for (let tx = box.x0; tx <= box.x1; tx += 1) {
+            const id = box.zoom + "/" + tx + "/" + ty;
+            touchDemTile(id);
+            if (!demTileData.has(id)) missing.push(demTileHeights(box.zoom, tx, ty));
+          }
+        }
+        if (!missing.length) return;
+        // Non si aspetta l'intera ondata: ogni tessera che arriva allarga la
+        // copertura, e il ridisegno raggruppato la mostra subito.
+        missing.forEach(function (promise) {
+          promise.then(function (heights) {
+            if (heights) scheduleTerrainRedraw();
+          });
+        });
+      }
+
+      // La correzione di quota non e' piu' legata al selettore "Ricalcola
+      // mappa". Erano due cose diverse messe sotto lo stesso interruttore: le
+      // osservazioni METAR valgono solo vicino all'ora attuale e cambiano da
+      // sole, la quota vera del terreno vale a ogni scadenza ed e' la stessa
+      // per tutto il run. Adesso la quota e' sempre attiva dove il profilo del
+      // modello la rende calcolabile, e il selettore riguarda le sole
+      // osservazioni.
+      //
+      // Poterla tenere accesa sempre e' una conseguenza del disegno nuovo: la
+      // correzione vive nel worker insieme al resto del raster, quindi non
+      // costa un millisecondo di thread principale e i fotogrammi corretti
+      // entrano in cache e si scaldano in anticipo come tutti gli altri.
       function elevationDownscalingActive() {
         const payload = profilePayload();
-        if (!showFusion || selectedLevel !== "surface" || !payload) return false;
+        if (selectedLevel !== "surface" || !payload) return false;
+        // Temperatura percepita e bulbo bagnato si disegnano dal loro campo,
+        // non dal profilo: spostarli in quota con la legge della temperatura
+        // sarebbe una correzione su una grandezza che non la segue.
         if (activeLayer === "temp") return true;
         // Il vento si sposta in quota solo se il profilo porta anche il vento.
         return activeLayer === "wind" && Boolean(payload.wind);
-      }
-
-      function requestTerrainSampler(west, east, south, north, width, key) {
-        if (terrainSamplerPending === key) return;
-        terrainSamplerPending = key;
-        buildTerrainSampler(west, east, south, north, width).then(function (sampler) {
-          if (terrainSamplerPending !== key) return;
-          terrainSamplerPending = "";
-          terrainSampler = sampler;
-          terrainSamplerKey = sampler ? key : "";
-          if (sampler) {
-            lastRasterSignature = "";
-            renderWeather();
-          }
-        });
       }
 
       // Temperatura del profilo del modello alla quota richiesta. Fra i livelli
@@ -7176,8 +7448,6 @@
         return lowT + (highT - lowT) / span * (metres - low);
       }
 
-      let lastElevationDelta = 0;
-
       // Fattore con cui il vento del modello va riportato sulla quota vera.
       //
       // Stesso ragionamento della temperatura, e stessa assenza di parametri
@@ -7191,20 +7461,12 @@
       // differenza: il rapporto e' adimensionale e cancella a primo ordine lo
       // scarto fra il vento a 10 m, che sente l'attrito del suolo, e quello
       // dell'aria libera. Sommare una differenza li' confonderebbe.
-      const WIND_ELEVATION_LIMITS = [0.5, 2.0];
-
-      function windElevationFactor(profile, modelTerrain, longitude, latitude) {
-        if (!terrainSampler || !profile || !profile.wind) return 1;
-        const trueHeight = terrainSampler.heightAt(longitude, latitude);
-        if (!Number.isFinite(trueHeight)) return 1;
-        const meta = currentData.meta;
-        const modelHeight = sampleBilinear(
-          modelTerrain, (longitude - meta.lo1) / meta.dx,
-          (meta.la1 - latitude) / meta.dy, meta.nx, meta.ny
-        );
-        if (!Number.isFinite(modelHeight)) return 1;
+      function windElevationFactor(profile, trueHeight, modelHeight,
+                                   longitude, latitude) {
+        const WIND_ELEVATION_LIMITS = [0.5, 2.0];
+        if (!profile || !profile.wind) return 1;
+        if (!Number.isFinite(trueHeight) || !Number.isFinite(modelHeight)) return 1;
         const delta = trueHeight - modelHeight;
-        lastElevationDelta = delta;
         if (!(Math.abs(delta) > 0.5) || Math.abs(delta) > 2500) return 1;
         const px = (longitude - profile.lo1) / profile.dx;
         const py = (profile.la1 - latitude) / profile.dy;
@@ -7244,17 +7506,10 @@
         return low.value + (high.value - low.value) / span * (metres - low.z);
       }
 
-      function elevationCorrection(profile, modelTerrain, longitude, latitude) {
-        if (!terrainSampler) return 0;
-        const trueHeight = terrainSampler.heightAt(longitude, latitude);
-        if (!Number.isFinite(trueHeight)) return 0;
-        const meta = currentData.meta;
-        const mx = (longitude - meta.lo1) / meta.dx;
-        const my = (meta.la1 - latitude) / meta.dy;
-        const modelHeight = sampleBilinear(modelTerrain, mx, my, meta.nx, meta.ny);
-        if (!Number.isFinite(modelHeight)) return 0;
+      function elevationCorrection(profile, trueHeight, modelHeight,
+                                   longitude, latitude) {
+        if (!Number.isFinite(trueHeight) || !Number.isFinite(modelHeight)) return 0;
         const delta = trueHeight - modelHeight;
-        lastElevationDelta = delta;
         // Sotto il mezzo metro non c'e' niente da correggere, e sopra i 2500 m
         // di scarto non c'e' piu' orografia ma un errore: meglio fermarsi.
         if (!(Math.abs(delta) > 0.5) || Math.abs(delta) > 2500) return 0;
@@ -7280,15 +7535,64 @@
       let rasterRenderToken = 0;
       let pendingRasterCallback = null;
 
-      function buildRasterWorker() {
-        const source = [
+      // Un solo sorgente per tutti i worker del raster: quello che disegna
+      // adesso e quello che scalda i fotogrammi vicini. Erano due liste di
+      // funzioni copiate a mano, e bastava aggiungerne una da una parte sola
+      // per avere due disegni diversi.
+      //
+      // Il campo delle quote pesa qualche megabyte e non cambia scorrendo la
+      // barra del tempo: si manda una volta per vista, identificato da una
+      // chiave, e il worker se lo tiene.
+      function rasterWorkerSource() {
+        return [
           clamp, getGrid, sampleNearest, sampleBilinear, sampleCoarseBilinear,
-          colorFor, fillRasterPixels
+          colorFor, profileTemperature, profileVectorAt,
+          elevationCorrection, windElevationFactor, fillRasterPixels
         ].map(function (fn) { return fn.toString(); }).join("\n\n") +
-          "\n\nself.onmessage = function (event) {" +
-          "  const pixels = fillRasterPixels(event.data);" +
-          "  self.postMessage({ token: event.data.token, pixels: pixels.buffer }, [pixels.buffer]);" +
+          "\n\nlet heldTerrain = null;" +
+          "\nself.onmessage = function (event) {" +
+          "  const data = event.data;" +
+          "  if (data.terrainField) {" +
+          "    heldTerrain = { key: data.terrainKey, field: data.terrainField };" +
+          "  }" +
+          "  if (data.elevation) {" +
+          "    if (heldTerrain && heldTerrain.key === data.terrainKey) {" +
+          "      data.elevation.trueHeight = heldTerrain.field.trueHeight;" +
+          "      data.elevation.modelHeight = heldTerrain.field.modelHeight;" +
+          "    } else {" +
+          "      data.elevation = null;" +
+          "    }" +
+          "  }" +
+          "  const result = fillRasterPixels(data);" +
+          "  self.postMessage(" +
+          "    { token: data.token, pixels: result.pixels.buffer, stat: result.stat }," +
+          "    [result.pixels.buffer]" +
+          "  );" +
           "};";
+      }
+
+      // Il messaggio vero: porta il campo delle quote solo se quel worker non
+      // ce l'ha gia'. Lo stato si aggiorna qui, all'invio, e non al momento in
+      // cui il disegno viene richiesto: un messaggio superato da uno piu'
+      // recente non parte, e non deve far credere di aver consegnato niente.
+      function rasterMessage(params, state) {
+        if (!params.elevation) return params;
+        const message = Object.assign({}, params);
+        message.elevation = { profile: params.elevation.profile };
+        if (state.terrainKey !== params.terrainKey) {
+          message.terrainField = {
+            trueHeight: params.elevation.trueHeight,
+            modelHeight: params.elevation.modelHeight
+          };
+          state.terrainKey = params.terrainKey;
+        }
+        return message;
+      }
+
+      const rasterWorkerState = { terrainKey: "" };
+
+      function buildRasterWorker() {
+        const source = rasterWorkerSource();
         let worker;
         try {
           const url = URL.createObjectURL(
@@ -7304,22 +7608,26 @@
           rasterWorkerBusy = false;
           if (queuedRasterParams) {
             const latest = queuedRasterParams; queuedRasterParams = null;
-            rasterWorkerBusy = true; worker.postMessage(latest);
+            rasterWorkerBusy = true;
+            worker.postMessage(rasterMessage(latest, rasterWorkerState));
           }
           if (event.data.token !== rasterRenderToken || !pendingRasterCallback) return;
           const callback = pendingRasterCallback;
           pendingRasterCallback = null;
-          callback(new Uint8ClampedArray(event.data.pixels));
+          callback(new Uint8ClampedArray(event.data.pixels), event.data.stat);
         };
         worker.onerror = function (error) {
           console.warn("Raster worker in errore, si torna al disegno sincrono", error);
           rasterWorkerSupported = false;
+          rasterWorkerState.terrainKey = "";
           if (pendingRasterCallback) {
             const callback = pendingRasterCallback;
             pendingRasterCallback = null;
-            callback(fillRasterPixels(lastRasterFillParams));
+            const result = fillRasterPixels(lastRasterFillParams);
+            callback(result.pixels, result.stat);
           }
         };
+        rasterWorkerState.terrainKey = "";
         return worker;
       }
 
@@ -7341,11 +7649,15 @@
           if (rasterWorker) {
             pendingRasterCallback = onDone;
             if (rasterWorkerBusy) queuedRasterParams = params;
-            else { rasterWorkerBusy = true; rasterWorker.postMessage(params); }
+            else {
+              rasterWorkerBusy = true;
+              rasterWorker.postMessage(rasterMessage(params, rasterWorkerState));
+            }
             return;
           }
         }
-        onDone(fillRasterPixels(params));
+        const result = fillRasterPixels(params);
+        onDone(result.pixels, result.stat);
       }
 
       function renderWeather(prewarm, onReady) {
@@ -7470,7 +7782,8 @@
           activeLayer, selectedLevel, activeModel, currentIndex,
           currentData.meta && currentData.meta.validTime,
           useNearestCell, showFusion, width, height,
-          elevationDownscalingActive(), terrainSamplerKey,
+          elevationDownscalingActive(),
+          elevationDownscalingActive() ? terrainCoverageStamp : 0,
           leftLongitude.toFixed(4), rightLongitude.toFixed(4),
           bottomLatitude.toFixed(4), topLatitude.toFixed(4)
         ].join("|");
@@ -7530,27 +7843,29 @@
         const windUGrid = isWindField ? getGrid(windLevel ? windLevel.u : windField().u) : null;
         const windVGrid = isWindField ? getGrid(windLevel ? windLevel.v : windField().v) : null;
 
-        // Quota vera del terreno: il campionatore arriva in modo asincrono,
-        // quindi il primo disegno esce non corretto e il secondo lo sostituisce.
+        // Quota vera del terreno. Le tessere che mancano si chiedono adesso,
+        // ma quelle gia' in memoria si usano subito: la correzione parte con
+        // la copertura che c'e' e si completa da se' quando il resto arriva,
+        // senza mai passare per un disegno non corretto.
         const elevationActive = elevationDownscalingActive();
         const profile = elevationActive ? profilePayload() : null;
         const modelTerrain = elevationActive && localDownscalingCache
           && localDownscalingCache.terrain
           && localDownscalingCache.terrain.runTime === currentData.meta.runTime
           ? getGrid(localDownscalingCache.terrain.terrainHeight) : null;
-        const terrainKey = elevationActive && modelTerrain
-          ? [leftLongitude.toFixed(3), rightLongitude.toFixed(3),
-             bottomLatitude.toFixed(3), topLatitude.toFixed(3), width].join("|")
-          : "";
-        if (terrainKey && terrainSamplerKey !== terrainKey) {
-          requestTerrainSampler(
-            leftLongitude, rightLongitude, bottomLatitude, topLatitude,
-            width, terrainKey
+        if (elevationActive && !modelTerrain) ensureLocalDownscaling();
+        if (elevationActive && modelTerrain) {
+          requestTerrainTiles(
+            leftLongitude, rightLongitude, bottomLatitude, topLatitude, width
           );
         }
-        const correctElevation = Boolean(
-          terrainKey && terrainSamplerKey === terrainKey && terrainSampler
-        );
+        const terrainField = elevationActive && modelTerrain && terrainHasCoverage()
+          ? terrainHeightField({
+              width: width, height: height,
+              leftLongitude: leftLongitude, rightLongitude: rightLongitude,
+              topMercator: topMercator, bottomMercator: bottomMercator
+            }, modelTerrain)
+          : null;
 
         const frameCoordinates = [[leftLongitude,topLatitude],[rightLongitude,topLatitude],[rightLongitude,bottomLatitude],[leftLongitude,bottomLatitude]];
         function finishRaster(pixels, elevationStat) {
@@ -7560,131 +7875,32 @@
           rasterCanvas.width = width; rasterCanvas.height = height;
           rasterContext.putImageData(new ImageData(pixels,width,height),0,0);
           lastElevationStat = elevationStat || null;
-          if(showFusion) updateDownscalingStatus();
+          updateDownscalingStatus();
           publishWeatherRaster(frameCoordinates);
           if(onReady) onReady();
           scheduleFrameWarmup();
         }
 
-        if (correctElevation) {
-          // Il worker non ha accesso al DEM: la correzione di quota, che lo
-          // consulta a ogni pixel, resta sul thread principale. E' una
-          // funzione opzionale (downscaling puntuale acceso), non il
-          // percorso comune che rende lenta la barra del tempo.
-          const elevated = fillRasterPixelsWithElevation({
-            width: width, height: height,
-            leftLongitude: leftLongitude, rightLongitude: rightLongitude,
-            topMercator: topMercator, bottomMercator: bottomMercator,
-            fieldMeta: fieldMeta, samplerKind: rasterSamplerKind,
-            isWindField: isWindField, fieldGrid: fieldGrid,
-            windUGrid: windUGrid, windVGrid: windVGrid,
-            info: info, activeLayer: activeLayer
-          }, profile, modelTerrain);
-          finishRaster(elevated[0], elevated[1]);
-        } else {
-          (prewarm ? dispatchWarmRaster : dispatchRasterFill)({
-            width: width, height: height,
-            leftLongitude: leftLongitude, rightLongitude: rightLongitude,
-            topMercator: topMercator, bottomMercator: bottomMercator,
-            fieldMeta: {
-              lo1: fieldMeta.lo1, la1: fieldMeta.la1,
-              dx: fieldMeta.dx, dy: fieldMeta.dy,
-              nx: fieldMeta.nx, ny: fieldMeta.ny
-            },
-            samplerKind: rasterSamplerKind, isWindField: isWindField,
-            fieldGrid: fieldGrid, windUGrid: windUGrid, windVGrid: windVGrid,
-            info: { stops: info.stops, discrete: Boolean(info.discrete) },
-            activeLayer: activeLayer
-          }, function (pixels) { finishRaster(pixels, null); });
-        }
-      }
-
-      // Copia di fillRasterPixels con la correzione di quota innestata nel
-      // ciclo: qui, non nella funzione pura per il worker, perche' legge
-      // windElevationFactor/elevationCorrection e il DEM del thread
-      // principale. Restituisce anche le statistiche della correzione, per
-      // il pannello che dice quanto ha pesato invece di limitarsi a
-      // dichiararla accesa.
-      function fillRasterPixelsWithElevation(params, profile, modelTerrain) {
-        const width = params.width, height = params.height;
-        const leftLongitude = params.leftLongitude, rightLongitude = params.rightLongitude;
-        const topMercator = params.topMercator, bottomMercator = params.bottomMercator;
-        const fieldMeta = params.fieldMeta;
-        const rasterSampler = params.samplerKind === "nearest" ? sampleNearest
-          : (params.samplerKind === "coarseBilinear" ? sampleCoarseBilinear : sampleBilinear);
-        const isWindField = params.isWindField;
-        const fieldGrid = params.fieldGrid;
-        const windUGrid = params.windUGrid, windVGrid = params.windVGrid;
-        const info = params.info;
-        const activeLayer = params.activeLayer;
-
-        let corrPixel = 0, corrDelta = 0;
-        let corrMax = isWindField ? 1 : 0;
-        const pixels = new Uint8ClampedArray(width * height * 4);
-
-        for (let y = 0; y < height; y += 1) {
-          const fraction = height > 1 ? y / (height - 1) : 0;
-          const mercatorY = topMercator + fraction * (bottomMercator - topMercator);
-          const latitude = (2 * Math.atan(Math.exp(mercatorY)) - Math.PI / 2) * 180 / Math.PI;
-          const gy = (fieldMeta.la1 - latitude) / fieldMeta.dy;
-
-          for (let x = 0; x < width; x += 1) {
-            const longitude = leftLongitude + (x / Math.max(width - 1, 1)) * (rightLongitude - leftLongitude);
-            const gx = (longitude - fieldMeta.lo1) / fieldMeta.dx;
-            let value;
-
-            if (isWindField) {
-              const u = rasterSampler(windUGrid, gx, gy, fieldMeta.nx, fieldMeta.ny);
-              const v = rasterSampler(windVGrid, gx, gy, fieldMeta.nx, fieldMeta.ny);
-              value = Number.isFinite(u) && Number.isFinite(v) ? Math.hypot(u, v) * 3.6 : NaN;
-            } else {
-              value = rasterSampler(fieldGrid, gx, gy, fieldMeta.nx, fieldMeta.ny);
-            }
-            if (isWindField && Number.isFinite(value)) {
-              const factor = windElevationFactor(
-                profile, modelTerrain, longitude, latitude
-              );
-              if (factor !== 1) {
-                value *= factor;
-                corrPixel += 1;
-                corrDelta += Math.abs(lastElevationDelta);
-                if (Math.abs(factor - 1) > Math.abs(corrMax - 1)) corrMax = factor;
-              }
-            } else if (Number.isFinite(value)) {
-              const shift = elevationCorrection(
-                profile, modelTerrain, longitude, latitude
-              );
-              if (shift) {
-                value += shift;
-                corrPixel += 1;
-                corrDelta += Math.abs(lastElevationDelta);
-                if (Math.abs(shift) > Math.abs(corrMax)) corrMax = shift;
-              }
-            }
-            const pixel = (y * width + x) * 4;
-
-            if (
-              !Number.isFinite(value) ||
-              (activeLayer === "rain" && value < 0.08) ||
-              (activeLayer === "cloud" && value < 4)
-            ) {
-              continue;
-            }
-
-            const color = colorFor(value, info);
-            pixels[pixel] = Math.round(color[0]);
-            pixels[pixel + 1] = Math.round(color[1]);
-            pixels[pixel + 2] = Math.round(color[2]);
-            pixels[pixel + 3] = Math.round(color[3] * 255);
-          }
-        }
-
-        return [pixels, {
-          corrected: corrPixel,
-          medianDelta: corrPixel ? Math.round(corrDelta / corrPixel) : 0,
-          maxCorrection: corrMax,
-          kind: isWindField ? "wind" : "temp"
-        }];
+        (prewarm ? dispatchWarmRaster : dispatchRasterFill)({
+          width: width, height: height,
+          leftLongitude: leftLongitude, rightLongitude: rightLongitude,
+          topMercator: topMercator, bottomMercator: bottomMercator,
+          fieldMeta: {
+            lo1: fieldMeta.lo1, la1: fieldMeta.la1,
+            dx: fieldMeta.dx, dy: fieldMeta.dy,
+            nx: fieldMeta.nx, ny: fieldMeta.ny
+          },
+          samplerKind: rasterSamplerKind, isWindField: isWindField,
+          fieldGrid: fieldGrid, windUGrid: windUGrid, windVGrid: windVGrid,
+          info: { stops: info.stops, discrete: Boolean(info.discrete) },
+          activeLayer: activeLayer,
+          terrainKey: terrainField ? terrainField.key : "",
+          elevation: terrainField ? {
+            profile: profile,
+            trueHeight: terrainField.trueHeight,
+            modelHeight: terrainField.modelHeight
+          } : null
+        }, finishRaster);
       }
 
       // Il mondo con un buco a forma di dominio. Serve a dire dove finisce il
@@ -11059,6 +11275,21 @@
 
       let localDownscalingRequest = 0;
       let localDownscalingCache = null;
+      let localTerrainRequest = "";
+
+      // Con la correzione di quota sempre attiva, la quota del modello va
+      // chiesta da sola alla prima mappa che la usa, non solo quando si accende
+      // il selettore delle osservazioni.
+      function ensureLocalDownscaling() {
+        const runTime = currentData && currentData.meta
+          ? currentData.meta.runTime : "";
+        if (!runTime || localTerrainRequest === runTime) return;
+        localTerrainRequest = runTime;
+        loadLocalDownscaling().then(function () {
+          lastRasterSignature = "";
+          renderWeather();
+        }).catch(function () { localTerrainRequest = ""; });
+      }
       let localDownscalingPromise = null;
       const elevationInput = document.getElementById("local-elevation");
       elevationInput.addEventListener("input", function () { updateLocalDownscaling(); });
@@ -11072,10 +11303,15 @@
 
       async function loadLocalDownscaling() {
         const directory = MODEL_INFO[activeModel].directory;
-        if (localDownscalingCache && localDownscalingCache.directory === directory && localDownscalingCache.product.runTime === (currentData && currentData.meta.runTime) && Date.now()-localDownscalingCache.at < 60000) return localDownscalingCache;
+        if (localDownscalingCache && localDownscalingCache.directory === directory && localDownscalingCache.product && localDownscalingCache.product.runTime === (currentData && currentData.meta.runTime) && Date.now()-localDownscalingCache.at < 60000) return localDownscalingCache;
         if (!localDownscalingPromise) {
           localDownscalingPromise = Promise.all([
-            loadDownscalingProduct(directory, currentData && currentData.meta.runTime),
+            // Il prodotto dell'agente serve alla scheda del punto; la quota
+            // del modello serve alla mappa. Erano legati da un Promise.all, e
+            // bastava che il primo mancasse perche' la correzione di quota non
+            // partisse mai, pur avendo il suo file.
+            loadDownscalingProduct(directory, currentData && currentData.meta.runTime)
+              .catch(function () { return null; }),
             fetchJsonResource(directory + "/downscaling_terrain.json.gz?t=" + Date.now())
           ]).then(function (values) {
             localDownscalingCache = {directory:directory, at:Date.now(), product:values[0], terrain:values[1]};
@@ -11095,6 +11331,7 @@
         try {
           const loaded = await loadLocalDownscaling();
           if (token !== localDownscalingRequest || currentData !== data || !selectedPoint) return;
+          if (!loaded.product) throw new Error("Prodotto di downscaling non disponibile.");
           const meta = loaded.terrain.meta;
           if (loaded.directory !== MODEL_INFO[activeModel].directory || loaded.terrain.runTime !== data.meta.runTime) throw new Error("Quota del modello appartenente a un altro run.");
           const gx = (position.lng-meta.lo1)/meta.dx;
@@ -11673,20 +11910,25 @@
       function updateDownscalingStatus() {
         const node = document.getElementById('map-downscaling-status');
         if (!node) return;
-        if (!showFusion) {
-          node.textContent = 'quota vera del terreno + osservazioni · T · vento · UR · MSLP · pressione stazione ≠ MSLP';
-          return;
-        }
         const parti = [];
         if (lastElevationStat && lastElevationStat.corrected) {
           const entita = lastElevationStat.kind === "wind"
             ? 'fino a ' + (lastElevationStat.maxCorrection >= 1 ? '+' : '')
               + Math.round((lastElevationStat.maxCorrection - 1) * 100) + '%'
             : 'fino a ' + lastElevationStat.maxCorrection.toFixed(1) + ' °C';
-          parti.push('quota vera del terreno · scarto medio '
-            + lastElevationStat.medianDelta + ' m · ' + entita);
+          parti.push('scarto medio dal modello ' + lastElevationStat.medianDelta
+            + ' m · ' + entita);
         } else if (elevationDownscalingActive()) {
           parti.push('quota del terreno: in caricamento');
+        }
+        // Il selettore riguarda le sole osservazioni: senza, si dice cosa
+        // farebbe invece di raccontare uno stato che non c'e'.
+        if (!showFusion) {
+          node.textContent = parti.length
+            ? 'Quota vera del terreno · ' + parti.join(' · ')
+              + ' · "Ricalcola mappa" aggiunge le osservazioni METAR'
+            : 'Ricalcola mappa · osservazioni METAR su T, vento, UR e MSLP';
+          return;
         }
         if (lastFusionStat && lastFusionStat.correctedCells) {
           const percent = (100 * lastFusionStat.correctedCells

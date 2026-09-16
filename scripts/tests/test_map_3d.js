@@ -1595,10 +1595,42 @@ assert.match(html, /const CAPE_STOPS = \[\s*\{ v: 0, c: \[238, 244, 240\], a: 0 
   // nessuno, che e' esattamente la montagna.
   assert.match(html, /if \(!matchingCount && !elevationReady\)/,
     "senza osservazioni il selettore si spegnerebbe anche in montagna");
-  // La firma del raster deve includerla, altrimenti accendere il selettore
-  // non ridisegnerebbe nulla.
-  assert.match(html, /elevationDownscalingActive\(\), terrainSamplerKey,/,
-    "la correzione non entra nella firma del raster");
+  // La firma del raster deve seguire la copertura del terreno: ogni tessera
+  // nuova cambia il disegno, e senza questo il raster resterebbe quello
+  // parziale disegnato con le prime tessere arrivate.
+  assert.match(html, /elevationDownscalingActive\(\) \? terrainCoverageStamp : 0,/,
+    "la copertura del terreno non entra nella firma del raster");
+
+  // Il difetto misurato: il campionatore del terreno era identificato dal
+  // riquadro esatto del raster, quindi ogni spostamento della mappa lo
+  // invalidava, annullava la richiesta in volo e ridisegnava senza
+  // correzione. Sulla build precedente, dopo uno spostamento i pixel
+  // corretti passavano da 429.823 a zero e non tornavano; adesso la
+  // copertura appartiene alla cache delle tessere e puo' solo crescere.
+  assert.ok(!/terrainSamplerKey/.test(html),
+    "il campionatore del terreno e' di nuovo legato al riquadro del raster");
+  assert.match(html, /function requestTerrainTiles\(west, east, south, north, width\)/,
+    "manca la richiesta di tessere indipendente dal riquadro");
+  assert.match(html, /function terrainHeightAt\(longitude, latitude\)/,
+    "manca il campionatore di quota sulla cache delle tessere");
+
+  // La correzione di quota deve stare nella funzione pura che finisce nel
+  // worker: sul thread principale costava 478 ms per raster, e con essa non
+  // si potevano ne' scaldare ne' mettere in cache i fotogrammi. Averla nel
+  // worker e' cio' che la rende accendibile di default.
+  const pura = html.slice(html.indexOf("function fillRasterPixels(params)"));
+  assert.match(pura.slice(0, 4000), /const elevation = params\.elevation \|\| null;/,
+    "la correzione di quota non e' nella funzione pura del worker");
+  assert.ok(!/fillRasterPixelsWithElevation/.test(html),
+    "esiste ancora una copia della funzione di disegno sul thread principale");
+  assert.match(html, /profileTemperature, profileVectorAt,\n\s+elevationCorrection, windElevationFactor, fillRasterPixels/,
+    "il worker non riceve le funzioni della correzione di quota");
+
+  // Non dipende piu' dal selettore delle osservazioni: e' attiva di suo.
+  assert.ok(!/if \(!showFusion \|\| selectedLevel !== "surface" \|\| !payload\) return false;/.test(html),
+    "la correzione di quota dipende ancora dal selettore delle osservazioni");
+  assert.match(html, /if \(selectedLevel !== "surface" \|\| !payload\) return false;/,
+    "elevationDownscalingActive non e' piu' riconoscibile");
 }
 // --- Rete osservativa su tutta Italia ---
 // La rete e' passata da 455 stazioni della sola Sicilia a circa 3640 su 27
@@ -1627,8 +1659,10 @@ assert.match(html, /const CAPE_STOPS = \[\s*\{ v: 0, c: \[238, 244, 240\], a: 0 
     "il pannello non spiega perche' in previsione la fusione si spegne");
   assert.match(html, /function updateDownscalingStatus\(\)/,
     "manca lo stato che distingue quota e osservazioni");
-  assert.match(html, /quota vera del terreno · scarto medio/,
+  assert.match(html, /scarto medio dal modello/,
     "lo stato non riporta quanto pesa la correzione di quota");
+  assert.match(html, /Quota vera del terreno · /,
+    "lo stato non distingue la quota, sempre attiva, dalle osservazioni");
 }
 // --- Quota neve e zero termico ---
 {
@@ -1674,33 +1708,39 @@ assert.match(html, /const CAPE_STOPS = \[\s*\{ v: 0, c: \[238, 244, 240\], a: 0 
 {
   const fillPure = html.match(/function fillRasterPixels\([\s\S]*?\n {6}\}/);
   assert.ok(fillPure, "fillRasterPixels assente");
-  ["map\\.", "currentData\\.", "terrainSampler\\.", "window\\."].forEach((pattern) => {
+  ["map\\.", "currentData\\.", "terrainHeightAt\\(", "window\\."].forEach((pattern) => {
     assert.doesNotMatch(fillPure[0], new RegExp(pattern),
       "fillRasterPixels non e' piu' pura: legge " + pattern + " dal thread principale");
   });
   assert.match(fillPure[0], /new Uint8ClampedArray\(width \* height \* 4\)/,
     "fillRasterPixels non produce piu' un buffer di pixel autonomo");
 
-  // La correzione di quota resta sul thread principale: usa il DEM, che il
-  // worker non ha.
-  const fillElevated = html.match(/function fillRasterPixelsWithElevation\([\s\S]*?\n {6}\}/);
-  assert.ok(fillElevated, "fillRasterPixelsWithElevation assente");
-  assert.match(fillElevated[0], /windElevationFactor\(/,
-    "la correzione di quota del vento e' sparita dal percorso con DEM");
-  assert.match(fillElevated[0], /elevationCorrection\(/,
-    "la correzione di quota della temperatura e' sparita dal percorso con DEM");
+  // La correzione di quota viaggia dentro la stessa funzione pura: le quote
+  // arrivano gia' calcolate nei parametri, quindi il DEM non serve al worker.
+  assert.match(fillPure[0], /windElevationFactor\(profile, high, low/,
+    "la correzione di quota del vento e' sparita dal disegno");
+  assert.match(fillPure[0], /elevationCorrection\(profile, high, low/,
+    "la correzione di quota della temperatura e' sparita dal disegno");
 
-  // Il worker si costruisce concatenando le funzioni vere, non una copia:
-  // se fillRasterPixels cambia, il worker cambia con lei.
-  const buildWorker = html.match(/function buildRasterWorker\([\s\S]*?\n {6}\}/);
-  assert.ok(buildWorker, "buildRasterWorker assente");
+  // Un solo sorgente per i due worker -- quello che disegna adesso e quello
+  // che scalda i fotogrammi vicini -- perche' due liste copiate a mano
+  // divergono alla prima funzione aggiunta da una parte sola.
+  const buildWorker = html.match(/function rasterWorkerSource\([\s\S]*?\n {6}\}/);
+  assert.ok(buildWorker, "rasterWorkerSource assente");
   ["clamp", "getGrid", "sampleNearest", "sampleBilinear", "sampleCoarseBilinear",
-   "colorFor", "fillRasterPixels"].forEach((name) => {
+   "colorFor", "profileTemperature", "profileVectorAt", "elevationCorrection",
+   "windElevationFactor", "fillRasterPixels"].forEach((name) => {
     assert.match(buildWorker[0], new RegExp("\\b" + name + "\\b"),
       "il worker del raster non porta con se' " + name);
   });
   assert.match(buildWorker[0], /\.toString\(\)/,
     "il worker copia le funzioni a mano invece di estrarne la fonte vera");
+  // Il campo delle quote pesa megabyte e non cambia scorrendo la barra del
+  // tempo: si manda una volta per vista, non a ogni fotogramma.
+  assert.match(buildWorker[0], /heldTerrain\.key === data\.terrainKey/,
+    "il worker non riusa il campo delle quote gia' ricevuto");
+  assert.match(html, /function rasterMessage\(params, state\)/,
+    "manca il messaggio che allega il campo delle quote solo quando serve");
 
   // Un raster superato da uno piu' recente non deve mai arrivare sullo
   // schermo: stesso principio del loadingToken di loadStep.
@@ -1708,17 +1748,20 @@ assert.match(html, /const CAPE_STOPS = \[\s*\{ v: 0, c: \[238, 244, 240\], a: 0 
   assert.ok(dispatch, "dispatchRasterFill assente");
   assert.match(dispatch[0], /\+\+rasterRenderToken/,
     "dispatchRasterFill non genera un token per scartare i risultati superati");
-  assert.match(buildWorker[0], /event\.data\.token !== rasterRenderToken/,
+  const workerBody = html.match(/function buildRasterWorker\([\s\S]*?\n {6}\}/);
+  assert.ok(workerBody, "buildRasterWorker assente");
+  assert.match(workerBody[0], /event\.data\.token !== rasterRenderToken/,
     "il worker non scarta piu' i risultati di un raster superato");
 
-  // renderWeather deve smistare fra i due percorsi in base a correctElevation,
-  // non disegnare sempre sullo stesso.
+  // Un solo percorso di disegno: il caso con correzione di quota e quello
+  // senza vanno entrambi al worker, altrimenti i fotogrammi corretti non si
+  // possono ne' mettere in cache ne' scaldare in anticipo.
   const render = html.match(/function renderWeather\(prewarm, onReady\) \{[\s\S]*?\n {6}\}/);
   assert.ok(render, "renderWeather assente");
-  assert.match(render[0], /if \(correctElevation\) \{/,
-    "renderWeather non distingue piu' il percorso con correzione di quota");
+  assert.ok(!/if \(correctElevation\) \{/.test(html),
+    "renderWeather ha di nuovo un percorso separato sul thread principale");
   assert.match(render[0], /dispatchRasterFill/,
-    "renderWeather non manda piu' il caso comune al worker");
+    "renderWeather non manda piu' il disegno al worker");
 }
 
 // --- Vento riportato sulla quota vera ---
@@ -1728,7 +1771,7 @@ assert.match(html, /const CAPE_STOPS = \[\s*\{ v: 0, c: \[238, 244, 240\], a: 0 
 // la differenza, perche' il rapporto cancella a primo ordine lo scarto fra il
 // vento a 10 m -- che sente l'attrito -- e quello dell'aria libera.
 {
-  assert.match(html, /function windElevationFactor\(profile, modelTerrain, longitude, latitude\)/,
+  assert.match(html, /function windElevationFactor\(profile, trueHeight, modelHeight,/,
     "manca il fattore di quota per il vento");
   assert.match(html, /return clamp\(high \/ low, WIND_ELEVATION_LIMITS\[0\], WIND_ELEVATION_LIMITS\[1\]\);/,
     "il fattore del vento non e' piu' un rapporto limitato");
