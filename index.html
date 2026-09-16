@@ -3018,7 +3018,13 @@
       // linee in tutto il dominio: una carta che non dice dove sta il
       // gradiente. Il campo resta quello mediato a scala sinottica, quindi il
       // passo piu' fitto aggiunge lettura, non rumore del modello.
-      const ISOBAR_INTERVAL_HPA = 4;
+      //
+      // Misurato sul run del 16/09 12Z: a quattro hPa il dominio intero aveva
+      // 7 isobare e un centro; a due ne ha 14 e due. E siccome le fasce di
+      // colore hanno lo stesso passo delle isobare, un campo da 11,9 hPa
+      // passa da tre a sei tinte distinguibili -- che e' la ragione per cui la
+      // mappa della pressione sembrava sempre la stessa.
+      const ISOBAR_INTERVAL_HPA = 2;
       // Attenzione: e' un modulo sul valore, non un moltiplicatore. Marcate
       // sono le isobare il cui valore e' multiplo di questo numero, quindi
       // ogni 4 hPa. Il cartiglio deve dichiarare questo, non il prodotto dei
@@ -8198,6 +8204,16 @@
       // sceglie la pressione: riempimento cromatico, valore puntuale, isobare
       // e centri. Prima il colore usava la griglia grezza a 2,2 km mentre le
       // isobare erano mediate: le due letture potevano quindi contraddirsi.
+      //
+      // La media resta, e non e' una perdita di risoluzione: la PMSL sopra un
+      // rilievo non e' una misura ma un'estrapolazione della pressione sotto
+      // la roccia, e il suo dettaglio a pochi chilometri e' la forma del
+      // terreno, non il tempo. Misurato sul run del 16/09 12Z, scarto fra
+      // griglia nativa e analisi: sotto i 200 m mediana 0,10 hPa (invisibile
+      // dentro una fascia da 2), sopra i 1200 m mediana 1,12 e punte di 5,73.
+      // Quei 5,73 hPa sono l'artefatto della riduzione al mare: rimetterli
+      // significherebbe disegnare le Alpi nel campo barico e fabbricare
+      // isobare e centri che non esistono.
       function pressureAnalysisGrid(data, pressure, cacheKey) {
         if (!data || !data.meta) return null;
         const source = getGrid(pressure || data.press);
@@ -8268,6 +8284,10 @@
       const CENTER_ANALYSIS_KM = 25;
       const CENTER_SMOOTHING_KM = 120;
       const CENTER_MAX_PROMINENCE_STEPS = 12;
+      // Distanza sotto la quale due estremi dello stesso segno sono la stessa
+      // struttura. E' la larghezza tipica del nucleo di un centro sinottico:
+      // due minimi a meno di 150 km l'uno dall'altro non sono due depressioni.
+      const CENTER_MERGE_KM = 150;
 
       function coarsenPressureGrid(pressure, nx, ny, step) {
         if (step <= 1) return { values: pressure, nx: nx, ny: ny, step: 1 };
@@ -8299,6 +8319,20 @@
       // inghiotta un estremo piu' profondo. Il valore restituito e' in hPa, e
       // la regione dell'ultimo contorno valido serve poi a fondere due
       // estremi che stanno dentro la stessa isobara chiusa.
+      // Il criterio di chi disegna la carta a mano: attorno a una A c'e'
+      // almeno un'ISOBARA chiusa. Un'isobara e' una linea a quota fissa --
+      // 1016, 1020 -- non una soglia misurata a partire dal massimo.
+      //
+      // Qui i contorni partivano dal valore del centro (valore meno 4 hPa,
+      // meno 8 e cosi' via), e quindi chiedevano al centro di sporgere di
+      // un'intera isobara sopra un contorno chiuso. Su un anticiclone largo e
+      // piatto -- 9,6 hPa su tutto il dominio, che e' una giornata di settembre
+      // qualunque -- nessun centro ci arriva: misurati 12 candidati ellittici
+      // e zero centri pubblicati. Sulla carta pero' la A si scrive lo stesso,
+      // perche' l'isobara dei 1020 si chiude anche se la cima sta a 1021,5.
+      //
+      // Adesso i contorni sono le isobare vere, e la prominenza e' quanto il
+      // centro sta sopra l'isobara chiusa piu' esterna.
       function closedContourProminence(
         field, nx, ny, seedIndex, kind, interval, maxSteps, rank, seedRank
       ) {
@@ -8311,10 +8345,15 @@
         let stamp = 0;
         const queue = new Int32Array(nx * ny);
 
-        for (let stepIndex = 1; stepIndex <= maxSteps; stepIndex += 1) {
+        // La prima isobara utile e' quella immediatamente oltre il centro: per
+        // una A la piu' alta sotto di lei, per una B la piu' bassa sopra.
+        const firstLevel = low
+          ? Math.ceil((seedValue + 1e-6) / interval) * interval
+          : Math.floor((seedValue - 1e-6) / interval) * interval;
+        for (let stepIndex = 0; stepIndex < maxSteps; stepIndex += 1) {
           const threshold = low
-            ? seedValue + interval * stepIndex
-            : seedValue - interval * stepIndex;
+            ? firstLevel + interval * stepIndex
+            : firstLevel - interval * stepIndex;
           stamp += 1;
           let head = 0;
           let tail = 0;
@@ -8352,8 +8391,20 @@
               // le due meta' di un colle simmetrico -- non sono l'uno piu'
               // estremo dell'altro, e confrontandone i valori il contorno li
               // fondeva in un centro solo.
+              // Solo un centro PIU' marcato dentro il contorno lo rende non
+              // esclusivo. Il confronto era "un altro qualsiasi", e cosi' una
+              // vasta A con due gobbe minori 200 km piu' in la' -- che e' il
+              // profilo normale di un anticiclone -- falliva gia' al contorno
+              // piu' stretto e usciva con prominenza zero. Le gobbe minori
+              // non contendono la struttura: sono dentro, e chi le contiene
+              // se le assorbe (ci pensa gia' "claimed" a non pubblicarle).
+              //
+              // Il confronto resta sul rango e non sul valore: due massimi
+              // esattamente uguali -- le due meta' di un colle simmetrico --
+              // sul valore si fonderebbero in un centro solo, mentre i ranghi
+              // sono unici e uno dei due vince sempre.
               const otherRank = rank ? rank[neighbour] : -1;
-              if (otherRank >= 0 && otherRank !== seedRank) exclusive = false;
+              if (otherRank >= 0 && otherRank < seedRank) exclusive = false;
               if (!rank && (low ? value < seedValue - 1e-6 : value > seedValue + 1e-6)) {
                 exclusive = false;
               }
@@ -8364,7 +8415,7 @@
           }
 
           if (!closed || !exclusive) break;
-          best = interval * stepIndex;
+          best = Math.abs(seedValue - threshold);
           bestRegion = region;
         }
         return { prominence: best, region: bestRegion };
@@ -8459,6 +8510,33 @@
         candidates.sort(function (first, second) {
           return Math.abs(second.laplacian) - Math.abs(first.laplacian);
         });
+
+        // Una cima piatta -- ed e' cio' che resta di un anticiclone dopo
+        // l'analisi sinottica -- ha molti massimi locali, perche' il confronto
+        // con gli otto vicini non e' stretto: su un ripiano nessun vicino e'
+        // maggiore, quindi ogni cella del ripiano risulta un massimo. Ognuno
+        // di quei massimi vedeva gli altri dentro il proprio contorno piu'
+        // stretto, lo dichiarava non esclusivo e usciva con prominenza zero.
+        //
+        // Misurato sul run vero (16/09 12Z, +0h): 14 estremi, 12 candidati
+        // ellittici, ZERO centri pubblicati -- e non per la soglia, perche'
+        // anche abbassando l'intervallo a 1 hPa restavano zero. Erano tutti
+        // fermi al primo contorno.
+        //
+        // Due estremi dello stesso segno a meno di questa distanza sono la
+        // stessa struttura vista due volte, non due centri: si tiene il piu'
+        // marcato e gli altri spariscono prima di ricevere un rango.
+        const mergeCells = Math.max(1, Math.round(CENTER_MERGE_KM / cellKm));
+        const merged = [];
+        candidates.forEach(function (candidate) {
+          const twin = merged.some(function (kept) {
+            return kept.kind === candidate.kind
+              && Math.abs(kept.x - candidate.x) <= mergeCells
+              && Math.abs(kept.y - candidate.y) <= mergeCells;
+          });
+          if (!twin) merged.push(candidate);
+        });
+
         // Il rango decide chi ha diritto alla struttura quando due estremi
         // finiscono dentro la stessa isobara chiusa. Massimi e minimi hanno
         // graduatorie separate: una A non contende una regione a una B.
@@ -8466,7 +8544,7 @@
         const rankLow = new Int32Array(gx * gy).fill(-1);
         let highRank = 0;
         let lowRank = 0;
-        candidates.forEach(function (candidate) {
+        merged.forEach(function (candidate) {
           if (candidate.kind === "A") {
             candidate.rank = highRank; rankHigh[candidate.index] = highRank; highRank += 1;
           } else {
@@ -8474,20 +8552,28 @@
           }
         });
 
-        const claimed = new Uint8Array(gx * gy);
+        // Niente prenotazione di territorio. Il centro piu' marcato, potendo
+        // ora inglobare le gobbe minori, arrivava a rivendicare l'intera
+        // regione e cancellava per sbaglio anche un secondo anticiclone vero a
+        // mille chilometri di distanza (la prova del colle fra due
+        // anticicloni). A distinguere una gobba da un centro basta il suo
+        // contorno: una gobba minore, alla sua prima isobara, incontra subito
+        // il centro piu' marcato e resta senza regione chiusa; un secondo
+        // anticiclone vero chiude la propria isobara attorno a se'. La fusione
+        // a CENTER_MERGE_KM esclude gia' i doppioni ravvicinati.
         const accepted = [];
-        candidates.forEach(function (candidate) {
+        merged.forEach(function (candidate) {
           if (accepted.length >= 10) return;
-          if (claimed[candidate.index]) return;
           const closed = closedContourProminence(
             field, gx, gy, candidate.index, candidate.kind,
             ISOBAR_INTERVAL_HPA, CENTER_MAX_PROMINENCE_STEPS,
             candidate.kind === "A" ? rankHigh : rankLow, candidate.rank
           );
           // Senza almeno un'isobara chiusa attorno non e' un centro: e' una
-          // ondulazione dentro un campo che scorre.
-          if (closed.prominence < ISOBAR_INTERVAL_HPA || !closed.region) return;
-          closed.region.forEach(function (cell) { claimed[cell] = 1; });
+          // ondulazione dentro un campo che scorre. La regione esiste solo se
+          // quell'isobara si chiude dentro il dominio, quindi e' quello il
+          // controllo -- non quanti hPa il centro sporga sopra di essa.
+          if (!closed.region) return;
 
           const horizontalOffset = parabolicCenterOffset(
             field[candidate.index - 1], candidate.value, field[candidate.index + 1]
@@ -8507,7 +8593,7 @@
             value: Number.isFinite(sourceValue) ? sourceValue : candidate.value,
             kind: candidate.kind,
             prominence: closed.prominence,
-            closedIsobars: Math.round(closed.prominence / ISOBAR_INTERVAL_HPA),
+            closedIsobars: Math.max(1, Math.round(closed.prominence / ISOBAR_INTERVAL_HPA)),
             laplacian: candidate.laplacian,
           });
         });
