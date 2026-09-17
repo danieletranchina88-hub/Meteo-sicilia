@@ -1645,10 +1645,10 @@ assert.match(html, /const CAPE_STOPS = \[\s*\{ v: 0, c: \[238, 244, 240\], a: 0 
     "il worker non riceve le funzioni della correzione di quota");
 
   // Non dipende piu' dal selettore delle osservazioni: e' attiva di suo.
-  assert.ok(!/if \(!showFusion \|\| selectedLevel !== "surface" \|\| !payload\) return false;/.test(html),
+  assert.ok(!/if \(!showFusion \|\| selectedLevel !== "surface" \|\| !payload\) return/.test(html),
     "la correzione di quota dipende ancora dal selettore delle osservazioni");
-  assert.match(html, /if \(selectedLevel !== "surface" \|\| !payload\) return false;/,
-    "elevationDownscalingActive non e' piu' riconoscibile");
+  assert.match(html, /if \(selectedLevel !== "surface" \|\| !payload\) return "";/,
+    "elevationCorrectionKind non e' piu' riconoscibile");
 }
 // --- Rete osservativa su tutta Italia ---
 // La rete e' passata da 455 stazioni della sola Sicilia a circa 3640 su 27
@@ -1798,11 +1798,27 @@ assert.match(html, /const CAPE_STOPS = \[\s*\{ v: 0, c: \[238, 244, 240\], a: 0 
   assert.match(html, /if \(!Number\.isFinite\(high\) \|\| !Number\.isFinite\(low\) \|\| low < 1\) return 1;/,
     "con vento quasi nullo alla quota del modello il rapporto va evitato");
   // Colore della mappa e freccia devono raccontare la stessa velocita'.
-  assert.match(html, /activeLayer === "wind" && elevationDownscalingActive\(\)/,
+  assert.match(html, /&& elevationCorrectionKind\(\) === "wind"\) \{/,
     "le frecce mostrerebbero una velocita' diversa dal colore");
-  // Il vento si sposta solo se il profilo porta davvero il vento.
-  assert.match(html, /return activeLayer === "wind" && Boolean\(payload\.wind\);/,
+  // Il vento si sposta solo se il profilo porta davvero il vento, e la
+  // raffica si sposta con lui: e' la stessa velocita' vista al suo massimo,
+  // quindi la vetta vera che sporge in un flusso piu' veloce la riguarda
+  // esattamente come la media.
+  assert.match(html, /if \(\(activeLayer === "wind" \|\| activeLayer === "gust"\) && payload\.wind\) \{/,
     "il vento verrebbe corretto anche senza il profilo del vento");
+
+  // Quale correzione applicare non si deduce dalla forma del campo: la
+  // raffica e' uno scalare, e dedurlo l'avrebbe spostata con la legge della
+  // temperatura invece che con il rapporto dei venti.
+  assert.match(html, /const windKind = Boolean\(elevation && elevation\.kind === "wind"\);/,
+    "il tipo di correzione torna a dipendere dalla forma del campo");
+
+  // Le letture puntuali passano dalle stesse due quote del raster: se
+  // divergessero, il colore direbbe un valore e il punto cliccato un altro.
+  assert.match(html, /function elevationPairAt\(longitude, latitude\)/,
+    "manca la sorgente unica delle due quote per le letture puntuali");
+  assert.match(html, /profilePayload\(\), heights\.trueHeight, heights\.modelHeight,/,
+    "le letture puntuali non usano piu' le due quote vere");
 }
 console.log("3D map regression checks: OK");
 

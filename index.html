@@ -4295,8 +4295,9 @@
         const trueHeight = elevation ? elevation.trueHeight : null;
         const modelHeight = elevation ? elevation.modelHeight : null;
         const profile = elevation ? elevation.profile : null;
+        const windKind = Boolean(elevation && elevation.kind === "wind");
         let corrPixel = 0, corrDelta = 0;
-        let corrMax = isWindField ? 1 : 0;
+        let corrMax = windKind ? 1 : 0;
 
         const pixels = new Uint8ClampedArray(width * height * 4);
         for (let y = 0; y < height; y += 1) {
@@ -4321,7 +4322,7 @@
 
             if (elevation && Number.isFinite(value)) {
               const high = trueHeight[index], low = modelHeight[index];
-              if (isWindField) {
+              if (windKind) {
                 const factor = windElevationFactor(profile, high, low, longitude, latitude);
                 if (factor !== 1) {
                   value *= factor;
@@ -4362,7 +4363,7 @@
             corrected: corrPixel,
             medianDelta: corrPixel ? Math.round(corrDelta / corrPixel) : 0,
             maxCorrection: corrMax,
-            kind: isWindField ? "wind" : "temp"
+            kind: windKind ? "wind" : "temp"
           } : null
         };
       }
@@ -4433,12 +4434,14 @@
         // carta direbbe una temperatura e il punto cliccato un'altra, ed e' la
         // contraddizione che si nota per prima.
         if (key === "temp" && Number.isFinite(value) && elevationDownscalingActive()) {
-          const terrain = localDownscalingCache && localDownscalingCache.terrain;
-          if (terrain && terrain.runTime === currentData.meta.runTime) {
-            const meta = currentData.meta;
+          const meta = currentData.meta;
+          const longitude = meta.lo1 + gx * meta.dx;
+          const latitude = meta.la1 - gy * meta.dy;
+          const heights = elevationPairAt(longitude, latitude);
+          if (heights) {
             return value + elevationCorrection(
-              profilePayload(), getGrid(terrain.terrainHeight),
-              meta.lo1 + gx * meta.dx, meta.la1 - gy * meta.dy
+              profilePayload(), heights.trueHeight, heights.modelHeight,
+              longitude, latitude
             );
           }
         }
@@ -4469,13 +4472,15 @@
         // di qui: se la applicasse solo il raster, il colore direbbe una
         // velocita' e la freccia ne mostrerebbe un'altra.
         if (Number.isFinite(u) && Number.isFinite(v)
-            && activeLayer === "wind" && elevationDownscalingActive()) {
-          const terrain = localDownscalingCache && localDownscalingCache.terrain;
-          if (terrain && terrain.runTime === currentData.meta.runTime) {
-            const meta = currentData.meta;
+            && elevationCorrectionKind() === "wind") {
+          const meta = currentData.meta;
+          const longitude = meta.lo1 + gx * meta.dx;
+          const latitude = meta.la1 - gy * meta.dy;
+          const heights = elevationPairAt(longitude, latitude);
+          if (heights) {
             const factor = windElevationFactor(
-              profilePayload(), getGrid(terrain.terrainHeight),
-              meta.lo1 + gx * meta.dx, meta.la1 - gy * meta.dy
+              profilePayload(), heights.trueHeight, heights.modelHeight,
+              longitude, latitude
             );
             u *= factor;
             v *= factor;
@@ -7281,6 +7286,25 @@
         return NaN;
       }
 
+      // Le due quote in un punto qualsiasi. Serve alle letture puntuali --
+      // valore sotto il cursore, frecce, linee di corrente -- che non passano
+      // dal campo per pixel del raster ma devono dire la stessa cosa.
+      function elevationPairAt(longitude, latitude) {
+        const terrain = localDownscalingCache && localDownscalingCache.terrain;
+        if (!currentData || !terrain
+            || terrain.runTime !== currentData.meta.runTime) return null;
+        const trueHeight = terrainHeightAt(longitude, latitude);
+        if (!Number.isFinite(trueHeight)) return null;
+        const meta = currentData.meta;
+        const modelHeight = sampleBilinear(
+          getGrid(terrain.terrainHeight),
+          (longitude - meta.lo1) / meta.dx, (meta.la1 - latitude) / meta.dy,
+          meta.nx, meta.ny
+        );
+        if (!Number.isFinite(modelHeight)) return null;
+        return { trueHeight: trueHeight, modelHeight: modelHeight };
+      }
+
       function terrainHasCoverage() {
         return terrainSampleZooms.length > 0 && demTileData.size > 0;
       }
@@ -7400,15 +7424,29 @@
       // correzione vive nel worker insieme al resto del raster, quindi non
       // costa un millisecondo di thread principale e i fotogrammi corretti
       // entrano in cache e si scaldano in anticipo come tutti gli altri.
-      function elevationDownscalingActive() {
+      // Quale correzione vale per il livello mostrato, o "" se nessuna. Non si
+      // deduce piu' dal fatto che il campo sia vettoriale: le raffiche sono
+      // uno scalare ma vanno corrette come il vento, e dedurlo dalla forma del
+      // campo le avrebbe spostate con la legge della temperatura.
+      function elevationCorrectionKind() {
         const payload = profilePayload();
-        if (selectedLevel !== "surface" || !payload) return false;
+        if (selectedLevel !== "surface" || !payload) return "";
         // Temperatura percepita e bulbo bagnato si disegnano dal loro campo,
         // non dal profilo: spostarli in quota con la legge della temperatura
         // sarebbe una correzione su una grandezza che non la segue.
-        if (activeLayer === "temp") return true;
-        // Il vento si sposta in quota solo se il profilo porta anche il vento.
-        return activeLayer === "wind" && Boolean(payload.wind);
+        if (activeLayer === "temp") return "temp";
+        // Vento e raffica si spostano in quota solo se il profilo porta anche
+        // il vento. La raffica e' la stessa velocita' del vento vista al suo
+        // massimo nell'intervallo, quindi la vetta vera che sporge in un flusso
+        // piu' veloce la riguarda esattamente come la media.
+        if ((activeLayer === "wind" || activeLayer === "gust") && payload.wind) {
+          return "wind";
+        }
+        return "";
+      }
+
+      function elevationDownscalingActive() {
+        return elevationCorrectionKind() !== "";
       }
 
       // Temperatura del profilo del modello alla quota richiesta. Fra i livelli
@@ -7563,7 +7601,9 @@
       function rasterMessage(params, state) {
         if (!params.elevation) return params;
         const message = Object.assign({}, params);
-        message.elevation = { profile: params.elevation.profile };
+        message.elevation = {
+          kind: params.elevation.kind, profile: params.elevation.profile
+        };
         if (state.terrainKey !== params.terrainKey) {
           message.terrainField = {
             trueHeight: params.elevation.trueHeight,
@@ -7881,6 +7921,7 @@
           activeLayer: activeLayer,
           terrainKey: terrainField ? terrainField.key : "",
           elevation: terrainField ? {
+            kind: elevationCorrectionKind(),
             profile: profile,
             trueHeight: terrainField.trueHeight,
             modelHeight: terrainField.modelHeight
