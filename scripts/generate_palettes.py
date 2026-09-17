@@ -56,50 +56,26 @@ out["TEMP_ANCHORS"] = [
 ]
 
 # --- Campi di superficie ----------------------------------------------------
-out["WIND_STOPS"] = [
-    {"v": 0, "c": [250, 250, 249]},
-    {"v": 5, "c": [174, 229, 252]},
-    {"v": 10, "c": [101, 201, 251]},
-    {"v": 15, "c": [63, 154, 245]},
-    {"v": 20, "c": [113, 248, 163]},
-    {"v": 25, "c": [101, 203, 112]},
-    {"v": 30, "c": [126, 203, 80]},
-    {"v": 35, "c": [144, 249, 76]},
-    {"v": 40, "c": [184, 238, 88]},
-    {"v": 45, "c": [190, 207, 69]},
-    {"v": 50, "c": [220, 239, 80]},
-    {"v": 55, "c": [201, 158, 50]},
-    {"v": 60, "c": [239, 159, 58]},
-    {"v": 65, "c": [242, 159, 112]},
-    {"v": 70, "c": [196, 155, 154]},
-    {"v": 75, "c": [194, 105, 64]},
-    {"v": 80, "c": [191, 62, 58]},
-    {"v": 85, "c": [232, 54, 42]},
-    {"v": 90, "c": [184, 36, 25]},
-    {"v": 95, "c": [118, 20, 13]},
-    {"v": 100, "c": [118, 20, 80]},
-    {"v": 105, "c": [145, 29, 113]},
-    {"v": 110, "c": [188, 38, 198]},
-    {"v": 115, "c": [234, 52, 243]},
-    {"v": 120, "c": [236, 80, 251]},
-    {"v": 125, "c": [238, 135, 252]},
-    {"v": 130, "c": [242, 164, 249]},
-    {"v": 135, "c": [246, 194, 247]},
-]
-
-# Raffiche. Il vento medio si legge su una scala regolare, la raffica no: cio'
-# che conta e' il grado Beaufort raggiunto, perche' e' quello che descrive il
-# danno. Percio' i bordi delle fasce non sono numeri tondi ma le soglie della
-# scala Beaufort convertite in km/h -- 12, 20, 29, 39, 50, 62, 75, 89, 103,
-# 118 -- e ogni cambio di colore e' un cambio di grado. Le tre soglie che si
-# devono riconoscere senza leggere la legenda (50 km/h vento forte, 75
-# burrasca forte, 103 tempesta violenta) cadono su salti cromatici
-# volutamente ampi.
+# Una sola scala per il vento medio e per le raffiche. Erano due, e lo stesso
+# valore usciva di due colori diversi a seconda del livello scelto: impossibile
+# vedere a colpo d'occhio quanto la raffica superi la media, che e' la lettura
+# per cui i due livelli esistono.
 #
-# Misurato in CAM02-UCS fra fasce adiacenti: distanza minima 7,6, e 4,9
-# simulando deuteranomalia, protanomalia e tritanomalia -- sopra la soglia di
-# distinguibilita'. Il salto piu' grande, 26,4, cade a 50 km/h.
-out["GUST_STOPS"] = [
+# Vince la scala delle raffiche, e non per gusto: i suoi bordi sono i gradi
+# Beaufort in km/h -- 12, 20, 29, 39, 50, 62, 75, 89, 103, 118 -- e la scala
+# Beaufort e' definita sul vento MEDIO, non sulla raffica. Era gia' la scala
+# giusta per il vento medio, applicata al campo sbagliato. Ogni cambio di
+# colore e' un cambio di grado, e le tre soglie che si devono riconoscere
+# senza leggere la legenda (50 km/h vento forte, 75 burrasca forte, 103
+# tempesta violenta) cadono su salti cromatici volutamente ampi.
+#
+# Ai gradi bassi non si aggiungono fasce, per quanto il vento medio in Italia
+# viva quasi sempre sotto i 20 km/h: fra il bianco della calma e il verde acqua
+# dei 20 km/h ci sono 20,5 unita' CAM02-UCS in tutto, e quattro fasce
+# disterebbero 5,1 l'una dall'altra -- sotto la soglia di 7,6 che questa scala
+# si e' data, e sotto i 4,9 del daltonismo. Sarebbe dettaglio solo apparente.
+#
+out["WIND_SPEED_STOPS"] = [
     {"v": 0, "c": [236, 242, 244]},
     {"v": 12, "c": [206, 232, 226]},
     {"v": 20, "c": [160, 214, 200]},

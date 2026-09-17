@@ -263,7 +263,7 @@ BINARY_FIELD_SCALE = {
     "geopot500": (1.0, 5000.0),      # arrotondava a 1 m attorno a 5000 gpm
     "rh": (1.0, 0.0),                # percento intero
     "cloud": (1.0, 0.0),             # percento intero
-    "gust": (1.0, 0.0),              # km/h intero; GUST_STOPS arriva a 140
+    "gust": (1.0, 0.0),              # km/h intero; WIND_SPEED_STOPS arriva a 140
     "convection_prob": (0.1, 0.0),   # arrotondava a 0,1 %
     "visibility": (10.0, 0.0),       # arrotondava a 10 m, fino a 320 km
     "freezing_rain": (1.0, 0.0),     # categoria/intensita' intera

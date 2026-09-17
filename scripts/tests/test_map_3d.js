@@ -166,11 +166,15 @@ assert.doesNotMatch(html, /Rotazione · elicità/,
   "UH_MAX viene ancora confusa con la SRH ambientale");
 assert.match(html, /Updraft helicity · UH_MAX/,
   "il campo UH_MAX non e' identificato in modo scientifico");
-assert.match(html, /const ISOBAR_INTERVAL_HPA = 4;/,
-  "le isobare non rispettano il passo sinottico di 4 hPa");
+// Due hPa e' il passo di una carta al suolo a scala regionale. A quattro il
+// dominio intero aveva 7 isobare e un centro: e siccome le fasce di colore
+// hanno per costruzione lo stesso passo delle isobare, un campo da 11,9 hPa
+// dava tre sole tinte distinguibili su tutta l'Italia.
+assert.match(html, /const ISOBAR_INTERVAL_HPA = 2;/,
+  "le isobare non rispettano il passo regionale di 2 hPa");
 assert.match(html, /const ISOBAR_MAJOR_EVERY = 8;/,
   "le isobare principali non rispettano il passo di 8 hPa");
-assert.match(html, /passo 4 hPa · principali ogni 8/,
+assert.match(html, /passo 2 hPa · principali ogni 8/,
   "l'interfaccia contraddice il passo reale delle isobare");
 
 // Il bollettino generale e quello puntuale sono prodotti distinti. L'analisi
@@ -1248,10 +1252,13 @@ assert.equal(
 
 // Il passo delle isobare dichiarato nel cartiglio deve essere quello con cui
 // sono davvero tracciate, non un numero scritto a mano.
-// Quattro hPa e' il passo operativo sinottico; due produce un eccesso di
-// dettaglio su una griglia convection-permitting senza aggiungere chiarezza.
-assert.match(html, /const ISOBAR_INTERVAL_HPA = 4;/,
-  "le isobare non seguono il passo sinottico di 4 hPa");
+//
+// Due hPa, non quattro: il dominio e' l'Italia, non l'emisfero. A quattro il
+// campo del 16/09 12Z dava 7 isobare e un centro in tutto il dominio, e il
+// dettaglio in piu' non viene dalla griglia del modello -- il campo resta
+// quello mediato a scala sinottica -- ma dal passo con cui lo si legge.
+assert.match(html, /const ISOBAR_INTERVAL_HPA = 2;/,
+  "le isobare non seguono il passo regionale di 2 hPa");
 assert.match(html, /const ISOBAR_MAJOR_EVERY = 8;/,
   "le isobare principali non sono marcate ogni 8 hPa");
 assert.match(html, /createContourFeatures\(\s*\n?\s*pressure, meta, ISOBAR_INTERVAL_HPA, ISOBAR_MAJOR_EVERY\s*\n?\s*\)/,
@@ -1422,32 +1429,49 @@ assert.match(html, /const T850_STOPS = buildDiscreteBands\(T850_ANCHORS, -30, 35
 assert.match(html, /t850:\s*\{[\s\S]{0,180}?stops:\s*T850_STOPS,/,
   "la temperatura a 850 hPa e' tornata sulla palette al suolo");
 
-// Vento medio: fasce ogni 5 km/h e grammatica cromatica della carta di
-// riferimento. La fascia estrema resta colorata: un valore oltre scala non
-// deve diventare bianco e sembrare calma.
+// Vento e raffiche condividono una scala sola. Erano due, e lo stesso valore
+// usciva di due colori diversi a seconda del livello scelto: impossibile
+// vedere quanto la raffica superi la media, che e' la lettura per cui i due
+// livelli esistono.
 {
-  const windSource = html.match(/const WIND_STOPS = \[([\s\S]*?)\n {6}\];/);
-  assert.ok(windSource, "scala esplicita del vento assente");
-  const edges = [...windSource[1].matchAll(/\{ v: (\d+), c:/g)]
+  assert.ok(!/const WIND_STOPS = \[/.test(html),
+    "il vento e' tornato ad avere una scala tutta sua");
+  assert.ok(!/const GUST_STOPS = \[/.test(html),
+    "le raffiche sono tornate ad avere una scala tutta loro");
+
+  const windSource = html.match(/const WIND_SPEED_STOPS = \[([\s\S]*?)\n {6}\];/);
+  assert.ok(windSource, "scala condivisa della velocita' del vento assente");
+  const edges = [...windSource[1].matchAll(/\{ v: (-?[\d.]+), c:/g)]
     .map((match) => Number(match[1]));
-  assert.deepEqual(edges, Array.from({ length: 28 }, (_, index) => index * 5),
-    "le fasce del vento non avanzano piu' ogni 5 km/h fino a 135");
-  assert.match(windSource[1], /\{ v: 0, c: \[250, 250, 249\] \}/,
+  // I bordi restano i gradi Beaufort in km/h -- ed e' il motivo per cui la
+  // scala vale anche sulla media: Beaufort e' definito sul vento medio.
+  assert.deepEqual(edges, [0, 12, 20, 29, 39, 50, 62, 75, 89, 103, 118, 140],
+    "i bordi delle fasce non sono piu' i gradi Beaufort in km/h");
+  assert.match(windSource[1], /\{ v: 0, c: \[236, 242, 244\] \}/,
     "la calma non e' quasi bianca");
-  assert.match(windSource[1], /\{ v: 15, c: \[63, 154, 245\] \}/,
-    "la brezza non raggiunge il blu della carta di riferimento");
-  assert.match(windSource[1], /\{ v: 20, c: \[113, 248, 163\] \}/,
-    "manca il passaggio netto blu-verde a 20 km/h");
-  assert.match(windSource[1], /\{ v: 85, c: \[232, 54, 42\] \}/,
-    "il vento molto forte non raggiunge il rosso operativo");
-  assert.match(windSource[1], /\{ v: 135, c: \[246, 194, 247\] \}/,
+  assert.match(windSource[1], /\{ v: 50, c: \[214, 199, 74\] \}/,
+    "manca lo scalino del vento forte a 50 km/h");
+  assert.match(windSource[1], /\{ v: 140, c: \[70, 22, 92\] \}/,
     "l'estremo oltre scala torna bianco e diventa invisibile");
+
+  // Nessuna fascia in piu' ai gradi bassi: fra il bianco della calma e il
+  // verde acqua dei 20 km/h ci sono 20,5 unita' CAM02-UCS in tutto, e quattro
+  // fasce disterebbero 5,1 -- sotto i 7,6 che la scala si e' data.
+  assert.ok(!edges.includes(1) && !edges.includes(6),
+    "aggiunte fasce che il divario percettivo non sostiene");
+
+  const windInfo = html.match(/\n {8}wind: \{[\s\S]*?\n {8}\},/);
+  assert.ok(windInfo, "il layer del vento non e' in LAYER_INFO");
+  assert.match(windInfo[0], /stops: WIND_SPEED_STOPS,/,
+    "il vento non usa la scala condivisa");
 
   const paletteGenerator = fs.readFileSync(
     path.join(root, "scripts", "generate_palettes.py"), "utf8"
   );
-  assert.match(paletteGenerator, /out\["WIND_STOPS"\] = \[/,
-    "il generatore puo' ancora ripristinare la vecchia rampa del vento");
+  assert.match(paletteGenerator, /out\["WIND_SPEED_STOPS"\] = \[/,
+    "il generatore non conosce la scala condivisa");
+  assert.doesNotMatch(paletteGenerator, /out\["WIND_STOPS"\]|out\["GUST_STOPS"\]/,
+    "il generatore puo' ancora ripristinare le due scale separate");
   assert.doesNotMatch(paletteGenerator, /out\["WIND_ANCHORS"\]/,
     "il generatore conserva ancora gli ancoraggi obsoleti");
 }
@@ -1481,16 +1505,10 @@ assert.match(html, /const CAPE_STOPS = \[\s*\{ v: 0, c: \[238, 244, 240\], a: 0 
 // gradi Beaufort: e' il motivo per cui una fascia cambia colore dove cambia
 // il grado, e le tre soglie che fanno danni si leggono senza legenda.
 {
-  const gustSource = html.match(/const GUST_STOPS = \[[\s\S]*?\n {6}\];/);
-  assert.ok(gustSource, "scala delle raffiche assente");
-  const edges = [...gustSource[0].matchAll(/\{ v: (-?[\d.]+),/g)]
-    .map((m) => Number(m[1]));
-  assert.deepEqual(edges, [0, 12, 20, 29, 39, 50, 62, 75, 89, 103, 118, 140],
-    "i bordi delle fasce non sono piu' i gradi Beaufort in km/h");
   const layerInfo = html.match(/\n {8}gust: \{[\s\S]*?\n {8}\},/);
   assert.ok(layerInfo, "il layer delle raffiche non e' in LAYER_INFO");
-  assert.match(layerInfo[0], /stops: GUST_STOPS,/,
-    "il layer delle raffiche non usa la propria scala");
+  assert.match(layerInfo[0], /stops: WIND_SPEED_STOPS,/,
+    "le raffiche non usano piu' la scala condivisa con il vento medio");
   assert.match(layerInfo[0], /discrete: true,/,
     "le raffiche devono restare a fasce nette, non sfumate");
   assert.match(layerInfo[0], /unit: "km\/h",/,
