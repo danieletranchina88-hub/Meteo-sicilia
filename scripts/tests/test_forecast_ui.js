@@ -56,6 +56,51 @@ async function test(name,fn) {await fn();console.log('PASS '+name);}
   const a=ctx.loadStep(0);kind='upper';gate.resolve({temp:99});await a;
   assert.equal(commits,0);assert.equal(ctx.currentData.temp,1);
  });
+ // Il commit del passo -- etichette del run, legenda, isobare, avvio del
+ // prefetch -- appartiene al PASSO, non al raster che lo ha chiesto. Era
+ // invece appeso a pendingRasterCallback, che ogni nuova richiesta di disegno
+ // sovrascrive: bastava un secondo renderWeather prima che il primo tornasse
+ // dal worker perche' il commit sparisse per sempre. Con le tessere del
+ // terreno che ora arrivano subito e chiedono un ridisegno, quel secondo
+ // renderWeather e' la norma, e il sito restava fermo a "In attesa dei dati"
+ // con la legenda vuota. Misurato sulla build pubblicata: run "In attesa dei
+ // dati", validita' "--", legenda vuota; con la correzione, "gio 17 set ·
+ // 08:00", "+6 h" e la legenda completa.
+ await test('il commit del passo sopravvive a un secondo disegno che lo supera',()=>{
+  const ctx={pendingRenderReady:null};
+  vm.createContext(ctx);
+  vm.runInContext(implementation('commitRenderReady'),ctx);
+  let commits=0;
+  // Primo disegno: deposita il commit.
+  ctx.pendingRenderReady=()=>commits++;
+  // Secondo disegno che lo supera: con il difetto la callback veniva
+  // sostituita, e il commit non veniva mai eseguito. Qui nessuno la tocca.
+  ctx.commitRenderReady();
+  assert.equal(commits,1,'il commit del passo non e\' stato eseguito');
+  // Una volta sola: un ridisegno successivo non deve rifare il commit.
+  ctx.commitRenderReady();
+  assert.equal(commits,1,'il commit del passo e\' stato eseguito due volte');
+ });
+
+ // La stessa invariante sul sorgente: renderWeather deve depositare il commit
+ // PRIMA di qualunque uscita anticipata, altrimenti un disegno saltato per una
+ // guardia lo perde comunque.
+ await test('renderWeather deposita il commit prima delle uscite anticipate',()=>{
+  const body=implementation('renderWeather');
+  const store=body.indexOf('pendingRenderReady = onReady');
+  assert.ok(store>=0,'renderWeather non deposita piu\' il commit del passo');
+  assert.ok(store<body.indexOf('return;'),
+   'il commit viene depositato dopo la prima uscita anticipata');
+  assert.ok(!/if\s*\(\s*onReady\s*\)\s*onReady\(\)/.test(body),
+   'renderWeather chiama ancora direttamente la callback di un singolo raster');
+  assert.ok(/commitRenderReady\(\)/.test(body),
+   'renderWeather non usa piu\' il commit condiviso');
+  // I disegni anticipati non commettono niente: scaldano la cache mentre
+  // currentData e' temporaneamente quello di un'altra scadenza.
+  assert.ok(/if \(!prewarm && onReady\) pendingRenderReady = onReady;/.test(body),
+   'anche un disegno anticipato deposita il commit di un altro passo');
+ });
+
  await test('raster worker coalesces obsolete jobs instead of queuing every hour',()=>{
   const sent=[],context={rasterRenderToken:0,rasterWorkerSupported:true,rasterWorkerBusy:false,
     queuedRasterParams:null,rasterWorker:{postMessage:p=>sent.push(p)},pendingRasterCallback:null,
@@ -108,7 +153,7 @@ async function test(name,fn) {await fn();console.log('PASS '+name);}
   const ctx={console,currentIndex:0,catalog:Array(3).fill({}),activeLayer:'temp',selectedLevel:'surface',activeModel:'icon2i',
     weatherView:'forecast',mapLoaded:true,showFusion:false,show3D:false,useNearestCell:false,
     currentData:{meta:{nx:2,ny:2,lo1:10,la1:40,dx:1,dy:1,validTime:'test'},temp:new Float32Array([10,20,30,40])},
-    window:{devicePixelRatio:1},weatherFrameEpoch:0,lastRasterSignature:'',terrainSamplerKey:'',rasterRenderToken:0,pendingRasterCallback:null,
+    window:{devicePixelRatio:1},weatherFrameEpoch:0,lastRasterSignature:'',terrainCoverageStamp:0,rasterRenderToken:0,pendingRasterCallback:null,pendingRenderReady:null,
     weatherFrames:new FrameCache(1000000),rasterCanvas:{},rasterContext:{putImageData:()=>paints++},
     ImageData:class {constructor(p,w,h){this.data=p;}},isMobile:()=>false,
     RASTER_CONFIG:{padding:.2,maxDensityDesktop:1,pixelLimitDesktop:100},
@@ -116,9 +161,13 @@ async function test(name,fn) {await fn();console.log('PASS '+name);}
     elevationDownscalingActive:()=>false,getGrid:x=>x,applyWeatherPaint:()=>{},scheduleFrameWarmup:()=>{},
     publishWeatherRaster:()=>publishes++,map:{getSource:()=>({}),getBounds:()=>({getWest:()=>9,getEast:()=>12,getSouth:()=>38,getNorth:()=>41}),getPitch:()=>0,getContainer:()=>({clientWidth:10,clientHeight:10})}};
   ctx.dispatchRasterFill=ctx.dispatchWarmRaster=(p,done)=>{computes++;done(new Uint8ClampedArray(p.width*p.height*4).fill(17));};
-  vm.createContext(ctx);vm.runInContext(implementation('renderWeather'),ctx);
+  vm.createContext(ctx);
+  vm.runInContext(implementation('commitRenderReady'),ctx);
+  vm.runInContext(implementation('renderWeather'),ctx);
   ctx.renderWeather(true);assert.equal(computes,1);assert.equal(publishes,0);assert.equal(paints,0);
-  ctx.renderWeather();assert.equal(computes,1);assert.equal(publishes,1);assert.equal(paints,1);
+  let commits=0;
+  ctx.renderWeather(false,()=>commits++);assert.equal(computes,1);assert.equal(publishes,1);assert.equal(paints,1);
+  assert.equal(commits,1,'il disegno dalla cache non commette il passo');
  });
  await test('satellite view clears overlays and restores the chosen field and forecast hour',()=>{
   const classes=new Set();const element={hidden:true,setAttribute:()=>{}};

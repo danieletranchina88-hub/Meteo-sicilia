@@ -7685,13 +7685,36 @@
         onDone(result.pixels, result.stat);
       }
 
+      // Il commit del passo -- etichette, legenda, isobare, avvio del prefetch --
+      // non appartiene a un raster particolare: appartiene al passo. Era invece
+      // legato alla singola richiesta di disegno, e bastava che una seconda
+      // richiesta partisse prima che la prima tornasse dal worker perche'
+      // pendingRasterCallback venisse sovrascritta e il commit sparisse per
+      // sempre. Con le tessere del terreno che adesso arrivano quasi subito e
+      // chiedono un ridisegno, quella seconda richiesta e' la norma: misurato
+      // al caricamento, la callback di commit veniva buttata via ogni volta e
+      // il sito restava fermo a "In attesa dei dati", senza legenda.
+      //
+      // Qui resta finche' un disegno vero non lo esegue -- il primo che
+      // arriva, non uno in particolare.
+      let pendingRenderReady = null;
+
+      function commitRenderReady() {
+        const ready = pendingRenderReady;
+        pendingRenderReady = null;
+        if (ready) ready();
+      }
+
       function renderWeather(prewarm, onReady) {
         prewarm = prewarm === true;
+        // I disegni anticipati non commettono niente: scaldano la cache
+        // mentre currentData e' temporaneamente quello di un'altra scadenza.
+        if (!prewarm && onReady) pendingRenderReady = onReady;
         if (weatherView !== "forecast") return;
         if (!mapLoaded || !currentData || !map.getSource("weather")) return;
 
         if (activeLayer === "none") {
-          if (onReady) onReady();
+          commitRenderReady();
           if (map.getLayer("weather-layer")) {
             map.setLayoutProperty("weather-layer", "visibility", "none");
           }
@@ -7816,14 +7839,17 @@
         const epoch = weatherFrameEpoch;
 
         if (!prewarm) applyWeatherPaint(info);
-        if (sameRaster || (prewarm && weatherFrames.has(renderSignature))) { if(onReady) onReady(); return; }
+        if (sameRaster || (prewarm && weatherFrames.has(renderSignature))) {
+          if (!prewarm) commitRenderReady();
+          return;
+        }
         const cachedFrame = !showFusion && weatherFrames.get(renderSignature);
         if (cachedFrame && !prewarm) {
           ++rasterRenderToken; pendingRasterCallback = null;
           rasterCanvas.width = cachedFrame.width; rasterCanvas.height = cachedFrame.height;
           rasterContext.putImageData(new ImageData(cachedFrame.pixels,cachedFrame.width,cachedFrame.height),0,0);
           publishWeatherRaster(cachedFrame.coordinates); lastRasterSignature = renderSignature;
-          if(onReady) onReady();
+          commitRenderReady();
           return;
         }
         if (!prewarm) lastRasterSignature = renderSignature;
@@ -7902,7 +7928,7 @@
           lastElevationStat = elevationStat || null;
           updateDownscalingStatus();
           publishWeatherRaster(frameCoordinates);
-          if(onReady) onReady();
+          commitRenderReady();
           scheduleFrameWarmup();
         }
 
