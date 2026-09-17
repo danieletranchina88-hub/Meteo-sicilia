@@ -12,7 +12,7 @@ function grab(name) {
   return m[0];
 }
 const consts = ["CENTER_ANALYSIS_KM", "CENTER_SMOOTHING_KM",
-                "CENTER_MAX_PROMINENCE_STEPS", "ISOBAR_INTERVAL_HPA",
+                "CENTER_MAX_PROMINENCE_STEPS", "CENTER_MERGE_KM", "ISOBAR_INTERVAL_HPA",
                 "ISOBAR_MAJOR_EVERY", "PRESSURE_ANALYSIS_RADIUS_KM",
                 "PRESSURE_ANALYSIS_PASSES"]
   .map((n) => html.match(new RegExp("const " + n + " = [^;]+;"))[0]).join("\n");
@@ -196,6 +196,40 @@ check(isobars.every((f) =>
   "la classificazione principale/secondaria delle isobare e' errata");
 
 // 8) Campo PMSL vero del run pubblicato.
+// 7b) Il difetto che teneva nascoste tutte le A e le B: un anticiclone largo
+// e piatto con qualche gobba minore addosso. E' il profilo normale di un
+// promontorio, e sul run vero del 16/09 12Z dava 12 candidati ellittici e
+// ZERO centri pubblicati, a qualunque intervallo di isobare.
+//
+// Due cause, entrambe verificate qui:
+//  - i contorni partivano dal valore del centro invece che dalle isobare
+//    vere, e chiedevano quindi al centro di sporgere di un'intera isobara
+//    sopra un contorno chiuso: su un campo da 10 hPa su tutto il dominio non
+//    ci arriva nessuno, mentre sulla carta la A si scrive lo stesso;
+//  - una gobba minore dentro il contorno lo dichiarava non esclusivo, e il
+//    centro usciva con prominenza zero invece di assorbirla.
+console.log("7b) promontorio piatto con gobbe minori");
+field = build(NX, NY, (x, y) => {
+  // Cupola larga, appena 3 hPa dal bordo del dominio alla cima.
+  const dome = 3 * Math.exp(
+    -(Math.pow(x - 100, 2) + Math.pow(y - 80, 2)) / (2 * 70 * 70)
+  );
+  // Due gobbe da un decimo di hPa, troppo deboli per essere centri: restano
+  // sotto la cima della cupola anche sommate al fianco su cui poggiano.
+  const bump1 = 0.12 * Math.exp(-(Math.pow(x - 78, 2) + Math.pow(y - 64, 2)) / (2 * 9 * 9));
+  const bump2 = 0.12 * Math.exp(-(Math.pow(x - 124, 2) + Math.pow(y - 96, 2)) / (2 * 9 * 9));
+  return 1016 + dome + bump1 + bump2;
+});
+out = api.detectPressureCenters(field, meta);
+console.log("   trovati:", out.map((c) => c.kind + " " + c.value.toFixed(1)
+  + " (" + c.closedIsobars + " isobare chiuse)").join(", ") || "nessuno");
+check(out.filter((c) => c.kind === "A").length === 1,
+  "un promontorio piatto deve dare una A sola, non zero e non tre");
+check(out.length && Math.abs(out[0].x - 100) < 12 && Math.abs(out[0].y - 80) < 12,
+  "la A non sta sulla cima della cupola");
+check(out.every((c) => c.kind !== "B"),
+  "le gobbe minori non devono produrre depressioni");
+
 console.log("8) campo PMSL reale");
 const stepFile = process.env.PRESSURE_TEST_STEP || "data_weather/step_0.bin.gz";
 if (fs.existsSync(stepFile)) {

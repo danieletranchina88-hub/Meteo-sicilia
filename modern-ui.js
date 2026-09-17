@@ -1,21 +1,25 @@
 /* Presentation and frame warming share the existing scientific renderer. */
+const warmWorkerState = { terrainKey: '' };
 function dispatchWarmRaster(params, onDone) {
   if (warmFrameBusy || typeof Worker === 'undefined') return;
   try {
     if (!warmRasterWorker) {
-      const source = [clamp,getGrid,sampleNearest,sampleBilinear,sampleCoarseBilinear,colorFor,fillRasterPixels]
-        .map(fn=>fn.toString()).join('\n') + '\nself.onmessage=function(e){const p=fillRasterPixels(e.data);self.postMessage(p.buffer,[p.buffer]);};';
-      const url = URL.createObjectURL(new Blob([source],{type:'application/javascript'}));
+      // Stesso sorgente del worker che disegna adesso: la correzione di quota
+      // vale anche per i fotogrammi scaldati in anticipo, altrimenti la barra
+      // del tempo mostrerebbe mappe non corrette a ogni passo gia' in cache.
+      const url = URL.createObjectURL(new Blob([rasterWorkerSource()],{type:'application/javascript'}));
       warmRasterWorker = new Worker(url); URL.revokeObjectURL(url);
+      warmWorkerState.terrainKey = '';
     }
     warmFrameBusy = true;
     warmRasterWorker.onmessage = function(e) {
-      warmFrameBusy = false; onDone(new Uint8ClampedArray(e.data)); scheduleFrameWarmup();
+      warmFrameBusy = false; onDone(new Uint8ClampedArray(e.data.pixels), e.data.stat); scheduleFrameWarmup();
     };
     warmRasterWorker.onerror = function() {
       warmFrameBusy = false; warmRasterWorker.terminate(); warmRasterWorker = null;
+      warmWorkerState.terrainKey = '';
     };
-    warmRasterWorker.postMessage(params);
+    warmRasterWorker.postMessage(rasterMessage(params, warmWorkerState));
   } catch (_) { warmFrameBusy = false; }
 }
 let warmedIndices = new Set();

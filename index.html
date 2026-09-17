@@ -2477,7 +2477,7 @@
                 <span><b>Fronti</b><small id="front-source-label">ICON-2I · OFA θw 925/850/700 hPa</small></span><span class="switch"></span>
               </button>
               <button class="toggle-row" type="button" data-toggle="isobars" aria-pressed="false">
-                <span><b>Isobare e A/B</b><small>passo 4 hPa · principali ogni 8</small></span><span class="switch"></span>
+                <span><b>Isobare e A/B</b><small>passo 2 hPa · principali ogni 8</small></span><span class="switch"></span>
               </button>
               <!-- Due modi di disegnare lo stesso campo u/v, separati perche'
                    servono a cose diverse: le linee di corrente descrivono la
@@ -2844,50 +2844,29 @@
       ];
       const TEMP_BANDS = buildDiscreteBands(TEMP_ANCHORS, -76, 46, 2, 1, true);
 
-      // Vento medio: fasce operative di 5 km/h, con la grammatica cromatica
-      // delle carte Meteociel usate come riferimento visuale. La calma resta
-      // quasi bianca; ciano/blu descrivono la brezza, verde e giallo il vento
-      // sostenuto, rosso/viola soltanto gli estremi. L'ultima fascia non torna
-      // bianca: oltre scala deve restare evidente, non sparire dalla carta.
-      const WIND_STOPS = [
-        { v: 0, c: [250, 250, 249] },
-        { v: 5, c: [174, 229, 252] },
-        { v: 10, c: [101, 201, 251] },
-        { v: 15, c: [63, 154, 245] },
-        { v: 20, c: [113, 248, 163] },
-        { v: 25, c: [101, 203, 112] },
-        { v: 30, c: [126, 203, 80] },
-        { v: 35, c: [144, 249, 76] },
-        { v: 40, c: [184, 238, 88] },
-        { v: 45, c: [190, 207, 69] },
-        { v: 50, c: [220, 239, 80] },
-        { v: 55, c: [201, 158, 50] },
-        { v: 60, c: [239, 159, 58] },
-        { v: 65, c: [242, 159, 112] },
-        { v: 70, c: [196, 155, 154] },
-        { v: 75, c: [194, 105, 64] },
-        { v: 80, c: [191, 62, 58] },
-        { v: 85, c: [232, 54, 42] },
-        { v: 90, c: [184, 36, 25] },
-        { v: 95, c: [118, 20, 13] },
-        { v: 100, c: [118, 20, 80] },
-        { v: 105, c: [145, 29, 113] },
-        { v: 110, c: [188, 38, 198] },
-        { v: 115, c: [234, 52, 243] },
-        { v: 120, c: [236, 80, 251] },
-        { v: 125, c: [238, 135, 252] },
-        { v: 130, c: [242, 164, 249] },
-        { v: 135, c: [246, 194, 247] }
-      ];
-
-      // Raffiche. Non una rampa uniforme: i valori che contano sono soglie, non
-      // gradienti, e i bordi delle fasce sono i gradi Beaufort in km/h. Un
-      // cambio di colore E' un salto di grado, e i tre gradini che fanno danni
-      // -- 50, 75, 103 km/h -- si riconoscono senza leggere la legenda.
+      // Una sola scala per il vento medio e per le raffiche. Erano due, e lo
+      // stesso valore usciva di due colori diversi a seconda del livello
+      // scelto: impossibile vedere a colpo d'occhio quanto la raffica superi
+      // la media, che e' esattamente la lettura per cui i due livelli esistono.
+      //
+      // Vince la scala delle raffiche, per una ragione che non e' di gusto: i
+      // suoi bordi sono i gradi Beaufort in km/h, e la scala Beaufort e'
+      // definita sul vento MEDIO, non sulla raffica. Era gia' la scala giusta
+      // per il vento medio, applicata al campo sbagliato.
+      //
+      // Un cambio di colore E' un salto di grado, e i tre gradini che fanno
+      // danni -- 50, 75, 103 km/h -- si riconoscono senza leggere la legenda.
       // Misurato in CAM02-UCS: distanza minima fra fasce adiacenti 7,6, e 4,9
       // simulando il daltonismo piu' penalizzante. Il salto piu' grande, 26,4,
       // cade a 50 km/h: la prima soglia che si nota davvero.
-      const GUST_STOPS = [
+      //
+      // Ai gradi bassi non si aggiungono fasce, per quanto il vento medio in
+      // Italia viva quasi sempre sotto i 20 km/h. Fra il bianco della calma e
+      // il verde acqua dei 20 km/h ci sono 20,5 unita' CAM02-UCS in tutto:
+      // quattro fasce disterebbero 5,1 l'una dall'altra, sotto la soglia di
+      // 7,6 che questa scala si e' data e sotto i 4,9 del daltonismo. Sarebbero
+      // fasce che non si distinguono, cioe' dettaglio solo apparente.
+      const WIND_SPEED_STOPS = [
         { v: 0, c: [236, 242, 244] },
         { v: 12, c: [206, 232, 226] },
         { v: 20, c: [160, 214, 200] },
@@ -3018,7 +2997,13 @@
       // linee in tutto il dominio: una carta che non dice dove sta il
       // gradiente. Il campo resta quello mediato a scala sinottica, quindi il
       // passo piu' fitto aggiunge lettura, non rumore del modello.
-      const ISOBAR_INTERVAL_HPA = 4;
+      //
+      // Misurato sul run del 16/09 12Z: a quattro hPa il dominio intero aveva
+      // 7 isobare e un centro; a due ne ha 14 e due. E siccome le fasce di
+      // colore hanno lo stesso passo delle isobare, un campo da 11,9 hPa
+      // passa da tre a sei tinte distinguibili -- che e' la ragione per cui la
+      // mappa della pressione sembrava sempre la stessa.
+      const ISOBAR_INTERVAL_HPA = 2;
       // Attenzione: e' un modulo sul valore, non un moltiplicatore. Marcate
       // sono le isobare il cui valore e' multiplo di questo numero, quindi
       // ogni 4 hPa. Il cartiglio deve dichiarare questo, non il prodotto dei
@@ -3260,22 +3245,22 @@
         wind: {
           label: "Vento a 10 m",
           unit: "km/h",
-          stops: WIND_STOPS,
+          stops: WIND_SPEED_STOPS,
           discrete: true,
           decimals: 0,
-          ticks: [0, 20, 40, 60, 80, 100, 130],
-          note: "Fasce ogni 5 km/h; linee di corrente istantanee integrate dalle componenti u/v.",
+          ticks: [12, 20, 29, 39, 50, 62, 75, 89, 103],
+          note: "Stessa scala delle raffiche, cosi' il confronto fra i due livelli si legge nel colore: i bordi delle fasce sono i gradi Beaufort in km/h, che sulla media sono la loro definizione. Frecce istantanee integrate dalle componenti u/v.",
           opacity: 0.93,
           terrainOpacity: 0.29
         },
         gust: {
           label: "Raffiche a 10 m",
           unit: "km/h",
-          stops: GUST_STOPS,
+          stops: WIND_SPEED_STOPS,
           discrete: true,
           decimals: 0,
           ticks: [20, 39, 50, 62, 75, 89, 103, 118],
-          note: "Il picco del vento nell'intervallo, non la media: è il valore che rompe rami e ombrelloni. I bordi delle fasce sono i gradi Beaufort, così 50 km/h (vento forte), 75 (burrasca forte) e 103 (tempesta violenta) si riconoscono a colpo d'occhio.",
+          note: "Il picco del vento nell'intervallo, non la media: è il valore che rompe rami e ombrelloni. Stessa scala del vento medio, così la differenza fra i due livelli si vede nel colore. I bordi delle fasce sono i gradi Beaufort, così 50 km/h (vento forte), 75 (burrasca forte) e 103 (tempesta violenta) si riconoscono a colpo d'occhio.",
           opacity: 0.93,
           terrainOpacity: 0.29
         },
@@ -4303,6 +4288,16 @@
         const windUGrid = params.windUGrid, windVGrid = params.windVGrid;
         const info = params.info;
         const activeLayer = params.activeLayer;
+        // Correzione di quota: il campo delle quote e il profilo del modello
+        // arrivano insieme ai dati, quindi il disegno corretto e' lo stesso
+        // disegno, non un percorso a parte sul thread principale.
+        const elevation = params.elevation || null;
+        const trueHeight = elevation ? elevation.trueHeight : null;
+        const modelHeight = elevation ? elevation.modelHeight : null;
+        const profile = elevation ? elevation.profile : null;
+        const windKind = Boolean(elevation && elevation.kind === "wind");
+        let corrPixel = 0, corrDelta = 0;
+        let corrMax = windKind ? 1 : 0;
 
         const pixels = new Uint8ClampedArray(width * height * 4);
         for (let y = 0; y < height; y += 1) {
@@ -4314,6 +4309,7 @@
           for (let x = 0; x < width; x += 1) {
             const longitude = leftLongitude + (x / Math.max(width - 1, 1)) * (rightLongitude - leftLongitude);
             const gx = (longitude - fieldMeta.lo1) / fieldMeta.dx;
+            const index = y * width + x;
             let value;
 
             if (isWindField) {
@@ -4324,6 +4320,27 @@
               value = rasterSampler(fieldGrid, gx, gy, fieldMeta.nx, fieldMeta.ny);
             }
 
+            if (elevation && Number.isFinite(value)) {
+              const high = trueHeight[index], low = modelHeight[index];
+              if (windKind) {
+                const factor = windElevationFactor(profile, high, low, longitude, latitude);
+                if (factor !== 1) {
+                  value *= factor;
+                  corrPixel += 1;
+                  corrDelta += Math.abs(high - low);
+                  if (Math.abs(factor - 1) > Math.abs(corrMax - 1)) corrMax = factor;
+                }
+              } else {
+                const shift = elevationCorrection(profile, high, low, longitude, latitude);
+                if (shift) {
+                  value += shift;
+                  corrPixel += 1;
+                  corrDelta += Math.abs(high - low);
+                  if (Math.abs(shift) > Math.abs(corrMax)) corrMax = shift;
+                }
+              }
+            }
+
             if (
               !Number.isFinite(value) ||
               (activeLayer === "rain" && value < 0.08) ||
@@ -4332,7 +4349,7 @@
               continue;
             }
 
-            const pixel = (y * width + x) * 4;
+            const pixel = index * 4;
             const color = colorFor(value, info);
             pixels[pixel] = Math.round(color[0]);
             pixels[pixel + 1] = Math.round(color[1]);
@@ -4340,7 +4357,15 @@
             pixels[pixel + 3] = Math.round(color[3] * 255);
           }
         }
-        return pixels;
+        return {
+          pixels: pixels,
+          stat: elevation ? {
+            corrected: corrPixel,
+            medianDelta: corrPixel ? Math.round(corrDelta / corrPixel) : 0,
+            maxCorrection: corrMax,
+            kind: windKind ? "wind" : "temp"
+          } : null
+        };
       }
 
       function sample(array, gx, gy) {
@@ -4409,12 +4434,14 @@
         // carta direbbe una temperatura e il punto cliccato un'altra, ed e' la
         // contraddizione che si nota per prima.
         if (key === "temp" && Number.isFinite(value) && elevationDownscalingActive()) {
-          const terrain = localDownscalingCache && localDownscalingCache.terrain;
-          if (terrain && terrain.runTime === currentData.meta.runTime) {
-            const meta = currentData.meta;
+          const meta = currentData.meta;
+          const longitude = meta.lo1 + gx * meta.dx;
+          const latitude = meta.la1 - gy * meta.dy;
+          const heights = elevationPairAt(longitude, latitude);
+          if (heights) {
             return value + elevationCorrection(
-              profilePayload(), getGrid(terrain.terrainHeight),
-              meta.lo1 + gx * meta.dx, meta.la1 - gy * meta.dy
+              profilePayload(), heights.trueHeight, heights.modelHeight,
+              longitude, latitude
             );
           }
         }
@@ -4445,13 +4472,15 @@
         // di qui: se la applicasse solo il raster, il colore direbbe una
         // velocita' e la freccia ne mostrerebbe un'altra.
         if (Number.isFinite(u) && Number.isFinite(v)
-            && activeLayer === "wind" && elevationDownscalingActive()) {
-          const terrain = localDownscalingCache && localDownscalingCache.terrain;
-          if (terrain && terrain.runTime === currentData.meta.runTime) {
-            const meta = currentData.meta;
+            && elevationCorrectionKind() === "wind") {
+          const meta = currentData.meta;
+          const longitude = meta.lo1 + gx * meta.dx;
+          const latitude = meta.la1 - gy * meta.dy;
+          const heights = elevationPairAt(longitude, latitude);
+          if (heights) {
             const factor = windElevationFactor(
-              profilePayload(), getGrid(terrain.terrainHeight),
-              meta.lo1 + gx * meta.dx, meta.la1 - gy * meta.dy
+              profilePayload(), heights.trueHeight, heights.modelHeight,
+              longitude, latitude
             );
             u *= factor;
             v *= factor;
@@ -7008,7 +7037,42 @@
       const DEM_TILE_PIXELS = 256;
       const DEM_MAX_ZOOM = 13;
       const DEM_TILE_BUDGET = 48;
+      // Quante tessere restano in memoria. Una tessera e' 256x256 float, cioe'
+      // 256 KB: il tetto vale circa 48 MB, poco piu' di tre inquadrature piene.
+      // Serve perche' adesso la copertura del terreno non si azzera piu' a
+      // ogni spostamento, quindi senza un limite crescerebbe all'infinito.
+      const DEM_TILE_CACHE_LIMIT = 192;
       const demTiles = new Map();
+      // Le stesse tessere gia' risolte, leggibili senza attendere: e' da qui
+      // che il campionatore di quota legge, un pixel alla volta.
+      const demTileData = new Map();
+
+      // Map conserva l'ordine d'inserimento: reinserire una chiave la porta in
+      // fondo, e lo sfratto parte sempre dalla testa. E' una LRU sulle
+      // richieste, che e' esattamente cio' che conta qui.
+      function touchDemTile(key) {
+        if (demTiles.has(key)) {
+          const entry = demTiles.get(key);
+          demTiles.delete(key);
+          demTiles.set(key, entry);
+        }
+        if (demTileData.has(key)) {
+          const heights = demTileData.get(key);
+          demTileData.delete(key);
+          demTileData.set(key, heights);
+        }
+      }
+
+      function trimDemTiles() {
+        while (demTiles.size > DEM_TILE_CACHE_LIMIT) {
+          const oldest = demTiles.keys().next().value;
+          demTiles.delete(oldest);
+          demTileData.delete(oldest);
+          // Il memo potrebbe puntare proprio a quella: si azzera e basta.
+          demMemoZoom = -1;
+          demMemoTile = null;
+        }
+      }
 
       function demTileHeights(z, x, y) {
         const key = z + "/" + x + "/" + y;
@@ -7044,8 +7108,17 @@
           image.onerror = function () { resolve(null); };
           image.src = "https://s3.amazonaws.com/elevation-tiles-prod/terrarium/"
             + z + "/" + x + "/" + y + ".png";
+        }).then(function (heights) {
+          // Sfrattata mentre era in volo: non la si rimette in cache, o
+          // resterebbe li' senza che nessuno la possa piu' liberare.
+          if (demTiles.has(key)) {
+            demTileData.set(key, heights);
+            if (heights) terrainCoverageStamp += 1;
+          }
+          return heights;
         });
         demTiles.set(key, promise);
+        trimDemTiles();
         return promise;
       }
 
@@ -7123,35 +7196,257 @@
       }
 
       // ---- CORREZIONE DI QUOTA ---------------------------------------------
-      let terrainSampler = null;
-      let terrainSamplerKey = "";
-      let terrainSamplerPending = "";
+      //
+      // La quota vera non e' piu' un mosaico legato al riquadro del raster.
+      // Legarcelo aveva un difetto preciso e visibile: ogni spostamento della
+      // mappa cambiava la chiave del mosaico, buttava via la richiesta in volo
+      // e ridisegnava senza correzione. Il downscaling si spegneva appena si
+      // muoveva la mappa, e tornava solo quando l'intero mosaico era stato
+      // riscaricato -- se nel frattempo si muoveva ancora, non tornava affatto.
+      //
+      // Adesso la copertura e' una proprieta' della cache delle tessere, e
+      // cresce soltanto: si legge dalla tessera piu' fine gia' in memoria e
+      // quelle che mancano si chiedono senza spegnere niente. Spostandosi di
+      // poco la vista nuova e' gia' quasi tutta coperta, quindi non c'e' piu'
+      // alcun ritorno alla mappa non corretta.
+      const TERRAIN_ZOOM_LEVELS = 4;
+      let terrainZooms = [];
+      let terrainSampleZooms = [];
+      let terrainCoverageStamp = 0;
+      let terrainRequestKey = "";
+      let terrainRedrawTimer = 0;
 
       function profilePayload() {
         return currentData && currentData.profile ? currentData.profile : null;
       }
 
-      function elevationDownscalingActive() {
-        const payload = profilePayload();
-        if (!showFusion || selectedLevel !== "surface" || !payload) return false;
-        if (activeLayer === "temp") return true;
-        // Il vento si sposta in quota solo se il profilo porta anche il vento.
-        return activeLayer === "wind" && Boolean(payload.wind);
+      // Gli zoom si ricordano per ordine di richiesta, ma si leggono dal piu'
+      // fine: allontanando la vista le tessere grosse restano disponibili come
+      // ripiego, e avvicinandola quelle fini prendono subito il posto. In
+      // mezzo non c'e' mai un istante scoperto.
+      function noteTerrainZoom(zoom) {
+        const kept = terrainZooms.filter(function (z) { return z !== zoom; });
+        kept.unshift(zoom);
+        terrainZooms = kept.slice(0, TERRAIN_ZOOM_LEVELS);
+        terrainSampleZooms = terrainZooms.slice().sort(function (a, b) {
+          return b - a;
+        });
       }
 
-      function requestTerrainSampler(west, east, south, north, width, key) {
-        if (terrainSamplerPending === key) return;
-        terrainSamplerPending = key;
-        buildTerrainSampler(west, east, south, north, width).then(function (sampler) {
-          if (terrainSamplerPending !== key) return;
-          terrainSamplerPending = "";
-          terrainSampler = sampler;
-          terrainSamplerKey = sampler ? key : "";
-          if (sampler) {
-            lastRasterSignature = "";
-            renderWeather();
+      // Il raster si percorre per righe, quindi due letture vicine cadono
+      // quasi sempre nella stessa tessera: ricordare l'ultima evita di
+      // ricomporre una chiave di testo e di interrogare la mappa a ogni
+      // campione. Misurato sul percorso vero: 357 ms per milione di campioni
+      // senza, 55 con.
+      let demMemoZoom = -1, demMemoX = -1, demMemoY = -1, demMemoTile = null;
+
+      function demTileAt(zoom, tx, ty) {
+        if (zoom === demMemoZoom && tx === demMemoX && ty === demMemoY) {
+          return demMemoTile;
+        }
+        const tile = demTileData.get(zoom + "/" + tx + "/" + ty) || null;
+        demMemoZoom = zoom; demMemoX = tx; demMemoY = ty; demMemoTile = tile;
+        return tile;
+      }
+
+      function demHeightAtZoom(zoom, longitude, latitude) {
+        const scale = Math.pow(2, zoom);
+        const span = scale * DEM_TILE_PIXELS;
+        const px = (longitude + 180) / 360 * span;
+        const py = mercatorPixelY(latitude, scale) * DEM_TILE_PIXELS;
+        const at = function (x, y) {
+          const iy = Math.floor(y);
+          if (iy < 0 || iy >= span) return NaN;
+          const ix = ((Math.floor(x) % span) + span) % span;
+          const tile = demTileAt(
+            zoom,
+            Math.floor(ix / DEM_TILE_PIXELS),
+            Math.floor(iy / DEM_TILE_PIXELS)
+          );
+          if (!tile) return NaN;
+          return tile[(iy % DEM_TILE_PIXELS) * DEM_TILE_PIXELS
+            + (ix % DEM_TILE_PIXELS)];
+        };
+        const a = at(px, py);
+        if (!Number.isFinite(a)) return NaN;
+        const fx = px - Math.floor(px), fy = py - Math.floor(py);
+        const b = at(px + 1, py), c = at(px, py + 1), d = at(px + 1, py + 1);
+        const top = a + (Number.isFinite(b) ? (b - a) * fx : 0);
+        const bottom = Number.isFinite(c)
+          ? c + (Number.isFinite(d) ? (d - c) * fx : 0)
+          : top;
+        return top + (bottom - top) * fy;
+      }
+
+      function terrainHeightAt(longitude, latitude) {
+        for (let i = 0; i < terrainSampleZooms.length; i += 1) {
+          const height = demHeightAtZoom(terrainSampleZooms[i], longitude, latitude);
+          if (Number.isFinite(height)) return height;
+        }
+        return NaN;
+      }
+
+      // Le due quote in un punto qualsiasi. Serve alle letture puntuali --
+      // valore sotto il cursore, frecce, linee di corrente -- che non passano
+      // dal campo per pixel del raster ma devono dire la stessa cosa.
+      function elevationPairAt(longitude, latitude) {
+        const terrain = localDownscalingCache && localDownscalingCache.terrain;
+        if (!currentData || !terrain
+            || terrain.runTime !== currentData.meta.runTime) return null;
+        const trueHeight = terrainHeightAt(longitude, latitude);
+        if (!Number.isFinite(trueHeight)) return null;
+        const meta = currentData.meta;
+        const modelHeight = sampleBilinear(
+          getGrid(terrain.terrainHeight),
+          (longitude - meta.lo1) / meta.dx, (meta.la1 - latitude) / meta.dy,
+          meta.nx, meta.ny
+        );
+        if (!Number.isFinite(modelHeight)) return null;
+        return { trueHeight: trueHeight, modelHeight: modelHeight };
+      }
+
+      function terrainHasCoverage() {
+        return terrainSampleZooms.length > 0 && demTileData.size > 0;
+      }
+
+      // Quota vera e quota del modello, un valore per pixel del raster.
+      //
+      // E' la parte cara della correzione -- 389 ms per milione di pixel fra
+      // DEM e terreno del modello -- ed e' anche l'unica che NON dipende
+      // dall'ora mostrata: la stessa vista, scorrendo la barra del tempo,
+      // riusa questo campo senza ricalcolarlo. Cambia solo quando cambiano il
+      // riquadro, la risoluzione, la copertura del DEM o il run.
+      let terrainFieldCache = null;
+
+      function terrainHeightField(geometry, modelTerrain) {
+        const meta = currentData.meta;
+        const key = [
+          geometry.width, geometry.height,
+          geometry.leftLongitude.toFixed(4), geometry.rightLongitude.toFixed(4),
+          geometry.topMercator.toFixed(6), geometry.bottomMercator.toFixed(6),
+          terrainCoverageStamp, meta.runTime
+        ].join("|");
+        if (terrainFieldCache && terrainFieldCache.key === key) {
+          return terrainFieldCache;
+        }
+        const width = geometry.width, height = geometry.height;
+        const trueHeight = new Float32Array(width * height);
+        const modelHeight = new Float32Array(width * height);
+        const longitudeSpan = geometry.rightLongitude - geometry.leftLongitude;
+        const lastColumn = Math.max(width - 1, 1);
+        for (let y = 0; y < height; y += 1) {
+          const fraction = height > 1 ? y / (height - 1) : 0;
+          const mercatorY = geometry.topMercator
+            + fraction * (geometry.bottomMercator - geometry.topMercator);
+          const latitude = (2 * Math.atan(Math.exp(mercatorY)) - Math.PI / 2)
+            * 180 / Math.PI;
+          const my = (meta.la1 - latitude) / meta.dy;
+          const row = y * width;
+          for (let x = 0; x < width; x += 1) {
+            const longitude = geometry.leftLongitude
+              + (x / lastColumn) * longitudeSpan;
+            trueHeight[row + x] = terrainHeightAt(longitude, latitude);
+            modelHeight[row + x] = sampleBilinear(
+              modelTerrain, (longitude - meta.lo1) / meta.dx, my,
+              meta.nx, meta.ny
+            );
           }
+        }
+        terrainFieldCache = {
+          key: key, width: width, height: height,
+          trueHeight: trueHeight, modelHeight: modelHeight
+        };
+        return terrainFieldCache;
+      }
+
+      // Il riquadro di tessere che copre la vista, con lo stesso tetto di
+      // spesa di prima: se a quello zoom servirebbero troppe tessere si
+      // scende di un livello finche' non ci si sta.
+      function terrainTileBox(west, east, south, north, width) {
+        let zoom = demZoomFor(west, east, width);
+        let x0 = 0, x1 = 0, y0 = 0, y1 = 0;
+        for (; zoom >= 4; zoom -= 1) {
+          const scale = Math.pow(2, zoom);
+          x0 = Math.floor((west + 180) / 360 * scale);
+          x1 = Math.floor((east + 180) / 360 * scale);
+          y0 = Math.floor(mercatorPixelY(north, scale));
+          y1 = Math.floor(mercatorPixelY(south, scale));
+          if ((x1 - x0 + 1) * (y1 - y0 + 1) <= DEM_TILE_BUDGET) break;
+        }
+        return { zoom: zoom, x0: x0, x1: x1, y0: y0, y1: y1 };
+      }
+
+      // Un solo ridisegno per ondata di tessere: arrivano a decine e a poca
+      // distanza l'una dall'altra, e ridisegnare a ognuna sarebbe lavoro buttato.
+      function scheduleTerrainRedraw() {
+        if (terrainRedrawTimer) return;
+        terrainRedrawTimer = setTimeout(function () {
+          terrainRedrawTimer = 0;
+          if (!elevationDownscalingActive()) return;
+          lastRasterSignature = "";
+          renderWeather();
+        }, 60);
+      }
+
+      function requestTerrainTiles(west, east, south, north, width) {
+        const box = terrainTileBox(west, east, south, north, width);
+        const key = [box.zoom, box.x0, box.x1, box.y0, box.y1].join("/");
+        noteTerrainZoom(box.zoom);
+        if (terrainRequestKey === key) return;
+        terrainRequestKey = key;
+        const missing = [];
+        for (let ty = box.y0; ty <= box.y1; ty += 1) {
+          for (let tx = box.x0; tx <= box.x1; tx += 1) {
+            const id = box.zoom + "/" + tx + "/" + ty;
+            touchDemTile(id);
+            if (!demTileData.has(id)) missing.push(demTileHeights(box.zoom, tx, ty));
+          }
+        }
+        if (!missing.length) return;
+        // Non si aspetta l'intera ondata: ogni tessera che arriva allarga la
+        // copertura, e il ridisegno raggruppato la mostra subito.
+        missing.forEach(function (promise) {
+          promise.then(function (heights) {
+            if (heights) scheduleTerrainRedraw();
+          });
         });
+      }
+
+      // La correzione di quota non e' piu' legata al selettore "Ricalcola
+      // mappa". Erano due cose diverse messe sotto lo stesso interruttore: le
+      // osservazioni METAR valgono solo vicino all'ora attuale e cambiano da
+      // sole, la quota vera del terreno vale a ogni scadenza ed e' la stessa
+      // per tutto il run. Adesso la quota e' sempre attiva dove il profilo del
+      // modello la rende calcolabile, e il selettore riguarda le sole
+      // osservazioni.
+      //
+      // Poterla tenere accesa sempre e' una conseguenza del disegno nuovo: la
+      // correzione vive nel worker insieme al resto del raster, quindi non
+      // costa un millisecondo di thread principale e i fotogrammi corretti
+      // entrano in cache e si scaldano in anticipo come tutti gli altri.
+      // Quale correzione vale per il livello mostrato, o "" se nessuna. Non si
+      // deduce piu' dal fatto che il campo sia vettoriale: le raffiche sono
+      // uno scalare ma vanno corrette come il vento, e dedurlo dalla forma del
+      // campo le avrebbe spostate con la legge della temperatura.
+      function elevationCorrectionKind() {
+        const payload = profilePayload();
+        if (selectedLevel !== "surface" || !payload) return "";
+        // Temperatura percepita e bulbo bagnato si disegnano dal loro campo,
+        // non dal profilo: spostarli in quota con la legge della temperatura
+        // sarebbe una correzione su una grandezza che non la segue.
+        if (activeLayer === "temp") return "temp";
+        // Vento e raffica si spostano in quota solo se il profilo porta anche
+        // il vento. La raffica e' la stessa velocita' del vento vista al suo
+        // massimo nell'intervallo, quindi la vetta vera che sporge in un flusso
+        // piu' veloce la riguarda esattamente come la media.
+        if ((activeLayer === "wind" || activeLayer === "gust") && payload.wind) {
+          return "wind";
+        }
+        return "";
+      }
+
+      function elevationDownscalingActive() {
+        return elevationCorrectionKind() !== "";
       }
 
       // Temperatura del profilo del modello alla quota richiesta. Fra i livelli
@@ -7176,8 +7471,6 @@
         return lowT + (highT - lowT) / span * (metres - low);
       }
 
-      let lastElevationDelta = 0;
-
       // Fattore con cui il vento del modello va riportato sulla quota vera.
       //
       // Stesso ragionamento della temperatura, e stessa assenza di parametri
@@ -7191,20 +7484,12 @@
       // differenza: il rapporto e' adimensionale e cancella a primo ordine lo
       // scarto fra il vento a 10 m, che sente l'attrito del suolo, e quello
       // dell'aria libera. Sommare una differenza li' confonderebbe.
-      const WIND_ELEVATION_LIMITS = [0.5, 2.0];
-
-      function windElevationFactor(profile, modelTerrain, longitude, latitude) {
-        if (!terrainSampler || !profile || !profile.wind) return 1;
-        const trueHeight = terrainSampler.heightAt(longitude, latitude);
-        if (!Number.isFinite(trueHeight)) return 1;
-        const meta = currentData.meta;
-        const modelHeight = sampleBilinear(
-          modelTerrain, (longitude - meta.lo1) / meta.dx,
-          (meta.la1 - latitude) / meta.dy, meta.nx, meta.ny
-        );
-        if (!Number.isFinite(modelHeight)) return 1;
+      function windElevationFactor(profile, trueHeight, modelHeight,
+                                   longitude, latitude) {
+        const WIND_ELEVATION_LIMITS = [0.5, 2.0];
+        if (!profile || !profile.wind) return 1;
+        if (!Number.isFinite(trueHeight) || !Number.isFinite(modelHeight)) return 1;
         const delta = trueHeight - modelHeight;
-        lastElevationDelta = delta;
         if (!(Math.abs(delta) > 0.5) || Math.abs(delta) > 2500) return 1;
         const px = (longitude - profile.lo1) / profile.dx;
         const py = (profile.la1 - latitude) / profile.dy;
@@ -7244,17 +7529,10 @@
         return low.value + (high.value - low.value) / span * (metres - low.z);
       }
 
-      function elevationCorrection(profile, modelTerrain, longitude, latitude) {
-        if (!terrainSampler) return 0;
-        const trueHeight = terrainSampler.heightAt(longitude, latitude);
-        if (!Number.isFinite(trueHeight)) return 0;
-        const meta = currentData.meta;
-        const mx = (longitude - meta.lo1) / meta.dx;
-        const my = (meta.la1 - latitude) / meta.dy;
-        const modelHeight = sampleBilinear(modelTerrain, mx, my, meta.nx, meta.ny);
-        if (!Number.isFinite(modelHeight)) return 0;
+      function elevationCorrection(profile, trueHeight, modelHeight,
+                                   longitude, latitude) {
+        if (!Number.isFinite(trueHeight) || !Number.isFinite(modelHeight)) return 0;
         const delta = trueHeight - modelHeight;
-        lastElevationDelta = delta;
         // Sotto il mezzo metro non c'e' niente da correggere, e sopra i 2500 m
         // di scarto non c'e' piu' orografia ma un errore: meglio fermarsi.
         if (!(Math.abs(delta) > 0.5) || Math.abs(delta) > 2500) return 0;
@@ -7280,15 +7558,66 @@
       let rasterRenderToken = 0;
       let pendingRasterCallback = null;
 
-      function buildRasterWorker() {
-        const source = [
+      // Un solo sorgente per tutti i worker del raster: quello che disegna
+      // adesso e quello che scalda i fotogrammi vicini. Erano due liste di
+      // funzioni copiate a mano, e bastava aggiungerne una da una parte sola
+      // per avere due disegni diversi.
+      //
+      // Il campo delle quote pesa qualche megabyte e non cambia scorrendo la
+      // barra del tempo: si manda una volta per vista, identificato da una
+      // chiave, e il worker se lo tiene.
+      function rasterWorkerSource() {
+        return [
           clamp, getGrid, sampleNearest, sampleBilinear, sampleCoarseBilinear,
-          colorFor, fillRasterPixels
+          colorFor, profileTemperature, profileVectorAt,
+          elevationCorrection, windElevationFactor, fillRasterPixels
         ].map(function (fn) { return fn.toString(); }).join("\n\n") +
-          "\n\nself.onmessage = function (event) {" +
-          "  const pixels = fillRasterPixels(event.data);" +
-          "  self.postMessage({ token: event.data.token, pixels: pixels.buffer }, [pixels.buffer]);" +
+          "\n\nlet heldTerrain = null;" +
+          "\nself.onmessage = function (event) {" +
+          "  const data = event.data;" +
+          "  if (data.terrainField) {" +
+          "    heldTerrain = { key: data.terrainKey, field: data.terrainField };" +
+          "  }" +
+          "  if (data.elevation) {" +
+          "    if (heldTerrain && heldTerrain.key === data.terrainKey) {" +
+          "      data.elevation.trueHeight = heldTerrain.field.trueHeight;" +
+          "      data.elevation.modelHeight = heldTerrain.field.modelHeight;" +
+          "    } else {" +
+          "      data.elevation = null;" +
+          "    }" +
+          "  }" +
+          "  const result = fillRasterPixels(data);" +
+          "  self.postMessage(" +
+          "    { token: data.token, pixels: result.pixels.buffer, stat: result.stat }," +
+          "    [result.pixels.buffer]" +
+          "  );" +
           "};";
+      }
+
+      // Il messaggio vero: porta il campo delle quote solo se quel worker non
+      // ce l'ha gia'. Lo stato si aggiorna qui, all'invio, e non al momento in
+      // cui il disegno viene richiesto: un messaggio superato da uno piu'
+      // recente non parte, e non deve far credere di aver consegnato niente.
+      function rasterMessage(params, state) {
+        if (!params.elevation) return params;
+        const message = Object.assign({}, params);
+        message.elevation = {
+          kind: params.elevation.kind, profile: params.elevation.profile
+        };
+        if (state.terrainKey !== params.terrainKey) {
+          message.terrainField = {
+            trueHeight: params.elevation.trueHeight,
+            modelHeight: params.elevation.modelHeight
+          };
+          state.terrainKey = params.terrainKey;
+        }
+        return message;
+      }
+
+      const rasterWorkerState = { terrainKey: "" };
+
+      function buildRasterWorker() {
+        const source = rasterWorkerSource();
         let worker;
         try {
           const url = URL.createObjectURL(
@@ -7304,22 +7633,26 @@
           rasterWorkerBusy = false;
           if (queuedRasterParams) {
             const latest = queuedRasterParams; queuedRasterParams = null;
-            rasterWorkerBusy = true; worker.postMessage(latest);
+            rasterWorkerBusy = true;
+            worker.postMessage(rasterMessage(latest, rasterWorkerState));
           }
           if (event.data.token !== rasterRenderToken || !pendingRasterCallback) return;
           const callback = pendingRasterCallback;
           pendingRasterCallback = null;
-          callback(new Uint8ClampedArray(event.data.pixels));
+          callback(new Uint8ClampedArray(event.data.pixels), event.data.stat);
         };
         worker.onerror = function (error) {
           console.warn("Raster worker in errore, si torna al disegno sincrono", error);
           rasterWorkerSupported = false;
+          rasterWorkerState.terrainKey = "";
           if (pendingRasterCallback) {
             const callback = pendingRasterCallback;
             pendingRasterCallback = null;
-            callback(fillRasterPixels(lastRasterFillParams));
+            const result = fillRasterPixels(lastRasterFillParams);
+            callback(result.pixels, result.stat);
           }
         };
+        rasterWorkerState.terrainKey = "";
         return worker;
       }
 
@@ -7341,11 +7674,15 @@
           if (rasterWorker) {
             pendingRasterCallback = onDone;
             if (rasterWorkerBusy) queuedRasterParams = params;
-            else { rasterWorkerBusy = true; rasterWorker.postMessage(params); }
+            else {
+              rasterWorkerBusy = true;
+              rasterWorker.postMessage(rasterMessage(params, rasterWorkerState));
+            }
             return;
           }
         }
-        onDone(fillRasterPixels(params));
+        const result = fillRasterPixels(params);
+        onDone(result.pixels, result.stat);
       }
 
       function renderWeather(prewarm, onReady) {
@@ -7470,7 +7807,8 @@
           activeLayer, selectedLevel, activeModel, currentIndex,
           currentData.meta && currentData.meta.validTime,
           useNearestCell, showFusion, width, height,
-          elevationDownscalingActive(), terrainSamplerKey,
+          elevationDownscalingActive(),
+          elevationDownscalingActive() ? terrainCoverageStamp : 0,
           leftLongitude.toFixed(4), rightLongitude.toFixed(4),
           bottomLatitude.toFixed(4), topLatitude.toFixed(4)
         ].join("|");
@@ -7530,27 +7868,29 @@
         const windUGrid = isWindField ? getGrid(windLevel ? windLevel.u : windField().u) : null;
         const windVGrid = isWindField ? getGrid(windLevel ? windLevel.v : windField().v) : null;
 
-        // Quota vera del terreno: il campionatore arriva in modo asincrono,
-        // quindi il primo disegno esce non corretto e il secondo lo sostituisce.
+        // Quota vera del terreno. Le tessere che mancano si chiedono adesso,
+        // ma quelle gia' in memoria si usano subito: la correzione parte con
+        // la copertura che c'e' e si completa da se' quando il resto arriva,
+        // senza mai passare per un disegno non corretto.
         const elevationActive = elevationDownscalingActive();
         const profile = elevationActive ? profilePayload() : null;
         const modelTerrain = elevationActive && localDownscalingCache
           && localDownscalingCache.terrain
           && localDownscalingCache.terrain.runTime === currentData.meta.runTime
           ? getGrid(localDownscalingCache.terrain.terrainHeight) : null;
-        const terrainKey = elevationActive && modelTerrain
-          ? [leftLongitude.toFixed(3), rightLongitude.toFixed(3),
-             bottomLatitude.toFixed(3), topLatitude.toFixed(3), width].join("|")
-          : "";
-        if (terrainKey && terrainSamplerKey !== terrainKey) {
-          requestTerrainSampler(
-            leftLongitude, rightLongitude, bottomLatitude, topLatitude,
-            width, terrainKey
+        if (elevationActive && !modelTerrain) ensureLocalDownscaling();
+        if (elevationActive && modelTerrain) {
+          requestTerrainTiles(
+            leftLongitude, rightLongitude, bottomLatitude, topLatitude, width
           );
         }
-        const correctElevation = Boolean(
-          terrainKey && terrainSamplerKey === terrainKey && terrainSampler
-        );
+        const terrainField = elevationActive && modelTerrain && terrainHasCoverage()
+          ? terrainHeightField({
+              width: width, height: height,
+              leftLongitude: leftLongitude, rightLongitude: rightLongitude,
+              topMercator: topMercator, bottomMercator: bottomMercator
+            }, modelTerrain)
+          : null;
 
         const frameCoordinates = [[leftLongitude,topLatitude],[rightLongitude,topLatitude],[rightLongitude,bottomLatitude],[leftLongitude,bottomLatitude]];
         function finishRaster(pixels, elevationStat) {
@@ -7560,131 +7900,33 @@
           rasterCanvas.width = width; rasterCanvas.height = height;
           rasterContext.putImageData(new ImageData(pixels,width,height),0,0);
           lastElevationStat = elevationStat || null;
-          if(showFusion) updateDownscalingStatus();
+          updateDownscalingStatus();
           publishWeatherRaster(frameCoordinates);
           if(onReady) onReady();
           scheduleFrameWarmup();
         }
 
-        if (correctElevation) {
-          // Il worker non ha accesso al DEM: la correzione di quota, che lo
-          // consulta a ogni pixel, resta sul thread principale. E' una
-          // funzione opzionale (downscaling puntuale acceso), non il
-          // percorso comune che rende lenta la barra del tempo.
-          const elevated = fillRasterPixelsWithElevation({
-            width: width, height: height,
-            leftLongitude: leftLongitude, rightLongitude: rightLongitude,
-            topMercator: topMercator, bottomMercator: bottomMercator,
-            fieldMeta: fieldMeta, samplerKind: rasterSamplerKind,
-            isWindField: isWindField, fieldGrid: fieldGrid,
-            windUGrid: windUGrid, windVGrid: windVGrid,
-            info: info, activeLayer: activeLayer
-          }, profile, modelTerrain);
-          finishRaster(elevated[0], elevated[1]);
-        } else {
-          (prewarm ? dispatchWarmRaster : dispatchRasterFill)({
-            width: width, height: height,
-            leftLongitude: leftLongitude, rightLongitude: rightLongitude,
-            topMercator: topMercator, bottomMercator: bottomMercator,
-            fieldMeta: {
-              lo1: fieldMeta.lo1, la1: fieldMeta.la1,
-              dx: fieldMeta.dx, dy: fieldMeta.dy,
-              nx: fieldMeta.nx, ny: fieldMeta.ny
-            },
-            samplerKind: rasterSamplerKind, isWindField: isWindField,
-            fieldGrid: fieldGrid, windUGrid: windUGrid, windVGrid: windVGrid,
-            info: { stops: info.stops, discrete: Boolean(info.discrete) },
-            activeLayer: activeLayer
-          }, function (pixels) { finishRaster(pixels, null); });
-        }
-      }
-
-      // Copia di fillRasterPixels con la correzione di quota innestata nel
-      // ciclo: qui, non nella funzione pura per il worker, perche' legge
-      // windElevationFactor/elevationCorrection e il DEM del thread
-      // principale. Restituisce anche le statistiche della correzione, per
-      // il pannello che dice quanto ha pesato invece di limitarsi a
-      // dichiararla accesa.
-      function fillRasterPixelsWithElevation(params, profile, modelTerrain) {
-        const width = params.width, height = params.height;
-        const leftLongitude = params.leftLongitude, rightLongitude = params.rightLongitude;
-        const topMercator = params.topMercator, bottomMercator = params.bottomMercator;
-        const fieldMeta = params.fieldMeta;
-        const rasterSampler = params.samplerKind === "nearest" ? sampleNearest
-          : (params.samplerKind === "coarseBilinear" ? sampleCoarseBilinear : sampleBilinear);
-        const isWindField = params.isWindField;
-        const fieldGrid = params.fieldGrid;
-        const windUGrid = params.windUGrid, windVGrid = params.windVGrid;
-        const info = params.info;
-        const activeLayer = params.activeLayer;
-
-        let corrPixel = 0, corrDelta = 0;
-        let corrMax = isWindField ? 1 : 0;
-        const pixels = new Uint8ClampedArray(width * height * 4);
-
-        for (let y = 0; y < height; y += 1) {
-          const fraction = height > 1 ? y / (height - 1) : 0;
-          const mercatorY = topMercator + fraction * (bottomMercator - topMercator);
-          const latitude = (2 * Math.atan(Math.exp(mercatorY)) - Math.PI / 2) * 180 / Math.PI;
-          const gy = (fieldMeta.la1 - latitude) / fieldMeta.dy;
-
-          for (let x = 0; x < width; x += 1) {
-            const longitude = leftLongitude + (x / Math.max(width - 1, 1)) * (rightLongitude - leftLongitude);
-            const gx = (longitude - fieldMeta.lo1) / fieldMeta.dx;
-            let value;
-
-            if (isWindField) {
-              const u = rasterSampler(windUGrid, gx, gy, fieldMeta.nx, fieldMeta.ny);
-              const v = rasterSampler(windVGrid, gx, gy, fieldMeta.nx, fieldMeta.ny);
-              value = Number.isFinite(u) && Number.isFinite(v) ? Math.hypot(u, v) * 3.6 : NaN;
-            } else {
-              value = rasterSampler(fieldGrid, gx, gy, fieldMeta.nx, fieldMeta.ny);
-            }
-            if (isWindField && Number.isFinite(value)) {
-              const factor = windElevationFactor(
-                profile, modelTerrain, longitude, latitude
-              );
-              if (factor !== 1) {
-                value *= factor;
-                corrPixel += 1;
-                corrDelta += Math.abs(lastElevationDelta);
-                if (Math.abs(factor - 1) > Math.abs(corrMax - 1)) corrMax = factor;
-              }
-            } else if (Number.isFinite(value)) {
-              const shift = elevationCorrection(
-                profile, modelTerrain, longitude, latitude
-              );
-              if (shift) {
-                value += shift;
-                corrPixel += 1;
-                corrDelta += Math.abs(lastElevationDelta);
-                if (Math.abs(shift) > Math.abs(corrMax)) corrMax = shift;
-              }
-            }
-            const pixel = (y * width + x) * 4;
-
-            if (
-              !Number.isFinite(value) ||
-              (activeLayer === "rain" && value < 0.08) ||
-              (activeLayer === "cloud" && value < 4)
-            ) {
-              continue;
-            }
-
-            const color = colorFor(value, info);
-            pixels[pixel] = Math.round(color[0]);
-            pixels[pixel + 1] = Math.round(color[1]);
-            pixels[pixel + 2] = Math.round(color[2]);
-            pixels[pixel + 3] = Math.round(color[3] * 255);
-          }
-        }
-
-        return [pixels, {
-          corrected: corrPixel,
-          medianDelta: corrPixel ? Math.round(corrDelta / corrPixel) : 0,
-          maxCorrection: corrMax,
-          kind: isWindField ? "wind" : "temp"
-        }];
+        (prewarm ? dispatchWarmRaster : dispatchRasterFill)({
+          width: width, height: height,
+          leftLongitude: leftLongitude, rightLongitude: rightLongitude,
+          topMercator: topMercator, bottomMercator: bottomMercator,
+          fieldMeta: {
+            lo1: fieldMeta.lo1, la1: fieldMeta.la1,
+            dx: fieldMeta.dx, dy: fieldMeta.dy,
+            nx: fieldMeta.nx, ny: fieldMeta.ny
+          },
+          samplerKind: rasterSamplerKind, isWindField: isWindField,
+          fieldGrid: fieldGrid, windUGrid: windUGrid, windVGrid: windVGrid,
+          info: { stops: info.stops, discrete: Boolean(info.discrete) },
+          activeLayer: activeLayer,
+          terrainKey: terrainField ? terrainField.key : "",
+          elevation: terrainField ? {
+            kind: elevationCorrectionKind(),
+            profile: profile,
+            trueHeight: terrainField.trueHeight,
+            modelHeight: terrainField.modelHeight
+          } : null
+        }, finishRaster);
       }
 
       // Il mondo con un buco a forma di dominio. Serve a dire dove finisce il
@@ -7982,6 +8224,16 @@
       // sceglie la pressione: riempimento cromatico, valore puntuale, isobare
       // e centri. Prima il colore usava la griglia grezza a 2,2 km mentre le
       // isobare erano mediate: le due letture potevano quindi contraddirsi.
+      //
+      // La media resta, e non e' una perdita di risoluzione: la PMSL sopra un
+      // rilievo non e' una misura ma un'estrapolazione della pressione sotto
+      // la roccia, e il suo dettaglio a pochi chilometri e' la forma del
+      // terreno, non il tempo. Misurato sul run del 16/09 12Z, scarto fra
+      // griglia nativa e analisi: sotto i 200 m mediana 0,10 hPa (invisibile
+      // dentro una fascia da 2), sopra i 1200 m mediana 1,12 e punte di 5,73.
+      // Quei 5,73 hPa sono l'artefatto della riduzione al mare: rimetterli
+      // significherebbe disegnare le Alpi nel campo barico e fabbricare
+      // isobare e centri che non esistono.
       function pressureAnalysisGrid(data, pressure, cacheKey) {
         if (!data || !data.meta) return null;
         const source = getGrid(pressure || data.press);
@@ -8052,6 +8304,10 @@
       const CENTER_ANALYSIS_KM = 25;
       const CENTER_SMOOTHING_KM = 120;
       const CENTER_MAX_PROMINENCE_STEPS = 12;
+      // Distanza sotto la quale due estremi dello stesso segno sono la stessa
+      // struttura. E' la larghezza tipica del nucleo di un centro sinottico:
+      // due minimi a meno di 150 km l'uno dall'altro non sono due depressioni.
+      const CENTER_MERGE_KM = 150;
 
       function coarsenPressureGrid(pressure, nx, ny, step) {
         if (step <= 1) return { values: pressure, nx: nx, ny: ny, step: 1 };
@@ -8083,6 +8339,20 @@
       // inghiotta un estremo piu' profondo. Il valore restituito e' in hPa, e
       // la regione dell'ultimo contorno valido serve poi a fondere due
       // estremi che stanno dentro la stessa isobara chiusa.
+      // Il criterio di chi disegna la carta a mano: attorno a una A c'e'
+      // almeno un'ISOBARA chiusa. Un'isobara e' una linea a quota fissa --
+      // 1016, 1020 -- non una soglia misurata a partire dal massimo.
+      //
+      // Qui i contorni partivano dal valore del centro (valore meno 4 hPa,
+      // meno 8 e cosi' via), e quindi chiedevano al centro di sporgere di
+      // un'intera isobara sopra un contorno chiuso. Su un anticiclone largo e
+      // piatto -- 9,6 hPa su tutto il dominio, che e' una giornata di settembre
+      // qualunque -- nessun centro ci arriva: misurati 12 candidati ellittici
+      // e zero centri pubblicati. Sulla carta pero' la A si scrive lo stesso,
+      // perche' l'isobara dei 1020 si chiude anche se la cima sta a 1021,5.
+      //
+      // Adesso i contorni sono le isobare vere, e la prominenza e' quanto il
+      // centro sta sopra l'isobara chiusa piu' esterna.
       function closedContourProminence(
         field, nx, ny, seedIndex, kind, interval, maxSteps, rank, seedRank
       ) {
@@ -8095,10 +8365,15 @@
         let stamp = 0;
         const queue = new Int32Array(nx * ny);
 
-        for (let stepIndex = 1; stepIndex <= maxSteps; stepIndex += 1) {
+        // La prima isobara utile e' quella immediatamente oltre il centro: per
+        // una A la piu' alta sotto di lei, per una B la piu' bassa sopra.
+        const firstLevel = low
+          ? Math.ceil((seedValue + 1e-6) / interval) * interval
+          : Math.floor((seedValue - 1e-6) / interval) * interval;
+        for (let stepIndex = 0; stepIndex < maxSteps; stepIndex += 1) {
           const threshold = low
-            ? seedValue + interval * stepIndex
-            : seedValue - interval * stepIndex;
+            ? firstLevel + interval * stepIndex
+            : firstLevel - interval * stepIndex;
           stamp += 1;
           let head = 0;
           let tail = 0;
@@ -8136,8 +8411,20 @@
               // le due meta' di un colle simmetrico -- non sono l'uno piu'
               // estremo dell'altro, e confrontandone i valori il contorno li
               // fondeva in un centro solo.
+              // Solo un centro PIU' marcato dentro il contorno lo rende non
+              // esclusivo. Il confronto era "un altro qualsiasi", e cosi' una
+              // vasta A con due gobbe minori 200 km piu' in la' -- che e' il
+              // profilo normale di un anticiclone -- falliva gia' al contorno
+              // piu' stretto e usciva con prominenza zero. Le gobbe minori
+              // non contendono la struttura: sono dentro, e chi le contiene
+              // se le assorbe (ci pensa gia' "claimed" a non pubblicarle).
+              //
+              // Il confronto resta sul rango e non sul valore: due massimi
+              // esattamente uguali -- le due meta' di un colle simmetrico --
+              // sul valore si fonderebbero in un centro solo, mentre i ranghi
+              // sono unici e uno dei due vince sempre.
               const otherRank = rank ? rank[neighbour] : -1;
-              if (otherRank >= 0 && otherRank !== seedRank) exclusive = false;
+              if (otherRank >= 0 && otherRank < seedRank) exclusive = false;
               if (!rank && (low ? value < seedValue - 1e-6 : value > seedValue + 1e-6)) {
                 exclusive = false;
               }
@@ -8148,7 +8435,7 @@
           }
 
           if (!closed || !exclusive) break;
-          best = interval * stepIndex;
+          best = Math.abs(seedValue - threshold);
           bestRegion = region;
         }
         return { prominence: best, region: bestRegion };
@@ -8243,6 +8530,33 @@
         candidates.sort(function (first, second) {
           return Math.abs(second.laplacian) - Math.abs(first.laplacian);
         });
+
+        // Una cima piatta -- ed e' cio' che resta di un anticiclone dopo
+        // l'analisi sinottica -- ha molti massimi locali, perche' il confronto
+        // con gli otto vicini non e' stretto: su un ripiano nessun vicino e'
+        // maggiore, quindi ogni cella del ripiano risulta un massimo. Ognuno
+        // di quei massimi vedeva gli altri dentro il proprio contorno piu'
+        // stretto, lo dichiarava non esclusivo e usciva con prominenza zero.
+        //
+        // Misurato sul run vero (16/09 12Z, +0h): 14 estremi, 12 candidati
+        // ellittici, ZERO centri pubblicati -- e non per la soglia, perche'
+        // anche abbassando l'intervallo a 1 hPa restavano zero. Erano tutti
+        // fermi al primo contorno.
+        //
+        // Due estremi dello stesso segno a meno di questa distanza sono la
+        // stessa struttura vista due volte, non due centri: si tiene il piu'
+        // marcato e gli altri spariscono prima di ricevere un rango.
+        const mergeCells = Math.max(1, Math.round(CENTER_MERGE_KM / cellKm));
+        const merged = [];
+        candidates.forEach(function (candidate) {
+          const twin = merged.some(function (kept) {
+            return kept.kind === candidate.kind
+              && Math.abs(kept.x - candidate.x) <= mergeCells
+              && Math.abs(kept.y - candidate.y) <= mergeCells;
+          });
+          if (!twin) merged.push(candidate);
+        });
+
         // Il rango decide chi ha diritto alla struttura quando due estremi
         // finiscono dentro la stessa isobara chiusa. Massimi e minimi hanno
         // graduatorie separate: una A non contende una regione a una B.
@@ -8250,7 +8564,7 @@
         const rankLow = new Int32Array(gx * gy).fill(-1);
         let highRank = 0;
         let lowRank = 0;
-        candidates.forEach(function (candidate) {
+        merged.forEach(function (candidate) {
           if (candidate.kind === "A") {
             candidate.rank = highRank; rankHigh[candidate.index] = highRank; highRank += 1;
           } else {
@@ -8258,20 +8572,28 @@
           }
         });
 
-        const claimed = new Uint8Array(gx * gy);
+        // Niente prenotazione di territorio. Il centro piu' marcato, potendo
+        // ora inglobare le gobbe minori, arrivava a rivendicare l'intera
+        // regione e cancellava per sbaglio anche un secondo anticiclone vero a
+        // mille chilometri di distanza (la prova del colle fra due
+        // anticicloni). A distinguere una gobba da un centro basta il suo
+        // contorno: una gobba minore, alla sua prima isobara, incontra subito
+        // il centro piu' marcato e resta senza regione chiusa; un secondo
+        // anticiclone vero chiude la propria isobara attorno a se'. La fusione
+        // a CENTER_MERGE_KM esclude gia' i doppioni ravvicinati.
         const accepted = [];
-        candidates.forEach(function (candidate) {
+        merged.forEach(function (candidate) {
           if (accepted.length >= 10) return;
-          if (claimed[candidate.index]) return;
           const closed = closedContourProminence(
             field, gx, gy, candidate.index, candidate.kind,
             ISOBAR_INTERVAL_HPA, CENTER_MAX_PROMINENCE_STEPS,
             candidate.kind === "A" ? rankHigh : rankLow, candidate.rank
           );
           // Senza almeno un'isobara chiusa attorno non e' un centro: e' una
-          // ondulazione dentro un campo che scorre.
-          if (closed.prominence < ISOBAR_INTERVAL_HPA || !closed.region) return;
-          closed.region.forEach(function (cell) { claimed[cell] = 1; });
+          // ondulazione dentro un campo che scorre. La regione esiste solo se
+          // quell'isobara si chiude dentro il dominio, quindi e' quello il
+          // controllo -- non quanti hPa il centro sporga sopra di essa.
+          if (!closed.region) return;
 
           const horizontalOffset = parabolicCenterOffset(
             field[candidate.index - 1], candidate.value, field[candidate.index + 1]
@@ -8291,7 +8613,7 @@
             value: Number.isFinite(sourceValue) ? sourceValue : candidate.value,
             kind: candidate.kind,
             prominence: closed.prominence,
-            closedIsobars: Math.round(closed.prominence / ISOBAR_INTERVAL_HPA),
+            closedIsobars: Math.max(1, Math.round(closed.prominence / ISOBAR_INTERVAL_HPA)),
             laplacian: candidate.laplacian,
           });
         });
@@ -11059,6 +11381,21 @@
 
       let localDownscalingRequest = 0;
       let localDownscalingCache = null;
+      let localTerrainRequest = "";
+
+      // Con la correzione di quota sempre attiva, la quota del modello va
+      // chiesta da sola alla prima mappa che la usa, non solo quando si accende
+      // il selettore delle osservazioni.
+      function ensureLocalDownscaling() {
+        const runTime = currentData && currentData.meta
+          ? currentData.meta.runTime : "";
+        if (!runTime || localTerrainRequest === runTime) return;
+        localTerrainRequest = runTime;
+        loadLocalDownscaling().then(function () {
+          lastRasterSignature = "";
+          renderWeather();
+        }).catch(function () { localTerrainRequest = ""; });
+      }
       let localDownscalingPromise = null;
       const elevationInput = document.getElementById("local-elevation");
       elevationInput.addEventListener("input", function () { updateLocalDownscaling(); });
@@ -11072,10 +11409,15 @@
 
       async function loadLocalDownscaling() {
         const directory = MODEL_INFO[activeModel].directory;
-        if (localDownscalingCache && localDownscalingCache.directory === directory && localDownscalingCache.product.runTime === (currentData && currentData.meta.runTime) && Date.now()-localDownscalingCache.at < 60000) return localDownscalingCache;
+        if (localDownscalingCache && localDownscalingCache.directory === directory && localDownscalingCache.product && localDownscalingCache.product.runTime === (currentData && currentData.meta.runTime) && Date.now()-localDownscalingCache.at < 60000) return localDownscalingCache;
         if (!localDownscalingPromise) {
           localDownscalingPromise = Promise.all([
-            loadDownscalingProduct(directory, currentData && currentData.meta.runTime),
+            // Il prodotto dell'agente serve alla scheda del punto; la quota
+            // del modello serve alla mappa. Erano legati da un Promise.all, e
+            // bastava che il primo mancasse perche' la correzione di quota non
+            // partisse mai, pur avendo il suo file.
+            loadDownscalingProduct(directory, currentData && currentData.meta.runTime)
+              .catch(function () { return null; }),
             fetchJsonResource(directory + "/downscaling_terrain.json.gz?t=" + Date.now())
           ]).then(function (values) {
             localDownscalingCache = {directory:directory, at:Date.now(), product:values[0], terrain:values[1]};
@@ -11095,6 +11437,7 @@
         try {
           const loaded = await loadLocalDownscaling();
           if (token !== localDownscalingRequest || currentData !== data || !selectedPoint) return;
+          if (!loaded.product) throw new Error("Prodotto di downscaling non disponibile.");
           const meta = loaded.terrain.meta;
           if (loaded.directory !== MODEL_INFO[activeModel].directory || loaded.terrain.runTime !== data.meta.runTime) throw new Error("Quota del modello appartenente a un altro run.");
           const gx = (position.lng-meta.lo1)/meta.dx;
@@ -11673,20 +12016,25 @@
       function updateDownscalingStatus() {
         const node = document.getElementById('map-downscaling-status');
         if (!node) return;
-        if (!showFusion) {
-          node.textContent = 'quota vera del terreno + osservazioni · T · vento · UR · MSLP · pressione stazione ≠ MSLP';
-          return;
-        }
         const parti = [];
         if (lastElevationStat && lastElevationStat.corrected) {
           const entita = lastElevationStat.kind === "wind"
             ? 'fino a ' + (lastElevationStat.maxCorrection >= 1 ? '+' : '')
               + Math.round((lastElevationStat.maxCorrection - 1) * 100) + '%'
             : 'fino a ' + lastElevationStat.maxCorrection.toFixed(1) + ' °C';
-          parti.push('quota vera del terreno · scarto medio '
-            + lastElevationStat.medianDelta + ' m · ' + entita);
+          parti.push('scarto medio dal modello ' + lastElevationStat.medianDelta
+            + ' m · ' + entita);
         } else if (elevationDownscalingActive()) {
           parti.push('quota del terreno: in caricamento');
+        }
+        // Il selettore riguarda le sole osservazioni: senza, si dice cosa
+        // farebbe invece di raccontare uno stato che non c'e'.
+        if (!showFusion) {
+          node.textContent = parti.length
+            ? 'Quota vera del terreno · ' + parti.join(' · ')
+              + ' · "Ricalcola mappa" aggiunge le osservazioni METAR'
+            : 'Ricalcola mappa · osservazioni METAR su T, vento, UR e MSLP';
+          return;
         }
         if (lastFusionStat && lastFusionStat.correctedCells) {
           const percent = (100 * lastFusionStat.correctedCells
