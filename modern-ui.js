@@ -60,7 +60,11 @@ function setWeatherView(view) {
     show3D = false; showSatellite = false; showSatelliteClouds = true;
     updateTerrain3D(); updateSatelliteBase(); updateSatelliteClouds();
   } else {
-    weatherView = 'forecast'; showSatelliteClouds = false; updateSatelliteClouds();
+    // Tornando alla previsione l'osservato torna in diretta: lasciare l'ora
+    // scelta avrebbe fatto ricomparire, al rientro, un'immagine vecchia senza
+    // che nessuno l'avesse piu' chiesta.
+    weatherView = 'forecast'; showSatelliteClouds = false; showLightning = false;
+    cloudTimeSelected = 0; updateLightningLayer(); updateSatelliteClouds();
     const saved = forecastRestore;
     if(saved) {
       activeLayer=saved.layer; showParticles=saved.particles; showVectors=saved.vectors;
@@ -76,6 +80,7 @@ function setWeatherView(view) {
   }
   document.body.classList.toggle('satellite-view',view === 'satellite');
   document.getElementById('satellite-status').hidden = view !== 'satellite';
+  updateSatelliteControlsVisibility();
   document.getElementById('forecast-view').setAttribute('aria-pressed',String(view === 'forecast'));
   document.getElementById('satellite-view').setAttribute('aria-pressed',String(view === 'satellite'));
   updateLayerUi(); updateLegend(); setDrawer(false);

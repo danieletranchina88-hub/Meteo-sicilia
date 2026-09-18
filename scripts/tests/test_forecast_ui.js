@@ -175,14 +175,22 @@ async function test(name,fn) {await fn();console.log('PASS '+name);}
     loadingToken:0,rasterRenderToken:0,pendingRasterCallback:null,forecastRestore:null,
     document:{getElementById:()=>element,body:{classList:{toggle:(c,v)=>{if(v)classes.add(c);else classes.delete(c);}}}},
     map:{setLayoutProperty:()=>{}},showParticles:false,showVectors:true,showIsobars:true,showIsotherms:false,showIsohypses:false,
-    showFronts:true,showFusion:false,showStations:false,showTerrain:false,showSatellite:false,show3D:false,showGraticule:false};
-  for(const name of ['setPlaying','updateTerrain3D','updateSatelliteBase','updateSatelliteClouds','updateLayerUi','updateLegend','setDrawer','updateMapPresentation','updateIsobars','updateStationMarkers','renderWeather','requestVectorRender','updateTimeUi','updateBufferUi','scheduleFrameWarmup'])ctx[name]=()=>{};
+    showFronts:true,showFusion:false,showStations:false,showTerrain:false,showSatellite:false,show3D:false,showGraticule:false,
+    showLightning:true,cloudTimeSelected:123456};
+  for(const name of ['setPlaying','updateTerrain3D','updateSatelliteBase','updateSatelliteClouds','updateLightningLayer','updateSatelliteControlsVisibility','updateLayerUi','updateLegend','setDrawer','updateMapPresentation','updateIsobars','updateStationMarkers','renderWeather','requestVectorRender','updateTimeUi','updateBufferUi','scheduleFrameWarmup'])ctx[name]=()=>{};
   ctx.clearMeteorologicalLayers=()=>{ctx.showVectors=false;ctx.showFronts=false;ctx.showIsobars=false;};
   vm.createContext(ctx);
   const source=fs.readFileSync(path.join(__dirname,'../../modern-ui.js'),'utf8');
   vm.runInContext(source.slice(source.indexOf('function setWeatherView'),source.indexOf('(function modernControls')),ctx);
   ctx.setWeatherView('satellite');assert.equal(ctx.showVectors,false);assert.equal(ctx.showFronts,false);assert.equal(ctx.showSatelliteClouds,true);
   ctx.setWeatherView('forecast');assert.equal(ctx.activeLayer,'wind');assert.equal(ctx.currentIndex,13);assert.equal(ctx.showVectors,true);assert.equal(ctx.showFronts,true);
+  // I due livelli osservati vivono solo nella vista satellite, e l'ora scelta
+  // con loro: rientrando nella previsione devono spegnersi e tornare in
+  // diretta, altrimenti al giro dopo si riaprirebbe il satellite su
+  // un'immagine vecchia che nessuno ha piu' chiesto.
+  assert.equal(ctx.showSatelliteClouds,false,'le nubi restano accese in previsione');
+  assert.equal(ctx.showLightning,false,'i fulmini restano accesi in previsione');
+  assert.equal(ctx.cloudTimeSelected,0,"l'ora dell'osservato non torna in diretta");
  });
  await test('page IDs are unique and new runtime assets are deployed',()=>{
   for(const file of ['index.html','meteograms.html']) {
