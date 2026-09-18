@@ -2512,6 +2512,9 @@
                 <button class="toggle-row" type="button" data-toggle="satclouds" aria-pressed="false">
                   <span><b>Satellite MTG</b><small id="satclouds-note">immagini reali e diagnostiche EUMETSAT</small></span><span class="switch"></span>
                 </button>
+                <button class="toggle-row" type="button" data-toggle="lightning" aria-pressed="false">
+                  <span><b>Fulmini</b><small id="lightning-note">MTG-I1 · area di flash · passo 5 minuti</small></span><span class="switch"></span>
+                </button>
                 <div id="satclouds-picker" class="level-picker" style="display: none">
                 <label for="satclouds-select">Prodotto satellitare
                   <small>dominio ICON-2I completo · canali FCI fino a 500 m</small>
@@ -3853,6 +3856,7 @@
       // serve guardare la fotografia, non a ogni visita.
       let showSatellite = false;
       let showSatelliteClouds = false;
+      let showLightning = false;
       let showGraticule = false;
       // Carta cartografica: non un livello in piu', un modo di presentare la
       // mappa. Spegne la base fotografica, le particelle e tutto cio' che
@@ -5588,6 +5592,44 @@
       ];
       const CLOUD_DOMAIN = MODEL_DOMAIN;
       const CLOUD_SLOT_MS = 10 * 60 * 1000;
+
+      // Istante osservato che si sta guardando. Zero significa "l'ultimo
+      // disponibile", cioe' il comportamento di prima; un valore in
+      // millisecondi ancora l'immagine a quel momento. Non e' una scelta di
+      // comodo: EUMETView espone una dimensione temporale dichiarata nelle sue
+      // capabilities, quindi chiedere il passato e' un'operazione prevista dal
+      // servizio, non un trucco.
+      let cloudTimeSelected = 0;
+      // Quanto indietro si puo' andare. L'archivio del servizio copre mesi --
+      // dal 23/09/2024 per l'infrarosso, dal 30/05/2025 per i fulmini -- ma
+      // una barra lunga un anno non si governa con il pollice. Sei ore sono
+      // l'evoluzione di un temporale dall'innesco alla dissipazione, che e'
+      // cio' per cui si guarda indietro.
+      const CLOUD_HISTORY_HOURS = 6;
+
+      // Fulmini osservati dallo spazio: Lightning Imager di MTG-I1, prodotto
+      // Accumulated Flash Area, stesso servizio pubblico delle nubi.
+      //
+      // Perche' questo e non una rete a terra tipo Blitzortung: le reti a
+      // terra danno la singola scarica con pochi secondi di ritardo, ma i loro
+      // dati non sono liberamente licenziati -- Blitzortung li riserva a chi
+      // partecipa al progetto o ha un permesso esplicito. Questo prodotto e'
+      // pubblico, non richiede chiave, e soprattutto ha una dimensione
+      // temporale: i fulmini scorrono avanti e indietro insieme all'immagine,
+      // cosa che un flusso live non puo' fare senza un archivio proprio.
+      //
+      // Il prezzo e' la latenza, misurata sul servizio: 21 minuti contro i
+      // 3-20 secondi di una rete a terra. E' area di flash vista dal sensore
+      // ottico, non il punto di impatto al suolo.
+      const LIGHTNING_PRODUCT = {
+        layer: "mtg_fd:li_afa",
+        name: "Fulmini · Lightning Imager",
+        detail: "MTG-I1 · area di flash · passo 5 minuti",
+        metres: 2000,
+        slotMs: 5 * 60 * 1000,
+        latencyMinutes: 21,
+        opacity: 0.95
+      };
       const CLOUD_MAX_SIDE = 4096;
       // Latenza di diffusione misurata sul servizio: alle 13:43 UTC l'ultima
       // immagine disponibile era quella delle 13:20.
@@ -5750,9 +5792,19 @@
         const latency = selected.latencyMinutes
           ? selected.latencyMinutes * 60 * 1000
           : CLOUD_LATENCY_MS;
-        const slot = Math.floor((Date.now() - latency) / slotMs) * slotMs;
+        // Il piu' recente che il servizio puo' avere, data la sua latenza.
+        const newest = Math.floor((Date.now() - latency) / slotMs) * slotMs;
+        // L'istante scelto si arrotonda alla griglia DEL PRODOTTO, non a una
+        // griglia sola: le nubi vanno a passo di dieci minuti e i fulmini di
+        // cinque, e forzarli sulla stessa griglia butterebbe via meta' dei
+        // passaggi del Lightning Imager.
+        const slot = cloudTimeSelected
+          ? Math.min(Math.floor(cloudTimeSelected / slotMs) * slotMs, newest)
+          : newest;
         return {
           value: slot,
+          newest: newest,
+          live: !cloudTimeSelected,
           date: new Date(slot),
           iso: new Date(slot).toISOString().replace(/\.\d{3}Z$/, ".000Z")
         };
@@ -6013,6 +6065,142 @@
         image.src = cloudUrl(box, size, product, slot);
       }
 
+      // ---- FULMINI DA SATELLITE ---------------------------------------
+      //
+      // Il prodotto arriva gia' trasparente e con la sua legenda calibrata da
+      // EUMETSAT, quindi -- a differenza delle nubi -- non passa da una canvas
+      // che ne ricalcola l'alfa: si pubblica com'e'. Toccarne i colori
+      // significherebbe alterare una scala che dichiara densita' di flash.
+      let lightningToken = 0;
+      let lightningLoadedBox = null;
+      let lightningLoadedSlot = 0;
+      let lightningLoadedMetres = Infinity;
+      let lightningReloadTimer = 0;
+      let lightningObjectUrl = "";
+      let lightningRetryTimer = 0;
+
+      function lightningNeedsReload(visible, size, slot) {
+        if (!lightningLoadedBox) return true;
+        if (slot.value !== lightningLoadedSlot) return true;
+        const outside = visible.west < lightningLoadedBox.west - 1e-6
+          || visible.east > lightningLoadedBox.east + 1e-6
+          || visible.south < lightningLoadedBox.south - 1e-6
+          || visible.north > lightningLoadedBox.north + 1e-6;
+        if (outside) return true;
+        return lightningLoadedMetres > size.metres * 1.35;
+      }
+
+      function loadLightning(force) {
+        if (!mapLoaded || !showLightning) return;
+        if (!map.getSource("satellite-lightning")) return;
+        if (typeof document.hidden === "boolean" && document.hidden) return;
+
+        const slot = cloudSlot(LIGHTNING_PRODUCT);
+        const box = cloudRequestBox(0.22);
+        const size = cloudRequestSize(box, LIGHTNING_PRODUCT);
+        if (!force && !lightningNeedsReload(cloudRequestBox(0), size, slot)) return;
+
+        const token = ++lightningToken;
+        const image = new Image();
+        image.crossOrigin = "anonymous";
+        image.onload = function () {
+          if (token !== lightningToken || !showLightning) return;
+          const source = map.getSource("satellite-lightning");
+          if (!source) return;
+          // Passare a MapLibre l'URL del servizio farebbe scaricare l'immagine
+          // una SECONDA volta -- misurato: due richieste per ogni fotogramma,
+          // una di questo Image e una della sorgente. Con una finestra da
+          // venti richieste e' spreco puro, quindi si ripubblica il bitmap
+          // gia' in memoria, come fanno il raster e le nubi.
+          const canvas = document.createElement("canvas");
+          canvas.width = image.naturalWidth || size.width;
+          canvas.height = image.naturalHeight || size.height;
+          canvas.getContext("2d").drawImage(image, 0, 0);
+          const coordinates = [
+            [box.west, box.north], [box.east, box.north],
+            [box.east, box.south], [box.west, box.south]
+          ];
+          const publish = function (url, isObjectUrl) {
+            if (token !== lightningToken || !showLightning) {
+              if (isObjectUrl) URL.revokeObjectURL(url);
+              return;
+            }
+            try {
+              source.updateImage({ url: url, coordinates: coordinates });
+              if (lightningObjectUrl) {
+                const previous = lightningObjectUrl;
+                setTimeout(function () { URL.revokeObjectURL(previous); }, 1600);
+              }
+              lightningObjectUrl = isObjectUrl ? url : "";
+              lightningLoadedBox = box;
+              lightningLoadedSlot = slot.value;
+              lightningLoadedMetres = size.metres;
+              updateLightningNote(slot);
+            } catch (error) {
+              if (isObjectUrl) URL.revokeObjectURL(url);
+              console.error("Fulmini non pubblicati", error);
+            }
+          };
+          if (typeof canvas.toBlob === "function"
+              && typeof URL.createObjectURL === "function") {
+            canvas.toBlob(function (blob) {
+              if (!blob) return;
+              publish(URL.createObjectURL(blob), true);
+            }, "image/png");
+          } else {
+            publish(canvas.toDataURL("image/png"), false);
+          }
+        };
+        image.onerror = function () {
+          if (token !== lightningToken) return;
+          if (!slot.latest) {
+            // Due casi, stesso rimedio. Lo slot stimato puo' non essere ancora
+            // pubblicato (la latenza di venti minuti e' una media, non una
+            // garanzia), e il servizio puo' rispondere 500 quando e' sotto
+            // carico. In entrambi, chiedere "l'ultimo disponibile" lascia
+            // scegliere a lui invece di lasciare il livello vuoto.
+            slot.latest = true;
+            image.src = cloudUrl(box, size, LIGHTNING_PRODUCT, slot, true);
+            return;
+          }
+          updateLightningNote(null);
+          // Un solo tentativo differito: se anche l'ultimo disponibile fallisce
+          // il servizio e' davvero in difficolta', e insistere lo peggiora.
+          if (lightningRetryTimer) return;
+          lightningRetryTimer = setTimeout(function () {
+            lightningRetryTimer = 0;
+            if (showLightning) loadLightning(true);
+          }, 8000);
+        };
+        image.src = cloudUrl(box, size, LIGHTNING_PRODUCT, slot);
+      }
+
+      function updateLightningNote(slot) {
+        const label = document.getElementById("lightning-note");
+        if (!label) return;
+        label.textContent = slot
+          ? LIGHTNING_PRODUCT.detail + " · " + formatClockTime(slot.date)
+          : "fulmini non raggiungibili";
+      }
+
+      function scheduleLightningReload() {
+        if (!showLightning) return;
+        if (lightningReloadTimer) clearTimeout(lightningReloadTimer);
+        lightningReloadTimer = setTimeout(function () {
+          lightningReloadTimer = 0;
+          loadLightning(false);
+        }, 600);
+      }
+
+      function updateLightningLayer() {
+        if (!mapLoaded || !map.getLayer("satellite-lightning-layer")) return;
+        map.setLayoutProperty(
+          "satellite-lightning-layer", "visibility",
+          showLightning ? "visible" : "none"
+        );
+        if (showLightning) loadLightning(true);
+      }
+
       // Dopo un gesto la vista e' cambiata: forse serve un'immagine piu'
       // stretta e piu' fitta. Aspetto che il gesto sia finito davvero, poi
       // lascio decidere a cloudNeedsReload.
@@ -6023,6 +6211,102 @@
           cloudReloadTimer = 0;
           loadSatelliteClouds(false);
         }, 600);
+      }
+
+      // ---- BARRA DEL TEMPO DELL'OSSERVATO ------------------------------
+      //
+      // In vista satellite la timeline della previsione e' disabilitata -- e
+      // deve restarlo, perche' scorrere la previsione sotto nubi ferme
+      // racconterebbe una cosa falsa. Mancava pero' il controllo dell'altra
+      // grandezza, quella che qui ha senso: l'ora dell'OSSERVAZIONE.
+      //
+      // Un vincolo governa il disegno: EUMETView limita le richieste (20 per
+      // finestra, lo dichiara nelle sue risposte). Trascinando il cursore si
+      // attraversano decine di slot, quindi l'etichetta segue il dito subito
+      // ma la richiesta parte solo quando ci si ferma. Senza questo, un solo
+      // trascinamento brucerebbe l'intera finestra.
+      const CLOUD_SCRUB_DEBOUNCE_MS = 450;
+      let cloudScrubTimer = 0;
+
+      function cloudHistorySlots() {
+        return Math.round(CLOUD_HISTORY_HOURS * 3600 * 1000 / CLOUD_SLOT_MS);
+      }
+
+      function buildSatelliteControls() {
+        const host = document.getElementById("satellite-controls");
+        if (!host || host.dataset.ready === "1") return;
+        host.dataset.ready = "1";
+        const slots = cloudHistorySlots();
+        host.innerHTML =
+          '<label class="sat-scrub">'
+          + '<input id="satellite-scrub" type="range" min="0" max="' + slots
+          + '" step="1" value="' + slots + '" aria-label="Ora dell\'osservazione">'
+          + '</label>'
+          + '<div class="sat-scrub-row">'
+          + '<button id="satellite-live" type="button" class="sat-live">In diretta</button>'
+          + '<span id="satellite-scrub-label"></span>'
+          + '</div>';
+
+        const scrub = document.getElementById("satellite-scrub");
+        const live = document.getElementById("satellite-live");
+        scrub.addEventListener("input", function () {
+          const back = slots - Number(scrub.value);
+          // Zero passi indietro vuol dire "l'ultimo disponibile", non un
+          // istante fisso: cosi' restando in fondo alla barra il satellite
+          // continua ad aggiornarsi da solo quando arriva un passaggio nuovo.
+          cloudTimeSelected = back === 0
+            ? 0
+            : Math.floor(Date.now() / CLOUD_SLOT_MS) * CLOUD_SLOT_MS - back * CLOUD_SLOT_MS;
+          updateSatelliteScrubLabel();
+          if (cloudScrubTimer) clearTimeout(cloudScrubTimer);
+          cloudScrubTimer = setTimeout(function () {
+            cloudScrubTimer = 0;
+            // Non forzate: cambiando istante cambia lo slot, e le due
+            // cloudNeedsReload/lightningNeedsReload se ne accorgono da sole.
+            // Forzandole si ripetevano richieste identiche allo stesso slot,
+            // e la finestra da venti richieste si esaurisce in fretta.
+            loadSatelliteClouds(false);
+            if (showLightning) loadLightning(false);
+            syncRadarToSatellite(cloudSlot());
+          }, CLOUD_SCRUB_DEBOUNCE_MS);
+        });
+        live.addEventListener("click", function () {
+          scrub.value = String(slots);
+          scrub.dispatchEvent(new Event("input"));
+        });
+        updateSatelliteScrubLabel();
+      }
+
+      function updateSatelliteScrubLabel() {
+        const label = document.getElementById("satellite-scrub-label");
+        const live = document.getElementById("satellite-live");
+        if (live) live.classList.toggle("active", !cloudTimeSelected);
+        if (!label) return;
+        const slot = cloudSlot();
+        if (!cloudTimeSelected) {
+          label.textContent = "in diretta · ultima immagine disponibile";
+          return;
+        }
+        // Da ADESSO, non dall'ultimo passaggio disponibile. Misurandolo dal
+        // piu' recente si perdevano i venti minuti di latenza del servizio, e
+        // l'etichetta diceva "160 min fa" per un'immagine di tre ore prima.
+        const minutes = Math.round((Date.now() - slot.value) / 60000);
+        const testo = minutes >= 120
+          ? Math.floor(minutes / 60) + " h " + (minutes % 60) + " min fa"
+          : minutes + " min fa";
+        label.textContent = formatClockTime(slot.date)
+          + (minutes > 0 ? " · " + testo : "");
+      }
+
+      function updateSatelliteControlsVisibility() {
+        const host = document.getElementById("satellite-controls");
+        if (!host) return;
+        const show = weatherView === "satellite";
+        host.hidden = !show;
+        if (show) {
+          buildSatelliteControls();
+          updateSatelliteScrubLabel();
+        }
       }
 
       function updateSatelliteClouds(changedProduct) {
@@ -6457,6 +6741,7 @@
           isohypses: showIsohypses,
           radar: showRadar,
           satclouds: showSatelliteClouds,
+          lightning: showLightning,
           fusion: showFusion,
           stations: showStations,
           fronts: showFronts,
@@ -6739,7 +7024,14 @@
 
       function setToggle(name) {
         weatherFrameEpoch++; lastRasterSignature = "";
-        if(weatherView === "satellite" && name !== "satclouds") setWeatherView("forecast");
+        // I comandi della previsione riportano alla previsione, perche' li'
+        // e' dove hanno effetto. Satellite e fulmini no: sono i due livelli
+        // osservati, e vivono proprio in questa vista -- accenderli non deve
+        // farne uscire.
+        if (weatherView === "satellite"
+            && name !== "satclouds" && name !== "lightning") {
+          setWeatherView("forecast");
+        }
         if (name === "vectors") {
           showVectors = !showVectors;
           requestVectorRender();
@@ -6796,6 +7088,22 @@
             );
           } else {
             toast("Radar spento · il satellite resta visibile");
+          }
+        } else if (name === "lightning") {
+          if (!map || !map.getLayer("satellite-lightning-layer")) {
+            toast("Livello dei fulmini non disponibile");
+            return;
+          }
+          showLightning = !showLightning;
+          updateLightningLayer();
+          if (showLightning) {
+            // Va detto: chi cerca "i fulmini" pensa alla rete a terra, e la
+            // differenza fra 21 minuti e 3 secondi cambia cosa ci si puo'
+            // fare. Meglio dirlo qui che lasciarlo scoprire.
+            toast(
+              "Fulmini dal Lightning Imager di MTG-I1 · osservazione dallo "
+              + "spazio con circa 20 minuti di ritardo, non rilevamento a terra"
+            );
           }
         } else if (name === "satclouds") {
           setWeatherView(weatherView === "satellite" ? "forecast" : "satellite");
@@ -12553,6 +12861,35 @@
             }
           });
 
+          map.addSource("satellite-lightning", {
+            type: "image",
+            url: "data:image/gif;base64,R0lGODlhAQABAAD/ACwAAAAAAQABAAACADs=",
+            coordinates: [
+              [CLOUD_DOMAIN.west, CLOUD_DOMAIN.north],
+              [CLOUD_DOMAIN.east, CLOUD_DOMAIN.north],
+              [CLOUD_DOMAIN.east, CLOUD_DOMAIN.south],
+              [CLOUD_DOMAIN.west, CLOUD_DOMAIN.south]
+            ]
+          });
+
+          // Sopra le nubi: i fulmini stanno dentro la nube che li produce, e
+          // sotto non si vedrebbero. Niente dissolvenza, perche' fra un
+          // passaggio e il successivo la mappa dei flash cambia davvero e una
+          // transizione morbida farebbe sembrare che si spostino.
+          map.addLayer({
+            id: "satellite-lightning-layer",
+            type: "raster",
+            source: "satellite-lightning",
+            layout: { visibility: "none" },
+            paint: {
+              "raster-opacity": LIGHTNING_PRODUCT.opacity,
+              "raster-resampling": "nearest",
+              "raster-fade-duration": 0
+            }
+          });
+
+          map.on("moveend", scheduleLightningReload);
+
           // --- l'inchiostro della carta, sopra il campo --------------------
           // Da qui in poi si disegna SOPRA il livello meteo. E' il punto di
           // tutto il fondo vettoriale: un raster sotto il campo sparisce
@@ -12948,6 +13285,10 @@
 
           updateSatelliteBase();
           updateMapPresentation();
+          // La barra dell'osservato esiste solo in vista satellite: allo
+          // stato iniziale va nascosta esplicitamente, o resterebbe marcata
+          // come visibile pur essendo dentro un pannello chiuso.
+          updateSatelliteControlsVisibility();
           await loadCatalog();
           setupRadarLayer();
           const query = new URLSearchParams(window.location.search);
