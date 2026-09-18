@@ -5965,8 +5965,38 @@
           }
         };
 
-        // Preserve the complete observed image, including clear sky and original IR tones.
-        update(image.src, false);
+        // L'immagine osservata si ripubblica intatta -- cielo sereno e toni
+        // originali dell'infrarosso compresi: la canvas la ricopia e basta,
+        // non ne tocca un pixel.
+        //
+        // Passare a MapLibre l'URL del servizio, com'era prima, la faceva
+        // scaricare una SECONDA volta: una richiesta per questo Image e una
+        // per la sorgente. Con un servizio che limita a venti richieste per
+        // finestra e' spreco doppio, e quando la seconda cadeva sotto il
+        // limite il risultato era peggio di uno spreco -- l'etichetta
+        // dell'ora si aggiornava (la pubblicazione era "riuscita") ma il
+        // livello restava vuoto, cioe' satellite invisibile senza un errore
+        // che lo dicesse. Stesso rimedio gia' applicato ai fulmini.
+        try {
+          const canvas = document.createElement("canvas");
+          canvas.width = image.naturalWidth || size.width;
+          canvas.height = image.naturalHeight || size.height;
+          canvas.getContext("2d").drawImage(image, 0, 0);
+          if (typeof canvas.toBlob === "function"
+              && typeof URL.createObjectURL === "function") {
+            canvas.toBlob(function (blob) {
+              if (!blob) { update(image.src, false); return; }
+              update(URL.createObjectURL(blob), true);
+            }, "image/png");
+          } else {
+            update(canvas.toDataURL("image/png"), false);
+          }
+        } catch (error) {
+          // Canvas "sporca" o memoria insufficiente: meglio l'immagine
+          // scaricata due volte che nessuna immagine.
+          console.warn("Nubi non ricopiate, si ripiega sull'URL", error);
+          update(image.src, false);
+        }
       }
 
       // ---------------------------------------------------------------
