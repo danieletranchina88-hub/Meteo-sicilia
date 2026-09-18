@@ -2787,4 +2787,27 @@ def process_data():
 
 if __name__ == "__main__":
     process_data()
+    # Uscita netta, senza smontare l'interprete.
+    #
+    # Il 18/09 due run consecutivi sono morti QUI, dopo aver gia' scritto
+    # tutto: il log dice "ELABORAZIONE COMPLETATA CON SUCCESSO", poi "double
+    # free or corruption (!prev)" e infine "Aborted (core dumped)", exit 134.
+    # Il lavoro era finito -- shutil.move su FINAL_DIR avviene prima di quella
+    # stampa -- ma lo shell ha -e, quindi il passo falliva e il deploy veniva
+    # saltato: il sito restava fermo all'ultimo run buono.
+    #
+    # Il guasto non e' in questo codice ma nei distruttori di una delle
+    # librerie native dello stack GRIB (eccodes, cfgrib, rasterio, numpy),
+    # che qui sono tutte a versione libera e possono cambiare da un giorno
+    # all'altro. Terminando il processo prima della fase di smontaggio quei
+    # distruttori non vengono eseguiti affatto, e il risultato -- che a quel
+    # punto e' gia' su disco -- non dipende da loro.
+    #
+    # I buffer vanno svuotati a mano, perche' os._exit non lo fa. Il ramo di
+    # fallimento non passa di qui: process_data() esce con sys.exit(1), che
+    # solleva SystemExit e chiude prima, quindi un run senza dati validi
+    # continua a fallire come deve.
+    sys.stdout.flush()
+    sys.stderr.flush()
+    os._exit(0)
 
