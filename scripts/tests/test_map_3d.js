@@ -1820,5 +1820,52 @@ assert.match(html, /const CAPE_STOPS = \[\s*\{ v: 0, c: \[238, 244, 240\], a: 0 
   assert.match(html, /profilePayload\(\), heights\.trueHeight, heights\.modelHeight,/,
     "le letture puntuali non usano piu' le due quote vere");
 }
+// --- Pannello del satellite: selettore e barra del tempo convivono ---
+// Il selettore del prodotto (infrarosso, fase delle nubi, polvere...) non sta
+// nel markup dove lo si vede: modern-ui.js lo SPOSTA dentro
+// #satellite-controls. Costruendo li' la barra del tempo con innerHTML lo si
+// cancellava, e con esso l'unico modo di cambiare canale -- misurato sulla
+// build pubblicata: selettore assente, tredici canali irraggiungibili.
+{
+  const costruisci = html.match(/function buildSatelliteControls\([\s\S]*?\n {6}\}/);
+  assert.ok(costruisci, "buildSatelliteControls assente");
+  assert.ok(!/host\.innerHTML\s*=/.test(costruisci[0]),
+    "la barra del tempo torna a svuotare il contenitore, cancellando il "
+    + "selettore del prodotto satellitare che modern-ui.js ci sposta dentro");
+  assert.match(costruisci[0], /host\.appendChild\(/,
+    "la barra del tempo non si aggiunge al contenitore");
+
+  const interfaccia = fs.readFileSync(path.join(root, "modern-ui.js"), "utf8");
+  assert.match(interfaccia, /getElementById\('satellite-controls'\)\.append\(satellitePicker\)/,
+    "il selettore del prodotto non viene piu' spostato nel pannello");
+  assert.match(html, /id="satclouds-select"/, "manca il selettore del prodotto");
+}
+
+// --- Scorrimento fluido dell'osservato ---
+// "Senza caricamenti" non si ottiene chiedendo piu' in fretta: EUMETView
+// limita a venti richieste per finestra. Si ottiene non chiedendo affatto,
+// cioe' ripubblicando dalla memoria. Misurato: sei scorrimenti consecutivi,
+// ZERO richieste nuove.
+{
+  assert.match(html, /const cloudFrames = new Map\(\);/,
+    "manca la cache dei fotogrammi osservati");
+  assert.match(html, /function pubblicaFotogrammaInCache\(\)/,
+    "manca la pubblicazione senza rete");
+  const scorrimento = html.match(/scrub\.addEventListener\("input"[\s\S]*?\n {8}\}\);/);
+  assert.ok(scorrimento, "manca il gestore dello scorrimento");
+  assert.match(scorrimento[0], /if \(pubblicaFotogrammaInCache\(\)\)/,
+    "lo scorrimento non prova piu' la cache prima della rete");
+  // Il precaricamento deve restare UNO ALLA VOLTA e distanziato, o brucia
+  // l'intera finestra di richieste del servizio in un gesto.
+  assert.match(html, /const CLOUD_PREFETCH_GAP_MS = \d{3,};/,
+    "il precaricamento non ha piu' una pausa fra una richiesta e l'altra");
+  assert.match(html, /if \(cloudPrefetchTimer \|\| cloudPrefetchBusy\) return;/,
+    "il precaricamento puo' partire in parallelo con se stesso");
+  // Sfrattare il fotogramma in mostra ne libererebbe l'object URL, e la
+  // mappa resterebbe vuota.
+  assert.match(html, /if \(candidata !== cloudPublishedKey\)/,
+    "lo sfratto dalla cache puo' cancellare l'immagine in mostra");
+}
+
 console.log("3D map regression checks: OK");
 

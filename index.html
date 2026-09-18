@@ -5982,11 +5982,19 @@
           canvas.width = image.naturalWidth || size.width;
           canvas.height = image.naturalHeight || size.height;
           canvas.getContext("2d").drawImage(image, 0, 0);
+          const chiave = cloudFrameKey(product, slot, box, size);
           if (typeof canvas.toBlob === "function"
               && typeof URL.createObjectURL === "function") {
             canvas.toBlob(function (blob) {
               if (!blob) { update(image.src, false); return; }
-              update(URL.createObjectURL(blob), true);
+              const url = URL.createObjectURL(blob);
+              // In cache prima di pubblicare: tornando su questo istante non
+              // si chiedera' piu' nulla alla rete. La cache possiede l'URL,
+              // quindi update non lo deve liberare.
+              rememberCloudFrame(chiave, url, box, size);
+              cloudPublishedKey = chiave;
+              update(url, false);
+              scheduleCloudPrefetch();
             }, "image/png");
           } else {
             update(canvas.toDataURL("image/png"), false);
@@ -6258,6 +6266,136 @@
       const CLOUD_SCRUB_DEBOUNCE_MS = 450;
       let cloudScrubTimer = 0;
 
+      // ---- FOTOGRAMMI OSSERVATI GIA' PRONTI ----------------------------
+      //
+      // "Scorrere senza caricamenti" non si ottiene chiedendo piu' in fretta:
+      // EUMETView limita a venti richieste per finestra, e una barra che
+      // attraversa 36 slot ne brucerebbe l'intero budget in un gesto. Si
+      // ottiene non chiedendo affatto -- cioe' tenendo i fotogrammi gia'
+      // scaricati e ripubblicandoli dalla memoria.
+      //
+      // Due meta'. Una cache per (prodotto, slot, riquadro, risoluzione), che
+      // rende istantaneo qualunque istante gia' visto; e un precaricamento in
+      // sottofondo che riempie gli slot vicini al cursore UNO ALLA VOLTA e a
+      // distanza, cosi' il budget del servizio si consuma piano invece che in
+      // una raffica. Il precaricamento tace mentre l'utente sta trascinando:
+      // li' la priorita' e' il fotogramma che sta chiedendo lui.
+      const CLOUD_FRAME_LIMIT = 48;
+      const CLOUD_PREFETCH_GAP_MS = 1100;
+      const cloudFrames = new Map();
+      let cloudPrefetchTimer = 0;
+      let cloudPrefetchBusy = false;
+      let cloudPublishedKey = "";
+
+      function cloudFrameKey(product, slot, box, size) {
+        return [
+          product.layer, slot.value, size.width, size.height,
+          box.west.toFixed(3), box.east.toFixed(3),
+          box.south.toFixed(3), box.north.toFixed(3)
+        ].join("|");
+      }
+
+      function rememberCloudFrame(key, url, box, size) {
+        if (cloudFrames.has(key)) return;
+        cloudFrames.set(key, { url: url, box: box, size: size });
+        while (cloudFrames.size > CLOUD_FRAME_LIMIT) {
+          let vecchia = null;
+          for (const candidata of cloudFrames.keys()) {
+            // Mai sfrattare il fotogramma attualmente in mostra: liberarne
+            // l'object URL lo cancellerebbe dalla mappa sotto gli occhi.
+            if (candidata !== cloudPublishedKey) { vecchia = candidata; break; }
+          }
+          if (vecchia === null) break;
+          const scartata = cloudFrames.get(vecchia);
+          cloudFrames.delete(vecchia);
+          // Gli object URL vanno liberati a mano, o il browser si tiene i
+          // bitmap all'infinito.
+          if (scartata && scartata.url.slice(0, 5) === "blob:") {
+            URL.revokeObjectURL(scartata.url);
+          }
+        }
+      }
+
+      // Lo slot piu' vicino al cursore che non e' ancora in cache. Si guarda
+      // prima indietro, perche' guardando il passato ci si muove all'indietro.
+      function prossimoSlotDaPrecaricare(product) {
+        const passi = cloudHistorySlots();
+        const corrente = cloudSlot(product);
+        const box = cloudRequestBox(0.22);
+        const size = cloudRequestSize(box, product);
+        const slotMs = product.slotMs || CLOUD_SLOT_MS;
+        for (let distanza = 1; distanza <= passi; distanza += 1) {
+          for (const verso of [-1, 1]) {
+            const valore = corrente.value + verso * distanza * slotMs;
+            if (valore > corrente.newest) continue;
+            if (valore < corrente.newest - passi * slotMs) continue;
+            const slot = {
+              value: valore, newest: corrente.newest, live: false,
+              date: new Date(valore),
+              iso: new Date(valore).toISOString().replace(/\.\d{3}Z$/, ".000Z")
+            };
+            if (!cloudFrames.has(cloudFrameKey(product, slot, box, size))) {
+              return { slot: slot, box: box, size: size };
+            }
+          }
+        }
+        return null;
+      }
+
+      function scheduleCloudPrefetch() {
+        if (cloudPrefetchTimer || cloudPrefetchBusy) return;
+        if (weatherView !== "satellite" || !showSatelliteClouds) return;
+        cloudPrefetchTimer = setTimeout(function () {
+          cloudPrefetchTimer = 0;
+          if (weatherView !== "satellite" || !showSatelliteClouds) return;
+          if (typeof document.hidden === "boolean" && document.hidden) return;
+          // Mentre si trascina non si ruba banda al fotogramma richiesto.
+          if (cloudScrubTimer) { scheduleCloudPrefetch(); return; }
+          const product = CLOUD_PRODUCTS[cloudProduct] || CLOUD_PRODUCTS.geocolour;
+          const prossimo = prossimoSlotDaPrecaricare(product);
+          if (!prossimo) return;
+          cloudPrefetchBusy = true;
+          scaricaFotogramma(product, prossimo.slot, prossimo.box, prossimo.size,
+            function () {
+              cloudPrefetchBusy = false;
+              scheduleCloudPrefetch();
+            });
+        }, CLOUD_PREFETCH_GAP_MS);
+      }
+
+      // Scarica un fotogramma e lo mette in cache, senza pubblicarlo.
+      function scaricaFotogramma(product, slot, box, size, fatto) {
+        const key = cloudFrameKey(product, slot, box, size);
+        if (cloudFrames.has(key)) { if (fatto) fatto(cloudFrames.get(key)); return; }
+        const image = new Image();
+        image.crossOrigin = "anonymous";
+        image.onload = function () {
+          try {
+            const canvas = document.createElement("canvas");
+            canvas.width = image.naturalWidth || size.width;
+            canvas.height = image.naturalHeight || size.height;
+            canvas.getContext("2d").drawImage(image, 0, 0);
+            if (typeof canvas.toBlob === "function"
+                && typeof URL.createObjectURL === "function") {
+              canvas.toBlob(function (blob) {
+                if (!blob) { if (fatto) fatto(null); return; }
+                const url = URL.createObjectURL(blob);
+                rememberCloudFrame(key, url, box, size);
+                if (fatto) fatto(cloudFrames.get(key));
+              }, "image/png");
+              return;
+            }
+            rememberCloudFrame(key, canvas.toDataURL("image/png"), box, size);
+          } catch (error) {
+            if (fatto) fatto(null);
+            return;
+          }
+          if (fatto) fatto(cloudFrames.get(key));
+        };
+        image.onerror = function () { if (fatto) fatto(null); };
+        image.src = cloudUrl(box, size, product, slot);
+      }
+
       function cloudHistorySlots() {
         return Math.round(CLOUD_HISTORY_HOURS * 3600 * 1000 / CLOUD_SLOT_MS);
       }
@@ -6267,7 +6405,13 @@
         if (!host || host.dataset.ready === "1") return;
         host.dataset.ready = "1";
         const slots = cloudHistorySlots();
-        host.innerHTML =
+        // Si AGGIUNGE, non si sostituisce. Questo contenitore non e' vuoto:
+        // modern-ui.js ci sposta dentro il selettore del prodotto satellitare
+        // (infrarosso, fase delle nubi, polvere...). Scrivendo innerHTML lo si
+        // cancellava, e con esso l'unico modo di cambiare canale.
+        const blocco = document.createElement("div");
+        blocco.className = "sat-time";
+        blocco.innerHTML =
           '<label class="sat-scrub">'
           + '<input id="satellite-scrub" type="range" min="0" max="' + slots
           + '" step="1" value="' + slots + '" aria-label="Ora dell\'osservazione">'
@@ -6276,6 +6420,7 @@
           + '<button id="satellite-live" type="button" class="sat-live">In diretta</button>'
           + '<span id="satellite-scrub-label"></span>'
           + '</div>';
+        host.appendChild(blocco);
 
         const scrub = document.getElementById("satellite-scrub");
         const live = document.getElementById("satellite-live");
@@ -6288,6 +6433,13 @@
             ? 0
             : Math.floor(Date.now() / CLOUD_SLOT_MS) * CLOUD_SLOT_MS - back * CLOUD_SLOT_MS;
           updateSatelliteScrubLabel();
+          // Se quell'istante e' gia' in memoria si pubblica adesso, senza
+          // rete e senza attesa: e' questo a rendere fluido lo scorrimento.
+          if (pubblicaFotogrammaInCache()) {
+            if (cloudScrubTimer) { clearTimeout(cloudScrubTimer); cloudScrubTimer = 0; }
+            scheduleCloudPrefetch();
+            return;
+          }
           if (cloudScrubTimer) clearTimeout(cloudScrubTimer);
           cloudScrubTimer = setTimeout(function () {
             cloudScrubTimer = 0;
@@ -6298,6 +6450,7 @@
             loadSatelliteClouds(false);
             if (showLightning) loadLightning(false);
             syncRadarToSatellite(cloudSlot());
+            scheduleCloudPrefetch();
           }, CLOUD_SCRUB_DEBOUNCE_MS);
         });
         live.addEventListener("click", function () {
@@ -6305,6 +6458,43 @@
           scrub.dispatchEvent(new Event("input"));
         });
         updateSatelliteScrubLabel();
+      }
+
+      // Pubblica dalla cache l'istante scelto, se c'e'. Restituisce false
+      // quando manca, perche' allora tocca chiederlo alla rete.
+      function pubblicaFotogrammaInCache() {
+        if (!showSatelliteClouds) return false;
+        const source = map && map.getSource ? map.getSource("satellite-clouds") : null;
+        if (!source) return false;
+        const product = CLOUD_PRODUCTS[cloudProduct] || CLOUD_PRODUCTS.geocolour;
+        const slot = cloudSlot(product);
+        const box = cloudRequestBox(0.22);
+        const size = cloudRequestSize(box, product);
+        const frame = cloudFrames.get(cloudFrameKey(product, slot, box, size));
+        if (!frame) return false;
+        try {
+          source.updateImage({
+            url: frame.url,
+            coordinates: [
+              [frame.box.west, frame.box.north], [frame.box.east, frame.box.north],
+              [frame.box.east, frame.box.south], [frame.box.west, frame.box.south]
+            ]
+          });
+        } catch (error) {
+          return false;
+        }
+        map.setPaintProperty("satellite-clouds-layer", "raster-opacity", 1);
+        cloudPublishedKey = cloudFrameKey(product, slot, box, size);
+        cloudLoadedBox = frame.box;
+        cloudLoadedMetres = frame.size.metres;
+        cloudLoadedSlot = slot.value;
+        markCloudFreshness(slot);
+        if (showRadar) syncRadarToSatellite(slot);
+        syncTimelineToSatellite(slot);
+        // I fulmini hanno la loro griglia da cinque minuti: si chiedono lo
+        // stesso, ma senza far aspettare la nube che e' gia' pronta.
+        if (showLightning) loadLightning(false);
+        return true;
       }
 
       function updateSatelliteScrubLabel() {
