@@ -232,6 +232,123 @@ async function test(name,fn) {await fn();console.log('PASS '+name);}
   assert(html.includes('firstLabelLayerId()'),
     'il radar non viene piu\' inserito prima del primo livello di inchiostro');
  });
+ await test('il pannello dell\'osservato si richiude e si ricorda la scelta',()=>{
+  // Aperto misura 327 px: su un telefono da 844 ne prende il quaranta per
+  // cento, e della mappa resta una striscia. Chiuso scende sotto i settanta.
+  // Qui si prova il comportamento, non l'aspetto: chi decide lo stato
+  // iniziale, chi lo ricorda, e che cosa racconta la barra quando e' chiusa.
+  function ambiente(larghezza, memoria) {
+    const nodi = {};
+    const fai = (id) => (nodi[id] = nodi[id] || {
+      id, textContent: '', classi: new Set(), attributi: {},
+      classList: {
+        toggle(c, v) { if (v) nodi[id].classi.add(c); else nodi[id].classi.delete(c); },
+        contains: (c) => nodi[id].classi.has(c)
+      },
+      setAttribute(k, v) { nodi[id].attributi[k] = v; }
+    });
+    const ctx = {
+      console, MOBILE_BREAKPOINT: 960,
+      window: { innerWidth: larghezza },
+      document: { getElementById: (id) => fai(id) },
+      localStorage: {
+        dati: Object.assign({}, memoria),
+        getItem(k) { return k in this.dati ? this.dati[k] : null; },
+        setItem(k, v) { this.dati[k] = String(v); }
+      },
+      showSatelliteClouds: true, showRadar: false,
+      showLiveLightning: false, showLightning: false,
+      cloudProduct: 'geocolour',
+      CLOUD_PRODUCTS: { geocolour: { name: 'GeoColour · reale di giorno, IR di notte' } }
+    };
+    vm.createContext(ctx);
+    vm.runInContext(implementation('isMobile'), ctx);
+    // Il blocco di stato sta fuori da una funzione: si estrae a parte.
+    const stato = html.slice(html.indexOf('const SAT_PANNELLO_KEY'),
+                             html.indexOf('      function setSatellitePannello'));
+    vm.runInContext(stato, ctx);
+    vm.runInContext(implementation('setSatellitePannello'), ctx);
+    vm.runInContext(implementation('aggiornaRiassuntoSatellite'), ctx);
+    // Le dichiarazioni con let non diventano proprieta' dell'oggetto globale
+    // del contesto: il valore si legge valutando l'espressione, non
+    // guardando ctx.
+    return { ctx, nodi: fai, leggi: (e) => vm.runInContext(e, ctx) };
+  }
+
+  // Senza scelta memorizzata: chiuso sul telefono, aperto sul desktop.
+  const tel = ambiente(390, {});
+  assert.equal(tel.leggi('satellitePannelloAperto'), false,
+    'sul telefono il pannello si apre da solo e ricopre la mappa');
+  const desk = ambiente(1440, {});
+  assert.equal(desk.leggi('satellitePannelloAperto'), true,
+    'sul desktop il pannello parte chiuso, dove non dava fastidio a nessuno');
+
+  // La scelta di chi guarda vince sul valore predefinito, su entrambi.
+  assert.equal(ambiente(390, {'meteo.pannelloSatellite': '1'}).leggi('satellitePannelloAperto'), true,
+    'chi ha aperto i comandi sul telefono se li ritrova chiusi');
+  assert.equal(ambiente(1440, {'meteo.pannelloSatellite': '0'}).leggi('satellitePannelloAperto'), false,
+    'chi ha chiuso i comandi sul desktop se li ritrova aperti');
+
+  // Chiudere marca la sezione e lo dice alle tecnologie assistive: la
+  // freccia e' l'unico invito ad aprire, e per chi non la vede aria-expanded
+  // e' l'unico modo di sapere che c'e' qualcosa sotto.
+  const a = ambiente(1440, {});
+  a.ctx.setSatellitePannello(false, true);
+  assert.equal(a.nodi('satellite-status').classList.contains('sat-chiuso'), true);
+  assert.equal(a.nodi('satellite-fold').attributi['aria-expanded'], 'false');
+  assert.equal(a.ctx.localStorage.dati['meteo.pannelloSatellite'], '0',
+    'la scelta non viene memorizzata');
+  a.ctx.setSatellitePannello(true, true);
+  assert.equal(a.nodi('satellite-status').classList.contains('sat-chiuso'), false);
+  assert.equal(a.nodi('satellite-fold').attributi['aria-expanded'], 'true');
+
+  // Chi apre il pannello senza chiederlo -- il rientro nella vista -- non
+  // deve sovrascrivere la scelta memorizzata.
+  const b = ambiente(1440, {'meteo.pannelloSatellite': '0'});
+  b.ctx.setSatellitePannello(b.leggi('satellitePannelloAperto'), false);
+  assert.equal(b.ctx.localStorage.dati['meteo.pannelloSatellite'], '0',
+    'rientrare nella vista riscrive la scelta di chi guarda');
+
+  // Chiuso, la barra deve dire cosa resta acceso sotto, o chiuderla
+  // vorrebbe dire perdere di vista quello che si sta guardando.
+  const c = ambiente(390, {});
+  c.ctx.showRadar = true; c.ctx.showLiveLightning = true;
+  c.ctx.aggiornaRiassuntoSatellite();
+  assert.equal(c.nodi('satellite-riassunto').textContent,
+    'GeoColour · radar · fulmini in diretta',
+    'il riassunto non elenca i livelli accesi');
+  // Solo il nome del canale: la descrizione che lo segue non ci sta.
+  assert.ok(!c.nodi('satellite-riassunto').textContent.includes('reale di giorno'));
+  c.ctx.showSatelliteClouds = false; c.ctx.showRadar = false;
+  c.ctx.showLiveLightning = false;
+  c.ctx.aggiornaRiassuntoSatellite();
+  assert.match(c.nodi('satellite-riassunto').textContent, /tocca per aprire/,
+    'a pannello chiuso e livelli spenti la barra non dice piu\' nulla, e '
+    + 'nessuno capisce che si puo\' riaprire');
+ });
+
+ await test('toccare un interruttore non richiude il pannello sotto le dita',()=>{
+  // Il modo silenzioso in cui questa cosa si rompe: tutta l'intestazione e'
+  // il bersaglio del tocco, e senza l'esclusione dei comandi ogni volta che
+  // si accende il radar il pannello si chiuderebbe da solo.
+  const gancio = html.slice(html.indexOf('(function pannelloOsservato()'),
+                            html.indexOf('})();', html.indexOf('(function pannelloOsservato()')));
+  assert.ok(gancio.length, 'manca il gancio del pannello');
+  assert.match(gancio, /if \(event\.target\.closest\("#satellite-controls"\)\) return;/,
+    'un tocco su un interruttore richiude il pannello');
+  assert.match(gancio, /event\.stopPropagation\(\);/,
+    'il tocco sulla freccia arriva anche alla riga e il pannello si riapre subito');
+  // Selezionare l'ora non e' chiedere di chiudere.
+  assert.match(gancio, /getSelection/,
+    'selezionare del testo nella barra la richiude');
+  // E il CSS deve davvero nascondere i comandi, non solo marcare la classe.
+  const css = fs.readFileSync(path.join(__dirname,'../../modern-ui.css'),'utf8');
+  assert.match(css, /\.sat-chiuso #satellite-controls \{ display: none !important; \}/,
+    'la classe c\'e\' ma i comandi restano visibili');
+  assert.match(css, /\.sat-chiuso #satellite-riassunto \{/,
+    'il riassunto non compare a pannello chiuso');
+ });
+
  await test('page IDs are unique and new runtime assets are deployed',()=>{
   for(const file of ['index.html','meteograms.html']) {
     const source=fs.readFileSync(path.join(__dirname,'../..',file),'utf8');
