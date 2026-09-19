@@ -6171,6 +6171,11 @@
       let blitzRetryDelay = 2000;
       let blitzLastStrikeAt = 0;
       let showLiveLightning = false;
+      // Chi chiede meno movimento conserva tutti i punti osservati e i
+      // nuclei di attivita', ma non riceve lampi, pulsazioni o anelli.
+      const STRIKE_REDUCED_MOTION = Boolean(
+        window.matchMedia && window.matchMedia("(prefers-reduced-motion: reduce)").matches
+      );
 
       // Decodificatore LZW del flusso. Il dizionario parte dai caratteri
       // singoli e le voci nuove arrivano come code point >= 256: e' per
@@ -6459,13 +6464,13 @@
       // lungo -- poco meno di un secondo -- perche' su una mappa il lampo
       // deve anche farsi notare: sotto i due decimi, chi non stava gia'
       // guardando quel punto non lo vede affatto.
-      const STRIKE_LEADER_MS = 95;
+      const STRIKE_LEADER_MS = 70;
       const STRIKE_STROKE_MS = 190;
-      // Quanto dura la coda di luce dopo l'ultimo colpo di ritorno. Sono due
-      // cose diverse con due tempi diversi: la nube illuminata si spegne in
-      // mezzo secondo scarso, il canale incandescente molto prima.
-      const STRIKE_BAGLIORE_MS = 620;
-      const STRIKE_BRACE_MS = 260;
+      // La luce fisica e' molto piu' breve del segno cartografico che resta:
+      // il canale muore subito, la nube conserva un bagliore morbido per
+      // qualche decimo di secondo.
+      const STRIKE_BAGLIORE_MS = 520;
+      const STRIKE_BRACE_MS = 150;
 
       // Il canale in coordinate sue: y da 0 (base della nube) a 1 (suolo),
       // x trasversale in unita' di semilarghezza. La scala in pixel si
@@ -6577,6 +6582,59 @@
         s.tono = 0.82 + rng() * 0.42;
       }
 
+      // La prospettiva cambia con lo zoom. Da lontano una saetta verticale
+      // grande decine di chilometri sembrerebbe parte del dato; resta quindi
+      // solo il lampo puntuale e la luce della cella. Il canale completo
+      // compare quando la scala permette di leggerlo come effetto grafico.
+      function geometriaScarica(zoom) {
+        const dettaglio = Math.max(0, Math.min(1, (zoom - 5.8) / 2.6));
+        return {
+          canale: zoom >= 5.8,
+          rami: zoom >= 7.0,
+          impatto: zoom >= 8.2,
+          altezza: 32 + 46 * dettaglio,
+          larghezza: 9 + 10 * dettaglio
+        };
+      }
+
+      // Il leader prima esisteva nella geometria ma non nella luce: finche'
+      // non arrivava il colpo di ritorno luceScarica valeva zero e il ramo
+      // di disegno non veniva mai eseguito. Questa intensita' separata lo
+      // rende appena percettibile, come deve essere.
+      function luceLeader(eta) {
+        if (eta < 0 || eta >= STRIKE_LEADER_MS) return 0;
+        const avanzamento = eta / STRIKE_LEADER_MS;
+        return (0.10 + 0.13 * avanzamento) * (1 - 0.30 * avanzamento);
+      }
+
+      // La luce nella nube non e' un disco. Sei coltri irregolari vengono
+      // preparate una volta sola e riusate: lobi sovrapposti, bordo morbido,
+      // nessun gradiente costruito a ogni fotogramma o per ogni scarica.
+      const COLTRE_VARIANTI = 6;
+      const coltreSprites = [];
+      function spriteColtre(indice) {
+        if (coltreSprites[indice]) return coltreSprites[indice];
+        const tela = document.createElement("canvas");
+        tela.width = 192; tela.height = 128;
+        const g = tela.getContext("2d");
+        const rng = semeCasuale((indice + 1) / 17);
+        g.globalCompositeOperation = "lighter";
+        for (let i = 0; i < 6; i += 1) {
+          const x = 96 + (rng() - 0.5) * 68;
+          const y = 59 + (rng() - 0.5) * 34;
+          const r = 25 + rng() * 32;
+          const grad = g.createRadialGradient(x, y, 0, x, y, r);
+          grad.addColorStop(0, "rgba(178,198,255,0.42)");
+          grad.addColorStop(0.38, "rgba(133,162,248,0.22)");
+          grad.addColorStop(0.72, "rgba(106,137,235,0.07)");
+          grad.addColorStop(1, "rgba(92,120,220,0)");
+          g.fillStyle = grad;
+          g.fillRect(x - r, y - r, r * 2, r * 2);
+        }
+        coltreSprites[indice] = tela;
+        return tela;
+      }
+
       // Un lampo non ha una luce sola, ne ha tre, e sono tre tempi diversi.
       // E' la loro sovrapposizione a farlo sembrare vero: il canale sfarfalla
       // in decimi di secondo, la nube attorno si accende e si spegne molto
@@ -6608,9 +6666,11 @@
       function luceNube(s, eta) {
         const dt = eta - STRIKE_LEADER_MS;
         if (dt < 0) return 0;
-        // Salita in 45 ms, discesa con costante di tempo 200 ms.
+        // Salita in 45 ms, discesa con costante di tempo 170 ms:
+        // abbastanza lenta da illuminare la nube, ma gia' spenta quando il
+        // ciclo ad alta frequenza termina.
         const salita = Math.min(1, dt / 45);
-        const discesa = Math.exp(-Math.max(0, dt - 45) / 200);
+        const discesa = Math.exp(-Math.max(0, dt - 45) / 170);
         // I colpi successivi la ravvivano un po', senza farla lampeggiare.
         const ravviva = 1 + 0.35 * (s.colpi.length - 1)
           * Math.exp(-Math.max(0, eta - s.ultimoColpo) / 240);
@@ -6831,12 +6891,15 @@
           const intensita = Math.min(1, Math.log1p(cella.peso) / Math.log(70));
           if (intensita < 0.06) continue;
           const livello = intensita > 0.72 ? 2 : (intensita > 0.34 ? 1 : 0);
-          // Il battito: piu' la cella e' attiva, piu' respira in fretta.
-          // E' quello che la fa sembrare viva invece di una macchia ferma.
-          const ritmo = 1400 - 700 * intensita;
-          const battito = 1 + 0.07 * Math.sin(adesso / ritmo + cella.lon * 7);
-          const raggio = (42 + 104 * intensita) * scala * battito;
-          context.globalAlpha = (0.10 + 0.34 * intensita) * battito;
+          // La cella non pulsa a intervalli inventati: reagisce all'ultima
+          // scarica realmente ricevuta. Una raffica la tiene luminosa, una
+          // cella che tace torna ferma mentre il decadimento ne spegne il
+          // peso. Il movimento ridotto conserva intensita' e posizione.
+          const daUltima = Math.max(0, adesso - cella.ultima);
+          const impulso = STRIKE_REDUCED_MOTION ? 0 : Math.exp(-daUltima / 380);
+          const risposta = 1 + 0.045 * impulso;
+          const raggio = (42 + 104 * intensita) * scala * risposta;
+          context.globalAlpha = (0.10 + 0.34 * intensita) * (1 + 0.22 * impulso);
           const bolla = bollaNucleo(livello);
           context.drawImage(bolla, punto.x - raggio, punto.y - raggio, raggio * 2, raggio * 2);
         }
@@ -6866,7 +6929,9 @@
         if (cloudTimeSelected) return;
         const context = vectorContext;
         const adesso = performance.now();
-        const scala = clamp(0.8 + (map.getZoom() - 4) * 0.13, 0.8, 2.1);
+        const zoom = map.getZoom();
+        const scala = clamp(0.8 + (zoom - 4) * 0.13, 0.8, 2.1);
+        const geometria = geometriaScarica(zoom);
         context.save();
         context.lineCap = "round";
         context.lineJoin = "round";
@@ -6895,37 +6960,31 @@
           const luce = luceScarica(s, eta);
           const nube = luceNube(s, eta);
           const brace = luceBrace(s, eta);
-          if (luce < 0.012 && nube < 0.012 && brace < 0.012) continue;
+          const leader = luceLeader(eta);
+          if (luce < 0.012 && nube < 0.012 && brace < 0.012 && leader < 0.012) continue;
 
-          const altezza = 84 * scala;
-          const larghezza = 22 * scala;
-          // Il leader: il canale si "cerca" la strada verso il basso a
-          // scatti, e finche' non tocca terra non c'e' ancora colpo.
-          const fino = eta < STRIKE_LEADER_MS
-            ? Math.min(1, eta / STRIKE_LEADER_MS)
+          const altezza = geometria.altezza;
+          const larghezza = geometria.larghezza;
+          // Il leader avanza in otto passi riconoscibili invece di rivelare
+          // una linea continua; al colpo di ritorno il canale e' completo.
+          const fino = leader > 0
+            ? Math.min(1, (Math.floor((eta / STRIKE_LEADER_MS) * 8) + 1) / 8)
             : 1;
 
           // LA NUBE CHE SI ACCENDE. E' la parte che si vede davvero di
-          // notte: larga, morbida, e con un tempo tutto suo -- sale col
-          // primo colpo e scende piano, senza seguire lo sfarfallio, perche'
-          // una massa d'aria illuminata non si spegne e riaccende in
-          // quaranta millisecondi. Il violetto non e' un vezzo: un bianco
-          // additivo sopra una nube gia' bianca non sposta niente, mentre
-          // uno scarto di tinta si vede anche sul GeoColour di giorno.
-          if (nube > 0.012) {
-            const alto = punto.y - altezza * 0.62;
-            const largo = (118 + 84 * nube) * scala;
-            const coltre = context.createRadialGradient(
-              punto.x, alto, 0, punto.x, alto, largo
-            );
-            coltre.addColorStop(0, "rgba(168,190,255," + (0.30 * nube).toFixed(3) + ")");
-            coltre.addColorStop(0.28, "rgba(140,164,250," + (0.15 * nube).toFixed(3) + ")");
-            coltre.addColorStop(0.62, "rgba(110,136,235," + (0.05 * nube).toFixed(3) + ")");
-            coltre.addColorStop(1, "rgba(96,120,225,0)");
-            context.fillStyle = coltre;
-            context.beginPath();
-            context.arc(punto.x, alto, largo, 0, Math.PI * 2);
-            context.fill();
+          // notte. Non e' un disco perfetto: una coltre ellittica e
+          // irregolare illumina una massa di nube, non un bersaglio sulla
+          // carta. Le varianti sono pre-disegnate e scelte dal seme.
+          if (!STRIKE_REDUCED_MOTION && nube > 0.012) {
+            const alto = punto.y - altezza * 0.58;
+            const largo = (48 + 42 * nube) * clamp(scala, 0.85, 1.35);
+            const sprite = spriteColtre(Math.floor(s.seme * COLTRE_VARIANTI) % COLTRE_VARIANTI);
+            context.save();
+            context.globalAlpha = (showSatelliteClouds ? 0.72 : 0.56) * nube;
+            context.translate(punto.x, alto);
+            context.rotate(s.inclinazione * 0.18);
+            context.drawImage(sprite, -largo, -largo * 0.64, largo * 2, largo * 1.28);
+            context.restore();
           }
 
           // Il cielo illuminato stretto attorno al canale: piu' acceso della
@@ -6933,8 +6992,8 @@
           // la scarica e' piu' forte -- e' luce, non una bolla che si
           // espande: farlo crescere mentre si spegne darebbe l'effetto
           // sbagliato, quello dell'onda d'urto.
-          if (luce > 0.012) {
-            const raggio = (34 + 74 * luce) * scala;
+          if (!STRIKE_REDUCED_MOTION && luce > 0.012) {
+            const raggio = (22 + 42 * luce) * clamp(scala, 0.85, 1.45);
             const alone = context.createRadialGradient(
               punto.x, punto.y - altezza * 0.45, 0,
               punto.x, punto.y - altezza * 0.45, raggio
@@ -6950,7 +7009,7 @@
 
           // La pozza di luce a terra: il terreno rischiarato sotto il punto
           // di impatto. Schiacciata, perche' la mappa si guarda dall'alto.
-          if (luce > 0.012) {
+          if (!STRIKE_REDUCED_MOTION && geometria.impatto && luce > 0.012) {
           context.save();
           context.translate(punto.x, punto.y);
           context.scale(1, 0.38);
@@ -6967,51 +7026,62 @@
 
           // I rami, piu' deboli del canale e spenti prima: si accendono solo
           // al colpo di ritorno, mai durante il leader.
-          if (eta >= STRIKE_LEADER_MS && luce > 0.012) {
-            context.strokeStyle = "rgba(196,220,255," + (0.5 * luce).toFixed(3) + ")";
-            context.lineWidth = 3.4 * scala;
+          if (!STRIKE_REDUCED_MOTION && geometria.rami
+              && eta >= STRIKE_LEADER_MS && luce > 0.012) {
+            context.strokeStyle = "rgba(190,216,255," + (0.42 * luce).toFixed(3) + ")";
+            context.lineWidth = 2.4 * clamp(scala, 0.9, 1.5);
             for (let r = 0; r < s.rami.length; r += 1) {
               tracciaCanale(context, s.rami[r].punti, punto.x, punto.y,
                 altezza, larghezza, s.inclinazione);
             }
-            context.strokeStyle = "rgba(255,252,244," + (0.72 * luce).toFixed(3) + ")";
-            context.lineWidth = 1.1 * scala;
+            context.strokeStyle = "rgba(255,253,246," + (0.70 * luce).toFixed(3) + ")";
+            context.lineWidth = 0.85 * clamp(scala, 0.9, 1.5);
             for (let r = 0; r < s.rami.length; r += 1) {
               tracciaCanale(context, s.rami[r].punti, punto.x, punto.y,
                 altezza, larghezza, s.inclinazione);
             }
           }
 
-          // Il canale, in tre passate sempre piu' strette e piu' chiare. La
-          // somma delle tre da' il nucleo incandescente senza che nessuna
-          // delle tre sia bianca: e' come si comporta la luce vera.
-          if (luce > 0.012) {
-            context.strokeStyle = "rgba(96,146,255," + (0.5 * luce).toFixed(3) + ")";
-            context.lineWidth = 11 * scala;
-            tracciaCanale(context, s.canale, punto.x, punto.y, altezza, larghezza,
-              s.inclinazione, fino);
-            context.strokeStyle = "rgba(170,206,255," + (0.62 * luce).toFixed(3) + ")";
-            context.lineWidth = 4.2 * scala;
-            tracciaCanale(context, s.canale, punto.x, punto.y, altezza, larghezza,
-              s.inclinazione, fino);
-            context.strokeStyle = "rgba(255,253,246," + (0.95 * luce).toFixed(3) + ")";
-            context.lineWidth = 1.5 * scala;
+          // Il leader e' una traccia debole che si costruisce a scatti. E'
+          // separato dal colpo: prima luceScarica valeva zero e il leader,
+          // pur calcolato, non arrivava mai sullo schermo.
+          if (!STRIKE_REDUCED_MOTION && geometria.canale && leader > 0.012) {
+            context.strokeStyle = "rgba(136,174,255," + (0.72 * leader).toFixed(3) + ")";
+            context.lineWidth = 1.05 * clamp(scala, 0.9, 1.45);
             tracciaCanale(context, s.canale, punto.x, punto.y, altezza, larghezza,
               s.inclinazione, fino);
           }
 
-          // LE BRACI. Finiti i colpi il canale non si spegne, si raffredda:
-          // resta un filo caldo che svanisce in un paio di decimi di
-          // secondo, e vira all'arancio mentre cala, com'e' giusto per
-          // qualcosa che perde temperatura. E' la differenza fra una luce
-          // che si spegne e una luce che muore.
-          if (brace > 0.012) {
-            context.strokeStyle = "rgba(255,150,64," + (0.30 * brace).toFixed(3) + ")";
-            context.lineWidth = 3.4 * scala;
+          // Il colpo di ritorno: tre passate contenute, con un nucleo
+          // sottilissimo bianco caldo. La scala e' limitata perche' una
+          // scarica non sembri occupare decine di chilometri sulla carta.
+          if (!STRIKE_REDUCED_MOTION && geometria.canale && luce > 0.012) {
+            const scalaLinea = clamp(scala, 0.9, 1.5);
+            context.strokeStyle = "rgba(98,148,255," + (0.38 * luce).toFixed(3) + ")";
+            context.lineWidth = 7.5 * scalaLinea;
             tracciaCanale(context, s.canale, punto.x, punto.y, altezza, larghezza,
               s.inclinazione);
-            context.strokeStyle = "rgba(255,226,170," + (0.55 * brace).toFixed(3) + ")";
-            context.lineWidth = 1.1 * scala;
+            context.strokeStyle = "rgba(184,216,255," + (0.58 * luce).toFixed(3) + ")";
+            context.lineWidth = 3.1 * scalaLinea;
+            tracciaCanale(context, s.canale, punto.x, punto.y, altezza, larghezza,
+              s.inclinazione);
+            context.strokeStyle = "rgba(255,255,248," + (0.96 * luce).toFixed(3) + ")";
+            context.lineWidth = 1.15 * scalaLinea;
+            tracciaCanale(context, s.canale, punto.x, punto.y, altezza, larghezza,
+              s.inclinazione);
+          }
+
+          // PERSISTENZA DEL PLASMA. Molto breve e fredda: una coda arancio
+          // sembrava una scintilla o un incendio. Resta appena un filo
+          // bianco-violetto, distinto dal simbolo cartografico persistente.
+          if (!STRIKE_REDUCED_MOTION && geometria.canale && brace > 0.012) {
+            const scalaLinea = clamp(scala, 0.9, 1.5);
+            context.strokeStyle = "rgba(126,154,232," + (0.20 * brace).toFixed(3) + ")";
+            context.lineWidth = 2.4 * scalaLinea;
+            tracciaCanale(context, s.canale, punto.x, punto.y, altezza, larghezza,
+              s.inclinazione);
+            context.strokeStyle = "rgba(224,232,255," + (0.34 * brace).toFixed(3) + ")";
+            context.lineWidth = 0.9 * scalaLinea;
             tracciaCanale(context, s.canale, punto.x, punto.y, altezza, larghezza,
               s.inclinazione);
           }
@@ -7073,17 +7143,19 @@
           // movimento molto prima del colore, e fra cento segni uguali sono
           // quelli degli ultimi secondi che contano.
           const fresca = clamp(1 - eta / 12000, 0, 1);
-          const battito = 1 + 0.12 * fresca * Math.sin(eta / 210);
-          const dimensione = 10 * scala * battito;
+          const battito = STRIKE_REDUCED_MOTION
+            ? 1
+            : 1 + 0.08 * fresca * Math.sin(eta / 210);
+          const dimensione = clamp(8 + (zoom - 5) * 0.8, 8, 14) * battito;
 
-          // L'anello: una volta sola, nel primo secondo. Dice "questa e'
-          // nuova" senza aggiungere un altro colore alla mappa.
-          if (eta < 700) {
-            const t = eta / 700;
-            context.strokeStyle = "rgba(255,236,170," + (0.3 * (1 - t) * (1 - t)).toFixed(3) + ")";
-            context.lineWidth = 1.3 * scala;
+          // Un anello corto segnala l'arrivo senza diventare un'onda
+          // d'urto. In movimento ridotto resta soltanto il segno.
+          if (!STRIKE_REDUCED_MOTION && eta < 420) {
+            const t = eta / 420;
+            context.strokeStyle = "rgba(255,236,184," + (0.24 * (1 - t) * (1 - t)).toFixed(3) + ")";
+            context.lineWidth = 1.15 * clamp(scala, 0.9, 1.4);
             context.beginPath();
-            context.arc(punto.x, punto.y, (10 + 30 * t) * scala, 0, Math.PI * 2);
+            context.arc(punto.x, punto.y, (8 + 22 * t) * clamp(scala, 0.9, 1.4), 0, Math.PI * 2);
             context.stroke();
           }
 
@@ -7122,7 +7194,7 @@
         // Piena frequenza solo finche' qualcosa sta davvero brillando. La
         // durata non e' uguale per tutte: ogni scarica ha i suoi colpi di
         // ritorno, e s.durata dice quando ha finito.
-        const lampeggia = liveStrikes.some(function (s) {
+        const lampeggia = !STRIKE_REDUCED_MOTION && liveStrikes.some(function (s) {
           return s.durata === undefined || timestamp - s.nato < s.durata;
         });
         // Fra un lampo e l'altro non si sta fermi: il nucleo della cella

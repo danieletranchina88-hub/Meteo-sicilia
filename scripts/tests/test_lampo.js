@@ -35,12 +35,12 @@ const codice = ['STRIKE_LEADER_MS', 'STRIKE_STROKE_MS', 'STRIKE_BAGLIORE_MS',
   'CELLA_RAGGIO_KM',
   'STRIKE_LIFE_MS', 'STRIKE_MAX'].map(costante).join('\n')
   + '\n\n'
-  + ['semeCasuale', 'generaCanale', 'generaRami', 'preparaScarica', 'luceScarica',
-     'luceNube', 'luceBrace', 'aggregaCelle', 'limiteSegni']
+  + ['semeCasuale', 'generaCanale', 'generaRami', 'preparaScarica', 'geometriaScarica',
+     'luceLeader', 'luceScarica', 'luceNube', 'luceBrace', 'aggregaCelle', 'limiteSegni']
       .map(implementazione).join('\n\n');
 const modulo = new Function(codice
-  + '\nreturn {semeCasuale, generaCanale, generaRami, preparaScarica, luceScarica,'
-  + ' luceNube, luceBrace, aggregaCelle, limiteSegni};')();
+  + '\nreturn {semeCasuale, generaCanale, generaRami, preparaScarica, geometriaScarica,'
+  + ' luceLeader, luceScarica, luceNube, luceBrace, aggregaCelle, limiteSegni};')();
 
 const CELLA_MAX_ATTESO = Number(costante('CELLA_MAX').match(/= (\d+)/)[1]);
 const STRIKE_MAX_ATTESO = Number(costante('STRIKE_MAX').match(/= (\d+)/)[1]);
@@ -172,13 +172,17 @@ prova('la luce sfarfalla: piu\' colpi lungo lo stesso canale', () => {
     + 'il ciclo di disegno smetterebbe di aggiornarla mentre e\' ancora accesa');
 });
 
-prova('prima del colpo di ritorno c\'e\' solo il leader, debole', () => {
+prova('prima del colpo di ritorno c\'e\' solo il leader, debole ma visibile', () => {
   // E' quello che da' al lampo il suo tempo: il canale si cerca la strada,
-  // poi esplode. Senza, si accende tutto insieme e sembra un disegno.
+  // poi esplode. La luce forte resta spenta, ma la traccia del leader esiste.
   const s = scarica(0.61);
   const durante = modulo.luceScarica(s, 40);
+  const leader = modulo.luceLeader(40);
   const dopo = modulo.luceScarica(s, s.colpi[0].quando + 8);
   assert.equal(durante, 0, 'il leader illumina gia\' come un colpo di ritorno');
+  assert.ok(leader > 0 && leader < 0.3, 'il leader non e\' una traccia debole');
+  assert.equal(modulo.luceLeader(s.colpi[0].quando), 0,
+    'il leader resta acceso insieme al colpo di ritorno');
   assert.ok(dopo > 0.7, 'il colpo di ritorno non illumina (' + dopo.toFixed(2) + ')');
 });
 
@@ -323,6 +327,19 @@ prova('i nuclei sono ordinati per attivita\' e limitati in numero', () => {
   }
 });
 
+prova('la saetta completa compare soltanto quando la scala la rende leggibile', () => {
+  const lontano = modulo.geometriaScarica(5);
+  const medio = modulo.geometriaScarica(6.5);
+  const vicino = modulo.geometriaScarica(9);
+  assert.equal(lontano.canale, false, 'da lontano compare una saetta grande quanto una regione');
+  assert.equal(medio.canale, true, 'a scala intermedia il canale non compare');
+  assert.equal(medio.rami, false, 'i rami affollano gia\' la scala intermedia');
+  assert.equal(vicino.rami, true, 'da vicino mancano le biforcazioni');
+  assert.equal(vicino.impatto, true, 'da vicino manca il punto di impatto');
+  assert.ok(vicino.altezza > medio.altezza && vicino.altezza <= 78,
+    'la saetta non cresce in modo controllato con lo zoom');
+});
+
 prova('da lontano si disegnano pochi segni, da vicino tutti', () => {
   // A zoom cinque un glifo da dieci pixel copre trenta chilometri: e' la
   // ragione per cui il limite esiste.
@@ -367,13 +384,29 @@ prova('il nucleo si ricalcola di rado e si disegna copiando', () => {
     'si crea un gradiente per nucleo a ogni fotogramma');
 });
 
-prova('fra un lampo e l\'altro il nucleo continua a respirare', () => {
-  // Il battito ha un periodo fra 0,7 e 1,4 secondi: a un fotogramma ogni
-  // secondo e mezzo sarebbe uno scatto, non un respiro.
+prova('il nucleo reagisce alle scariche invece di pulsare a tempo inventato', () => {
+  const disegna = html.match(/function disegnaNuclei\([\s\S]*?\n {6}\}/);
+  assert.ok(disegna, 'manca il disegno dei nuclei');
+  assert.match(disegna[0], /Math\.exp\(-daUltima \/ 380\)/,
+    'il nucleo non reagisce piu\' all\'ultima scarica osservata');
+  assert.doesNotMatch(disegna[0], /Math\.sin/,
+    'il nucleo pulsa ancora con un ritmo indipendente dai dati');
   const ciclo = html.match(/if \(timestamp - strikeLastDraw >= \(lampeggia \? 0 : (\d+)\)\)/);
-  assert.ok(ciclo, 'manca la cadenza del ciclo di disegno');
-  assert.ok(Number(ciclo[1]) <= 120,
-    'fra i lampi si ridisegna ogni ' + ciclo[1] + ' ms: il respiro scatta');
+  assert.ok(ciclo && Number(ciclo[1]) <= 120,
+    'il decadimento della cella non viene ridisegnato con continuita\'');
+});
+
+prova('la coltre e\' irregolare, riusata e accessibile', () => {
+  assert.match(html, /const COLTRE_VARIANTI = 6;/,
+    'mancano le varianti della nube illuminata');
+  assert.match(html, /if \(coltreSprites\[indice\]\) return coltreSprites\[indice\];/,
+    'la coltre viene ricostruita a ogni fotogramma');
+  assert.match(html, /context\.drawImage\(sprite,/,
+    'la scarica non usa la coltre pre-disegnata');
+  assert.match(html, /prefers-reduced-motion: reduce/,
+    'chi chiede meno movimento riceve ancora tutti i lampi');
+  assert.doesNotMatch(html, /rgba\(255,150,64,/,
+    'la persistenza del canale e\' ancora arancione come una scintilla');
 });
 
 prova('il tick non puo\' diventare un ronzio', () => {
