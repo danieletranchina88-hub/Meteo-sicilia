@@ -170,14 +170,16 @@ async function test(name,fn) {await fn();console.log('PASS '+name);}
   assert.equal(commits,1,'il disegno dalla cache non commette il passo');
  });
  await test('satellite view clears overlays and restores the chosen field and forecast hour',()=>{
-  const classes=new Set();const element={hidden:true,setAttribute:()=>{}};
+  const classes=new Set();const element={hidden:true,setAttribute:()=>{}};const visibilita={};
   const ctx={console,weatherView:'forecast',mapLoaded:true,currentIndex:13,activeLayer:'wind',synopticChart:false,
     loadingToken:0,rasterRenderToken:0,pendingRasterCallback:null,forecastRestore:null,
     document:{getElementById:()=>element,body:{classList:{toggle:(c,v)=>{if(v)classes.add(c);else classes.delete(c);}}}},
-    map:{setLayoutProperty:()=>{}},showParticles:false,showVectors:true,showIsobars:true,showIsotherms:false,showIsohypses:false,
+    map:{setLayoutProperty:(id,k,value)=>{visibilita[id]=value;},getLayer:()=>({})},
+    showParticles:false,showVectors:true,showIsobars:true,showIsotherms:false,showIsohypses:false,
     showFronts:true,showFusion:false,showStations:false,showTerrain:false,showSatellite:false,show3D:false,showGraticule:false,
-    showLightning:true,cloudTimeSelected:123456};
-  for(const name of ['setPlaying','updateTerrain3D','updateSatelliteBase','updateSatelliteClouds','updateLightningLayer','updateSatelliteControlsVisibility','updateLayerUi','updateLegend','setDrawer','updateMapPresentation','updateIsobars','updateStationMarkers','renderWeather','requestVectorRender','updateTimeUi','updateBufferUi','scheduleFrameWarmup'])ctx[name]=()=>{};
+    showLightning:true,showRadar:true,showLiveLightning:true,liveStrikes:[{},{}],cloudTimeSelected:123456};
+  for(const name of ['setPlaying','updateTerrain3D','updateSatelliteBase','updateSatelliteClouds','updateLightningLayer','updateSatelliteControlsVisibility','updateLayerUi','updateLegend','setDrawer','updateMapPresentation','updateIsobars','updateStationMarkers','renderWeather','requestVectorRender','updateTimeUi','updateBufferUi','scheduleFrameWarmup','stopStrikeAnimation'])ctx[name]=()=>{};
+  let chiusure=0;ctx.blitzDisconnect=()=>chiusure++;
   ctx.clearMeteorologicalLayers=()=>{ctx.showVectors=false;ctx.showFronts=false;ctx.showIsobars=false;};
   vm.createContext(ctx);
   const source=fs.readFileSync(path.join(__dirname,'../../modern-ui.js'),'utf8');
@@ -191,6 +193,44 @@ async function test(name,fn) {await fn();console.log('PASS '+name);}
   assert.equal(ctx.showSatelliteClouds,false,'le nubi restano accese in previsione');
   assert.equal(ctx.showLightning,false,'i fulmini restano accesi in previsione');
   assert.equal(ctx.cloudTimeSelected,0,"l'ora dell'osservato non torna in diretta");
+  // Radar e fulmini in diretta hanno il comando SOLO nel pannello del
+  // satellite: se restassero accesi tornando alla previsione, resterebbero
+  // sulla mappa senza piu' alcun modo di spegnerli.
+  assert.equal(ctx.showRadar,false,'il radar resta acceso in previsione');
+  assert.equal(visibilita['radar-layer'],'none','il livello radar resta visibile in previsione');
+  assert.equal(ctx.showLiveLightning,false,'la diretta resta accesa in previsione');
+  assert.equal(ctx.liveStrikes.length,0,'le scariche restano in memoria');
+  assert.equal(chiusure,1,'la connessione al flusso resta aperta senza nessuno che guardi');
+ });
+
+ await test('i comandi osservati stanno nel pannello del satellite e sono sovrapponibili',()=>{
+  const html=fs.readFileSync(path.join(__dirname,'../../index.html'),'utf8');
+  const markup=html.replace(/<script\b[^>]*>[\s\S]*?<\/script>/g,'');
+  const pannello=markup.slice(markup.indexOf('id="satellite-status"'),
+    markup.indexOf('</section>',markup.indexOf('id="satellite-status"')));
+  // Erano sparsi nel cassetto dei campi previsti, dove accenderne uno faceva
+  // uscire dalla vista satellite: il comando c'era ma non si poteva usare
+  // insieme all'immagine.
+  for(const nome of ['satimage','radar','livelightning','lightning','strikesound']) {
+    assert(pannello.includes('data-toggle="'+nome+'"'),
+      'il comando '+nome+' non e\' nel pannello del satellite');
+    assert.equal(markup.split('data-toggle="'+nome+'"').length-1,1,
+      'il comando '+nome+' compare piu\' volte: due interruttori per lo stesso livello');
+  }
+  // E nessuno dei tre deve piu' far uscire dalla vista quando lo si accende.
+  const uscita=html.slice(html.indexOf('const SATELLITE_TOGGLES'),
+    html.indexOf('function setToggle'));
+  for(const nome of ['satimage','radar','lightning','livelightning','strikesound'])
+    assert(uscita.includes('"'+nome+'"'),nome+' fa ancora uscire dalla vista satellite');
+  // L'ordine dei livelli sulla mappa: il radar sopra le nubi e sopra i
+  // fulmini da satellite, altrimenti la pioggia sparisce sotto la coltre.
+  const nubi=html.indexOf('id: "satellite-clouds-layer"');
+  const fulmini=html.indexOf('id: "satellite-lightning-layer"');
+  const inchiostro=html.indexOf('id: "base-rivers-layer"');
+  assert(nubi<fulmini && fulmini<inchiostro,
+    'i fulmini da satellite non stanno piu\' sopra le nubi');
+  assert(html.includes('firstLabelLayerId()'),
+    'il radar non viene piu\' inserito prima del primo livello di inchiostro');
  });
  await test('page IDs are unique and new runtime assets are deployed',()=>{
   for(const file of ['index.html','meteograms.html']) {

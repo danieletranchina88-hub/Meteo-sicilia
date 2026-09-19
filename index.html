@@ -2303,7 +2303,7 @@
     <div id="place-search" class="surface"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><circle cx="10" cy="10" r="6"></circle><path d="m15 15 5 5"></path></svg><input id="place-query" type="search" placeholder="Cerca una località" aria-label="Cerca una località" autocomplete="off" /><div id="place-results" hidden></div></div>
     <nav id="quick-layers" aria-label="Campi principali"></nav>
     <div id="view-switch" class="surface" aria-label="Vista della mappa"><button id="forecast-view" type="button" aria-pressed="true">Previsioni</button><button id="satellite-view" type="button" aria-pressed="false">Satellite</button></div>
-    <section id="satellite-status" class="surface" hidden><b>Satellite · osservazione</b><span id="satellite-time">Ultima immagine disponibile</span><div id="satellite-controls"></div></section>
+    <section id="satellite-status" class="surface" hidden><b>Satellite · osservazione</b><span id="satellite-time">Ultima immagine disponibile</span><div id="satellite-controls"><div id="satellite-layers"><button class="sat-layer" type="button" data-toggle="satimage" aria-pressed="false"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M6 17a5 5 0 0 1 0-10 6 6 0 0 1 11-1 5.5 5.5 0 0 1 0 11Z"></path></svg><span><b>Immagine satellite</b><small>canale scelto qui sotto</small></span></button><button class="sat-layer" type="button" data-toggle="radar" aria-pressed="false"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 20a8 8 0 0 1 0-16 M12 16.5a4.5 4.5 0 0 1 0-9 M12 13a1 1 0 0 1 0 2 M16 6l4-2 M17 12h4 M16 18l4 2"></path></svg><span><b>Radar precipitazioni</b><small id="radar-note">RainViewer HD · osservato</small></span></button><button class="sat-layer" type="button" data-toggle="livelightning" aria-pressed="false"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M13 2 4.5 13.5H11L9.5 22 19 10h-6.5L13 2Z"></path></svg><span><b>Fulmini in diretta</b><small id="livelightning-note">Blitzortung · rete a terra · scariche in diretta</small></span></button><button class="sat-layer" type="button" data-toggle="lightning" aria-pressed="false"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 4.5a10 10 0 0 1 10 10 M4 9a5.5 5.5 0 0 1 5.5 5.5 M14.5 4 11 9.5h2.8L12 14l4.5-6h-2.9L14.5 4Z M4.5 19.5h.01"></path></svg><span><b>Fulmini da satellite</b><small id="lightning-note">MTG-I1 · area di flash · passo 5 minuti</small></span></button><button class="sat-layer" type="button" data-toggle="strikesound" aria-pressed="false"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 9.5h3.5L12 5.5v13L7.5 14.5H4Z M15.5 9.5a4 4 0 0 1 0 5 M18.5 7a8 8 0 0 1 0 10"></path></svg><span><b>Tick della scarica</b><small>un colpo breve a ogni fulmine</small></span></button></div></div></section>
     <section id="meta-card" class="surface" aria-label="Metadati della previsione">
       <div class="meta-item">
         <div class="micro-label">Run del modello</div>
@@ -2489,9 +2489,6 @@
               <button class="toggle-row" type="button" data-toggle="flow" aria-pressed="false">
                 <span><b>Flusso animato</b><small>particelle u/v · opzionale e più pesante</small></span><span class="switch"></span>
               </button>
-              <button class="toggle-row" type="button" data-toggle="radar" aria-pressed="false">
-                <span><b>Radar precipitazioni</b><small>RainViewer HD · osservato</small></span><span class="switch"></span>
-              </button>
               <button class="toggle-row" type="button" data-toggle="synoptic" aria-pressed="false">
                 <span><b>Modalità carta</b><small>analisi al suolo su carta, campo velato sotto</small></span><span class="switch"></span>
               </button>
@@ -2511,12 +2508,6 @@
                 </button>
                 <button class="toggle-row" type="button" data-toggle="satclouds" aria-pressed="false">
                   <span><b>Satellite MTG</b><small id="satclouds-note">immagini reali e diagnostiche EUMETSAT</small></span><span class="switch"></span>
-                </button>
-                <button class="toggle-row" type="button" data-toggle="lightning" aria-pressed="false">
-                  <span><b>Fulmini da satellite</b><small id="lightning-note">MTG-I1 · area di flash · passo 5 minuti</small></span><span class="switch"></span>
-                </button>
-                <button class="toggle-row" type="button" data-toggle="livelightning" aria-pressed="false">
-                  <span><b>Fulmini in diretta</b><small id="livelightning-note">Blitzortung · rete a terra · scariche in diretta</small></span><span class="switch"></span>
                 </button>
                 <div id="satclouds-picker" class="level-picker" style="display: none">
                 <label for="satclouds-select">Prodotto satellitare
@@ -5821,14 +5812,51 @@
         }, radarFrames[0]);
       }
 
+      // Quanto lontano puo' stare il fotogramma radar dall'istante chiesto
+      // prima che smetta di descriverlo. Le celle si muovono: a 50 km/h un
+      // quarto d'ora sposta l'eco di 12 km, e a quel punto disegnarlo
+      // sull'orario sbagliato e' peggio che non disegnarlo.
+      const RADAR_MATCH_TOLERANCE_MS = 12 * 60 * 1000;
+
       function syncRadarToSatellite(slot) {
-        const frame = radarFrameNearestTo(slot && slot.value ? slot.value : Date.now());
+        const quando = slot && slot.value ? slot.value : Date.now();
+        const frame = radarFrameNearestTo(quando);
         const source = map && map.getSource ? map.getSource("radar") : null;
-        if (!frame || !source || typeof source.setTiles !== "function") return frame;
+        // L'archivio di RainViewer e' corto -- un paio d'ore -- mentre la
+        // barra del satellite torna indietro di sei. Oltre il bordo
+        // dell'archivio il fotogramma piu' vicino resta il piu' vecchio
+        // disponibile: mostrarlo sarebbe raccontare la pioggia di due ore fa
+        // come se fosse quella di sei. Meglio spegnere e dirlo.
+        const copre = Boolean(frame)
+          && Math.abs(frame.time * 1000 - quando) <= RADAR_MATCH_TOLERANCE_MS;
+        if (map && map.getLayer("radar-layer")) {
+          map.setLayoutProperty(
+            "radar-layer", "visibility", showRadar && copre ? "visible" : "none"
+          );
+        }
+        updateRadarNote(copre ? frame : null);
+        if (!frame || !copre || !source || typeof source.setTiles !== "function") {
+          return copre ? frame : null;
+        }
         source.setTiles([
           radarHost + frame.path + "/512/{z}/{x}/{y}/4/1_1.png"
         ]);
         return frame;
+      }
+
+      function updateRadarNote(frame) {
+        const label = document.getElementById("radar-note");
+        if (!label) return;
+        if (!showRadar) {
+          label.textContent = "RainViewer HD \u00b7 osservato";
+          return;
+        }
+        if (!frame) {
+          label.textContent = "fuori dall'archivio radar per questo istante";
+          return;
+        }
+        label.textContent = "RainViewer HD \u00b7 agg. " + new Date(frame.time * 1000)
+          .toLocaleTimeString("it-IT", { hour: "2-digit", minute: "2-digit" });
       }
 
       // Il riquadro da chiedere: quello che si sta guardando, allargato di
@@ -6134,7 +6162,6 @@
       // frazioni di secondo; qui il segno si trattiene perche' serve a vedere
       // DOVE sta lavorando la cella, non a riprodurre la durata ottica.
       const STRIKE_LIFE_MS = 150 * 1000;
-      const STRIKE_FLASH_MS = 1100;
       const STRIKE_MAX = 400;
 
       let liveStrikes = [];
@@ -6220,6 +6247,154 @@
         if (socket) { try { socket.close(); } catch (error) { /* gia' chiusa */ } }
       }
 
+      // ---- IL TICK DELLA SCARICA ---------------------------------------
+      //
+      // Un colpo secco, brevissimo, a ogni fulmine che cade dentro lo
+      // schermo. Serve a una cosa sola: accorgersi che sta succedendo
+      // qualcosa senza dover tenere gli occhi sulla mappa.
+      //
+      // Tre regole, e sono tutte per NON dare fastidio:
+      //
+      //  - dura 45 millisecondi e sta sotto il sei per cento del volume.
+      //    E' un tick da orologio, non un tuono: il tuono di un temporale
+      //    vero, riprodotto a ogni scarica, sarebbe insopportabile dopo
+      //    trenta secondi;
+      //  - non suona piu' di sei volte al secondo, e quando i colpi si
+      //    infittiscono si abbassa da solo. Una cella attiva manda decine di
+      //    scariche al secondo: senza questi due limiti il tick diventerebbe
+      //    un ronzio continuo, cioe' rumore invece di notizia. Misurato con
+      //    trenta scariche in tre secondi, il freno lascia passare un colpo
+      //    su due;
+      //  - suona solo per le scariche VISIBILI adesso sullo schermo, e piu'
+      //    piano per quelle lontane dal centro. Un fulmine in Croazia
+      //    mentre si guarda la Sicilia non riguarda chi sta guardando.
+      //
+      // Il timbro e' un clic di legno, non un fischio: rumore filtrato da un
+      // passabanda stretto piu' un corpo sinusoidale grave. Un'onda pura
+      // suonerebbe come una sveglia, e una sveglia ogni pochi secondi e'
+      // esattamente il fastidio che si vuole evitare. L'altezza cambia
+      // leggermente da una scarica all'altra, secondo il seme: due tick
+      // identici di fila suonano meccanici, due leggermente diversi no.
+      const STRIKE_SOUND_KEY = "meteo.tickScariche";
+      const STRIKE_SOUND_MIN_GAP_MS = 160;
+      let strikeSoundOn = true;
+      let strikeAudio = null;
+      let strikeNoiseBuffer = null;
+      let strikeLastSound = 0;
+
+      try {
+        const salvato = localStorage.getItem(STRIKE_SOUND_KEY);
+        if (salvato !== null) strikeSoundOn = salvato === "1";
+      } catch (error) { /* modalita' privata: resta il valore predefinito */ }
+
+      // Il contesto audio si puo' creare solo dentro un gesto dell'utente:
+      // i browser bloccano l'audio che parte da solo, ed e' giusto cosi'.
+      // Nasce quindi al clic sul comando, mai al caricamento della pagina.
+      function ensureStrikeAudio() {
+        if (strikeAudio) {
+          if (strikeAudio.state === "suspended") strikeAudio.resume();
+          return strikeAudio;
+        }
+        const Contesto = window.AudioContext || window.webkitAudioContext;
+        if (!Contesto) return null;
+        try { strikeAudio = new Contesto(); }
+        catch (error) { return null; }
+        // Un secondo di rumore bianco, generato una volta e riusato: e' la
+        // sorgente del transiente. Rigenerarlo a ogni tick costerebbe piu'
+        // del suono.
+        const campioni = Math.floor(strikeAudio.sampleRate * 0.25);
+        strikeNoiseBuffer = strikeAudio.createBuffer(1, campioni, strikeAudio.sampleRate);
+        const dati = strikeNoiseBuffer.getChannelData(0);
+        for (let i = 0; i < campioni; i += 1) dati[i] = Math.random() * 2 - 1;
+        return strikeAudio;
+      }
+
+      function setStrikeSound(acceso) {
+        strikeSoundOn = Boolean(acceso);
+        try { localStorage.setItem(STRIKE_SOUND_KEY, strikeSoundOn ? "1" : "0"); }
+        catch (error) { /* niente memoria: vale per questa sessione */ }
+        if (strikeSoundOn) {
+          const contesto = ensureStrikeAudio();
+          toast(contesto
+            ? "Tick acceso · un colpo breve per ogni scarica che cade nello schermo"
+            : "Questo browser non produce suoni per la pagina");
+          if (!contesto) strikeSoundOn = false;
+        } else {
+          toast("Tick spento · i fulmini restano");
+        }
+        updateLayerUi();
+      }
+
+      // Quanto forte, e se del tutto. Restituisce 0 per cio' che non si vede.
+      function volumeScarica(lon, lat) {
+        if (!map || !map.getBounds) return 0;
+        const bounds = map.getBounds();
+        if (lon < bounds.getWest() || lon > bounds.getEast()) return 0;
+        if (lat < bounds.getSouth() || lat > bounds.getNorth()) return 0;
+        const centro = map.getCenter();
+        const mezzaX = (bounds.getEast() - bounds.getWest()) / 2 || 1;
+        const mezzaY = (bounds.getNorth() - bounds.getSouth()) / 2 || 1;
+        // Distanza dal centro in frazione di semischermo: al bordo vale 1.
+        const d = Math.min(1, Math.hypot(
+          (lon - centro.lng) / mezzaX, (lat - centro.lat) / mezzaY
+        ));
+        // Dal pieno al terzo, senza mai azzerarsi dentro lo schermo.
+        return 1 - 0.66 * d;
+      }
+
+      function suonaTick(lon, lat, tono) {
+        if (!strikeSoundOn || document.hidden) return;
+        const contesto = strikeAudio;
+        if (!contesto || contesto.state !== "running" || !strikeNoiseBuffer) return;
+        const adesso = performance.now();
+        if (adesso - strikeLastSound < STRIKE_SOUND_MIN_GAP_MS) return;
+        const forza = volumeScarica(lon, lat);
+        if (forza <= 0) return;
+        // Piu' i colpi si infittiscono, piu' il singolo colpo si fa
+        // discreto: una cella che scarica in continuazione diventa un
+        // picchiettio di fondo, non una raffica a volume pieno.
+        const fitto = adesso - strikeLastSound < 500 ? 0.5 : 1;
+        strikeLastSound = adesso;
+
+        const t = contesto.currentTime;
+        const uscita = contesto.createGain();
+        uscita.gain.value = 0.055 * forza * fitto;
+        uscita.connect(contesto.destination);
+
+        // Il transiente: rumore attraverso un passabanda stretto. E' la
+        // parte che si sente come "clic".
+        const rumore = contesto.createBufferSource();
+        rumore.buffer = strikeNoiseBuffer;
+        const banda = contesto.createBiquadFilter();
+        banda.type = "bandpass";
+        banda.frequency.value = 2100 * tono;
+        banda.Q.value = 1.6;
+        const bustaRumore = contesto.createGain();
+        bustaRumore.gain.setValueAtTime(0.0001, t);
+        bustaRumore.gain.exponentialRampToValueAtTime(1, t + 0.002);
+        bustaRumore.gain.exponentialRampToValueAtTime(0.0001, t + 0.045);
+        rumore.connect(banda); banda.connect(bustaRumore); bustaRumore.connect(uscita);
+
+        // Il corpo: una sinusoide grave che scende, brevissima. Toglie al
+        // clic la durezza del rumore puro e lo rende un suono di legno.
+        const corpo = contesto.createOscillator();
+        corpo.type = "sine";
+        corpo.frequency.setValueAtTime(420 * tono, t);
+        corpo.frequency.exponentialRampToValueAtTime(190 * tono, t + 0.05);
+        const bustaCorpo = contesto.createGain();
+        bustaCorpo.gain.setValueAtTime(0.0001, t);
+        bustaCorpo.gain.exponentialRampToValueAtTime(0.5, t + 0.003);
+        bustaCorpo.gain.exponentialRampToValueAtTime(0.0001, t + 0.055);
+        corpo.connect(bustaCorpo); bustaCorpo.connect(uscita);
+
+        rumore.start(t); rumore.stop(t + 0.06);
+        corpo.start(t); corpo.stop(t + 0.06);
+        // I nodi si scollegano da soli quando la sorgente finisce: senza
+        // questo, una notte di temporali lascerebbe in piedi decine di
+        // migliaia di nodi audio.
+        corpo.onended = function () { try { uscita.disconnect(); } catch (e) { /* gia' staccato */ } };
+      }
+
       function addLiveStrike(payload) {
         const lat = Number(payload && payload.lat);
         const lon = Number(payload && payload.lon);
@@ -6244,39 +6419,186 @@
         }
         updateLiveLightningNote();
         startStrikeAnimation();
+        // Il tono viene dal seme della scarica: due tick di fila non suonano
+        // mai identici, e non c'e' bisogno di tenere altro stato.
+        suonaTick(lon, lat, 0.82 + liveStrikes[liveStrikes.length - 1].seme * 0.42);
       }
 
-      // Il segno di una scarica. Non un pallino: un lampo che sboccia e
-      // svanisce, e che lascia il simbolo del fulmine finche' la scarica e'
-      // recente.
+      // ---- IL LAMPO ---------------------------------------------------
       //
-      // Tre tempi diversi, ed e' quello che lo fa sembrare vero:
-      //  - il BAGLIORE, un alone che si allarga e sparisce in meno di un
-      //    secondo, come la luce che illumina la nube attorno;
-      //  - la SAETTA a zig-zag, bianca incandescente con alone azzurro,
-      //    disegnata solo durante il bagliore;
-      //  - il SEGNO che resta, un fulmine piccolo che si spegne piano nei
-      //    minuti successivi, perche' serve a vedere dove sta lavorando la
-      //    cella, non a riprodurre la durata ottica del lampo.
+      // Un fulmine non e' un segno: e' luce, e dura pochissimo. Tre cose lo
+      // rendono riconoscibile, e sono tutte e tre di tempo, non di forma:
       //
-      // Lo zig-zag nasce da un seme fisso per scarica: senza, la saetta
-      // cambierebbe forma a ogni fotogramma e tremerebbe invece di brillare.
-      function drawBoltPath(context, x, y, altezza, seme, larghezza) {
-        const segmenti = 5;
+      //  1. il CANALE non e' una linea spezzata a caso ma una frattura
+      //     frattale -- si genera per spostamento del punto medio, lo stesso
+      //     procedimento con cui si disegnano i profili di montagna: ogni
+      //     raffinamento sposta i punti medi di meta' dell'ampiezza
+      //     precedente, e il risultato ha dettaglio a ogni scala, come la
+      //     scarica vera;
+      //  2. la scarica arriva in due tempi: il LEADER, un canale debole che
+      //     scende a scatti in poche decine di millisecondi, e il COLPO DI
+      //     RITORNO, che risale lo stesso canale e lo fa esplodere di luce.
+      //     E' il secondo a illuminare, ed e' per questo che il lampo sembra
+      //     accendersi tutto insieme dopo essersi "cercato" la strada;
+      //  3. i colpi sono quasi sempre PIU' D'UNO lungo lo stesso canale, a
+      //     qualche decina di millisecondi l'uno dall'altro: e' lo
+      //     sfarfallio che tutti riconoscono e che un lampo disegnato una
+      //     volta sola non ha mai.
+      //
+      // Il disegno e' in composizione additiva: la luce si somma, non copre.
+      // Due rami che si incrociano diventano piu' luminosi nel punto in cui
+      // si toccano, come luce vera, e il nucleo bianco nasce dalla somma del
+      // bagliore azzurro con se stesso invece che da un colore scelto.
+      //
+      // Tutta la geometria nasce dal seme della scarica e si calcola UNA
+      // volta sola, alla prima comparsa: ricalcolarla a ogni fotogramma
+      // farebbe tremare il fulmine invece di farlo brillare, e costerebbe
+      // sessanta volte tanto.
+
+      // Il lampo vero dura fra uno e due decimi di secondo. Qui e' piu'
+      // lungo -- poco meno di un secondo -- perche' su una mappa il lampo
+      // deve anche farsi notare: sotto i due decimi, chi non stava gia'
+      // guardando quel punto non lo vede affatto.
+      const STRIKE_LEADER_MS = 95;
+      const STRIKE_STROKE_MS = 190;
+
+      // Il canale in coordinate sue: y da 0 (base della nube) a 1 (suolo),
+      // x trasversale in unita' di semilarghezza. La scala in pixel si
+      // applica al momento del disegno, cosi' lo zoom non obbliga a
+      // rigenerare nulla.
+      //
+      // Lo spostamento e' solo trasversale e proporzionale all'altezza del
+      // segmento: e' il frattale monodimensionale, e fa due cose che
+      // servono entrambe. La prima e' il dettaglio a ogni scala -- ogni
+      // raffinamento sposta di poco piu' della meta' del precedente, quindi
+      // la scarica ha gomiti grandi e gomiti piccoli come quella vera. La
+      // seconda e' che il canale scende sempre: non torna mai su di se'
+      // stesso, che e' la differenza fra una saetta e uno scarabocchio.
+      function generaCanale(rng, livelli, ampiezza) {
+        let punti = [{ x: (rng() - 0.5) * 0.9, y: 0 }, { x: 0, y: 1 }];
+        let ampiezzaCorrente = ampiezza;
+        for (let livello = 0; livello < livelli; livello += 1) {
+          const raffinato = [punti[0]];
+          for (let i = 1; i < punti.length; i += 1) {
+            const a = punti[i - 1], b = punti[i];
+            const passo = b.y - a.y;
+            // Il primo gomito non puo' uscire piccolo. Con uno spostamento
+            // uniforme la piega grande, quella che da' forma a tutto il
+            // canale, ogni tanto cadeva vicino allo zero: i raffinamenti
+            // successivi sono troppo fini per rimediare, e quella scarica
+            // usciva come una riga quasi dritta. Misurato su sessanta semi,
+            // la piu' dritta si scostava di quattro pixel in tutto. Qui il
+            // verso resta casuale ma l'ampiezza parte da meta' del massimo.
+            const deriva = livello === 0
+              ? (rng() < 0.5 ? -1 : 1) * (0.5 + 0.5 * rng())
+              : (rng() - 0.5) * 2;
+            raffinato.push({
+              x: (a.x + b.x) / 2 + deriva * ampiezzaCorrente * passo,
+              y: (a.y + b.y) / 2
+            });
+            raffinato.push(b);
+          }
+          punti = raffinato;
+          ampiezzaCorrente *= 0.55;
+        }
+        return punti;
+      }
+
+      // I rami: partono da un nodo del canale principale, se ne allontanano
+      // di lato e muoiono prima di toccare terra. Senza, la saetta sembra un
+      // fulmine da cartone animato; con, si legge subito come scarica.
+      function generaRami(rng, canale) {
+        const rami = [];
+        const quanti = 2 + Math.floor(rng() * 3);
+        for (let i = 0; i < quanti; i += 1) {
+          // Mai dall'ultimo quarto: un ramo che nasce a terra non esiste.
+          const nodo = Math.floor((0.1 + rng() * 0.62) * (canale.length - 1));
+          const radice = canale[nodo];
+          // Mai oltre terra: un ramo nasce da un nodo che puo' stare gia'
+          // in basso, e senza questo limite finirebbe sotto il punto di
+          // impatto -- cioe' sottoterra.
+          const caduta = Math.min(0.2 + rng() * 0.3, (1 - radice.y) * 0.75);
+          const apertura = (rng() < 0.5 ? -1 : 1) * (0.45 + rng() * 0.75);
+          const forma = generaCanale(rng, 2, 0.9);
+          rami.push({
+            punti: forma.map(function (p) {
+              return {
+                // p.y va da 0 a 1 lungo il ramo: il ramo si allontana di
+                // lato man mano che scende, come una biforcazione vera.
+                x: radice.x + apertura * p.y + p.x * 0.35,
+                y: radice.y + caduta * p.y
+              };
+            })
+          });
+        }
+        return rami;
+      }
+
+      // Generatore deterministico: stessa scarica, stesso fulmine, per tutta
+      // la sua vita e a qualunque zoom.
+      function semeCasuale(seme) {
+        let stato = Math.floor(seme * 2147483647) || 1;
+        return function () {
+          stato = (stato * 1103515245 + 12345) & 0x7fffffff;
+          return stato / 0x7fffffff;
+        };
+      }
+
+      function preparaScarica(s) {
+        if (s.canale) return;
+        const rng = semeCasuale(s.seme);
+        s.canale = generaCanale(rng, 5, 1.5);
+        s.rami = generaRami(rng, s.canale);
+        // Due o tre colpi di ritorno lungo lo stesso canale, a 40-90 ms
+        // l'uno dall'altro e via via piu' deboli: lo sfarfallio.
+        const colpi = [{ quando: STRIKE_LEADER_MS, forza: 1 }];
+        const quanti = 1 + Math.floor(rng() * 2);
+        let quando = STRIKE_LEADER_MS;
+        for (let i = 0; i < quanti; i += 1) {
+          quando += 40 + rng() * 55;
+          colpi.push({ quando: quando, forza: 0.78 - i * 0.22 });
+        }
+        s.colpi = colpi;
+        s.durata = quando + STRIKE_STROKE_MS;
+        // Un'inclinazione leggera: le scariche non sono verticali, e una
+        // decina di gradi basta a togliere l'aria di simbolo.
+        s.inclinazione = (rng() - 0.5) * 0.42;
+        s.tono = 0.82 + rng() * 0.42;
+      }
+
+      // Quanta luce c'e' adesso: la somma dei colpi, ognuno con attacco
+      // ripido e coda esponenziale. E' l'inviluppo che si sente "elettrico".
+      function luceScarica(s, eta) {
+        if (eta < 0) return 0;
+        let luce = 0;
+        for (let i = 0; i < s.colpi.length; i += 1) {
+          const c = s.colpi[i];
+          const dt = eta - c.quando;
+          if (dt < 0) continue;
+          // Attacco in 6 ms, poi decadimento con costante di tempo ~55 ms.
+          const attacco = Math.min(1, dt / 6);
+          luce = Math.max(luce, c.forza * attacco * Math.exp(-dt / 55));
+        }
+        return luce;
+      }
+
+      function tracciaCanale(context, punti, x, y, altezza, larghezza, inclinazione, fino) {
         context.beginPath();
-        context.moveTo(x, y - altezza);
-        let casuale = seme;
-        for (let i = 1; i <= segmenti; i += 1) {
-          // Generatore deterministico: stessa scarica, stessa saetta.
-          casuale = (casuale * 9301 + 49297) % 233280 / 233280;
-          const t = i / segmenti;
-          const scarto = (casuale - 0.5) * larghezza * (1 - t * 0.55);
-          context.lineTo(x + scarto, y - altezza * (1 - t));
+        const ultimo = fino === undefined ? 1 : fino;
+        for (let i = 0; i < punti.length; i += 1) {
+          const p = punti[i];
+          if (p.y > ultimo) break;
+          const px = x + (p.x * larghezza) + p.y * altezza * inclinazione;
+          const py = y - altezza * (1 - p.y);
+          if (i === 0) context.moveTo(px, py);
+          else context.lineTo(px, py);
         }
         context.stroke();
       }
 
       // Il glifo del fulmine, quello del simbolo: un lampo spezzato pieno.
+      // E' il segno che RESTA quando la luce e' finita, e serve a leggere
+      // dove sta lavorando la cella, non a riprodurre il lampo.
       function drawBoltGlyph(context, x, y, scala, contorno) {
         context.beginPath();
         context.moveTo(x + 0.15 * scala, y - 1.0 * scala);
@@ -6302,57 +6624,152 @@
         context.save();
         context.lineCap = "round";
         context.lineJoin = "round";
+
+        // --- primo passaggio: la luce ------------------------------------
+        // Additiva, perche' la luce si somma. Tutto quello che brilla sta in
+        // questo passaggio e in nessun altro: cambiare modalita' di
+        // composizione a ogni scarica costerebbe piu' del disegno stesso.
+        context.globalCompositeOperation = "lighter";
+        // La proiezione da coordinate geografiche a pixel si fa una volta
+        // per scarica e per fotogramma, non due: i due passaggi la
+        // condividono. Con qualche centinaio di scariche vive e il ciclo a
+        // piena frequenza durante un lampo, rifarla e' il costo piu' alto
+        // dell'intero disegno.
+        const punti = new Array(liveStrikes.length);
+        for (let i = 0; i < liveStrikes.length; i += 1) {
+          const s = liveStrikes[i];
+          const eta = adesso - s.nato;
+          preparaScarica(s);
+          const punto = projectParticle(s.lon, s.lat, 0);
+          punti[i] = punto;
+          if (!punto || eta > s.durata) continue;
+          const luce = luceScarica(s, eta);
+          if (luce < 0.012) continue;
+
+          const altezza = 84 * scala;
+          const larghezza = 22 * scala;
+          // Il leader: il canale si "cerca" la strada verso il basso a
+          // scatti, e finche' non tocca terra non c'e' ancora colpo.
+          const fino = eta < STRIKE_LEADER_MS
+            ? Math.min(1, eta / STRIKE_LEADER_MS)
+            : 1;
+
+          // Il cielo illuminato attorno. E' la parte che si vede con la coda
+          // dell'occhio, ed e' quella che fa accorgere del fulmine anche a
+          // chi stava guardando dall'altra parte della mappa.
+          // Il bagliore e' piu' largo quando la scarica e' piu' forte: e'
+          // luce, non una bolla che si espande. Farlo crescere mentre si
+          // spegne darebbe l'effetto sbagliato, quello dell'onda d'urto.
+          const raggio = (34 + 74 * luce) * scala;
+          const alone = context.createRadialGradient(
+            punto.x, punto.y - altezza * 0.45, 0,
+            punto.x, punto.y - altezza * 0.45, raggio
+          );
+          alone.addColorStop(0, "rgba(186,212,255," + (0.78 * luce).toFixed(3) + ")");
+          alone.addColorStop(0.35, "rgba(128,168,244," + (0.34 * luce).toFixed(3) + ")");
+          alone.addColorStop(1, "rgba(90,130,220,0)");
+          context.fillStyle = alone;
+          context.beginPath();
+          context.arc(punto.x, punto.y - altezza * 0.45, raggio, 0, Math.PI * 2);
+          context.fill();
+
+          // La pozza di luce a terra: il terreno rischiarato sotto il punto
+          // di impatto. Schiacciata, perche' la mappa si guarda dall'alto.
+          context.save();
+          context.translate(punto.x, punto.y);
+          context.scale(1, 0.38);
+          const pozza = context.createRadialGradient(0, 0, 0, 0, 0, 46 * scala);
+          pozza.addColorStop(0, "rgba(255,248,228," + (0.8 * luce).toFixed(3) + ")");
+          pozza.addColorStop(0.5, "rgba(255,238,198," + (0.26 * luce).toFixed(3) + ")");
+          pozza.addColorStop(1, "rgba(255,230,180,0)");
+          context.fillStyle = pozza;
+          context.beginPath();
+          context.arc(0, 0, 46 * scala, 0, Math.PI * 2);
+          context.fill();
+          context.restore();
+
+          // I rami, piu' deboli del canale e spenti prima: si accendono solo
+          // al colpo di ritorno, mai durante il leader.
+          if (eta >= STRIKE_LEADER_MS) {
+            context.strokeStyle = "rgba(196,220,255," + (0.5 * luce).toFixed(3) + ")";
+            context.lineWidth = 3.4 * scala;
+            for (let r = 0; r < s.rami.length; r += 1) {
+              tracciaCanale(context, s.rami[r].punti, punto.x, punto.y,
+                altezza, larghezza, s.inclinazione);
+            }
+            context.strokeStyle = "rgba(255,252,244," + (0.72 * luce).toFixed(3) + ")";
+            context.lineWidth = 1.1 * scala;
+            for (let r = 0; r < s.rami.length; r += 1) {
+              tracciaCanale(context, s.rami[r].punti, punto.x, punto.y,
+                altezza, larghezza, s.inclinazione);
+            }
+          }
+
+          // Il canale, in tre passate sempre piu' strette e piu' chiare. La
+          // somma delle tre da' il nucleo incandescente senza che nessuna
+          // delle tre sia bianca: e' come si comporta la luce vera.
+          context.strokeStyle = "rgba(96,146,255," + (0.5 * luce).toFixed(3) + ")";
+          context.lineWidth = 11 * scala;
+          tracciaCanale(context, s.canale, punto.x, punto.y, altezza, larghezza,
+            s.inclinazione, fino);
+          context.strokeStyle = "rgba(170,206,255," + (0.62 * luce).toFixed(3) + ")";
+          context.lineWidth = 4.2 * scala;
+          tracciaCanale(context, s.canale, punto.x, punto.y, altezza, larghezza,
+            s.inclinazione, fino);
+          context.strokeStyle = "rgba(255,253,246," + (0.95 * luce).toFixed(3) + ")";
+          context.lineWidth = 1.5 * scala;
+          tracciaCanale(context, s.canale, punto.x, punto.y, altezza, larghezza,
+            s.inclinazione, fino);
+        }
+
+        // --- secondo passaggio: il segno che resta -----------------------
+        // Non e' luce, e' un'etichetta: va disegnata normalmente, o su una
+        // notturna additiva diventerebbe una macchia illeggibile.
+        context.globalCompositeOperation = "source-over";
         for (let i = 0; i < liveStrikes.length; i += 1) {
           const s = liveStrikes[i];
           const eta = adesso - s.nato;
           if (eta > STRIKE_LIFE_MS) continue;
-          const punto = projectParticle(s.lon, s.lat, 0);
+          const punto = punti[i];
           if (!punto) continue;
 
-          if (eta < STRIKE_FLASH_MS) {
-            // Il bagliore: si allarga e si spegne.
-            const t = eta / STRIKE_FLASH_MS;
-            const raggio = (14 + 70 * t) * scala;
-            const forza = Math.pow(1 - t, 1.7);
-            const alone = context.createRadialGradient(
-              punto.x, punto.y, 0, punto.x, punto.y, raggio
-            );
-            alone.addColorStop(0, "rgba(255,255,255," + (0.85 * forza).toFixed(3) + ")");
-            alone.addColorStop(0.35, "rgba(190,214,255," + (0.5 * forza).toFixed(3) + ")");
-            alone.addColorStop(1, "rgba(150,180,255,0)");
-            context.fillStyle = alone;
-            context.beginPath();
-            context.arc(punto.x, punto.y, raggio, 0, Math.PI * 2);
-            context.fill();
-
-            // La saetta, finche' il bagliore dura.
-            const altezza = 54 * scala;
-            const larghezza = 20 * scala;
-            context.strokeStyle = "rgba(150,195,255," + (0.8 * forza).toFixed(3) + ")";
-            context.lineWidth = 7.5 * scala;
-            drawBoltPath(context, punto.x, punto.y, altezza, s.seme, larghezza);
-            context.strokeStyle = "rgba(255,255,255," + (0.98 * forza).toFixed(3) + ")";
-            context.lineWidth = 2.4 * scala;
-            drawBoltPath(context, punto.x, punto.y, altezza, s.seme, larghezza);
-          }
-
-          // Il segno che resta: si spegne piano, e negli ultimi istanti
-          // svanisce del tutto invece di sparire di colpo.
           // Il segno resta pieno per la prima meta' della vita e sbiadisce
           // nella seconda: cosi' le scariche degli ultimi minuti si leggono
           // tutte allo stesso modo, e solo le piu' vecchie si spengono.
           const vita = 1 - eta / STRIKE_LIFE_MS;
           const opacita = clamp(vita * 2, 0, 1);
+          // Un battito lento sulle scariche fresche: l'occhio prende il
+          // movimento molto prima del colore, e fra cento segni uguali sono
+          // quelli degli ultimi secondi che contano.
+          const fresca = clamp(1 - eta / 12000, 0, 1);
+          const battito = 1 + 0.12 * fresca * Math.sin(eta / 210);
+          const dimensione = 10 * scala * battito;
+
+          // L'anello: una volta sola, nel primo secondo. Dice "questa e'
+          // nuova" senza aggiungere un altro colore alla mappa.
+          if (eta < 700) {
+            const t = eta / 700;
+            context.strokeStyle = "rgba(255,236,170," + (0.3 * (1 - t) * (1 - t)).toFixed(3) + ")";
+            context.lineWidth = 1.3 * scala;
+            context.beginPath();
+            context.arc(punto.x, punto.y, (10 + 30 * t) * scala, 0, Math.PI * 2);
+            context.stroke();
+          }
+
           // Contorno scuro: sotto c'e' un'immagine notturna piena di luci,
           // e un glifo giallo senza stacco ci si perderebbe dentro.
           context.strokeStyle = "rgba(6,10,18," + (0.85 * opacita).toFixed(3) + ")";
           context.lineWidth = 2.4 * scala;
-          context.lineJoin = "round";
-          drawBoltGlyph(context, punto.x, punto.y, 10 * scala, true);
-          context.fillStyle = eta < STRIKE_FLASH_MS
+          drawBoltGlyph(context, punto.x, punto.y, dimensione, true);
+          // Il colore racconta l'eta': bianco incandescente mentre brilla,
+          // poi giallo, poi ambra. Si legge a colpo d'occhio quali celle
+          // stanno scaricando adesso e quali hanno finito.
+          context.fillStyle = eta < s.durata
             ? "rgba(255,255,255," + opacita.toFixed(3) + ")"
-            : "rgba(255,216,74," + opacita.toFixed(3) + ")";
-          drawBoltGlyph(context, punto.x, punto.y, 10 * scala);
+            : (eta < 30000
+                ? "rgba(255,226,96," + opacita.toFixed(3) + ")"
+                : "rgba(255,158,58," + opacita.toFixed(3) + ")");
+          drawBoltGlyph(context, punto.x, punto.y, dimensione);
         }
         context.restore();
       }
@@ -6371,8 +6788,11 @@
         if (!showLiveLightning) return;
         pruneLiveStrikes();
         if (!liveStrikes.length) { drawVectors(); updateLiveLightningNote(); return; }
+        // Piena frequenza solo finche' qualcosa sta davvero brillando. La
+        // durata non e' uguale per tutte: ogni scarica ha i suoi colpi di
+        // ritorno, e s.durata dice quando ha finito.
         const lampeggia = liveStrikes.some(function (s) {
-          return timestamp - s.nato < STRIKE_FLASH_MS;
+          return s.durata === undefined || timestamp - s.nato < s.durata;
         });
         if (timestamp - strikeLastDraw >= (lampeggia ? 0 : 1500)) {
           strikeLastDraw = timestamp;
@@ -7272,8 +7692,10 @@
           isohypses: showIsohypses,
           radar: showRadar,
           satclouds: showSatelliteClouds,
+          satimage: showSatelliteClouds,
           lightning: showLightning,
           livelightning: showLiveLightning,
+          strikesound: strikeSoundOn,
           fusion: showFusion,
           stations: showStations,
           fronts: showFronts,
@@ -7296,6 +7718,12 @@
           button.disabled = frontUnavailable;
           button.setAttribute("aria-pressed", active ? "true" : "false");
         });
+
+        // Il tick e' una proprieta' della diretta, non un livello: senza
+        // scariche in arrivo non ha niente da suonare, e un comando che non
+        // fa nulla in un pannello piccolo e' solo rumore.
+        const tickChip = document.querySelector('[data-toggle="strikesound"]');
+        if (tickChip) tickChip.hidden = !showLiveLightning;
 
         // Regolare densita' e scie di un flusso spento non vuol dire niente:
         // i due selettori compaiono con il vento animato e spariscono con lui.
@@ -7554,15 +7982,25 @@
         refreshSelectedPoint();
       }
 
+      // I comandi che appartengono al pannello del satellite. Sono qui e non
+      // sparsi nei rami piu' sotto perche' e' una sola domanda -- "questo
+      // comando vive nella vista osservata?" -- e va risposta in un posto
+      // solo: aggiungendone uno senza toccare questo insieme, il comando
+      // nuovo farebbe uscire dalla vista al primo clic.
+      const SATELLITE_TOGGLES = new Set([
+        "satclouds", "satimage", "radar", "lightning", "livelightning",
+        "strikesound"
+      ]);
+
       function setToggle(name) {
         weatherFrameEpoch++; lastRasterSignature = "";
         // I comandi della previsione riportano alla previsione, perche' li'
-        // e' dove hanno effetto. Satellite e fulmini no: sono i due livelli
-        // osservati, e vivono proprio in questa vista -- accenderli non deve
-        // farne uscire.
-        if (weatherView === "satellite"
-            && name !== "satclouds" && name !== "lightning"
-            && name !== "livelightning") {
+        // e' dove hanno effetto. I livelli OSSERVATI no: immagine satellitare,
+        // radar di precipitazione e i due fulmini descrivono tutti il tempo
+        // che sta accadendo adesso, vivono nella vista satellite e si
+        // sovrappongono fra loro -- accenderne uno non deve spegnere gli
+        // altri ne' far uscire dalla vista.
+        if (weatherView === "satellite" && !SATELLITE_TOGGLES.has(name)) {
           setWeatherView("forecast");
         }
         if (name === "vectors") {
@@ -7595,32 +8033,45 @@
           if (showIsohypses) {
             toast("Isoipse di geopotenziale a 500 hPa · passo 4 dam");
           }
+        } else if (name === "satimage") {
+          // L'immagine satellitare dentro la vista satellite. Spegnerla non
+          // vuol dire uscire: serve a guardare il radar o i fulmini sulla
+          // carta nuda, senza la coltre di nubi sopra.
+          showSatelliteClouds = !showSatelliteClouds;
+          updateSatelliteClouds();
+          updateSatelliteControlsVisibility();
+        } else if (name === "strikesound") {
+          setStrikeSound(!strikeSoundOn);
         } else if (name === "radar") {
           if (!map || !map.getLayer("radar-layer")) {
             toast("Radar osservato recente non disponibile al momento");
             return;
           }
           showRadar = !showRadar;
-          map.setLayoutProperty(
-            "radar-layer", "visibility", showRadar ? "visible" : "none"
-          );
-          if (showRadar) {
+          {
             const product = CLOUD_PRODUCTS[cloudProduct] || CLOUD_PRODUCTS.geocolour;
-            const slot = showSatelliteClouds
+            // Il radar segue l'ora scelta sulla barra, non l'ora dell'orologio:
+            // se si sta guardando un'ora fa, la pioggia dev'essere quella di
+            // un'ora fa. syncRadarToSatellite decide anche la visibilita',
+            // perche' e' l'unico posto che sa se quell'istante e' coperto
+            // dall'archivio.
+            const slot = (cloudTimeSelected || showSatelliteClouds)
               ? cloudSlot(product)
               : { value: Date.now(), date: new Date() };
             const latest = syncRadarToSatellite(slot);
-            const when = latest
-              ? new Date(latest.time * 1000).toLocaleTimeString(
-                  "it-IT", { hour: "2-digit", minute: "2-digit" }
-                )
-              : "";
-            toast(
-              "Radar RainViewer HD attivo"
-              + (when ? " · agg. " + when : "")
-            );
-          } else {
-            toast("Radar spento · il satellite resta visibile");
+            if (showRadar) {
+              const when = latest
+                ? new Date(latest.time * 1000).toLocaleTimeString(
+                    "it-IT", { hour: "2-digit", minute: "2-digit" }
+                  )
+                : "";
+              toast(latest
+                ? "Radar RainViewer HD attivo\u00a0\u00b7 agg. " + when
+                : "Radar acceso, ma l'archivio non copre l'istante scelto\u00a0\u00b7 "
+                  + "torna in diretta per vederlo");
+            } else {
+              toast("Radar spento \u00b7 gli altri livelli osservati restano");
+            }
           }
         } else if (name === "livelightning") {
           showLiveLightning = !showLiveLightning;
@@ -7628,6 +8079,11 @@
             blitzRetryDelay = 2000;
             blitzConnect();
             startStrikeAnimation();
+            // Siamo dentro il clic: e' l'unico momento in cui il browser
+            // lascia creare o risvegliare il contesto audio. Rimandarlo alla
+            // prima scarica lo farebbe rifiutare in silenzio, e il tick non
+            // suonerebbe mai.
+            if (strikeSoundOn) ensureStrikeAudio();
             toast(
               "Fulmini in diretta da Blitzortung · rete di volontari, ritardo "
               + "di pochi secondi. Uso personale e non commerciale."
@@ -14089,6 +14545,9 @@
             blitzRetryDelay = 2000;
             blitzConnect();
             startStrikeAnimation();
+            // Il contesto audio viene sospeso dal browser con la scheda
+            // nascosta: tornando va risvegliato, o il tick resta muto.
+            if (strikeSoundOn && strikeAudio) ensureStrikeAudio();
           }
         }
       });

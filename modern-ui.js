@@ -65,6 +65,14 @@ function setWeatherView(view) {
     // che nessuno l'avesse piu' chiesta.
     weatherView = 'forecast'; showSatelliteClouds = false; showLightning = false;
     cloudTimeSelected = 0; updateLightningLayer(); updateSatelliteClouds();
+    // Radar e fulmini in diretta sono livelli osservati come il satellite, e
+    // il loro comando vive nel pannello del satellite: lasciarli accesi qui
+    // vorrebbe dire lasciare sulla previsione un livello che non si puo' piu'
+    // spegnere, perche' il pannello non c'e'. Anche la connessione al flusso
+    // va chiusa: nessuno la sta piu' guardando.
+    showRadar = false;
+    if (map.getLayer('radar-layer')) map.setLayoutProperty('radar-layer','visibility','none');
+    if (showLiveLightning) { showLiveLightning = false; blitzDisconnect(); stopStrikeAnimation(); liveStrikes = []; }
     const saved = forecastRestore;
     if(saved) {
       activeLayer=saved.layer; showParticles=saved.particles; showVectors=saved.vectors;
