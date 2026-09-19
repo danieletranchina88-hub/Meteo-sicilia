@@ -97,6 +97,201 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  # Che cosa ha toccato questo push? Una modifica a un CSS non ha bisogno di
+  # riscaricare 1,7 GB di GRIB e rifare l'analisi dei fronti su 73 scadenze:
+  # i dati su gh-pages sono gia' quelli giusti e verrebbero ripubblicati
+  # identici. Misurato sul run 1199: 30 dei 32 minuti erano process_data.py.
+  #
+  # La classificazione sbaglia sempre dalla parte prudente. Qualunque dubbio
+  # -- un push senza base nota, un confronto troncato, una chiamata fallita,
+  # un file che non e' nell'elenco -- vale "no", cioe' pipeline completa.
+  # L'errore costoso e' pubblicare l'interfaccia saltando un ricalcolo che
+  # serviva; aspettare mezz'ora di troppo si nota e basta.
+  ambito:
+    if: github.event_name != 'pull_request'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+    outputs:
+      solo_interfaccia: ${{ steps.esame.outputs.solo_interfaccia }}
+    steps:
+      - name: Classifica le modifiche del push
+        id: esame
+        uses: actions/github-script@v7
+        with:
+          script: |
+            // Nessun checkout: basta il confronto fra i due commit, che
+            // l'API restituisce in una chiamata sola.
+            const INTERFACCIA = new Set([
+              'index.html', 'meteograms.html', 'radar.html',
+              'forecast-cache.js', 'modern-ui.js', 'modern-ui.css',
+              'meteograms-ui.css', 'point_bulletin.js', 'local_downscaling.js'
+            ]);
+            function rapido(nome) {
+              if (INTERFACCIA.has(nome)) return true;
+              // Il fondo cartografico e' statico e viene pubblicato com'e'.
+              if (nome.startsWith('data_base/')) return true;
+              // Le prove in JavaScript girano anche nella corsia rapida.
+              // Quelle in Python no: hanno bisogno di eccodes, netcdf e
+              // dell'intero requirements, che la corsia rapida non installa.
+              if (nome.startsWith('scripts/tests/') && nome.endsWith('.js')) return true;
+              return false;
+            }
+            async function decidi() {
+              if (context.eventName !== 'push') {
+                core.info('Evento ' + context.eventName + ': pipeline completa.');
+                return false;
+              }
+              const prima = context.payload.before;
+              if (!prima || /^0+$/.test(prima)) {
+                core.info('Push senza base nota: pipeline completa.');
+                return false;
+              }
+              let confronto;
+              try {
+                confronto = await github.rest.repos.compareCommitsWithBasehead({
+                  owner: context.repo.owner, repo: context.repo.repo,
+                  basehead: prima + '...' + context.sha
+                });
+              } catch (errore) {
+                core.info('Confronto non riuscito (' + errore.message + '): pipeline completa.');
+                return false;
+              }
+              // Un confronto troncato non elenca tutto, e quello che non si
+              // vede potrebbe essere proprio il file che impone il ricalcolo.
+              // L'API taglia l'elenco a 300 file; 'ahead' e 'identical' sono
+              // gli unici stati in cui il confronto descrive davvero cosa e'
+              // stato aggiunto (dopo un push forzato i rami divergono e il
+              // confronto non dice piu' cosa e' cambiato rispetto a prima).
+              if (!Array.isArray(confronto.data.files)) {
+                core.info('Elenco dei file assente: pipeline completa.');
+                return false;
+              }
+              if (confronto.data.files.length >= 300) {
+                core.info('Elenco dei file troncato a 300: pipeline completa.');
+                return false;
+              }
+              if (confronto.data.status !== 'ahead' && confronto.data.status !== 'identical') {
+                core.info('Confronto in stato ' + confronto.data.status + ': pipeline completa.');
+                return false;
+              }
+              const nomi = confronto.data.files.map((f) => f.filename);
+              if (!nomi.length) {
+                core.info('Nessun file modificato: pipeline completa.');
+                return false;
+              }
+              const fuori = nomi.filter((n) => !rapido(n));
+              core.info('File modificati: ' + nomi.join(', '));
+              if (fuori.length) {
+                core.info('Fuori dalla corsia rapida: ' + fuori.join(', '));
+                return false;
+              }
+              return true;
+            }
+            const esito = await decidi();
+            core.setOutput('solo_interfaccia', String(esito));
+            core.info(esito
+              ? 'Solo interfaccia: pubblico riusando i dati gia\' su gh-pages.'
+              : 'Pipeline completa.');
+
+  # La corsia rapida. Prova l'interfaccia e ripubblica i soli file statici
+  # sopra il commit che gia' sta su gh-pages, quindi i dati meteo restano
+  # esattamente quelli dell'ultimo run senza essere ricalcolati ne' ricaricati.
+  pubblica_interfaccia:
+    needs: ambito
+    if: github.event_name == 'push' && needs.ambito.outputs.solo_interfaccia == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: write
+
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+
+      # Niente apt, niente pip: le prove dell'interfaccia sono tutte in
+      # JavaScript e girano sul Node gia' presente nel runner. E' questa la
+      # ragione per cui la corsia rapida dura secondi invece di minuti.
+      - name: Prove dell'interfaccia
+        run: |
+          set -e
+          for prova in scripts/tests/test_*.js; do
+            echo "--- $prova"
+            node "$prova"
+          done
+
+      - name: Pubblica i file statici su gh-pages
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const fs = require('fs');
+            const percorsi = [
+              'index.html', 'meteograms.html', 'radar.html',
+              'point_bulletin.js', 'local_downscaling.js',
+              'forecast-cache.js', 'modern-ui.js', 'modern-ui.css',
+              'meteograms-ui.css'
+            ];
+            for (const nome of fs.readdirSync('data_base')) {
+              percorsi.push('data_base/' + nome);
+            }
+            const owner = context.repo.owner, repo = context.repo.repo;
+
+            // I blob si caricano una volta sola: non dipendono dal commit su
+            // cui si innesta l'albero, quindi un eventuale nuovo tentativo
+            // non li ricarica.
+            const voci = [];
+            for (const percorso of percorsi) {
+              const blob = await github.rest.git.createBlob({ owner, repo,
+                content: fs.readFileSync(percorso).toString('base64'),
+                encoding: 'base64' });
+              voci.push({ path: percorso, mode: '100644', type: 'blob', sha: blob.data.sha });
+            }
+
+            // Un run dei dati puo' aver forzato gh-pages mentre lavoravamo.
+            // In quel caso il nostro genitore non e' piu' la punta e
+            // updateRef rifiuta: si rilegge il ramo e si riprova, senza mai
+            // forzare -- forzare qui vorrebbe dire cancellare i dati appena
+            // pubblicati da quel run.
+            for (let tentativo = 1; tentativo <= 3; tentativo += 1) {
+              const ref = await github.rest.git.getRef({ owner, repo, ref: 'heads/gh-pages' });
+              const padre = ref.data.object.sha;
+              const commit = await github.rest.git.getCommit({ owner, repo, commit_sha: padre });
+
+              // Guardia: si pubblica sopra i dati, mai al posto loro. Se il
+              // ramo non porta data_weather, l'innesto darebbe un sito di
+              // sola interfaccia senza previsioni.
+              const radice = await github.rest.git.getTree({ owner, repo,
+                tree_sha: commit.data.tree.sha });
+              if (!radice.data.tree.some((v) => v.path === 'data_weather')) {
+                core.setFailed('gh-pages non contiene data_weather: serve un run completo.');
+                return;
+              }
+
+              const albero = await github.rest.git.createTree({ owner, repo,
+                base_tree: commit.data.tree.sha, tree: voci });
+              if (albero.data.sha === commit.data.tree.sha) {
+                core.info('I file pubblicati sono gia\' identici: niente da fare.');
+                return;
+              }
+              const nuovo = await github.rest.git.createCommit({ owner, repo,
+                message: 'Aggiorna interfaccia ' + new Date().toISOString().replace(/\.\d{3}Z$/, 'Z'),
+                tree: albero.data.sha, parents: [padre] });
+              try {
+                await github.rest.git.updateRef({ owner, repo, ref: 'heads/gh-pages',
+                  sha: nuovo.data.sha });
+                core.info('Interfaccia pubblicata su gh-pages (tentativo ' + tentativo + ').');
+                return;
+              } catch (errore) {
+                core.info('gh-pages e\' cambiata sotto di noi (tentativo ' + tentativo
+                  + '): ' + errore.message);
+                await new Promise((r) => setTimeout(r, 4000));
+              }
+            }
+            core.setFailed('Non sono riuscito ad aggiornare gh-pages: riprovare o lanciare un run completo.');
+
   tests:
     if: github.event_name == 'pull_request'
     runs-on: ubuntu-latest
@@ -166,9 +361,15 @@ jobs:
           node scripts/tests/test_map_3d.js
           node scripts/tests/test_blitzortung.js
           node scripts/tests/test_lampo.js
+          node scripts/tests/test_workflow.js
 
   build:
-    if: github.event_name != 'pull_request'
+    needs: ambito
+    # !cancelled() e non il solo needs: se la classificazione si rompe, il
+    # suo esito e' vuoto -- quindi diverso da 'true' -- e la pipeline
+    # completa parte lo stesso. Senza questo, un guasto nel job che decide
+    # farebbe saltare in silenzio i quattro aggiornamenti dei dati al giorno.
+    if: ${{ !cancelled() && github.event_name != 'pull_request' && needs.ambito.outputs.solo_interfaccia != 'true' }}
     runs-on: ubuntu-latest
     timeout-minutes: 90
     permissions:
@@ -247,6 +448,7 @@ jobs:
           node scripts/tests/test_map_3d.js
           node scripts/tests/test_blitzortung.js
           node scripts/tests/test_lampo.js
+          node scripts/tests/test_workflow.js
 
       - name: Run ICON-2I processor
         env:
