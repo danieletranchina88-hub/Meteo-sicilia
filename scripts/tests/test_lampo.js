@@ -313,8 +313,15 @@ prova('la luce esce dalle nubi, non da un disco', () => {
   // E il ritaglio non deve poter spegnere del tutto un lampo: la posizione
   // di una scarica ha un chilometro di incertezza, e basta che cada in uno
   // squarcio fra le nubi perche' la maschera le porti via tutta la luce.
-  assert.match(ritaglioMinimo(), /tondo\(0\.34\);/,
+  assert.match(ritaglioMinimo(), /tondo\(0\.26\);/,
     'senza un minimo garantito una scarica caduta fra due nubi diventa invisibile');
+  // E il minimo deve restare un minimo: se pareggiasse la passata
+  // ritagliata, il ritaglio si limiterebbe a togliere luce invece di dare
+  // forma, e il bagliore uscirebbe troppo debole per vedersi.
+  const passate = (ritaglioMinimo().match(/drawImage\(telaBagliore/g) || []).length;
+  assert.ok(passate >= 2,
+    'la luce ritagliata sulle nubi si somma una volta sola: non e\' abbastanza '
+    + 'forte da farsi leggere come sagoma');
   function ritaglioMinimo() {
     return html.match(/function disegnaNubeIlluminata\([\s\S]*?\n {6}\}/)[0];
   }
@@ -353,7 +360,7 @@ prova('la luce del lampo e\' bianca calda, non azzurra', () => {
     assert.ok(+m[1] >= 0.8,
       'la tinta fredda compare gia\' a ' + m[1] + ' del raggio: non e\' un '
       + 'accenno sul bordo, e\' il colore del lampo');
-    const alfa = m[5].match(/\(([0-9.]+) \* nube\)/);
+    const alfa = m[5].match(/\(([0-9.]+) \* a\)/);
     assert.ok(!alfa || Number(alfa[1]) <= 0.05,
       'la tinta fredda del bordo ha opacita\' ' + (alfa && alfa[1]) + ': si vede come azzurro');
   }
@@ -389,11 +396,11 @@ prova('l\'alone illumina le nuvole invece di coprirle', () => {
     'il bagliore dura ' + STRIKE_BAGLIORE_ATTESO + ' ms: resta sulla mappa');
   // Il centro puo' essere acceso, ma il bordo deve lasciar vedere la nube:
   // il gradiente non arriva mai opaco fino al margine.
-  const stops = [...regioneLampo.matchAll(/g\.addColorStop\(([0-9.]+), "rgba\([^)]*?," \+ \(([0-9.]+) \* nube\)/g)]
+  const stops = [...regioneLampo.matchAll(/g\.addColorStop\(([0-9.]+), "rgba\([^)]*?," \+ \(([0-9.]+) \* a\)/g)]
     .map((m) => ({ dove: +m[1], alfa: +m[2] }));
   assert.ok(stops.length >= 3, 'il gradiente della nube ha troppe poche tappe');
   const fuori = stops.filter((t) => t.dove >= 0.6);
-  assert.ok(fuori.length && fuori.every((t) => t.alfa <= 0.1),
+  assert.ok(fuori.length && fuori.every((t) => t.alfa <= 0.12),
     'il bordo dell\'alone e\' ancora opaco: copre la nube invece di sfumarci sopra');
 });
 

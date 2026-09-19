@@ -6465,14 +6465,48 @@
           pc.drawImage(sorgente, 0, 0, mw, mh);
           const dati = pc.getImageData(0, 0, mw, mh);
           const px = dati.data;
+
+          // Quanto e' "nube" un pixel si misura dalla luminanza percepita:
+          // nel visibile le nubi sono chiare, nell'infrarosso le sommita'
+          // fredde sono chiare, e in entrambi mare e terra sono piu' scuri.
+          //
+          // La soglia pero' NON puo' essere fissa. I tredici canali hanno
+          // dinamiche molto diverse, e soprattutto la stessa GeoColour di
+          // notte mostra nubi grigio-azzurre scure invece che bianche: con
+          // una soglia tarata sul giorno la maschera notturna usciva quasi
+          // trasparente, e il bagliore -- misurato -- restava al sette per
+          // cento di opacita', cioe' invisibile. La soglia si ricava quindi
+          // dall'immagine stessa, per percentili: il quindicesimo e' la
+          // superficie piu' scura presente, il novantesimo la nube piu'
+          // spessa. In mezzo c'e' tutto quello che diffonde luce.
+          const istogramma = new Uint32Array(64);
+          let quanti = 0;
           for (let i = 0; i < px.length; i += 4) {
-            // Quanto e' "nube" questo pixel. La luminanza percepita e' la
-            // misura giusta: nell'infrarosso le sommita' fredde sono chiare,
-            // nel visibile le nubi sono chiare, e in entrambi il mare e la
-            // terra sono piu' scuri. Sotto un quinto di luminanza non c'e'
-            // nulla da illuminare.
+            if (px[i + 3] < 8) continue;
+            const l = (px[i] * 0.2126 + px[i + 1] * 0.7152 + px[i + 2] * 0.0722) / 255;
+            istogramma[Math.min(63, Math.max(0, Math.round(l * 63)))] += 1;
+            quanti += 1;
+          }
+          const percentile = function (frazione) {
+            let visti = 0;
+            const bersaglio = quanti * frazione;
+            for (let b = 0; b < 64; b += 1) {
+              visti += istogramma[b];
+              if (visti >= bersaglio) return b / 63;
+            }
+            return 1;
+          };
+          const buio = quanti ? percentile(0.15) : 0.2;
+          const pieno = quanti ? percentile(0.9) : 0.75;
+          // Se l'immagine e' tutta uguale -- cielo sereno da un capo
+          // all'altro, o una schermata nera -- non c'e' sagoma da ricavare:
+          // meglio nessuna maschera che una maschera casuale.
+          const intervallo = pieno - buio;
+          if (!quanti || intervallo < 0.06) { mascheraNube = null; return; }
+
+          for (let i = 0; i < px.length; i += 4) {
             const luminanza = (px[i] * 0.2126 + px[i + 1] * 0.7152 + px[i + 2] * 0.0722) / 255;
-            const nuvolosita = clamp((luminanza - 0.2) / 0.55, 0, 1);
+            const nuvolosita = clamp((luminanza - buio) / intervallo, 0, 1);
             // Il colore non serve: resta solo il canale alfa, che e' la
             // sagoma. Bianco pieno cosi' il ritaglio non tinge il bagliore.
             px[i] = 255; px[i + 1] = 255; px[i + 2] = 255;
@@ -6494,14 +6528,33 @@
       // dalle nubi con una sola passata di composizione.
       let telaBagliore = null;
       function disegnaNubeIlluminata(context, punto, largo, nube) {
-        const tinte = function (g) {
-          g.addColorStop(0, "rgba(255,255,252," + (0.82 * nube).toFixed(3) + ")");
-          g.addColorStop(0.18, "rgba(255,252,240," + (0.46 * nube).toFixed(3) + ")");
-          g.addColorStop(0.42, "rgba(255,242,218," + (0.17 * nube).toFixed(3) + ")");
-          g.addColorStop(0.68, "rgba(248,232,208," + (0.06 * nube).toFixed(3) + ")");
-          g.addColorStop(0.85, "rgba(198,214,248," + (0.03 * nube).toFixed(3) + ")");
+        // Le tappe del bagliore, con un fattore che ne scala la forza. Serve
+        // perche' le due passate qui sotto hanno forze molto diverse: quella
+        // ritagliata sulle nubi deve essere la luce vera, quella tonda solo
+        // un minimo di sicurezza.
+        const tinte = function (g, forza) {
+          const a = forza * nube;
+          g.addColorStop(0, "rgba(255,255,252," + (0.98 * a).toFixed(3) + ")");
+          g.addColorStop(0.18, "rgba(255,252,240," + (0.66 * a).toFixed(3) + ")");
+          g.addColorStop(0.42, "rgba(255,242,218," + (0.3 * a).toFixed(3) + ")");
+          g.addColorStop(0.68, "rgba(248,232,208," + (0.11 * a).toFixed(3) + ")");
+          g.addColorStop(0.85, "rgba(198,214,248," + (0.03 * a).toFixed(3) + ")");
           g.addColorStop(1, "rgba(190,206,244,0)");
         };
+        const tondo = function (forza) {
+          const g = context.createRadialGradient(punto.x, punto.y, 0, punto.x, punto.y, largo);
+          tinte(g, forza);
+          context.fillStyle = g;
+          context.beginPath();
+          context.arc(punto.x, punto.y, largo, 0, Math.PI * 2);
+          context.fill();
+        };
+
+        // Senza maschera, o con la mappa inclinata -- dove il riquadro
+        // dell'immagine non e' piu' un rettangolo sullo schermo -- resta
+        // solo il bagliore tondo. Meno bello, ma mai sbagliato.
+        const inclinata = map.getPitch && map.getPitch() > 4;
+        if (!mascheraNube || inclinata || !showSatelliteClouds) { tondo(1); return; }
 
         // Il bagliore si disegna in due parti, ed e' la seconda a dargli la
         // forma.
@@ -6512,29 +6565,17 @@
         // squarcio fra le nubi perche' il ritaglio le porti via tutta la
         // luce. Un lampo invisibile e' peggio di un lampo un po' tondo.
         // Copre anche i bordi del riquadro satellitare, dove la maschera
-        // semplicemente non arriva.
-        const tondo = function (alfa) {
-          context.save();
-          context.globalAlpha = alfa;
-          const g = context.createRadialGradient(punto.x, punto.y, 0, punto.x, punto.y, largo);
-          tinte(g);
-          context.fillStyle = g;
-          context.beginPath();
-          context.arc(punto.x, punto.y, largo, 0, Math.PI * 2);
-          context.fill();
-          context.restore();
-        };
+        // semplicemente non arriva. Resta pero' un quarto della luce piena:
+        // deve garantire, non competere con la seconda passata.
+        tondo(0.26);
 
-        // Senza maschera, o con la mappa inclinata -- dove il riquadro
-        // dell'immagine non e' piu' un rettangolo sullo schermo -- resta
-        // solo quella. Meno bella, ma mai sbagliata.
-        const inclinata = map.getPitch && map.getPitch() > 4;
-        if (!mascheraNube || inclinata || !showSatelliteClouds) { tondo(1); return; }
-        tondo(0.34);
-
-        // La seconda parte e' la stessa luce ritagliata sulla sagoma delle
-        // nubi: e' questa che fa vedere la sommita' accendersi, con i suoi
-        // bordi frastagliati e i suoi buchi, invece di un cerchio.
+        // La seconda e' la stessa luce ritagliata sulla sagoma delle nubi:
+        // e' questa che fa vedere la sommita' accendersi, con i suoi bordi
+        // frastagliati e i suoi buchi, invece di un cerchio. Ed e' molto
+        // piu' forte del minimo, o il ritaglio si limiterebbe a togliere
+        // luce invece di dare forma -- misurato, con le due passate quasi
+        // pari il bagliore usciva al sette per cento di opacita' media,
+        // cioe' non si vedeva affatto.
         const lato = Math.ceil(largo * 2);
         if (!telaBagliore) telaBagliore = document.createElement("canvas");
         if (telaBagliore.width !== lato || telaBagliore.height !== lato) {
@@ -6544,7 +6585,7 @@
         tc.setTransform(1, 0, 0, 1, 0, 0);
         tc.clearRect(0, 0, lato, lato);
         const g = tc.createRadialGradient(largo, largo, 0, largo, largo, largo);
-        tinte(g);
+        tinte(g, 1);
         tc.fillStyle = g;
         tc.fillRect(0, 0, lato, lato);
 
@@ -6556,7 +6597,10 @@
           nw.x - (punto.x - largo), nw.y - (punto.y - largo),
           se.x - nw.x, se.y - nw.y);
         tc.globalCompositeOperation = "source-over";
-        context.globalAlpha = 0.85;
+        // Due volte: la luce che esce da una nube spessa deve essere
+        // nettamente piu' forte del minimo tondo, o la sagoma non si legge.
+        context.drawImage(telaBagliore, punto.x - largo, punto.y - largo);
+        context.globalAlpha = 0.6;
         context.drawImage(telaBagliore, punto.x - largo, punto.y - largo);
         context.globalAlpha = 1;
       }
