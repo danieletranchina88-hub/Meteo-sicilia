@@ -6013,6 +6013,10 @@
           canvas.width = image.naturalWidth || size.width;
           canvas.height = image.naturalHeight || size.height;
           canvas.getContext("2d").drawImage(image, 0, 0);
+          // L'immagine e' gia' qui, su una canvas nostra: costa pochissimo
+          // ricavarne anche la sagoma delle nubi, che serve al lampo per
+          // accendersi dove la nube c'e' davvero invece che in un disco.
+          costruisciMascheraNube(canvas, box);
           const chiave = cloudFrameKey(product, slot, box, size);
           if (typeof canvas.toBlob === "function"
               && typeof URL.createObjectURL === "function") {
@@ -6424,76 +6428,210 @@
         suonaTick(lon, lat, 0.82 + liveStrikes[liveStrikes.length - 1].seme * 0.42);
       }
 
-      // ---- IL LAMPO ---------------------------------------------------
+      // ---- LA NUBE CHE SI ACCENDE --------------------------------------
       //
-      // Un fulmine non e' un segno: e' luce, e dura pochissimo. Tre cose lo
-      // rendono riconoscibile, e sono tutte e tre di tempo, non di forma:
+      // Un lampo visto dall'alto non illumina un cerchio: illumina LA NUBE.
+      // La luce esce dove c'e' ghiaccio che la diffonde e non esce dove il
+      // cielo e' sereno, quindi la macchia luminosa ha la forma della
+      // sommita' nuvolosa -- frastagliata, con i suoi bordi e i suoi buchi.
+      // Un disco morbido, per quanto ben sfumato, si riconosce subito come
+      // disegnato.
       //
-      //  1. il CANALE non e' una linea spezzata a caso ma una frattura
-      //     frattale -- si genera per spostamento del punto medio, lo stesso
-      //     procedimento con cui si disegnano i profili di montagna: ogni
-      //     raffinamento sposta i punti medi di meta' dell'ampiezza
-      //     precedente, e il risultato ha dettaglio a ogni scala, come la
-      //     scarica vera;
-      //  2. la scarica arriva in due tempi: il LEADER, un canale debole che
-      //     scende a scatti in poche decine di millisecondi, e il COLPO DI
-      //     RITORNO, che risale lo stesso canale e lo fa esplodere di luce.
-      //     E' il secondo a illuminare, ed e' per questo che il lampo sembra
-      //     accendersi tutto insieme dopo essersi "cercato" la strada;
-      //  3. i colpi sono quasi sempre PIU' D'UNO lungo lo stesso canale, a
-      //     qualche decina di millisecondi l'uno dall'altro: e' lo
-      //     sfarfallio che tutti riconoscono e che un lampo disegnato una
-      //     volta sola non ha mai.
+      // La sagoma non va inventata ne' chiesta a nessuno: l'immagine
+      // satellitare passa gia' da una canvas nostra prima di essere
+      // pubblicata, quindi i pixel delle nubi li abbiamo in mano. Da quelli
+      // si ricava una maschera in scala di grigi -- chiaro dove c'e' nube,
+      // trasparente dove non ce n'e' -- e il bagliore ci viene ritagliato
+      // dentro.
       //
-      // Il disegno e' in composizione additiva: la luce si somma, non copre.
-      // Due rami che si incrociano diventano piu' luminosi nel punto in cui
-      // si toccano, come luce vera, e il nucleo bianco nasce dalla somma del
-      // bagliore azzurro con se stesso invece che da un colore scelto.
+      // Costa una volta per fotogramma satellitare, cioe' ogni cinque o
+      // dieci minuti, non a ogni lampo.
+      const MASCHERA_LATO = 512;
+      let mascheraNube = null;
+
+      function costruisciMascheraNube(sorgente, box) {
+        try {
+          const largo = sorgente.width, alto = sorgente.height;
+          if (!largo || !alto) { mascheraNube = null; return; }
+          // Ridotta: la maschera serve a dare una forma a un bagliore, non a
+          // essere guardata. Mezzo migliaio di pixel di lato bastano, e
+          // tengono il costo di lettura sotto il millisecondo.
+          const scala = Math.min(1, MASCHERA_LATO / Math.max(largo, alto));
+          const mw = Math.max(1, Math.round(largo * scala));
+          const mh = Math.max(1, Math.round(alto * scala));
+          const piccola = document.createElement("canvas");
+          piccola.width = mw; piccola.height = mh;
+          const pc = piccola.getContext("2d");
+          pc.drawImage(sorgente, 0, 0, mw, mh);
+          const dati = pc.getImageData(0, 0, mw, mh);
+          const px = dati.data;
+          for (let i = 0; i < px.length; i += 4) {
+            // Quanto e' "nube" questo pixel. La luminanza percepita e' la
+            // misura giusta: nell'infrarosso le sommita' fredde sono chiare,
+            // nel visibile le nubi sono chiare, e in entrambi il mare e la
+            // terra sono piu' scuri. Sotto un quinto di luminanza non c'e'
+            // nulla da illuminare.
+            const luminanza = (px[i] * 0.2126 + px[i + 1] * 0.7152 + px[i + 2] * 0.0722) / 255;
+            const nuvolosita = clamp((luminanza - 0.2) / 0.55, 0, 1);
+            // Il colore non serve: resta solo il canale alfa, che e' la
+            // sagoma. Bianco pieno cosi' il ritaglio non tinge il bagliore.
+            px[i] = 255; px[i + 1] = 255; px[i + 2] = 255;
+            px[i + 3] = Math.round(255 * nuvolosita);
+          }
+          pc.putImageData(dati, 0, 0);
+          mascheraNube = { tela: piccola, west: box.west, east: box.east,
+                           south: box.south, north: box.north };
+        } catch (error) {
+          // Canvas "sporca" o memoria insufficiente: si ripiega sul disco
+          // morbido, che e' meno bello ma non e' un guasto.
+          mascheraNube = null;
+        }
+      }
+
+      // Il bagliore ritagliato sulla sagoma delle nubi. Si disegna su una
+      // tela di servizio, ci si ritaglia dentro la maschera, e il risultato
+      // si somma alla mappa: e' l'unico modo di far uscire la luce solo
+      // dalle nubi con una sola passata di composizione.
+      let telaBagliore = null;
+      function disegnaNubeIlluminata(context, punto, largo, nube) {
+        const tinte = function (g) {
+          g.addColorStop(0, "rgba(255,255,252," + (0.82 * nube).toFixed(3) + ")");
+          g.addColorStop(0.18, "rgba(255,252,240," + (0.46 * nube).toFixed(3) + ")");
+          g.addColorStop(0.42, "rgba(255,242,218," + (0.17 * nube).toFixed(3) + ")");
+          g.addColorStop(0.68, "rgba(248,232,208," + (0.06 * nube).toFixed(3) + ")");
+          g.addColorStop(0.85, "rgba(198,214,248," + (0.03 * nube).toFixed(3) + ")");
+          g.addColorStop(1, "rgba(190,206,244,0)");
+        };
+
+        // Il bagliore si disegna in due parti, ed e' la seconda a dargli la
+        // forma.
+        //
+        // La prima e' un minimo garantito, tondo e tenue. Serve perche' la
+        // maschera da sola e' troppo severa: la posizione di una scarica ha
+        // un chilometro buono di incertezza, e basta che cada in uno
+        // squarcio fra le nubi perche' il ritaglio le porti via tutta la
+        // luce. Un lampo invisibile e' peggio di un lampo un po' tondo.
+        // Copre anche i bordi del riquadro satellitare, dove la maschera
+        // semplicemente non arriva.
+        const tondo = function (alfa) {
+          context.save();
+          context.globalAlpha = alfa;
+          const g = context.createRadialGradient(punto.x, punto.y, 0, punto.x, punto.y, largo);
+          tinte(g);
+          context.fillStyle = g;
+          context.beginPath();
+          context.arc(punto.x, punto.y, largo, 0, Math.PI * 2);
+          context.fill();
+          context.restore();
+        };
+
+        // Senza maschera, o con la mappa inclinata -- dove il riquadro
+        // dell'immagine non e' piu' un rettangolo sullo schermo -- resta
+        // solo quella. Meno bella, ma mai sbagliata.
+        const inclinata = map.getPitch && map.getPitch() > 4;
+        if (!mascheraNube || inclinata || !showSatelliteClouds) { tondo(1); return; }
+        tondo(0.34);
+
+        // La seconda parte e' la stessa luce ritagliata sulla sagoma delle
+        // nubi: e' questa che fa vedere la sommita' accendersi, con i suoi
+        // bordi frastagliati e i suoi buchi, invece di un cerchio.
+        const lato = Math.ceil(largo * 2);
+        if (!telaBagliore) telaBagliore = document.createElement("canvas");
+        if (telaBagliore.width !== lato || telaBagliore.height !== lato) {
+          telaBagliore.width = lato; telaBagliore.height = lato;
+        }
+        const tc = telaBagliore.getContext("2d");
+        tc.setTransform(1, 0, 0, 1, 0, 0);
+        tc.clearRect(0, 0, lato, lato);
+        const g = tc.createRadialGradient(largo, largo, 0, largo, largo, largo);
+        tinte(g);
+        tc.fillStyle = g;
+        tc.fillRect(0, 0, lato, lato);
+
+        const nw = projectParticle(mascheraNube.west, mascheraNube.north, 0);
+        const se = projectParticle(mascheraNube.east, mascheraNube.south, 0);
+        if (!nw || !se || !(se.x > nw.x) || !(se.y > nw.y)) return;
+        tc.globalCompositeOperation = "destination-in";
+        tc.drawImage(mascheraNube.tela,
+          nw.x - (punto.x - largo), nw.y - (punto.y - largo),
+          se.x - nw.x, se.y - nw.y);
+        tc.globalCompositeOperation = "source-over";
+        context.globalAlpha = 0.85;
+        context.drawImage(telaBagliore, punto.x - largo, punto.y - largo);
+        context.globalAlpha = 1;
+      }
+
+      // ---- IL LAMPO, VISTO DALL'ALTO -----------------------------------
+      //
+      // Questa mappa guarda l'Italia da sopra. Un fulmine disegnato come una
+      // saetta verticale che sale dal punto di impatto e' un fulmine visto
+      // DI LATO: bello, ma in una veduta zenitale non ha senso, perche' da
+      // sopra quel canale sarebbe un punto.
+      //
+      // Chi vola sopra un temporale di notte non vede saette: vede la
+      // sommita' delle nubi ACCENDERSI DA DENTRO, come una lanterna di
+      // carta. Il canale sta dentro e sotto la nube, e quello che esce e'
+      // luce diffusa dal ghiaccio -- bianca, non azzurra: l'azzurro e' il
+      // colore del canale nudo a trentamila gradi, ma dopo qualche
+      // chilometro di nube attraversata resta un bianco appena caldo.
+      //
+      // L'unica cosa filiforme che si vede davvero da sopra sono i RAGNI:
+      // scariche intra-nube che strisciano orizzontali sulla sommita' anche
+      // per decine di chilometri, ramificandosi. Quelle si vedono, perche'
+      // corrono in superficie. Sono loro a dare al lampo dall'alto la sua
+      // forma riconoscibile.
+      //
+      // Restano invece veri, e quindi restano qui, i tre tempi:
+      //
+      //  1. la geometria e' frattale, per spostamento del punto medio -- lo
+      //     stesso procedimento dei profili di montagna: ogni raffinamento
+      //     sposta di poco piu' della meta' del precedente, e si ottiene
+      //     dettaglio a ogni scala, come nella scarica vera;
+      //  2. la scarica arriva in due tempi: il LEADER, debole, che si cerca
+      //     la strada in poche decine di millisecondi, e il COLPO DI
+      //     RITORNO, che la ripercorre e la fa esplodere di luce;
+      //  3. i colpi sono quasi sempre PIU' D'UNO, a qualche decina di
+      //     millisecondi l'uno dall'altro: e' lo sfarfallio che tutti
+      //     riconoscono, e che un lampo disegnato una volta sola non ha mai.
+      //
+      // Il disegno e' additivo, perche' la luce si somma e non copre: due
+      // ragni che si incrociano diventano piu' luminosi nel punto in cui si
+      // toccano, come luce vera.
       //
       // Tutta la geometria nasce dal seme della scarica e si calcola UNA
-      // volta sola, alla prima comparsa: ricalcolarla a ogni fotogramma
-      // farebbe tremare il fulmine invece di farlo brillare, e costerebbe
-      // sessanta volte tanto.
+      // volta sola: ricalcolarla a ogni fotogramma farebbe tremare il lampo
+      // invece di farlo brillare, e costerebbe sessanta volte tanto.
 
-      // Il lampo vero dura fra uno e due decimi di secondo. Qui e' piu'
-      // lungo -- poco meno di un secondo -- perche' su una mappa il lampo
-      // deve anche farsi notare: sotto i due decimi, chi non stava gia'
-      // guardando quel punto non lo vede affatto.
-      const STRIKE_LEADER_MS = 95;
-      const STRIKE_STROKE_MS = 190;
-      // Quanto dura la coda di luce dopo l'ultimo colpo di ritorno. Sono due
-      // cose diverse con due tempi diversi: la nube illuminata si spegne in
-      // mezzo secondo scarso, il canale incandescente molto prima.
-      const STRIKE_BAGLIORE_MS = 620;
-      const STRIKE_BRACE_MS = 260;
+      // Un lampo vero dura fra uno e due decimi di secondo, e quello che si
+      // vede da sopra e' ancora piu' breve. Qui si sta appena sopra, perche'
+      // sotto i due decimi chi non stava gia' guardando quel punto non lo
+      // vedrebbe affatto -- ma non oltre, o l'alone resta sulla mappa e
+      // copre le nuvole invece di illuminarle.
+      const STRIKE_LEADER_MS = 80;
+      const STRIKE_STROKE_MS = 150;
+      // La nube illuminata si spegne in un terzo di secondo scarso: e' la
+      // durata che la fa leggere come un lampo e non come una macchia.
+      const STRIKE_BAGLIORE_MS = 360;
+      const STRIKE_BRACE_MS = 150;
 
-      // Il canale in coordinate sue: y da 0 (base della nube) a 1 (suolo),
-      // x trasversale in unita' di semilarghezza. La scala in pixel si
-      // applica al momento del disegno, cosi' lo zoom non obbliga a
-      // rigenerare nulla.
+      // La geometria di un ragno, in coordinate sue: y da 0 (il punto della
+      // scarica) a 1 (la punta del filamento), x lo scostamento laterale.
+      // E' lo stesso frattale monodimensionale di prima, ma quello che
+      // prima era "quota" adesso e' DISTANZA ORIZZONTALE dal punto: il
+      // filamento non scende, si allontana strisciando.
       //
-      // Lo spostamento e' solo trasversale e proporzionale all'altezza del
-      // segmento: e' il frattale monodimensionale, e fa due cose che
-      // servono entrambe. La prima e' il dettaglio a ogni scala -- ogni
-      // raffinamento sposta di poco piu' della meta' del precedente, quindi
-      // la scarica ha gomiti grandi e gomiti piccoli come quella vera. La
-      // seconda e' che il canale scende sempre: non torna mai su di se'
-      // stesso, che e' la differenza fra una saetta e uno scarabocchio.
+      // Lo spostamento e' proporzionale alla lunghezza del tratto, cosi' il
+      // dettaglio c'e' a ogni scala; e il primo gomito non puo' uscire
+      // piccolo, perche' con uno spostamento uniforme ogni tanto cadeva
+      // vicino allo zero e quel filamento usciva come un raggio dritto.
       function generaCanale(rng, livelli, ampiezza) {
-        let punti = [{ x: (rng() - 0.5) * 0.9, y: 0 }, { x: 0, y: 1 }];
+        let punti = [{ x: 0, y: 0 }, { x: (rng() - 0.5) * 0.9, y: 1 }];
         let ampiezzaCorrente = ampiezza;
         for (let livello = 0; livello < livelli; livello += 1) {
           const raffinato = [punti[0]];
           for (let i = 1; i < punti.length; i += 1) {
             const a = punti[i - 1], b = punti[i];
             const passo = b.y - a.y;
-            // Il primo gomito non puo' uscire piccolo. Con uno spostamento
-            // uniforme la piega grande, quella che da' forma a tutto il
-            // canale, ogni tanto cadeva vicino allo zero: i raffinamenti
-            // successivi sono troppo fini per rimediare, e quella scarica
-            // usciva come una riga quasi dritta. Misurato su sessanta semi,
-            // la piu' dritta si scostava di quattro pixel in tutto. Qui il
-            // verso resta casuale ma l'ampiezza parte da meta' del massimo.
             const deriva = livello === 0
               ? (rng() < 0.5 ? -1 : 1) * (0.5 + 0.5 * rng())
               : (rng() - 0.5) * 2;
@@ -6509,37 +6647,51 @@
         return punti;
       }
 
-      // I rami: partono da un nodo del canale principale, se ne allontanano
-      // di lato e muoiono prima di toccare terra. Senza, la saetta sembra un
-      // fulmine da cartone animato; con, si legge subito come scarica.
-      function generaRami(rng, canale) {
-        const rami = [];
-        const quanti = 2 + Math.floor(rng() * 3);
+      // Il ragno intero: da tre a sei filamenti che partono dal punto della
+      // scarica e strisciano in direzioni diverse, ognuno con la sua
+      // lunghezza e le sue biforcazioni. Le direzioni non sono a caso ma
+      // sparse attorno al giro con un po' di disordine: sei filamenti
+      // sorteggiati liberamente finiscono spesso tutti dalla stessa parte, e
+      // il risultato sembra un pennello, non una scarica.
+      function generaRagno(rng) {
+        const quanti = 4 + Math.floor(rng() * 5);
+        const partenza = rng() * Math.PI * 2;
+        const filamenti = [];
         for (let i = 0; i < quanti; i += 1) {
-          // Mai dall'ultimo quarto: un ramo che nasce a terra non esiste.
-          const nodo = Math.floor((0.1 + rng() * 0.62) * (canale.length - 1));
-          const radice = canale[nodo];
-          // Mai oltre terra: un ramo nasce da un nodo che puo' stare gia'
-          // in basso, e senza questo limite finirebbe sotto il punto di
-          // impatto -- cioe' sottoterra.
-          const caduta = Math.min(0.2 + rng() * 0.3, (1 - radice.y) * 0.75);
-          const apertura = (rng() < 0.5 ? -1 : 1) * (0.45 + rng() * 0.75);
-          const forma = generaCanale(rng, 2, 0.9);
-          rami.push({
-            punti: forma.map(function (p) {
-              return {
-                // p.y va da 0 a 1 lungo il ramo: il ramo si allontana di
-                // lato man mano che scende, come una biforcazione vera.
-                x: radice.x + apertura * p.y + p.x * 0.35,
-                y: radice.y + caduta * p.y
-              };
-            })
-          });
+          const direzione = partenza + (i / quanti) * Math.PI * 2
+            + (rng() - 0.5) * (Math.PI / quanti);
+          // Ampiezza uno: misurata su quattrocento scariche, il filamento
+          // piu' dritto si scosta comunque di un terzo della sua
+          // semilarghezza. Sotto, la coda della distribuzione produceva
+          // filamenti praticamente rettilinei -- a schermo raggi disegnati,
+          // non scariche.
+          const forma = generaCanale(rng, 4, 1.0);
+          // Lunghezze molto diverse fra loro: un ragno con tutti i bracci
+          // uguali sembra una stella disegnata, non una scarica. La radice
+          // quadrata rende rari i filamenti lunghi e comuni i mozziconi,
+          // che e' come si comporta una scarica vera: un canale principale
+          // e molte diramazioni brevi attorno.
+          const lunghezza = 0.28 + Math.sqrt(rng()) * 1.05;
+          const rami = [];
+          const quantiRami = Math.floor(rng() * 3);
+          for (let r = 0; r < quantiRami; r += 1) {
+            // Il ramo nasce da un nodo del filamento e se ne stacca di
+            // lato, morendo prima della punta.
+            const nodo = 0.25 + rng() * 0.5;
+            rami.push({
+              nodo: nodo,
+              direzione: direzione + (rng() < 0.5 ? -1 : 1) * (0.35 + rng() * 0.5),
+              lunghezza: lunghezza * (0.25 + rng() * 0.3),
+              forma: generaCanale(rng, 3, 0.7)
+            });
+          }
+          filamenti.push({ direzione: direzione, lunghezza: lunghezza,
+                           forma: forma, rami: rami });
         }
-        return rami;
+        return filamenti;
       }
 
-      // Generatore deterministico: stessa scarica, stesso fulmine, per tutta
+      // Generatore deterministico: stessa scarica, stesso lampo, per tutta
       // la sua vita e a qualunque zoom.
       function semeCasuale(seme) {
         let stato = Math.floor(seme * 2147483647) || 1;
@@ -6550,10 +6702,9 @@
       }
 
       function preparaScarica(s) {
-        if (s.canale) return;
+        if (s.ragno) return;
         const rng = semeCasuale(s.seme);
-        s.canale = generaCanale(rng, 5, 1.5);
-        s.rami = generaRami(rng, s.canale);
+        s.ragno = generaRagno(rng);
         // Due o tre colpi di ritorno lungo lo stesso canale, a 40-90 ms
         // l'uno dall'altro e via via piu' deboli: lo sfarfallio.
         const colpi = [{ quando: STRIKE_LEADER_MS, forza: 1 }];
@@ -6565,15 +6716,12 @@
         }
         s.colpi = colpi;
         s.ultimoColpo = quando;
-        // La durata non finisce con l'ultimo colpo: il bagliore della nube e
-        // il canale che si raffredda vivono oltre, e il ciclo di disegno usa
-        // questo numero per sapere fino a quando aggiornare a piena
-        // frequenza. Troncarlo all'ultimo colpo spegnerebbe il bagliore di
-        // scatto, che e' l'unica cosa che un lampo vero non fa mai.
+        // La durata non finisce con l'ultimo colpo: la nube illuminata vive
+        // oltre, e il ciclo di disegno usa questo numero per sapere fino a
+        // quando aggiornare a piena frequenza. Troncarlo all'ultimo colpo
+        // spegnerebbe il bagliore di scatto, che e' l'unica cosa che un
+        // lampo vero non fa mai.
         s.durata = quando + STRIKE_BAGLIORE_MS;
-        // Un'inclinazione leggera: le scariche non sono verticali, e una
-        // decina di gradi basta a togliere l'aria di simbolo.
-        s.inclinazione = (rng() - 0.5) * 0.42;
         s.tono = 0.82 + rng() * 0.42;
       }
 
@@ -6608,12 +6756,14 @@
       function luceNube(s, eta) {
         const dt = eta - STRIKE_LEADER_MS;
         if (dt < 0) return 0;
-        // Salita in 45 ms, discesa con costante di tempo 200 ms.
-        const salita = Math.min(1, dt / 45);
-        const discesa = Math.exp(-Math.max(0, dt - 45) / 200);
+        // Salita in 35 ms, discesa con costante di tempo 105 ms. Prima erano
+        // 200: l'alone restava mezzo secondo sulla mappa e a quel punto non
+        // illuminava piu' le nuvole, le copriva.
+        const salita = Math.min(1, dt / 35);
+        const discesa = Math.exp(-Math.max(0, dt - 35) / 105);
         // I colpi successivi la ravvivano un po', senza farla lampeggiare.
         const ravviva = 1 + 0.35 * (s.colpi.length - 1)
-          * Math.exp(-Math.max(0, eta - s.ultimoColpo) / 240);
+          * Math.exp(-Math.max(0, eta - s.ultimoColpo) / 140);
         return Math.min(1, salita * discesa * ravviva);
       }
 
@@ -6625,21 +6775,77 @@
       function luceBrace(s, eta) {
         const dt = eta - s.ultimoColpo;
         if (dt < 0 || dt > STRIKE_BRACE_MS) return 0;
-        return Math.exp(-dt / 95) * (1 - dt / STRIKE_BRACE_MS);
+        return Math.exp(-dt / 55) * (1 - dt / STRIKE_BRACE_MS);
       }
 
-      function tracciaCanale(context, punti, x, y, altezza, larghezza, inclinazione, fino) {
-        context.beginPath();
+      // I punti di un filamento, in pixel. In coordinate del filamento y e'
+      // la distanza percorsa e x lo scostamento laterale: qui diventano una
+      // rotazione, perche' su una mappa vista dall'alto il canale striscia
+      // sul piano invece di scendere.
+      function puntiFilamento(punti, x, y, lunghezza, direzione, fino) {
+        const cos = Math.cos(direzione), sin = Math.sin(direzione);
+        // Lo scostamento laterale si misura in frazione della lunghezza: un
+        // ragno lungo ha gomiti larghi, uno corto li ha stretti, come nella
+        // realta'.
+        const lato = lunghezza * 0.42;
         const ultimo = fino === undefined ? 1 : fino;
+        const fuori = [];
         for (let i = 0; i < punti.length; i += 1) {
           const p = punti[i];
           if (p.y > ultimo) break;
-          const px = x + (p.x * larghezza) + p.y * altezza * inclinazione;
-          const py = y - altezza * (1 - p.y);
-          if (i === 0) context.moveTo(px, py);
-          else context.lineTo(px, py);
+          const avanti = p.y * lunghezza;
+          const fianco = p.x * lato;
+          fuori.push({
+            x: x + avanti * cos - fianco * sin,
+            y: y + avanti * sin + fianco * cos,
+            t: p.y
+          });
         }
-        context.stroke();
+        return fuori;
+      }
+
+      // Un canale non ha spessore costante: e' grosso e incandescente dove
+      // passa piu' corrente, vicino all'origine, e si assottiglia fino a
+      // spegnersi alla punta. Disegnato a spessore unico sembra uno stecco,
+      // ed e' quello che faceva sembrare il ragno una figura disegnata
+      // invece di una scarica.
+      //
+      // La sfumatura si fa a pezzi e non punto per punto: cinque tratti per
+      // filamento bastano perche' l'occhio la legga come continua, e
+      // costano cinque stroke invece di trenta.
+      const FILAMENTO_PEZZI = 5;
+      function strokeSfumato(context, pixel, larghezza, tinta, alfa) {
+        if (pixel.length < 2) return;
+        const perPezzo = Math.max(1, Math.ceil((pixel.length - 1) / FILAMENTO_PEZZI));
+        for (let da = 0; da < pixel.length - 1; da += perPezzo) {
+          const a = Math.min(pixel.length - 1, da + perPezzo);
+          // La coda del tratto decide spessore e luce: si prende il punto
+          // piu' lontano, cosi' ogni tratto e' gia' piu' sottile del
+          // precedente e la punta svanisce davvero.
+          const t = pixel[a].t;
+          const calo = (1 - t) * (1 - t * 0.45);
+          if (calo <= 0.02) break;
+          context.lineWidth = Math.max(0.35, larghezza * calo);
+          context.strokeStyle = "rgba(" + tinta + "," + (alfa * calo).toFixed(3) + ")";
+          context.beginPath();
+          context.moveTo(pixel[da].x, pixel[da].y);
+          for (let i = da + 1; i <= a; i += 1) context.lineTo(pixel[i].x, pixel[i].y);
+          context.stroke();
+        }
+      }
+
+      // Dove si trova un nodo del filamento, per farci partire un ramo.
+      function puntoDelFilamento(punti, frazione, x, y, lunghezza, direzione) {
+        const cos = Math.cos(direzione), sin = Math.sin(direzione);
+        const lato = lunghezza * 0.42;
+        let scelto = punti[punti.length - 1];
+        for (let i = 0; i < punti.length; i += 1) {
+          if (punti[i].y >= frazione) { scelto = punti[i]; break; }
+        }
+        const avanti = scelto.y * lunghezza;
+        const fianco = scelto.x * lato;
+        return { x: x + avanti * cos - fianco * sin,
+                 y: y + avanti * sin + fianco * cos };
       }
 
       // Il glifo del fulmine, quello del simbolo: un lampo spezzato pieno.
@@ -6776,15 +6982,22 @@
       // insieme. Si disegnano invece una volta sola tre bolle morbide, una
       // per livello di attivita', e poi si copiano scalate: una copia di
       // immagine e' un'operazione che la scheda grafica fa senza pensarci.
-      // Blu e ciano, mai bianco. Vale qui la stessa ragione della coltre: il
-      // nucleo sta quasi sempre sopra la sommita' di una nube, che
-      // nell'immagine satellitare e' gia' bianca, e sommare bianco a bianco
-      // non sposta niente -- si ottiene del cotone, non della luce. Uno
-      // scarto di tinta invece si vede, e si legge come elettricita'.
+      // Resta vero che sommare bianco a una nube gia' bianca non sposta
+      // niente: serve uno scarto di tinta, o si ottiene del cotone invece
+      // della luce. Ma lo scarto va preso dalla parte CALDA, non dal blu.
+      // Il nucleo non e' il lampo: e' la traccia di dove la cella sta
+      // lavorando negli ultimi minuti, e una brace arancione la racconta
+      // meglio di un alone elettrico -- che oltretutto, azzurro e largo,
+      // finiva per tingere di blu tutta la sommita' della nube.
+      // Brace profonda, non ambra. Di notte le citta' nell'immagine
+      // satellitare sono punti ambra: un nucleo dello stesso colore si
+      // confonde con l'illuminazione pubblica di mezza pianura padana. Il
+      // rosso carico invece non esiste in quella tavolozza, e si legge come
+      // calore -- che e' quello che il nucleo racconta.
       const NUCLEO_COLORI = [
-        [78, 116, 255],
-        [86, 178, 255],
-        [142, 216, 255]
+        [232, 64, 28],
+        [248, 104, 40],
+        [255, 150, 74]
       ];
       const nucleoBolle = [];
       function bollaNucleo(livello) {
@@ -6835,8 +7048,10 @@
           // E' quello che la fa sembrare viva invece di una macchia ferma.
           const ritmo = 1400 - 700 * intensita;
           const battito = 1 + 0.07 * Math.sin(adesso / ritmo + cella.lon * 7);
-          const raggio = (42 + 104 * intensita) * scala * battito;
-          context.globalAlpha = (0.10 + 0.34 * intensita) * battito;
+          const raggio = (34 + 78 * intensita) * scala * battito;
+          // Piu' basso di prima: il nucleo deve far intuire dove lavora la
+          // cella, non nascondere la nube che la contiene.
+          context.globalAlpha = (0.06 + 0.20 * intensita) * battito;
           const bolla = bollaNucleo(livello);
           context.drawImage(bolla, punto.x - raggio, punto.y - raggio, raggio * 2, raggio * 2);
         }
@@ -6897,125 +7112,83 @@
           const brace = luceBrace(s, eta);
           if (luce < 0.012 && nube < 0.012 && brace < 0.012) continue;
 
-          const altezza = 84 * scala;
-          const larghezza = 22 * scala;
-          // Il leader: il canale si "cerca" la strada verso il basso a
-          // scatti, e finche' non tocca terra non c'e' ancora colpo.
+          // Quanto si estende il lampo sulla mappa. Un ragno vero striscia
+          // per chilometri sulla sommita', ma qui il raggio resta contenuto
+          // apposta: piu' e' largo, piu' copre la nube invece di accenderla.
+          const raggio = 58 * scala;
+          // Il leader: il filamento si cerca la strada strisciando, e
+          // finche' non ha finito il colpo di ritorno non c'e'.
           const fino = eta < STRIKE_LEADER_MS
             ? Math.min(1, eta / STRIKE_LEADER_MS)
             : 1;
 
-          // LA NUBE CHE SI ACCENDE. E' la parte che si vede davvero di
-          // notte: larga, morbida, e con un tempo tutto suo -- sale col
-          // primo colpo e scende piano, senza seguire lo sfarfallio, perche'
-          // una massa d'aria illuminata non si spegne e riaccende in
-          // quaranta millisecondi. Il violetto non e' un vezzo: un bianco
-          // additivo sopra una nube gia' bianca non sposta niente, mentre
-          // uno scarto di tinta si vede anche sul GeoColour di giorno.
+          // LA NUBE CHE SI ACCENDE DA DENTRO. E' la cosa che si vede
+          // davvero dall'alto. Bianca appena calda, non azzurra: l'azzurro
+          // e' il colore del canale nudo, ma la luce che esce da una
+          // sommita' di nube ha attraversato chilometri di ghiaccio e ne
+          // esce bianca. Stretta e con il bordo che svanisce presto, cosi'
+          // la nube sotto continua a vedersi: e' illuminata, non coperta.
           if (nube > 0.012) {
-            const alto = punto.y - altezza * 0.62;
-            const largo = (118 + 84 * nube) * scala;
-            const coltre = context.createRadialGradient(
-              punto.x, alto, 0, punto.x, alto, largo
-            );
-            coltre.addColorStop(0, "rgba(168,190,255," + (0.30 * nube).toFixed(3) + ")");
-            coltre.addColorStop(0.28, "rgba(140,164,250," + (0.15 * nube).toFixed(3) + ")");
-            coltre.addColorStop(0.62, "rgba(110,136,235," + (0.05 * nube).toFixed(3) + ")");
-            coltre.addColorStop(1, "rgba(96,120,225,0)");
-            context.fillStyle = coltre;
-            context.beginPath();
-            context.arc(punto.x, alto, largo, 0, Math.PI * 2);
-            context.fill();
+            const largo = (38 + 34 * nube) * scala;
+            disegnaNubeIlluminata(context, punto, largo, nube);
           }
 
-          // Il cielo illuminato stretto attorno al canale: piu' acceso della
-          // coltre, e segue i colpi invece di integrarli. Piu' largo quando
-          // la scarica e' piu' forte -- e' luce, non una bolla che si
-          // espande: farlo crescere mentre si spegne darebbe l'effetto
-          // sbagliato, quello dell'onda d'urto.
+          // IL RAGNO. I filamenti che strisciano sulla sommita': sono
+          // l'unica cosa filiforme che si veda davvero da sopra, perche'
+          // corrono in superficie invece di stare dentro la nube.
+          //
+          // Tre passate sempre piu' strette e piu' chiare, e ognuna si
+          // assottiglia allontanandosi: la somma da' il nucleo
+          // incandescente senza che nessuna sia bianca piena, e il canale
+          // svanisce alla punta invece di finire di netto.
           if (luce > 0.012) {
-            const raggio = (34 + 74 * luce) * scala;
-            const alone = context.createRadialGradient(
-              punto.x, punto.y - altezza * 0.45, 0,
-              punto.x, punto.y - altezza * 0.45, raggio
-            );
-            alone.addColorStop(0, "rgba(186,212,255," + (0.78 * luce).toFixed(3) + ")");
-            alone.addColorStop(0.35, "rgba(128,168,244," + (0.34 * luce).toFixed(3) + ")");
-            alone.addColorStop(1, "rgba(90,130,220,0)");
-            context.fillStyle = alone;
-            context.beginPath();
-            context.arc(punto.x, punto.y - altezza * 0.45, raggio, 0, Math.PI * 2);
-            context.fill();
-          }
-
-          // La pozza di luce a terra: il terreno rischiarato sotto il punto
-          // di impatto. Schiacciata, perche' la mappa si guarda dall'alto.
-          if (luce > 0.012) {
-          context.save();
-          context.translate(punto.x, punto.y);
-          context.scale(1, 0.38);
-          const pozza = context.createRadialGradient(0, 0, 0, 0, 0, 46 * scala);
-          pozza.addColorStop(0, "rgba(255,248,228," + (0.8 * luce).toFixed(3) + ")");
-          pozza.addColorStop(0.5, "rgba(255,238,198," + (0.26 * luce).toFixed(3) + ")");
-          pozza.addColorStop(1, "rgba(255,230,180,0)");
-          context.fillStyle = pozza;
-          context.beginPath();
-          context.arc(0, 0, 46 * scala, 0, Math.PI * 2);
-          context.fill();
-          context.restore();
-          }
-
-          // I rami, piu' deboli del canale e spenti prima: si accendono solo
-          // al colpo di ritorno, mai durante il leader.
-          if (eta >= STRIKE_LEADER_MS && luce > 0.012) {
-            context.strokeStyle = "rgba(196,220,255," + (0.5 * luce).toFixed(3) + ")";
-            context.lineWidth = 3.4 * scala;
-            for (let r = 0; r < s.rami.length; r += 1) {
-              tracciaCanale(context, s.rami[r].punti, punto.x, punto.y,
-                altezza, larghezza, s.inclinazione);
+            const passate = [
+              { larghezza: 9, tinta: "255,228,184", alfa: 0.30 },
+              { larghezza: 3.2, tinta: "255,248,232", alfa: 0.58 },
+              { larghezza: 1.3, tinta: "255,255,253", alfa: 1 }
+            ];
+            for (let p = 0; p < passate.length; p += 1) {
+              const passata = passate[p];
+              const largo = passata.larghezza * scala;
+              const alfa = passata.alfa * luce;
+              for (let f = 0; f < s.ragno.length; f += 1) {
+                const filo = s.ragno[f];
+                const lungo = filo.lunghezza * raggio;
+                strokeSfumato(context,
+                  puntiFilamento(filo.forma, punto.x, punto.y, lungo, filo.direzione, fino),
+                  largo, passata.tinta, alfa);
+                // I rami si accendono solo col colpo di ritorno: durante il
+                // leader il canale non si e' ancora biforcato.
+                if (eta < STRIKE_LEADER_MS) continue;
+                for (let r = 0; r < filo.rami.length; r += 1) {
+                  const ramo = filo.rami[r];
+                  const radice = puntoDelFilamento(filo.forma, ramo.nodo,
+                    punto.x, punto.y, lungo, filo.direzione);
+                  strokeSfumato(context,
+                    puntiFilamento(ramo.forma, radice.x, radice.y,
+                      ramo.lunghezza * raggio, ramo.direzione),
+                    largo * 0.6, passata.tinta, alfa * 0.8);
+                }
+              }
             }
-            context.strokeStyle = "rgba(255,252,244," + (0.72 * luce).toFixed(3) + ")";
-            context.lineWidth = 1.1 * scala;
-            for (let r = 0; r < s.rami.length; r += 1) {
-              tracciaCanale(context, s.rami[r].punti, punto.x, punto.y,
-                altezza, larghezza, s.inclinazione);
-            }
-          }
-
-          // Il canale, in tre passate sempre piu' strette e piu' chiare. La
-          // somma delle tre da' il nucleo incandescente senza che nessuna
-          // delle tre sia bianca: e' come si comporta la luce vera.
-          if (luce > 0.012) {
-            context.strokeStyle = "rgba(96,146,255," + (0.5 * luce).toFixed(3) + ")";
-            context.lineWidth = 11 * scala;
-            tracciaCanale(context, s.canale, punto.x, punto.y, altezza, larghezza,
-              s.inclinazione, fino);
-            context.strokeStyle = "rgba(170,206,255," + (0.62 * luce).toFixed(3) + ")";
-            context.lineWidth = 4.2 * scala;
-            tracciaCanale(context, s.canale, punto.x, punto.y, altezza, larghezza,
-              s.inclinazione, fino);
-            context.strokeStyle = "rgba(255,253,246," + (0.95 * luce).toFixed(3) + ")";
-            context.lineWidth = 1.5 * scala;
-            tracciaCanale(context, s.canale, punto.x, punto.y, altezza, larghezza,
-              s.inclinazione, fino);
           }
 
           // LE BRACI. Finiti i colpi il canale non si spegne, si raffredda:
-          // resta un filo caldo che svanisce in un paio di decimi di
-          // secondo, e vira all'arancio mentre cala, com'e' giusto per
-          // qualcosa che perde temperatura. E' la differenza fra una luce
-          // che si spegne e una luce che muore.
+          // resta un filo caldo che svanisce in un decimo di secondo e vira
+          // all'arancio mentre cala, com'e' giusto per qualcosa che perde
+          // temperatura. E' la differenza fra una luce che si spegne e una
+          // luce che muore.
           if (brace > 0.012) {
-            context.strokeStyle = "rgba(255,150,64," + (0.30 * brace).toFixed(3) + ")";
-            context.lineWidth = 3.4 * scala;
-            tracciaCanale(context, s.canale, punto.x, punto.y, altezza, larghezza,
-              s.inclinazione);
-            context.strokeStyle = "rgba(255,226,170," + (0.55 * brace).toFixed(3) + ")";
-            context.lineWidth = 1.1 * scala;
-            tracciaCanale(context, s.canale, punto.x, punto.y, altezza, larghezza,
-              s.inclinazione);
+            for (let f = 0; f < s.ragno.length; f += 1) {
+              const filo = s.ragno[f];
+              strokeSfumato(context,
+                puntiFilamento(filo.forma, punto.x, punto.y,
+                  filo.lunghezza * raggio, filo.direzione),
+                1.6 * scala, "255,158,72", 0.5 * brace);
+            }
           }
         }
+
 
         // --- secondo passaggio: il segno che resta -----------------------
         // Non e' luce, e' un'etichetta: va disegnata normalmente, o su una
@@ -7067,6 +7240,11 @@
           // Il segno resta pieno per la prima meta' della vita e sbiadisce
           // nella seconda: cosi' le scariche degli ultimi minuti si leggono
           // tutte allo stesso modo, e solo le piu' vecchie si spengono.
+          // Mentre il lampo brilla il segno non serve: c'e' la luce vera,
+          // e un simbolo sovrapposto la fa sembrare un disegno. Il glifo
+          // compare quando la luce e' finita, ed e' li' che fa il suo
+          // mestiere -- dire dove la scarica e' caduta.
+          if (eta < s.durata * 0.8) continue;
           const vita = 1 - eta / limite.eta;
           const opacita = clamp(vita * 2, 0, 1);
           // Un battito lento sulle scariche fresche: l'occhio prende il

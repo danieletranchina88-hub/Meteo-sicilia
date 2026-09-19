@@ -35,11 +35,11 @@ const codice = ['STRIKE_LEADER_MS', 'STRIKE_STROKE_MS', 'STRIKE_BAGLIORE_MS',
   'CELLA_RAGGIO_KM',
   'STRIKE_LIFE_MS', 'STRIKE_MAX'].map(costante).join('\n')
   + '\n\n'
-  + ['semeCasuale', 'generaCanale', 'generaRami', 'preparaScarica', 'luceScarica',
+  + ['semeCasuale', 'generaCanale', 'generaRagno', 'preparaScarica', 'luceScarica',
      'luceNube', 'luceBrace', 'aggregaCelle', 'limiteSegni']
       .map(implementazione).join('\n\n');
 const modulo = new Function(codice
-  + '\nreturn {semeCasuale, generaCanale, generaRami, preparaScarica, luceScarica,'
+  + '\nreturn {semeCasuale, generaCanale, generaRagno, preparaScarica, luceScarica,'
   + ' luceNube, luceBrace, aggregaCelle, limiteSegni};')();
 
 const CELLA_MAX_ATTESO = Number(costante('CELLA_MAX').match(/= (\d+)/)[1]);
@@ -47,12 +47,24 @@ const STRIKE_MAX_ATTESO = Number(costante('STRIKE_MAX').match(/= (\d+)/)[1]);
 const STRIKE_LIFE_ATTESO = eval(costante('STRIKE_LIFE_MS').match(/= (.+);/)[1]);
 const STRIKE_BRACE_FINE = eval(costante('STRIKE_BRACE_MS').match(/= (.+);/)[1]);
 const CELLA_RAGGIO_ATTESO = Number(costante('CELLA_RAGGIO_KM').match(/= (\d+)/)[1]);
+const STRIKE_BAGLIORE_ATTESO = Number(costante('STRIKE_BAGLIORE_MS').match(/= (\d+)/)[1]);
 
 let ok = true;
 function prova(nome, fn) {
   try { fn(); console.log('PASS ' + nome); }
   catch (error) { ok = false; console.log('FALLITO ' + nome + ': ' + error.message); }
 }
+
+// Tutto il codice che disegna il lampo, non una funzione sola: il bagliore
+// e il ragno vivono in due posti diversi, e una prova che ne guardasse uno
+// solo passerebbe mentre l'altro e' azzurro.
+const regioneLampo = (function () {
+  const da = html.indexOf('      function disegnaNubeIlluminata(');
+  assert.ok(da >= 0, 'manca il disegno della nube illuminata');
+  const disegno = html.match(/function drawLiveStrikes\(\)[\s\S]*?\n {6}\}/);
+  assert.ok(disegno, 'manca il disegno delle scariche');
+  return html.slice(da, html.indexOf(disegno[0]) + disegno[0].length);
+})();
 
 function scarica(seme) {
   const s = { seme: seme };
@@ -65,49 +77,97 @@ prova('la stessa scarica da sempre lo stesso fulmine', () => {
   // invece di brillare: e' il motivo per cui la geometria nasce da un seme
   // fisso e si calcola una volta sola.
   const a = scarica(0.37), b = scarica(0.37), c = scarica(0.38);
-  assert.deepEqual(a.canale, b.canale, 'due scariche uguali danno canali diversi');
+  assert.deepEqual(a.ragno, b.ragno, 'due scariche uguali danno ragni diversi');
   assert.deepEqual(a.colpi, b.colpi, 'due scariche uguali danno colpi diversi');
-  assert.notDeepEqual(a.canale, c.canale, 'semi diversi danno lo stesso canale');
+  assert.notDeepEqual(a.ragno, c.ragno, 'semi diversi danno lo stesso ragno');
 });
 
-prova('il canale scende sempre e arriva a terra', () => {
+prova('il fulmine e\' visto dall\'alto, non di lato', () => {
+  // La cosa che questa modifica ha corretto, e che leggendo il disegno
+  // vecchio sembrava giusta: una saetta verticale che sale dal punto di
+  // impatto e' un fulmine visto DI LATO. Su una mappa zenitale quel canale
+  // sarebbe un punto. Dall'alto si vede la nube accendersi da dentro e i
+  // ragni strisciare sulla sommita', e basta.
+  const disegno = html.match(/function drawLiveStrikes\(\)[\s\S]*?\n {6}\}/);
+  assert.ok(disegno, 'manca il disegno delle scariche');
+  assert.doesNotMatch(disegno[0], /const altezza =/,
+    'il lampo ha di nuovo un\'altezza: e\' tornato a essere una veduta laterale');
+  assert.doesNotMatch(disegno[0], /punto\.y - altezza/,
+    'si disegna ancora sopra il punto, cioe\' di lato');
+  assert.match(disegno[0], /puntiFilamento\(/,
+    'i canali non strisciano piu\' sul piano');
+  // E il tracciatore deve davvero ruotare attorno alla direzione, non
+  // limitarsi a salire.
+  const tracciante = html.match(/function puntiFilamento\([\s\S]*?\n {6}\}/);
+  assert.ok(tracciante, 'manca il tracciatore dei filamenti');
+  assert.match(tracciante[0], /Math\.cos\(direzione\)/,
+    'il filamento non viene orientato nel piano');
+});
+
+prova('ogni filamento si allontana e non torna mai indietro', () => {
   for (let i = 0; i < 60; i += 1) {
     const s = scarica(i / 60);
-    let precedente = -1;
-    for (let k = 0; k < s.canale.length; k += 1) {
-      assert.ok(s.canale[k].y >= precedente,
-        'il canale risale: al punto ' + k + ' la quota torna indietro');
-      precedente = s.canale[k].y;
+    for (const filo of s.ragno) {
+      let precedente = -1;
+      for (let k = 0; k < filo.forma.length; k += 1) {
+        assert.ok(filo.forma[k].y >= precedente,
+          'il filamento torna verso il punto di partenza');
+        precedente = filo.forma[k].y;
+      }
+      assert.equal(filo.forma[0].y, 0, 'il filamento non parte dalla scarica');
+      assert.equal(filo.forma[filo.forma.length - 1].y, 1,
+        'il filamento non arriva alla sua punta');
     }
-    assert.equal(s.canale[0].y, 0, 'il canale non parte dalla base della nube');
-    assert.equal(s.canale[s.canale.length - 1].y, 1, 'il canale non tocca terra');
   }
 });
 
-prova('il canale e\' davvero spezzato, non una riga', () => {
-  // La prova che avrebbe smascherato la prima versione. Due misure:
-  // lo scarto laterale, in unita' di semilarghezza del disegno, e la
-  // tortuosita', cioe' quanto il percorso e' piu' lungo della corda.
+prova('i filamenti si spargono attorno al giro', () => {
+  // Sorteggiare sei direzioni a caso le fa finire spesso tutte dalla stessa
+  // parte, e il risultato sembra un pennello invece di una scarica. Le
+  // direzioni sono quindi sparse sul giro con un po' di disordine: qui si
+  // misura che nessun semicerchio resti vuoto.
+  for (let i = 0; i < 60; i += 1) {
+    const s = scarica(i / 60);
+    const angoli = s.ragno.map((f) => f.direzione)
+      .map((a) => ((a % (Math.PI * 2)) + Math.PI * 2) % (Math.PI * 2))
+      .sort((a, b) => a - b);
+    let buco = (angoli[0] + Math.PI * 2) - angoli[angoli.length - 1];
+    for (let k = 1; k < angoli.length; k += 1) {
+      buco = Math.max(buco, angoli[k] - angoli[k - 1]);
+    }
+    assert.ok(buco < Math.PI * 1.05,
+      'i filamenti lasciano scoperti ' + Math.round(buco * 180 / Math.PI)
+      + ' gradi di giro: il ragno pende tutto da una parte');
+  }
+});
+
+prova('il filamento e\' davvero spezzato, non un raggio dritto', () => {
+  // La prova che smaschera un frattale che non si vede: due misure, lo
+  // scarto laterale in unita' di semilarghezza e la tortuosita', cioe'
+  // quanto il percorso e' piu' lungo della corda.
   let scartoMinimo = Infinity, tortuositaMinima = Infinity;
   for (let i = 0; i < 60; i += 1) {
-    const s = scarica(i / 60);
-    let scarto = 0, percorso = 0;
-    for (let k = 0; k < s.canale.length; k += 1) {
-      scarto = Math.max(scarto, Math.abs(s.canale[k].x));
-      if (k) {
-        percorso += Math.hypot(s.canale[k].x - s.canale[k - 1].x,
-                               s.canale[k].y - s.canale[k - 1].y);
+    for (const filo of scarica(i / 60).ragno) {
+      let scarto = 0, percorso = 0;
+      for (let k = 0; k < filo.forma.length; k += 1) {
+        scarto = Math.max(scarto, Math.abs(filo.forma[k].x));
+        if (k) {
+          percorso += Math.hypot(filo.forma[k].x - filo.forma[k - 1].x,
+                                 filo.forma[k].y - filo.forma[k - 1].y);
+        }
       }
+      scartoMinimo = Math.min(scartoMinimo, scarto);
+      tortuositaMinima = Math.min(tortuositaMinima, percorso);
     }
-    scartoMinimo = Math.min(scartoMinimo, scarto);
-    tortuositaMinima = Math.min(tortuositaMinima, percorso);
   }
-  // Con larghezza 22 px sullo schermo, mezza unita' sono 11 px di scarto:
-  // sotto questa soglia il fulmine torna a leggersi come una riga.
-  assert.ok(scartoMinimo > 0.5,
-    'il canale piu\' dritto si scosta solo di ' + scartoMinimo.toFixed(2)
-    + ' semilarghezze: a schermo e\' una riga');
-  assert.ok(tortuositaMinima > 1.15,
+  // La soglia e' in unita' di semilarghezza del filamento. Un terzo
+  // significa che il piu' dritto dei filamenti lunghi si piega comunque di
+  // una quindicina di pixel a schermo, e il piu' corto di tre su venti di
+  // lunghezza: entrambi si leggono come scariche e non come raggi.
+  assert.ok(scartoMinimo > 0.3,
+    'il filamento piu\' dritto si scosta solo di ' + scartoMinimo.toFixed(2)
+    + ' semilarghezze: a schermo e\' un raggio');
+  assert.ok(tortuositaMinima > 1.05,
     'il percorso piu\' dritto e\' lungo ' + tortuositaMinima.toFixed(3)
     + ' volte la corda: non c\'e\' abbastanza dettaglio');
 });
@@ -115,43 +175,74 @@ prova('il canale e\' davvero spezzato, non una riga', () => {
 prova('il dettaglio c\'e\' a ogni scala, non solo nei gomiti grandi', () => {
   // La proprieta' che distingue un frattale da una zigzagata: raffinando si
   // continua a trovare struttura, con ampiezza che cala in modo geometrico.
-  // Misurata come scarto quadratico dei punti dalla corda, per meta' e per
-  // quarti del canale.
-  const s = scarica(0.41);
+  const punti = scarica(0.41).ragno[0].forma;
   function rugosita(da, a) {
     let somma = 0, n = 0;
     for (let k = da; k <= a; k += 1) {
-      const t = (s.canale[k].y - s.canale[da].y)
-        / ((s.canale[a].y - s.canale[da].y) || 1);
-      const corda = s.canale[da].x + t * (s.canale[a].x - s.canale[da].x);
-      somma += (s.canale[k].x - corda) ** 2; n += 1;
+      const t = (punti[k].y - punti[da].y) / ((punti[a].y - punti[da].y) || 1);
+      const corda = punti[da].x + t * (punti[a].x - punti[da].x);
+      somma += (punti[k].x - corda) ** 2; n += 1;
     }
     return Math.sqrt(somma / n);
   }
-  const ultimo = s.canale.length - 1;
+  const ultimo = punti.length - 1;
   const intera = rugosita(0, ultimo);
   const meta = Math.max(rugosita(0, ultimo >> 1), rugosita(ultimo >> 1, ultimo));
-  assert.ok(intera > 0, 'il canale non ha alcuna rugosita\'');
-  assert.ok(meta > 0.02,
-    'meta\' canale e\' liscia (' + meta.toFixed(4) + '): il dettaglio fine e\' sparito');
+  assert.ok(intera > 0, 'il filamento non ha alcuna rugosita\'');
+  assert.ok(meta > 0.01,
+    'meta\' filamento e\' liscia (' + meta.toFixed(4) + '): il dettaglio fine e\' sparito');
   assert.ok(meta < intera,
     'la rugosita\' non cala raffinando: non e\' un frattale, e\' rumore');
 });
 
-prova('i rami nascono dal canale e muoiono prima di toccare terra', () => {
+prova('il canale si assottiglia e si spegne verso la punta', () => {
+  // Un canale a spessore costante fino alla punta sembra uno stecco: era
+  // il difetto che faceva leggere il ragno come una figura disegnata invece
+  // che come una scarica. Spessore e luce devono calare col percorso.
+  const sfumato = html.match(/function strokeSfumato\([\s\S]*?\n {6}\}/);
+  assert.ok(sfumato, 'manca il tracciatore sfumato');
+  assert.match(sfumato[0], /const calo = \(1 - t\)/,
+    'lo spessore non dipende piu\' da quanto il canale si e\' allontanato');
+  assert.match(sfumato[0], /context\.lineWidth = Math\.max\([0-9.]+, larghezza \* calo\)/,
+    'lo spessore non cala verso la punta');
+  assert.match(sfumato[0], /alfa \* calo/,
+    'la luce non cala verso la punta: il canale finisce di netto');
+  // E il disegno deve usarlo davvero, in tutte le passate.
+  const disegno = html.match(/function drawLiveStrikes\(\)[\s\S]*?\n {6}\}/);
+  assert.ok(!/context\.lineWidth = \([0-9.]+ \? /.test(disegno[0]),
+    'restano passate a spessore fisso');
+  const usi = (disegno[0].match(/strokeSfumato\(/g) || []).length;
+  assert.ok(usi >= 3, 'il tracciatore sfumato viene usato solo ' + usi + ' volte');
+});
+
+prova('mentre il lampo brilla il simbolo non lo copre', () => {
+  // Il glifo e' un'etichetta: sovrapposto alla luce vera la fa sembrare un
+  // disegno. Deve comparire quando la scarica ha finito di illuminare.
+  const disegno = html.match(/function drawLiveStrikes\(\)[\s\S]*?\n {6}\}/);
+  assert.match(disegno[0], /if \(eta < s\.durata \* 0\.8\) continue;/,
+    'il simbolo viene disegnato sopra il lampo acceso');
+});
+
+prova('i rami sono piu\' corti del filamento da cui nascono', () => {
+  // Un ramo lungo quanto il suo filamento non e' una biforcazione: e' un
+  // secondo fulmine, e disegnato cosi' il ragno sembra una ragnatela.
+  let trovati = 0;
   for (let i = 0; i < 60; i += 1) {
-    const s = scarica(i / 60);
-    assert.ok(s.rami.length >= 2, 'una scarica senza biforcazioni');
-    for (let r = 0; r < s.rami.length; r += 1) {
-      const punti = s.rami[r].punti;
-      const fine = punti[punti.length - 1].y;
-      // Un ramo che arriva a terra non e' un ramo: e' un secondo fulmine,
-      // e disegnato cosi' sembrerebbe che la scarica sia doppia.
-      assert.ok(fine < 1,
-        'un ramo arriva a quota ' + fine.toFixed(3) + ', cioe\' sottoterra');
-      assert.ok(punti[0].y < fine, 'un ramo risale invece di scendere');
+    for (const filo of scarica(i / 60).ragno) {
+      for (const ramo of filo.rami) {
+        trovati += 1;
+        assert.ok(ramo.lunghezza < filo.lunghezza * 0.6,
+          'un ramo lungo ' + ramo.lunghezza.toFixed(2) + ' su un filamento da '
+          + filo.lunghezza.toFixed(2));
+        assert.ok(ramo.nodo > 0.2 && ramo.nodo < 0.8,
+          'un ramo nasce sulla punta o sul punto della scarica');
+        // Si stacca di lato: un ramo parallelo al filamento non si vede.
+        const scarto = Math.abs(ramo.direzione - filo.direzione);
+        assert.ok(scarto > 0.3, 'un ramo corre parallelo al filamento');
+      }
     }
   }
+  assert.ok(trovati > 20, 'quasi nessuna scarica ha biforcazioni: ne ho contate ' + trovati);
 });
 
 prova('la luce sfarfalla: piu\' colpi lungo lo stesso canale', () => {
@@ -203,6 +294,107 @@ prova('la nube resta accesa oltre lo sfarfallio del canale', () => {
   assert.ok(modulo.luceNube(s, s.durata) < 0.06,
     'la nube e\' ancora accesa quando il ciclo smette di aggiornarla: '
     + 'si spegnerebbe di scatto');
+});
+
+prova('la luce esce dalle nubi, non da un disco', () => {
+  // Un lampo visto dall'alto non illumina un cerchio: illumina LA NUBE, e
+  // la macchia luminosa ha la sagoma della sommita' nuvolosa. Un disco
+  // morbido, per quanto ben sfumato, si riconosce subito come disegnato.
+  // La sagoma non si inventa: l'immagine satellitare passa gia' da una
+  // canvas nostra, e da quei pixel si ricava.
+  assert.match(html, /costruisciMascheraNube\(canvas, box\);/,
+    'la maschera delle nubi non viene piu\' costruita quando arriva un fotogramma');
+  const maschera = html.match(/function costruisciMascheraNube\([\s\S]*?\n {6}\}/);
+  assert.ok(maschera, 'manca la costruzione della maschera');
+  assert.match(maschera[0], /0\.2126/,
+    'la nuvolosita\' non si misura piu\' dalla luminanza percepita');
+  assert.match(maschera[0], /px\[i \+ 3\] = Math\.round\(255 \* nuvolosita/,
+    'la maschera non finisce nel canale alfa: non ritaglierebbe niente');
+  // E il ritaglio non deve poter spegnere del tutto un lampo: la posizione
+  // di una scarica ha un chilometro di incertezza, e basta che cada in uno
+  // squarcio fra le nubi perche' la maschera le porti via tutta la luce.
+  assert.match(ritaglioMinimo(), /tondo\(0\.34\);/,
+    'senza un minimo garantito una scarica caduta fra due nubi diventa invisibile');
+  function ritaglioMinimo() {
+    return html.match(/function disegnaNubeIlluminata\([\s\S]*?\n {6}\}/)[0];
+  }
+  const ritaglio = html.match(/function disegnaNubeIlluminata\([\s\S]*?\n {6}\}/);
+  assert.ok(ritaglio, 'manca il disegno della nube illuminata');
+  assert.match(ritaglio[0], /globalCompositeOperation = "destination-in"/,
+    'il bagliore non viene piu\' ritagliato sulla sagoma delle nubi');
+  // E deve esistere la via di scampo: senza maschera, o con la mappa
+  // inclinata -- dove il riquadro dell'immagine non e' piu' un rettangolo
+  // sullo schermo -- si torna al bagliore tondo invece di sbagliare.
+  assert.match(ritaglio[0], /map\.getPitch\(\) > 4/,
+    'con la mappa inclinata il ritaglio finirebbe fuori posto');
+  assert.match(ritaglio[0], /if \(!mascheraNube \|\| inclinata \|\| !showSatelliteClouds\)/,
+    'senza immagine satellitare il lampo resterebbe invisibile');
+});
+
+prova('la luce del lampo e\' bianca calda, non azzurra', () => {
+  // La luce che esce dalla sommita' di una nube ha attraversato chilometri
+  // di ghiaccio: l'azzurro e' il colore del canale nudo a trentamila gradi,
+  // ma diffuso resta un bianco appena caldo. Un lampo azzurro su una mappa
+  // e' un lampo visto da vicino e al buio, non da un satellite.
+  const colori = [...regioneLampo.matchAll(/rgba\((\d+),(\d+),(\d+),/g)]
+    .map((m) => ({ r: +m[1], g: +m[2], b: +m[3] }));
+  assert.ok(colori.length > 6, 'non trovo i colori del lampo');
+  // Solo i colori CHIARI: i contorni scuri del glifo sono quasi neri, e un
+  // nero ha sempre piu' blu che rosso senza per questo essere azzurro.
+  const chiari = colori.filter((c) => c.r + c.g + c.b > 320);
+  const freddi = chiari.filter((c) => c.b > c.r + 8);
+  // Gli unici colori freddi ammessi sono le due tappe piu' esterne del
+  // gradiente della nube: la luce diffusa vira davvero al blu sul margine,
+  // ma con un'opacita' che si conta in centesimi.
+  const fringia = [...regioneLampo.matchAll(
+    /g\.addColorStop\(([0-9.]+), "rgba\((\d+),(\d+),(\d+),([^"]*)"/g)]
+    .filter((m) => +m[4] > +m[2] + 8);
+  for (const m of fringia) {
+    assert.ok(+m[1] >= 0.8,
+      'la tinta fredda compare gia\' a ' + m[1] + ' del raggio: non e\' un '
+      + 'accenno sul bordo, e\' il colore del lampo');
+    const alfa = m[5].match(/\(([0-9.]+) \* nube\)/);
+    assert.ok(!alfa || Number(alfa[1]) <= 0.05,
+      'la tinta fredda del bordo ha opacita\' ' + (alfa && alfa[1]) + ': si vede come azzurro');
+  }
+  assert.equal(freddi.length, fringia.length,
+    'il lampo ha ' + (freddi.length - fringia.length) + ' colori chiari piu\' blu '
+    + 'che rossi oltre all\'accenno sul bordo: e\' tornato azzurro ('
+    + freddi.map((c) => c.r + ',' + c.g + ',' + c.b).join(' / ') + ')');
+  // E il nucleo della cella, che e' la macchia piu' larga di tutte.
+  const nucleo = html.match(/const NUCLEO_COLORI = \[([\s\S]*?)\];/);
+  assert.ok(nucleo, 'manca la tavolozza del nucleo');
+  for (const m of nucleo[1].matchAll(/\[(\d+), (\d+), (\d+)\]/g)) {
+    assert.ok(+m[1] >= +m[3],
+      'un nucleo con piu\' blu che rosso (' + m[1] + ',' + m[2] + ',' + m[3]
+      + '): tinge di azzurro tutta la sommita\' della nube');
+  }
+});
+
+prova('l\'alone illumina le nuvole invece di coprirle', () => {
+  // Due modi di coprire: troppo largo e troppo a lungo. Il primo spalma una
+  // tinta piatta su mezza cella, il secondo lascia la macchia sulla mappa
+  // quando il lampo e' gia' finito.
+  const largo = regioneLampo.match(/const largo = \((\d+) \+ (\d+) \* nube\) \* scala;/);
+  assert.ok(largo, 'non trovo il raggio della nube illuminata');
+  const massimo = Number(largo[1]) + Number(largo[2]);
+  assert.ok(massimo <= 90,
+    'la nube illuminata arriva a ' + massimo + ' pixel di raggio: a quella '
+    + 'dimensione non illumina la nube, la copre');
+  // E deve spegnersi in fretta.
+  const s = scarica(0.44);
+  assert.ok(modulo.luceNube(s, s.ultimoColpo + 250) < 0.12,
+    'un quarto di secondo dopo l\'ultimo colpo la nube e\' ancora accesa');
+  assert.ok(STRIKE_BAGLIORE_ATTESO <= 420,
+    'il bagliore dura ' + STRIKE_BAGLIORE_ATTESO + ' ms: resta sulla mappa');
+  // Il centro puo' essere acceso, ma il bordo deve lasciar vedere la nube:
+  // il gradiente non arriva mai opaco fino al margine.
+  const stops = [...regioneLampo.matchAll(/g\.addColorStop\(([0-9.]+), "rgba\([^)]*?," \+ \(([0-9.]+) \* nube\)/g)]
+    .map((m) => ({ dove: +m[1], alfa: +m[2] }));
+  assert.ok(stops.length >= 3, 'il gradiente della nube ha troppe poche tappe');
+  const fuori = stops.filter((t) => t.dove >= 0.6);
+  assert.ok(fuori.length && fuori.every((t) => t.alfa <= 0.1),
+    'il bordo dell\'alone e\' ancora opaco: copre la nube invece di sfumarci sopra');
 });
 
 prova('le braci partono quando i colpi finiscono, e durano poco', () => {
