@@ -291,6 +291,87 @@ prova('prima del colpo di ritorno c\'e\' solo il leader, debole', () => {
   assert.ok(dopo > 0.7, 'il colpo di ritorno non illumina (' + dopo.toFixed(2) + ')');
 });
 
+prova('i canali diagnostici non diventano una sagoma di nube', () => {
+  // Fase delle nubi, tipo di nube, nebbia, polvere, neve sono RGB
+  // artificiali: il rosa o il verde acceso segnalano una diagnosi (ghiaccio
+  // piccolo, polvere, manto nevoso), non "piu' chiaro, piu' nube". Usarne
+  // la luminanza come sagoma sarebbe fisica finta con l'aria di essere
+  // vera -- illuminerebbe la nube secondo una scala che misura tutt'altro.
+  const maschera = implementazione('costruisciMascheraNube');
+  assert.match(maschera, /if \(!product \|\| !\["scene", "grey"\]\.includes\(product\.mode\)\) return null;/,
+    'i canali diagnostici (fase, tipo, nebbia, polvere, neve) producono ancora una maschera');
+  // E la tavolozza dichiarata dei prodotti deve avere davvero quella
+  // proprieta', o il controllo sopra non filtra nulla.
+  assert.match(html, /cloudphase: \{[\s\S]{0,200}mode: "diagnostic"/,
+    'il prodotto diagnostico non dichiara piu\' la propria natura');
+  assert.match(html, /geocolour: \{[\s\S]{0,200}mode: "scene"/,
+    'il composito a colori naturali non e\' piu\' marcato "scene"');
+});
+
+prova('sui compositi a colore, terra e luci non contano come nube', () => {
+  // Un deserto, un tetto assolato o le luci di una citta' possono essere
+  // chiari quanto una sommita' di cumulo -- ma sono COLORATI, e una nube
+  // no. Sul grigio dell'infrarosso non c'e' colore da giudicare: il filtro
+  // vale solo sui compositi "scene".
+  const maschera = implementazione('costruisciMascheraNube');
+  assert.match(maschera,
+    /const saturazione = \(Math\.max\(r, g, b\) - Math\.min\(r, g, b\)\) \/ Math\.max\(1, r, g, b\);/,
+    'manca il calcolo della saturazione');
+  assert.match(maschera,
+    /const neutro = product\.mode === "scene"\s*\n\s*\? 1 - clamp\(\(saturazione - 0\.12\) \/ 0\.5, 0, 1\)\s*\n\s*: 1;/,
+    'la saturazione non penalizza piu\' la nuvolosita\' sui compositi a colore');
+  assert.match(maschera, /const nuvolosita = grezza \* grezza \* \(3 - 2 \* grezza\) \* neutro \* alfaSorgente;/,
+    'il fattore neutro non entra piu\' nel calcolo della nuvolosita\'');
+});
+
+prova('una richiesta superata non ripubblica la sua immagine vecchia', () => {
+  // Il caricamento di un\'immagine e la sua codifica in PNG sono due passi,
+  // e il secondo e' asincrono (canvas.toBlob). Se nel frattempo parte ED
+  // ARRIVA una richiesta piu\' nuova, la codifica piu\' lenta della vecchia
+  // vince comunque la corsa: senza un controllo qui, ripubblicherebbe
+  // un\'immagine superata SOPRA quella giusta gia\' in mostra, e la maschera
+  // dei fulmini tornerebbe a descrivere la nube di prima.
+  const pubblica = implementazione('publishSatelliteClouds');
+  assert.match(pubblica, /const publicationToken = cloudToken;/,
+    'la pubblicazione non tiene piu\' traccia di quale richiesta e\'');
+  // Il controllo che conta e' quello dentro update(): e' il punto dove si
+  // decide se mostrare davvero l\'immagine e la sua maschera, e deve essere
+  // la PRIMA cosa che fa -- prima ancora del try, o l\'aggiornamento
+  // partirebbe comunque.
+  const update = pubblica.match(/const update = function \(url, isObjectUrl\) \{[\s\S]*?\n {8}\};/);
+  assert.ok(update, 'manca la funzione che pubblica davvero il fotogramma');
+  assert.match(update[0], /^const update = function \(url, isObjectUrl\) \{\s*\n\s*if \(publicationToken !== cloudToken\) \{/,
+    'update() non e\' piu\' la prima cosa a controllare se e\' ancora la richiesta giusta');
+  assert.match(update[0], /mascheraNube = maschera;/,
+    'la maschera vera non si aggiorna piu\' dentro update()');
+  // E il secondo controllo, dentro la codifica asincrona: senza questo,
+  // una richiesta scartata rivelerebbe comunque l\'immagine vecchia una
+  // volta finita la sua codifica in PNG.
+  const dopoIlBlob = pubblica.match(/canvas\.toBlob\(function \(blob\) \{[\s\S]*?\n {12}\}, "image\/png"\);/);
+  assert.ok(dopoIlBlob, 'manca la codifica asincrona del fotogramma');
+  assert.match(dopoIlBlob[0], /if \(publicationToken !== cloudToken\) \{ URL\.revokeObjectURL\(url\); return; \}/,
+    'la codifica finita in ritardo non controlla piu\' se la richiesta e\' ancora quella giusta');
+});
+
+prova('scorrendo fino a un istante gia\' visto, il lampo sagoma la nube giusta', () => {
+  // pubblicaFotogrammaInCache ripubblica un fotogramma senza toccare la
+  // rete. Se non ripristina anche la maschera che gli appartiene, il
+  // bagliore resterebbe sagomato sull\'ultima immagine scaricata dal vivo
+  // invece che su quella davvero in mostra dopo lo scorrimento.
+  const dallaCache = implementazione('pubblicaFotogrammaInCache');
+  assert.match(dallaCache, /mascheraNube = frame\.maschera \|\| null;/,
+    'ripubblicando dalla cache la maschera dei fulmini non si aggiorna piu\'');
+  const ricorda = implementazione('rememberCloudFrame');
+  assert.match(ricorda, /maschera: maschera \|\| null/,
+    'la cache non conserva piu\' la maschera insieme al fotogramma');
+  // E il precaricamento in sottofondo -- quello che prepara gli istanti
+  // vicini prima che l\'utente li chieda -- deve costruirla anche lui, o i
+  // fotogrammi precaricati arriverebbero con la sagoma sempre assente.
+  const scarica = implementazione('scaricaFotogramma');
+  assert.match(scarica, /costruisciMascheraNube\(canvas, box, product\)/,
+    'il precaricamento in sottofondo non costruisce piu\' la sagoma');
+});
+
 prova('la nube resta accesa oltre lo sfarfallio del canale', () => {
   // Il punto della coltre: il canale sfarfalla in decimi di secondo, la
   // massa d'aria illuminata no. Se la nube seguisse i colpi si vedrebbe
@@ -320,7 +401,7 @@ prova('la luce esce dalle nubi, non da un disco', () => {
   // morbido, per quanto ben sfumato, si riconosce subito come disegnato.
   // La sagoma non si inventa: l'immagine satellitare passa gia' da una
   // canvas nostra, e da quei pixel si ricava.
-  assert.match(html, /costruisciMascheraNube\(canvas, box\);/,
+  assert.match(html, /maschera = costruisciMascheraNube\(canvas, box, product\);/,
     'la maschera delle nubi non viene piu\' costruita quando arriva un fotogramma');
   const maschera = html.match(/function costruisciMascheraNube\([\s\S]*?\n {6}\}/);
   assert.ok(maschera, 'manca la costruzione della maschera');
@@ -328,6 +409,13 @@ prova('la luce esce dalle nubi, non da un disco', () => {
     'la nuvolosita\' non si misura piu\' dalla luminanza percepita');
   assert.match(maschera[0], /px\[i \+ 3\] = Math\.round\(255 \* nuvolosita/,
     'la maschera non finisce nel canale alfa: non ritaglierebbe niente');
+  // La funzione RESTITUISCE la maschera, non muta piu' la globale in
+  // silenzio: e' quello che permette a chi chiama di deciderne le sorti
+  // (applicarla solo se questa e' ancora la richiesta piu' recente).
+  assert.doesNotMatch(maschera[0], /mascheraNube = /,
+    'la funzione muta ancora la globale invece di restituire il risultato');
+  assert.match(maschera[0], /return \{ tela: piccola,/,
+    'la funzione non restituisce piu\' la maschera costruita');
   // E il ritaglio non deve poter spegnere del tutto un lampo: la posizione
   // di una scarica ha un chilometro di incertezza, e basta che cada in uno
   // squarcio fra le nubi perche' la maschera le porti via tutta la luce.
