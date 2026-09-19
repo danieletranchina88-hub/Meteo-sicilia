@@ -2513,7 +2513,10 @@
                   <span><b>Satellite MTG</b><small id="satclouds-note">immagini reali e diagnostiche EUMETSAT</small></span><span class="switch"></span>
                 </button>
                 <button class="toggle-row" type="button" data-toggle="lightning" aria-pressed="false">
-                  <span><b>Fulmini</b><small id="lightning-note">MTG-I1 · area di flash · passo 5 minuti</small></span><span class="switch"></span>
+                  <span><b>Fulmini da satellite</b><small id="lightning-note">MTG-I1 · area di flash · passo 5 minuti</small></span><span class="switch"></span>
+                </button>
+                <button class="toggle-row" type="button" data-toggle="livelightning" aria-pressed="false">
+                  <span><b>Fulmini in diretta</b><small id="livelightning-note">Blitzortung · rete a terra · scariche in diretta</small></span><span class="switch"></span>
                 </button>
                 <div id="satclouds-picker" class="level-picker" style="display: none">
                 <label for="satclouds-select">Prodotto satellitare
@@ -5982,11 +5985,19 @@
           canvas.width = image.naturalWidth || size.width;
           canvas.height = image.naturalHeight || size.height;
           canvas.getContext("2d").drawImage(image, 0, 0);
+          const chiave = cloudFrameKey(product, slot, box, size);
           if (typeof canvas.toBlob === "function"
               && typeof URL.createObjectURL === "function") {
             canvas.toBlob(function (blob) {
               if (!blob) { update(image.src, false); return; }
-              update(URL.createObjectURL(blob), true);
+              const url = URL.createObjectURL(blob);
+              // In cache prima di pubblicare: tornando su questo istante non
+              // si chiedera' piu' nulla alla rete. La cache possiede l'URL,
+              // quindi update non lo deve liberare.
+              rememberCloudFrame(chiave, url, box, size);
+              cloudPublishedKey = chiave;
+              update(url, false);
+              scheduleCloudPrefetch();
             }, "image/png");
           } else {
             update(canvas.toDataURL("image/png"), false);
@@ -6093,6 +6104,314 @@
           toast("Satellite EUMETSAT non raggiungibile");
         };
         image.src = cloudUrl(box, size, product, slot);
+      }
+
+      // ---- FULMINI IN DIRETTA (Blitzortung) ----------------------------
+      //
+      // Rete di rilevamento a terra gestita da volontari: la singola scarica
+      // con 3-20 secondi di ritardo, contro i 21 minuti del sensore a bordo di
+      // MTG-I1. I due livelli non si sostituiscono, si completano -- questo
+      // vale solo adesso, perche' e' un flusso e non un archivio, quindi
+      // scorrendo la barra del tempo sparisce e resta il Lightning Imager,
+      // che invece il passato ce l'ha.
+      //
+      // Sui termini: Blitzortung riserva i dati ai partecipanti del progetto o
+      // a chi ha un permesso, vieta l'uso commerciale e chiede alle
+      // applicazioni di terze parti di non scaricare i propri utenti sui suoi
+      // server. Qui il sito e' uno strumento personale con un solo lettore:
+      // una connessione sola, nessuna ridistribuzione, nessun uso
+      // commerciale. Se un giorno diventasse un sito con visitatori, questo
+      // livello andrebbe spento o spostato dietro un relay proprio.
+      //
+      // Il protocollo e' stato verificato sul flusso vero, non dedotto: ci si
+      // connette, si manda {"a":111}, e ogni frame e' JSON compresso in LZW.
+      const BLITZORTUNG_HOSTS = [
+        "wss://ws1.blitzortung.org:443/",
+        "wss://ws7.blitzortung.org:443/",
+        "wss://ws8.blitzortung.org:443/"
+      ];
+      // Quanto a lungo una scarica resta visibile. Il lampo vero dura
+      // frazioni di secondo; qui il segno si trattiene perche' serve a vedere
+      // DOVE sta lavorando la cella, non a riprodurre la durata ottica.
+      const STRIKE_LIFE_MS = 150 * 1000;
+      const STRIKE_FLASH_MS = 1100;
+      const STRIKE_MAX = 400;
+
+      let liveStrikes = [];
+      let blitzSocket = null;
+      let blitzHostIndex = 0;
+      let blitzRetryTimer = 0;
+      let blitzRetryDelay = 2000;
+      let blitzLastStrikeAt = 0;
+      let showLiveLightning = false;
+
+      // Decodificatore LZW del flusso. Il dizionario parte dai caratteri
+      // singoli e le voci nuove arrivano come code point >= 256: e' per
+      // questo che il JSON sembra "degradare" dopo i primi campi.
+      function decodeBlitzortung(input) {
+        const dict = {};
+        const data = Array.from(input);
+        if (!data.length) return "";
+        let currChar = data[0];
+        let oldPhrase = currChar;
+        const out = [currChar];
+        let code = 256;
+        let phrase;
+        for (let i = 1; i < data.length; i += 1) {
+          const currCode = data[i].codePointAt(0);
+          if (currCode < 256) phrase = data[i];
+          else phrase = dict[currCode] ? dict[currCode] : (oldPhrase + currChar);
+          out.push(phrase);
+          currChar = phrase.charAt(0);
+          dict[code] = oldPhrase + currChar;
+          code += 1;
+          oldPhrase = phrase;
+        }
+        return out.join("");
+      }
+
+      function blitzConnect() {
+        if (!showLiveLightning || blitzSocket) return;
+        if (typeof WebSocket === "undefined") return;
+        const host = BLITZORTUNG_HOSTS[blitzHostIndex % BLITZORTUNG_HOSTS.length];
+        let socket;
+        try { socket = new WebSocket(host); } catch (error) { blitzRetry(); return; }
+        blitzSocket = socket;
+        socket.onopen = function () {
+          blitzRetryDelay = 2000;
+          // Senza questo il server non manda nulla: e' la richiesta di
+          // sottoscrizione al flusso.
+          try { socket.send('{"a":111}'); } catch (error) { /* ci pensa onclose */ }
+          updateLiveLightningNote();
+        };
+        socket.onmessage = function (event) {
+          if (typeof event.data !== "string") return;
+          let payload;
+          try { payload = JSON.parse(decodeBlitzortung(event.data)); }
+          catch (error) { return; }
+          addLiveStrike(payload);
+        };
+        socket.onerror = function () { /* il browser chiude subito dopo */ };
+        socket.onclose = function () {
+          if (blitzSocket === socket) blitzSocket = null;
+          updateLiveLightningNote();
+          // Host successivo al tentativo dopo: se uno e' in manutenzione gli
+          // altri rispondono, e non si insiste sullo stesso.
+          blitzHostIndex += 1;
+          blitzRetry();
+        };
+      }
+
+      function blitzRetry() {
+        if (!showLiveLightning || blitzRetryTimer) return;
+        blitzRetryTimer = setTimeout(function () {
+          blitzRetryTimer = 0;
+          blitzConnect();
+        }, blitzRetryDelay);
+        // Attesa che raddoppia fino a mezzo minuto: se la rete e' giu' non la
+        // si martella.
+        blitzRetryDelay = Math.min(blitzRetryDelay * 2, 30000);
+      }
+
+      function blitzDisconnect() {
+        if (blitzRetryTimer) { clearTimeout(blitzRetryTimer); blitzRetryTimer = 0; }
+        const socket = blitzSocket;
+        blitzSocket = null;
+        if (socket) { try { socket.close(); } catch (error) { /* gia' chiusa */ } }
+      }
+
+      function addLiveStrike(payload) {
+        const lat = Number(payload && payload.lat);
+        const lon = Number(payload && payload.lon);
+        if (!Number.isFinite(lat) || !Number.isFinite(lon)) return;
+        // Il flusso e' mondiale: si tiene solo cio' che cade nel dominio.
+        if (lon < CLOUD_DOMAIN.west || lon > CLOUD_DOMAIN.east) return;
+        if (lat < CLOUD_DOMAIN.south || lat > CLOUD_DOMAIN.north) return;
+        // Il tempo arriva in nanosecondi.
+        const quando = Number(payload.time) / 1e6;
+        blitzLastStrikeAt = Date.now();
+        liveStrikes.push({
+          lat: lat, lon: lon,
+          at: Number.isFinite(quando) ? quando : Date.now(),
+          nato: performance.now(),
+          // Seme fisso per scarica: il disegno a zig-zag deve restare lo
+          // stesso a ogni fotogramma, o il fulmine "tremerebbe".
+          seme: (Math.abs(Math.round(lat * 9973) + Math.round(lon * 9949)) % 1000) / 1000,
+          stazioni: payload.sig && payload.sig.length ? payload.sig.length : 0
+        });
+        if (liveStrikes.length > STRIKE_MAX) {
+          liveStrikes.splice(0, liveStrikes.length - STRIKE_MAX);
+        }
+        updateLiveLightningNote();
+        startStrikeAnimation();
+      }
+
+      // Il segno di una scarica. Non un pallino: un lampo che sboccia e
+      // svanisce, e che lascia il simbolo del fulmine finche' la scarica e'
+      // recente.
+      //
+      // Tre tempi diversi, ed e' quello che lo fa sembrare vero:
+      //  - il BAGLIORE, un alone che si allarga e sparisce in meno di un
+      //    secondo, come la luce che illumina la nube attorno;
+      //  - la SAETTA a zig-zag, bianca incandescente con alone azzurro,
+      //    disegnata solo durante il bagliore;
+      //  - il SEGNO che resta, un fulmine piccolo che si spegne piano nei
+      //    minuti successivi, perche' serve a vedere dove sta lavorando la
+      //    cella, non a riprodurre la durata ottica del lampo.
+      //
+      // Lo zig-zag nasce da un seme fisso per scarica: senza, la saetta
+      // cambierebbe forma a ogni fotogramma e tremerebbe invece di brillare.
+      function drawBoltPath(context, x, y, altezza, seme, larghezza) {
+        const segmenti = 5;
+        context.beginPath();
+        context.moveTo(x, y - altezza);
+        let casuale = seme;
+        for (let i = 1; i <= segmenti; i += 1) {
+          // Generatore deterministico: stessa scarica, stessa saetta.
+          casuale = (casuale * 9301 + 49297) % 233280 / 233280;
+          const t = i / segmenti;
+          const scarto = (casuale - 0.5) * larghezza * (1 - t * 0.55);
+          context.lineTo(x + scarto, y - altezza * (1 - t));
+        }
+        context.stroke();
+      }
+
+      // Il glifo del fulmine, quello del simbolo: un lampo spezzato pieno.
+      function drawBoltGlyph(context, x, y, scala, contorno) {
+        context.beginPath();
+        context.moveTo(x + 0.15 * scala, y - 1.0 * scala);
+        context.lineTo(x - 0.45 * scala, y + 0.08 * scala);
+        context.lineTo(x - 0.05 * scala, y + 0.08 * scala);
+        context.lineTo(x - 0.22 * scala, y + 1.0 * scala);
+        context.lineTo(x + 0.46 * scala, y - 0.18 * scala);
+        context.lineTo(x + 0.04 * scala, y - 0.18 * scala);
+        context.closePath();
+        if (contorno) context.stroke();
+        else context.fill();
+      }
+
+      function drawLiveStrikes() {
+        if (!showLiveLightning || !liveStrikes.length || !map) return;
+        // Un flusso non ha archivio: queste scariche sono arrivate adesso e
+        // valgono solo adesso. Spostando la barra nel passato spariscono, e
+        // resta il Lightning Imager, che il passato ce l'ha.
+        if (cloudTimeSelected) return;
+        const context = vectorContext;
+        const adesso = performance.now();
+        const scala = clamp(0.8 + (map.getZoom() - 4) * 0.13, 0.8, 2.1);
+        context.save();
+        context.lineCap = "round";
+        context.lineJoin = "round";
+        for (let i = 0; i < liveStrikes.length; i += 1) {
+          const s = liveStrikes[i];
+          const eta = adesso - s.nato;
+          if (eta > STRIKE_LIFE_MS) continue;
+          const punto = projectParticle(s.lon, s.lat, 0);
+          if (!punto) continue;
+
+          if (eta < STRIKE_FLASH_MS) {
+            // Il bagliore: si allarga e si spegne.
+            const t = eta / STRIKE_FLASH_MS;
+            const raggio = (14 + 70 * t) * scala;
+            const forza = Math.pow(1 - t, 1.7);
+            const alone = context.createRadialGradient(
+              punto.x, punto.y, 0, punto.x, punto.y, raggio
+            );
+            alone.addColorStop(0, "rgba(255,255,255," + (0.85 * forza).toFixed(3) + ")");
+            alone.addColorStop(0.35, "rgba(190,214,255," + (0.5 * forza).toFixed(3) + ")");
+            alone.addColorStop(1, "rgba(150,180,255,0)");
+            context.fillStyle = alone;
+            context.beginPath();
+            context.arc(punto.x, punto.y, raggio, 0, Math.PI * 2);
+            context.fill();
+
+            // La saetta, finche' il bagliore dura.
+            const altezza = 54 * scala;
+            const larghezza = 20 * scala;
+            context.strokeStyle = "rgba(150,195,255," + (0.8 * forza).toFixed(3) + ")";
+            context.lineWidth = 7.5 * scala;
+            drawBoltPath(context, punto.x, punto.y, altezza, s.seme, larghezza);
+            context.strokeStyle = "rgba(255,255,255," + (0.98 * forza).toFixed(3) + ")";
+            context.lineWidth = 2.4 * scala;
+            drawBoltPath(context, punto.x, punto.y, altezza, s.seme, larghezza);
+          }
+
+          // Il segno che resta: si spegne piano, e negli ultimi istanti
+          // svanisce del tutto invece di sparire di colpo.
+          // Il segno resta pieno per la prima meta' della vita e sbiadisce
+          // nella seconda: cosi' le scariche degli ultimi minuti si leggono
+          // tutte allo stesso modo, e solo le piu' vecchie si spengono.
+          const vita = 1 - eta / STRIKE_LIFE_MS;
+          const opacita = clamp(vita * 2, 0, 1);
+          // Contorno scuro: sotto c'e' un'immagine notturna piena di luci,
+          // e un glifo giallo senza stacco ci si perderebbe dentro.
+          context.strokeStyle = "rgba(6,10,18," + (0.85 * opacita).toFixed(3) + ")";
+          context.lineWidth = 2.4 * scala;
+          context.lineJoin = "round";
+          drawBoltGlyph(context, punto.x, punto.y, 10 * scala, true);
+          context.fillStyle = eta < STRIKE_FLASH_MS
+            ? "rgba(255,255,255," + opacita.toFixed(3) + ")"
+            : "rgba(255,216,74," + opacita.toFixed(3) + ")";
+          drawBoltGlyph(context, punto.x, punto.y, 10 * scala);
+        }
+        context.restore();
+      }
+
+      // Il disegno dei lampi ha bisogno di un ciclo suo: drawVectors nasce
+      // per essere chiamato quando qualcosa cambia, non sessanta volte al
+      // secondo. Il ciclo gira solo finche' ci sono scariche vive, va a piena
+      // frequenza mentre almeno un bagliore e' acceso e rallenta a un
+      // fotogramma ogni secondo e mezzo quando restano solo i segni che
+      // sbiadiscono.
+      let strikeFrame = null;
+      let strikeLastDraw = 0;
+
+      function animateStrikes(timestamp) {
+        strikeFrame = null;
+        if (!showLiveLightning) return;
+        pruneLiveStrikes();
+        if (!liveStrikes.length) { drawVectors(); updateLiveLightningNote(); return; }
+        const lampeggia = liveStrikes.some(function (s) {
+          return timestamp - s.nato < STRIKE_FLASH_MS;
+        });
+        if (timestamp - strikeLastDraw >= (lampeggia ? 0 : 1500)) {
+          strikeLastDraw = timestamp;
+          drawVectors();
+        }
+        strikeFrame = requestAnimationFrame(animateStrikes);
+      }
+
+      function startStrikeAnimation() {
+        if (strikeFrame || !showLiveLightning) return;
+        strikeFrame = requestAnimationFrame(animateStrikes);
+      }
+
+      function stopStrikeAnimation() {
+        if (strikeFrame) cancelAnimationFrame(strikeFrame);
+        strikeFrame = null;
+      }
+
+      function pruneLiveStrikes() {
+        if (!liveStrikes.length) return;
+        const adesso = performance.now();
+        liveStrikes = liveStrikes.filter(function (s) {
+          return adesso - s.nato < STRIKE_LIFE_MS;
+        });
+      }
+
+      function updateLiveLightningNote() {
+        const label = document.getElementById("livelightning-note");
+        if (!label) return;
+        if (!showLiveLightning) {
+          label.textContent = "Blitzortung · rete a terra · scariche in diretta";
+          return;
+        }
+        const collegato = blitzSocket && blitzSocket.readyState === 1;
+        if (!collegato) { label.textContent = "in collegamento…"; return; }
+        label.textContent = liveStrikes.length
+          ? liveStrikes.length + " scariche negli ultimi "
+            + Math.round(STRIKE_LIFE_MS / 60000) + " minuti"
+          : "collegato · nessuna scarica nel dominio";
       }
 
       // ---- FULMINI DA SATELLITE ---------------------------------------
@@ -6258,6 +6577,136 @@
       const CLOUD_SCRUB_DEBOUNCE_MS = 450;
       let cloudScrubTimer = 0;
 
+      // ---- FOTOGRAMMI OSSERVATI GIA' PRONTI ----------------------------
+      //
+      // "Scorrere senza caricamenti" non si ottiene chiedendo piu' in fretta:
+      // EUMETView limita a venti richieste per finestra, e una barra che
+      // attraversa 36 slot ne brucerebbe l'intero budget in un gesto. Si
+      // ottiene non chiedendo affatto -- cioe' tenendo i fotogrammi gia'
+      // scaricati e ripubblicandoli dalla memoria.
+      //
+      // Due meta'. Una cache per (prodotto, slot, riquadro, risoluzione), che
+      // rende istantaneo qualunque istante gia' visto; e un precaricamento in
+      // sottofondo che riempie gli slot vicini al cursore UNO ALLA VOLTA e a
+      // distanza, cosi' il budget del servizio si consuma piano invece che in
+      // una raffica. Il precaricamento tace mentre l'utente sta trascinando:
+      // li' la priorita' e' il fotogramma che sta chiedendo lui.
+      const CLOUD_FRAME_LIMIT = 48;
+      const CLOUD_PREFETCH_GAP_MS = 1100;
+      const cloudFrames = new Map();
+      let cloudPrefetchTimer = 0;
+      let cloudPrefetchBusy = false;
+      let cloudPublishedKey = "";
+
+      function cloudFrameKey(product, slot, box, size) {
+        return [
+          product.layer, slot.value, size.width, size.height,
+          box.west.toFixed(3), box.east.toFixed(3),
+          box.south.toFixed(3), box.north.toFixed(3)
+        ].join("|");
+      }
+
+      function rememberCloudFrame(key, url, box, size) {
+        if (cloudFrames.has(key)) return;
+        cloudFrames.set(key, { url: url, box: box, size: size });
+        while (cloudFrames.size > CLOUD_FRAME_LIMIT) {
+          let vecchia = null;
+          for (const candidata of cloudFrames.keys()) {
+            // Mai sfrattare il fotogramma attualmente in mostra: liberarne
+            // l'object URL lo cancellerebbe dalla mappa sotto gli occhi.
+            if (candidata !== cloudPublishedKey) { vecchia = candidata; break; }
+          }
+          if (vecchia === null) break;
+          const scartata = cloudFrames.get(vecchia);
+          cloudFrames.delete(vecchia);
+          // Gli object URL vanno liberati a mano, o il browser si tiene i
+          // bitmap all'infinito.
+          if (scartata && scartata.url.slice(0, 5) === "blob:") {
+            URL.revokeObjectURL(scartata.url);
+          }
+        }
+      }
+
+      // Lo slot piu' vicino al cursore che non e' ancora in cache. Si guarda
+      // prima indietro, perche' guardando il passato ci si muove all'indietro.
+      function prossimoSlotDaPrecaricare(product) {
+        const passi = cloudHistorySlots();
+        const corrente = cloudSlot(product);
+        const box = cloudRequestBox(0.22);
+        const size = cloudRequestSize(box, product);
+        const slotMs = product.slotMs || CLOUD_SLOT_MS;
+        for (let distanza = 1; distanza <= passi; distanza += 1) {
+          for (const verso of [-1, 1]) {
+            const valore = corrente.value + verso * distanza * slotMs;
+            if (valore > corrente.newest) continue;
+            if (valore < corrente.newest - passi * slotMs) continue;
+            const slot = {
+              value: valore, newest: corrente.newest, live: false,
+              date: new Date(valore),
+              iso: new Date(valore).toISOString().replace(/\.\d{3}Z$/, ".000Z")
+            };
+            if (!cloudFrames.has(cloudFrameKey(product, slot, box, size))) {
+              return { slot: slot, box: box, size: size };
+            }
+          }
+        }
+        return null;
+      }
+
+      function scheduleCloudPrefetch() {
+        if (cloudPrefetchTimer || cloudPrefetchBusy) return;
+        if (weatherView !== "satellite" || !showSatelliteClouds) return;
+        cloudPrefetchTimer = setTimeout(function () {
+          cloudPrefetchTimer = 0;
+          if (weatherView !== "satellite" || !showSatelliteClouds) return;
+          if (typeof document.hidden === "boolean" && document.hidden) return;
+          // Mentre si trascina non si ruba banda al fotogramma richiesto.
+          if (cloudScrubTimer) { scheduleCloudPrefetch(); return; }
+          const product = CLOUD_PRODUCTS[cloudProduct] || CLOUD_PRODUCTS.geocolour;
+          const prossimo = prossimoSlotDaPrecaricare(product);
+          if (!prossimo) return;
+          cloudPrefetchBusy = true;
+          scaricaFotogramma(product, prossimo.slot, prossimo.box, prossimo.size,
+            function () {
+              cloudPrefetchBusy = false;
+              scheduleCloudPrefetch();
+            });
+        }, CLOUD_PREFETCH_GAP_MS);
+      }
+
+      // Scarica un fotogramma e lo mette in cache, senza pubblicarlo.
+      function scaricaFotogramma(product, slot, box, size, fatto) {
+        const key = cloudFrameKey(product, slot, box, size);
+        if (cloudFrames.has(key)) { if (fatto) fatto(cloudFrames.get(key)); return; }
+        const image = new Image();
+        image.crossOrigin = "anonymous";
+        image.onload = function () {
+          try {
+            const canvas = document.createElement("canvas");
+            canvas.width = image.naturalWidth || size.width;
+            canvas.height = image.naturalHeight || size.height;
+            canvas.getContext("2d").drawImage(image, 0, 0);
+            if (typeof canvas.toBlob === "function"
+                && typeof URL.createObjectURL === "function") {
+              canvas.toBlob(function (blob) {
+                if (!blob) { if (fatto) fatto(null); return; }
+                const url = URL.createObjectURL(blob);
+                rememberCloudFrame(key, url, box, size);
+                if (fatto) fatto(cloudFrames.get(key));
+              }, "image/png");
+              return;
+            }
+            rememberCloudFrame(key, canvas.toDataURL("image/png"), box, size);
+          } catch (error) {
+            if (fatto) fatto(null);
+            return;
+          }
+          if (fatto) fatto(cloudFrames.get(key));
+        };
+        image.onerror = function () { if (fatto) fatto(null); };
+        image.src = cloudUrl(box, size, product, slot);
+      }
+
       function cloudHistorySlots() {
         return Math.round(CLOUD_HISTORY_HOURS * 3600 * 1000 / CLOUD_SLOT_MS);
       }
@@ -6267,7 +6716,13 @@
         if (!host || host.dataset.ready === "1") return;
         host.dataset.ready = "1";
         const slots = cloudHistorySlots();
-        host.innerHTML =
+        // Si AGGIUNGE, non si sostituisce. Questo contenitore non e' vuoto:
+        // modern-ui.js ci sposta dentro il selettore del prodotto satellitare
+        // (infrarosso, fase delle nubi, polvere...). Scrivendo innerHTML lo si
+        // cancellava, e con esso l'unico modo di cambiare canale.
+        const blocco = document.createElement("div");
+        blocco.className = "sat-time";
+        blocco.innerHTML =
           '<label class="sat-scrub">'
           + '<input id="satellite-scrub" type="range" min="0" max="' + slots
           + '" step="1" value="' + slots + '" aria-label="Ora dell\'osservazione">'
@@ -6276,6 +6731,7 @@
           + '<button id="satellite-live" type="button" class="sat-live">In diretta</button>'
           + '<span id="satellite-scrub-label"></span>'
           + '</div>';
+        host.appendChild(blocco);
 
         const scrub = document.getElementById("satellite-scrub");
         const live = document.getElementById("satellite-live");
@@ -6288,6 +6744,13 @@
             ? 0
             : Math.floor(Date.now() / CLOUD_SLOT_MS) * CLOUD_SLOT_MS - back * CLOUD_SLOT_MS;
           updateSatelliteScrubLabel();
+          // Se quell'istante e' gia' in memoria si pubblica adesso, senza
+          // rete e senza attesa: e' questo a rendere fluido lo scorrimento.
+          if (pubblicaFotogrammaInCache()) {
+            if (cloudScrubTimer) { clearTimeout(cloudScrubTimer); cloudScrubTimer = 0; }
+            scheduleCloudPrefetch();
+            return;
+          }
           if (cloudScrubTimer) clearTimeout(cloudScrubTimer);
           cloudScrubTimer = setTimeout(function () {
             cloudScrubTimer = 0;
@@ -6298,6 +6761,7 @@
             loadSatelliteClouds(false);
             if (showLightning) loadLightning(false);
             syncRadarToSatellite(cloudSlot());
+            scheduleCloudPrefetch();
           }, CLOUD_SCRUB_DEBOUNCE_MS);
         });
         live.addEventListener("click", function () {
@@ -6305,6 +6769,43 @@
           scrub.dispatchEvent(new Event("input"));
         });
         updateSatelliteScrubLabel();
+      }
+
+      // Pubblica dalla cache l'istante scelto, se c'e'. Restituisce false
+      // quando manca, perche' allora tocca chiederlo alla rete.
+      function pubblicaFotogrammaInCache() {
+        if (!showSatelliteClouds) return false;
+        const source = map && map.getSource ? map.getSource("satellite-clouds") : null;
+        if (!source) return false;
+        const product = CLOUD_PRODUCTS[cloudProduct] || CLOUD_PRODUCTS.geocolour;
+        const slot = cloudSlot(product);
+        const box = cloudRequestBox(0.22);
+        const size = cloudRequestSize(box, product);
+        const frame = cloudFrames.get(cloudFrameKey(product, slot, box, size));
+        if (!frame) return false;
+        try {
+          source.updateImage({
+            url: frame.url,
+            coordinates: [
+              [frame.box.west, frame.box.north], [frame.box.east, frame.box.north],
+              [frame.box.east, frame.box.south], [frame.box.west, frame.box.south]
+            ]
+          });
+        } catch (error) {
+          return false;
+        }
+        map.setPaintProperty("satellite-clouds-layer", "raster-opacity", 1);
+        cloudPublishedKey = cloudFrameKey(product, slot, box, size);
+        cloudLoadedBox = frame.box;
+        cloudLoadedMetres = frame.size.metres;
+        cloudLoadedSlot = slot.value;
+        markCloudFreshness(slot);
+        if (showRadar) syncRadarToSatellite(slot);
+        syncTimelineToSatellite(slot);
+        // I fulmini hanno la loro griglia da cinque minuti: si chiedono lo
+        // stesso, ma senza far aspettare la nube che e' gia' pronta.
+        if (showLightning) loadLightning(false);
+        return true;
       }
 
       function updateSatelliteScrubLabel() {
@@ -6772,6 +7273,7 @@
           radar: showRadar,
           satclouds: showSatelliteClouds,
           lightning: showLightning,
+          livelightning: showLiveLightning,
           fusion: showFusion,
           stations: showStations,
           fronts: showFronts,
@@ -7059,7 +7561,8 @@
         // osservati, e vivono proprio in questa vista -- accenderli non deve
         // farne uscire.
         if (weatherView === "satellite"
-            && name !== "satclouds" && name !== "lightning") {
+            && name !== "satclouds" && name !== "lightning"
+            && name !== "livelightning") {
           setWeatherView("forecast");
         }
         if (name === "vectors") {
@@ -7119,6 +7622,23 @@
           } else {
             toast("Radar spento · il satellite resta visibile");
           }
+        } else if (name === "livelightning") {
+          showLiveLightning = !showLiveLightning;
+          if (showLiveLightning) {
+            blitzRetryDelay = 2000;
+            blitzConnect();
+            startStrikeAnimation();
+            toast(
+              "Fulmini in diretta da Blitzortung · rete di volontari, ritardo "
+              + "di pochi secondi. Uso personale e non commerciale."
+            );
+          } else {
+            blitzDisconnect();
+            stopStrikeAnimation();
+            liveStrikes = [];
+            requestVectorRender();
+          }
+          updateLiveLightningNote();
         } else if (name === "lightning") {
           if (!map || !map.getLayer("satellite-lightning-layer")) {
             toast("Livello dei fulmini non disponibile");
@@ -11431,7 +11951,11 @@
         }
         drawSynopticCanvas();
         drawFrontsCanvas();
-        drawPlaceNames();
+        // In vista satellite l'inchiostro della carta e' spento, ma i lampi
+        // devono vedersi: sono il livello osservato che si sovrappone
+        // all'immagine.
+        if (weatherView !== "satellite") drawPlaceNames();
+        drawLiveStrikes();
         if (synopticChart) drawChartFurniture();
       }
 
@@ -13554,8 +14078,18 @@
         if (document.hidden) {
           if (particleFrame) cancelAnimationFrame(particleFrame);
           particleFrame = null;
+          // Nessuno sta guardando: si chiude la connessione ai fulmini invece
+          // di tenere aperta una presa sui server di una rete di volontari
+          // per una scheda in secondo piano.
+          stopStrikeAnimation();
+          blitzDisconnect();
         } else {
           startParticles();
+          if (showLiveLightning) {
+            blitzRetryDelay = 2000;
+            blitzConnect();
+            startStrikeAnimation();
+          }
         }
       });
 
