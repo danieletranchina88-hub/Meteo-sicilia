@@ -137,6 +137,7 @@
 
       #particle-canvas,
       #vector-canvas,
+      #strike-light-canvas,
       #map-vignette {
         position: fixed;
         inset: 0;
@@ -148,6 +149,10 @@
       #particle-canvas {
         z-index: 6;
       }
+
+      /* Blend emission with the actual WebGL satellite, not with an empty
+         2D overlay. Keep symbols and analytical labels on their normal layer. */
+      #strike-light-canvas { z-index: 5; mix-blend-mode: screen; }
 
       #vector-canvas {
         z-index: 7;
@@ -2206,6 +2211,7 @@
   <body>
     <div id="map" aria-label="Mappa meteorologica interattiva"></div>
     <canvas id="particle-canvas" aria-hidden="true"></canvas>
+    <canvas id="strike-light-canvas" aria-hidden="true"></canvas>
     <canvas id="vector-canvas" aria-hidden="true"></canvas>
     <div id="sky-haze" aria-hidden="true"></div>
     <div id="paper-wash" aria-hidden="true"></div>
@@ -2303,7 +2309,7 @@
     <div id="place-search" class="surface"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><circle cx="10" cy="10" r="6"></circle><path d="m15 15 5 5"></path></svg><input id="place-query" type="search" placeholder="Cerca una località" aria-label="Cerca una località" autocomplete="off" /><div id="place-results" hidden></div></div>
     <nav id="quick-layers" aria-label="Campi principali"></nav>
     <div id="view-switch" class="surface" aria-label="Vista della mappa"><button id="forecast-view" type="button" aria-pressed="true">Previsioni</button><button id="satellite-view" type="button" aria-pressed="false">Satellite</button></div>
-    <section id="satellite-status" class="surface" hidden><b>Satellite · osservazione</b><span id="satellite-time">Ultima immagine disponibile</span><button id="satellite-fold" type="button" aria-expanded="true" aria-controls="satellite-controls" aria-label="Mostra o nascondi i comandi dell'osservato"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M6 9.5 12 15.5 18 9.5"></path></svg></button><span id="satellite-riassunto"></span><div id="satellite-controls"><div id="satellite-layers"><button class="sat-layer" type="button" data-toggle="satimage" aria-pressed="false"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M6 17a5 5 0 0 1 0-10 6 6 0 0 1 11-1 5.5 5.5 0 0 1 0 11Z"></path></svg><span><b>Immagine satellite</b><small>canale scelto qui sotto</small></span></button><button class="sat-layer" type="button" data-toggle="radar" aria-pressed="false"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 20a8 8 0 0 1 0-16 M12 16.5a4.5 4.5 0 0 1 0-9 M12 13a1 1 0 0 1 0 2 M16 6l4-2 M17 12h4 M16 18l4 2"></path></svg><span><b>Radar precipitazioni</b><small id="radar-note">RainViewer HD · osservato</small></span></button><button class="sat-layer" type="button" data-toggle="livelightning" aria-pressed="false"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M13 2 4.5 13.5H11L9.5 22 19 10h-6.5L13 2Z"></path></svg><span><b>Fulmini in diretta</b><small id="livelightning-note">Blitzortung · rete a terra · scariche in diretta</small></span></button><button class="sat-layer" type="button" data-toggle="lightning" aria-pressed="false"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 4.5a10 10 0 0 1 10 10 M4 9a5.5 5.5 0 0 1 5.5 5.5 M14.5 4 11 9.5h2.8L12 14l4.5-6h-2.9L14.5 4Z M4.5 19.5h.01"></path></svg><span><b>Fulmini da satellite</b><small id="lightning-note">MTG-I1 · area di flash · passo 5 minuti</small></span></button><button class="sat-layer" type="button" data-toggle="strikesound" aria-pressed="false"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 9.5h3.5L12 5.5v13L7.5 14.5H4Z M15.5 9.5a4 4 0 0 1 0 5 M18.5 7a8 8 0 0 1 0 10"></path></svg><span><b>Tick della scarica</b><small>un colpo breve a ogni fulmine</small></span></button></div></div></section>
+    <section id="satellite-status" class="surface" hidden><b>Satellite · osservazione</b><span id="satellite-time">Ultima immagine disponibile</span><button id="satellite-fold" type="button" aria-expanded="true" aria-controls="satellite-controls" aria-label="Mostra o nascondi i comandi dell'osservato"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M6 9.5 12 15.5 18 9.5"></path></svg></button><span id="satellite-riassunto"></span><div id="satellite-controls"><div id="satellite-layers"><button class="sat-layer" type="button" data-toggle="satimage" aria-pressed="false"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M6 17a5 5 0 0 1 0-10 6 6 0 0 1 11-1 5.5 5.5 0 0 1 0 11Z"></path></svg><span><b>Immagine satellite</b><small>canale scelto qui sotto</small></span></button><button class="sat-layer" type="button" data-toggle="radar" aria-pressed="false"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 20a8 8 0 0 1 0-16 M12 16.5a4.5 4.5 0 0 1 0-9 M12 13a1 1 0 0 1 0 2 M16 6l4-2 M17 12h4 M16 18l4 2"></path></svg><span><b>Radar precipitazioni</b><small id="radar-note">RainViewer HD · osservato</small></span></button><button class="sat-layer" type="button" data-toggle="livelightning" aria-pressed="false"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M13 2 4.5 13.5H11L9.5 22 19 10h-6.5L13 2Z"></path></svg><span><b>Fulmini in diretta</b><small id="livelightning-note">Blitzortung · rete a terra · scariche in diretta</small></span></button><button class="sat-layer" type="button" data-toggle="lightning" aria-pressed="false"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 4.5a10 10 0 0 1 10 10 M4 9a5.5 5.5 0 0 1 5.5 5.5 M14.5 4 11 9.5h2.8L12 14l4.5-6h-2.9L14.5 4Z M4.5 19.5h.01"></path></svg><span><b>Fulmini da satellite</b><small id="lightning-note">MTG-I1 · area di flash · passo 5 minuti</small></span></button><button class="sat-layer" type="button" data-toggle="strikesound" aria-pressed="false"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 9.5h3.5L12 5.5v13L7.5 14.5H4Z M15.5 9.5a4 4 0 0 1 0 5 M18.5 7a8 8 0 0 1 0 10"></path></svg><span><b>Tick della scarica</b><small>tick stereo · segnale, non tuono</small></span></button></div></div></section>
     <section id="meta-card" class="surface" aria-label="Metadati della previsione">
       <div class="meta-item">
         <div class="micro-label">Run del modello</div>
@@ -3802,6 +3808,8 @@
       const rasterContext = rasterCanvas.getContext("2d");
       const particleCanvas = document.getElementById("particle-canvas");
       const particleContext = particleCanvas.getContext("2d", { alpha: true });
+      const strikeLightCanvas = document.getElementById("strike-light-canvas");
+      const strikeLightContext = strikeLightCanvas.getContext("2d", { alpha: true });
       const vectorCanvas = document.getElementById("vector-canvas");
       const vectorContext = vectorCanvas.getContext("2d", { alpha: true });
 
@@ -5969,16 +5977,20 @@
       function publishSatelliteClouds(image, box, size, product, slot) {
         const source = map.getSource("satellite-clouds");
         if (!source) return;
+        const publicationToken = cloudToken;
+        let texture = null;
         const corners = [
           [box.west, box.north], [box.east, box.north],
           [box.east, box.south], [box.west, box.south]
         ];
         const update = function (url, isObjectUrl) {
+          if (publicationToken !== cloudToken) { if (isObjectUrl) URL.revokeObjectURL(url); return; }
           try {
             source.updateImage({ url: url, coordinates: corners });
             map.setPaintProperty(
               "satellite-clouds-layer", "raster-opacity", 1
             );
+            mascheraNube = texture;
             cloudLoadedBox = box;
             cloudLoadedMetres = size.metres;
             cloudLoadedSlot = slot.value;
@@ -6016,7 +6028,7 @@
           // L'immagine e' gia' qui, su una canvas nostra: costa pochissimo
           // ricavarne anche la sagoma delle nubi, che serve al lampo per
           // accendersi dove la nube c'e' davvero invece che in un disco.
-          costruisciMascheraNube(canvas, box);
+          texture = costruisciMascheraNube(canvas, box, product);
           const chiave = cloudFrameKey(product, slot, box, size);
           if (typeof canvas.toBlob === "function"
               && typeof URL.createObjectURL === "function") {
@@ -6026,7 +6038,8 @@
               // In cache prima di pubblicare: tornando su questo istante non
               // si chiedera' piu' nulla alla rete. La cache possiede l'URL,
               // quindi update non lo deve liberare.
-              rememberCloudFrame(chiave, url, box, size);
+              if (publicationToken !== cloudToken) { URL.revokeObjectURL(url); return; }
+              rememberCloudFrame(chiave, url, box, size, texture);
               cloudPublishedKey = chiave;
               update(url, false);
               scheduleCloudPrefetch();
@@ -6348,6 +6361,7 @@
 
       function suonaTick(lon, lat, tono) {
         if (!strikeSoundOn || document.hidden) return;
+        if (cloudTimeSelected) return;
         const contesto = strikeAudio;
         if (!contesto || contesto.state !== "running" || !strikeNoiseBuffer) return;
         const adesso = performance.now();
@@ -6360,10 +6374,16 @@
         const fitto = adesso - strikeLastSound < 500 ? 0.5 : 1;
         strikeLastSound = adesso;
 
-        const t = contesto.currentTime;
+        const t = contesto.currentTime + 0.08;
         const uscita = contesto.createGain();
         uscita.gain.value = 0.055 * forza * fitto;
-        uscita.connect(contesto.destination);
+        const pan = contesto.createStereoPanner ? contesto.createStereoPanner() : null;
+        if (pan) {
+          const point = map.project([lon, lat]);
+          const width = map.getContainer().clientWidth || 1;
+          pan.pan.value = clamp((point.x / width * 2 - 1) * 0.65, -0.65, 0.65);
+          uscita.connect(pan); pan.connect(contesto.destination);
+        } else uscita.connect(contesto.destination);
 
         // Il transiente: rumore attraverso un passabanda stretto. E' la
         // parte che si sente come "clic".
@@ -6371,8 +6391,8 @@
         rumore.buffer = strikeNoiseBuffer;
         const banda = contesto.createBiquadFilter();
         banda.type = "bandpass";
-        banda.frequency.value = 2100 * tono;
-        banda.Q.value = 1.6;
+        banda.frequency.value = 1450 * clamp(tono, 0.92, 1.08);
+        banda.Q.value = 0.65;
         const bustaRumore = contesto.createGain();
         bustaRumore.gain.setValueAtTime(0.0001, t);
         bustaRumore.gain.exponentialRampToValueAtTime(1, t + 0.002);
@@ -6383,8 +6403,8 @@
         // clic la durezza del rumore puro e lo rende un suono di legno.
         const corpo = contesto.createOscillator();
         corpo.type = "sine";
-        corpo.frequency.setValueAtTime(420 * tono, t);
-        corpo.frequency.exponentialRampToValueAtTime(190 * tono, t + 0.05);
+        corpo.frequency.setValueAtTime(240 * clamp(tono, 0.92, 1.08), t);
+        corpo.frequency.exponentialRampToValueAtTime(140, t + 0.05);
         const bustaCorpo = contesto.createGain();
         bustaCorpo.gain.setValueAtTime(0.0001, t);
         bustaCorpo.gain.exponentialRampToValueAtTime(0.5, t + 0.003);
@@ -6396,7 +6416,11 @@
         // I nodi si scollegano da soli quando la sorgente finisce: senza
         // questo, una notte di temporali lascerebbe in piedi decine di
         // migliaia di nodi audio.
-        corpo.onended = function () { try { uscita.disconnect(); } catch (e) { /* gia' staccato */ } };
+        corpo.onended = function () {
+          [rumore, banda, bustaRumore, corpo, bustaCorpo, uscita, pan].forEach(function (node) {
+            if (node) { try { node.disconnect(); } catch (_) {} }
+          });
+        };
       }
 
       function addLiveStrike(payload) {
@@ -6446,243 +6470,146 @@
       //
       // Costa una volta per fotogramma satellitare, cioe' ogni cinque o
       // dieci minuti, non a ogni lampo.
-      const MASCHERA_LATO = 512;
+      const MASCHERA_LATO = 768;
       let mascheraNube = null;
 
-      function costruisciMascheraNube(sorgente, box) {
+      function costruisciMascheraNube(sorgente, box, product) {
+        // Optical texture proxy, NOT a retrieved cloud optical depth or a
+        // calibrated cloud mask. RGB cannot distinguish snow/land from cloud
+        // reliably. Never interpret false-colour diagnostic legends as clouds.
+        if (!product || !["scene", "grey"].includes(product.mode)) return null;
         try {
-          const largo = sorgente.width, alto = sorgente.height;
-          if (!largo || !alto) { mascheraNube = null; return; }
-          // Ridotta: la maschera serve a dare una forma a un bagliore, non a
-          // essere guardata. Mezzo migliaio di pixel di lato bastano, e
-          // tengono il costo di lettura sotto il millisecondo.
-          const scala = Math.min(1, MASCHERA_LATO / Math.max(largo, alto));
-          const mw = Math.max(1, Math.round(largo * scala));
-          const mh = Math.max(1, Math.round(alto * scala));
-          const piccola = document.createElement("canvas");
-          piccola.width = mw; piccola.height = mh;
-          const pc = piccola.getContext("2d");
-          pc.drawImage(sorgente, 0, 0, mw, mh);
-          const dati = pc.getImageData(0, 0, mw, mh);
-          const px = dati.data;
-
-          // Quanto e' "nube" un pixel si misura dalla luminanza percepita:
-          // nel visibile le nubi sono chiare, nell'infrarosso le sommita'
-          // fredde sono chiare, e in entrambi mare e terra sono piu' scuri.
-          //
-          // La soglia pero' NON puo' essere fissa. I tredici canali hanno
-          // dinamiche molto diverse, e soprattutto la stessa GeoColour di
-          // notte mostra nubi grigio-azzurre scure invece che bianche: con
-          // una soglia tarata sul giorno la maschera notturna usciva quasi
-          // trasparente, e il bagliore -- misurato -- restava al sette per
-          // cento di opacita', cioe' invisibile. La soglia si ricava quindi
-          // dall'immagine stessa, per percentili: il quindicesimo e' la
-          // superficie piu' scura presente, il novantesimo la nube piu'
-          // spessa. In mezzo c'e' tutto quello che diffonde luce.
-          const istogramma = new Uint32Array(64);
-          let quanti = 0;
+          const scala = Math.min(1, MASCHERA_LATO / Math.max(sorgente.width, sorgente.height));
+          const w = Math.max(1, Math.round(sorgente.width * scala));
+          const h = Math.max(1, Math.round(sorgente.height * scala));
+          const tela = document.createElement("canvas");
+          tela.width = w; tela.height = h;
+          const ctx = tela.getContext("2d", { willReadFrequently: true });
+          ctx.drawImage(sorgente, 0, 0, w, h);
+          const image = ctx.getImageData(0, 0, w, h), px = image.data;
+          const hist = new Uint32Array(256);
+          let count = 0;
           for (let i = 0; i < px.length; i += 4) {
-            if (px[i + 3] < 8) continue;
-            const l = (px[i] * 0.2126 + px[i + 1] * 0.7152 + px[i + 2] * 0.0722) / 255;
-            istogramma[Math.min(63, Math.max(0, Math.round(l * 63)))] += 1;
-            quanti += 1;
+            if (px[i + 3] < 16) continue;
+            const l = Math.round(0.2126 * px[i] + 0.7152 * px[i + 1] + 0.0722 * px[i + 2]);
+            hist[l]++; count++;
           }
-          const percentile = function (frazione) {
-            let visti = 0;
-            const bersaglio = quanti * frazione;
-            for (let b = 0; b < 64; b += 1) {
-              visti += istogramma[b];
-              if (visti >= bersaglio) return b / 63;
-            }
-            return 1;
+          const quantile = function(q) {
+            let n = 0;
+            for (let i = 0; i < 256; i++) { n += hist[i]; if (n >= count * q) return i; }
+            return 255;
           };
-          const buio = quanti ? percentile(0.15) : 0.2;
-          const pieno = quanti ? percentile(0.9) : 0.75;
-          // Se l'immagine e' tutta uguale -- cielo sereno da un capo
-          // all'altro, o una schermata nera -- non c'e' sagoma da ricavare:
-          // meglio nessuna maschera che una maschera casuale.
-          const intervallo = pieno - buio;
-          if (!quanti || intervallo < 0.06) { mascheraNube = null; return; }
-
+          const low = Math.max(20, quantile(0.18)), high = quantile(0.94);
+          if (!count || high - low < 18) return null;
           for (let i = 0; i < px.length; i += 4) {
-            const luminanza = (px[i] * 0.2126 + px[i + 1] * 0.7152 + px[i + 2] * 0.0722) / 255;
-            // Il contrasto si alza con una gamma: nella fotografia i lobi
-            // scuri davanti restano neri mentre il cuore della nube brucia,
-            // ed e' quel salto a far leggere la luce come interna alla
-            // nube. Una maschera lineare invece la spalma, e il risultato
-            // sembra nebbia illuminata.
-            const grezza = clamp((luminanza - buio) / intervallo, 0, 1);
-            const nuvolosita = grezza * grezza * (3 - 2 * grezza);
-            // Il colore non serve: resta solo il canale alfa, che e' la
-            // sagoma. Bianco pieno cosi' il ritaglio non tinge il bagliore.
-            px[i] = 255; px[i + 1] = 255; px[i + 2] = 255;
-            px[i + 3] = Math.round(255 * nuvolosita);
+            const r = px[i], g = px[i + 1], b = px[i + 2], alpha = px[i + 3] / 255;
+            const luminance = 0.2126 * r + 0.7152 * g + 0.0722 * b;
+            const t = clamp((luminance - low) / (high - low), 0, 1);
+            const saturation = (Math.max(r,g,b) - Math.min(r,g,b)) / Math.max(1,r,g,b);
+            // Suppress coloured terrain and city lights. Retain the actual
+            // satellite texture in alpha: dark folds stay dark, bright rims
+            // transmit more light. No synthetic terrain normals or shadows.
+            const neutral = product.mode === "scene" ? 1 - clamp((saturation - 0.12) / 0.5, 0, 1) : 1;
+            const cloud = t * t * (3 - 2 * t) * neutral * alpha;
+            px[i] = 244; px[i + 1] = 248; px[i + 2] = 255;
+            px[i + 3] = Math.round(255 * cloud);
           }
-          pc.putImageData(dati, 0, 0);
-          mascheraNube = { tela: piccola, west: box.west, east: box.east,
-                           south: box.south, north: box.north };
-        } catch (error) {
-          // Canvas "sporca" o memoria insufficiente: si ripiega sul disco
-          // morbido, che e' meno bello ma non e' un guasto.
-          mascheraNube = null;
-        }
+          ctx.putImageData(image, 0, 0);
+          return { tela: tela, west: box.west, east: box.east, north: box.north,
+            south: box.south, layer: product.layer };
+        } catch (_) { return null; }
       }
 
-      // Il bagliore ritagliato sulla sagoma delle nubi. Si disegna su una
-      // tela di servizio, ci si ritaglia dentro la maschera, e il risultato
-      // si somma alla mappa: e' l'unico modo di far uscire la luce solo
-      // dalle nubi con una sola passata di composizione.
-      let telaBagliore = null;
-      function disegnaNubeIlluminata(context, punto, largo, nube) {
-        // Le tappe del bagliore, con un fattore che ne scala la forza. Serve
-        // perche' le due passate qui sotto hanno forze molto diverse: quella
-        // ritagliata sulle nubi deve essere la luce vera, quella tonda solo
-        // un minimo di sicurezza.
-        // La tavolozza non e' scelta a occhio: viene campionata da una
-        // fotografia vera di temporale illuminato dall'interno, misurando la
-        // tinta media per fascia di luminanza. Il risultato dice una cosa
-        // sola e chiara -- il VERDE e' sempre il canale piu' basso:
-        //
-        //   luminanza 0,38-0,58   133,115,128
-        //   luminanza 0,58-0,80   189,168,190
-        //   luminanza 0,80-1,00   229,217,240
-        //
-        // Non e' azzurro (li' il blu supererebbe il rosso di un centinaio) e
-        // non e' ambra: e' lavanda. Ha anche senso fisico, perche' lo
-        // spettro del fulmine e' dominato dall'azoto nel violetto piu' un
-        // po' di rosso, con un buco proprio nel verde; diffuso dal ghiaccio
-        // della nube resta questo.
-        const tinte = function (g, forza) {
-          const a = forza * nube;
-          g.addColorStop(0, "rgba(253,250,255," + (0.98 * a).toFixed(3) + ")");
-          g.addColorStop(0.16, "rgba(250,236,255," + (0.72 * a).toFixed(3) + ")");
-          g.addColorStop(0.36, "rgba(238,214,248," + (0.42 * a).toFixed(3) + ")");
-          // E si SCALDA mentre si spegne, invece di virare al violetto: nella
-          // fotografia lo scarto fra blu e rosso passa da +11 nel cuore a -5
-          // nella fascia intermedia. E' il contrario di quello che verrebbe
-          // da disegnare, ed e' l'unica ragione per cui vale la pena
-          // misurare una foto invece di scegliere i colori a mano.
-          g.addColorStop(0.58, "rgba(208,182,208," + (0.2 * a).toFixed(3) + ")");
-          g.addColorStop(0.8, "rgba(178,154,174," + (0.07 * a).toFixed(3) + ")");
-          g.addColorStop(1, "rgba(162,140,156,0)");
-        };
-        const tondo = function (forza, raggio) {
-          const g = context.createRadialGradient(punto.x, punto.y, 0, punto.x, punto.y, raggio);
-          tinte(g, forza);
-          context.fillStyle = g;
-          context.beginPath();
-          context.arc(punto.x, punto.y, raggio, 0, Math.PI * 2);
-          context.fill();
-        };
+      // Broadband visible lightning is normally white to blue-white (NOAA).
+      // This sRGB approximation is not the measured spectrum of this event:
+      // Blitzortung supplies neither spectral radiance nor channel geometry.
+      // Preserve the observed cloud texture; diffusion paths below are a
+      // visual model, not a reconstruction of a measured intracloud channel.
+      function strikeReducedMotion() {
+        return Boolean(window.matchMedia && window.matchMedia("(prefers-reduced-motion: reduce)").matches);
+      }
 
-        // Senza maschera, o con la mappa inclinata -- dove il riquadro
-        // dell'immagine non e' piu' un rettangolo sullo schermo -- resta
-        // solo il bagliore tondo. Meno bello, ma mai sbagliato.
-        // Il raggio pieno vale solo per la luce RITAGLIATA: li' allargarsi
-        // vuol dire illuminare piu' nube. Il bagliore tondo, che non sa
-        // dove sia la nube, deve restare molto piu' stretto, o torna a
-        // essere la macchia che copriva tutto.
-        const inclinata = map.getPitch && map.getPitch() > 4;
-        if (!mascheraNube || inclinata || !showSatelliteClouds) {
-          tondo(1, largo * 0.62);
-          return;
-        }
+      function proiezioneNube(mask) {
+        if (!mask || !showSatelliteClouds || cloudTimeSelected
+            || (map.getPitch && map.getPitch() > 1)) return null;
+        // updateImage decodes asynchronously: never light a new texture
+        // while MapLibre is still displaying the preceding satellite frame.
+        if (map.isSourceLoaded && !map.isSourceLoaded("satellite-clouds")) return null;
+        if (!CLOUD_PRODUCTS[cloudProduct] || mask.layer !== CLOUD_PRODUCTS[cloudProduct].layer) return null;
+        const nw = projectParticle(mask.west, mask.north, 0);
+        const ne = projectParticle(mask.east, mask.north, 0);
+        const sw = projectParticle(mask.west, mask.south, 0);
+        if (!nw || !ne || !sw) return null;
+        // Mercator raster => affine screen transform for a flat map,
+        // including bearing. Never assume NW and SE remain screen corners.
+        return { nw: nw, ne: ne, sw: sw };
+      }
 
-        // Il bagliore si disegna in due parti, ed e' la seconda a dargli la
-        // forma.
-        //
-        // La prima e' un minimo garantito, tondo e tenue. Serve perche' la
-        // maschera da sola e' troppo severa: la posizione di una scarica ha
-        // un chilometro buono di incertezza, e basta che cada in uno
-        // squarcio fra le nubi perche' il ritaglio le porti via tutta la
-        // luce. Un lampo invisibile e' peggio di un lampo un po' tondo.
-        // Copre anche i bordi del riquadro satellitare, dove la maschera
-        // semplicemente non arriva. Resta pero' un quarto della luce piena:
-        // deve garantire, non competere con la seconda passata.
-        tondo(0.2, largo * 0.68);
-
-        // La seconda e' la stessa luce ritagliata sulla sagoma delle nubi:
-        // e' questa che fa vedere la sommita' accendersi, con i suoi bordi
-        // frastagliati e i suoi buchi, invece di un cerchio. Ed e' molto
-        // piu' forte del minimo, o il ritaglio si limiterebbe a togliere
-        // luce invece di dare forma -- misurato, con le due passate quasi
-        // pari il bagliore usciva al sette per cento di opacita' media,
-        // cioe' non si vedeva affatto.
+      function disegnaNubeIlluminata(context, punto, largo, nube, scarica) {
+        const projection = proiezioneNube(mascheraNube);
+        if (!projection || strikeReducedMotion()) return false;
+        const mask = mascheraNube, p = projection;
         const lato = Math.ceil(largo * 2);
-        if (!telaBagliore) telaBagliore = document.createElement("canvas");
-        if (telaBagliore.width !== lato || telaBagliore.height !== lato) {
-          telaBagliore.width = lato; telaBagliore.height = lato;
-        }
-        const tc = telaBagliore.getContext("2d");
-        tc.setTransform(1, 0, 0, 1, 0, 0);
-        tc.clearRect(0, 0, lato, lato);
-        const g = tc.createRadialGradient(largo, largo, 0, largo, largo, largo);
-        tinte(g, 1);
-        tc.fillStyle = g;
-        tc.fillRect(0, 0, lato, lato);
+        const key = [lato, punto.x, punto.y, p.nw.x, p.nw.y,
+          p.ne.x, p.ne.y, p.sw.x, p.sw.y].map(v => v.toFixed(2)).join("|");
+        if (!scarica.cloudLight || scarica.cloudLight.key !== key || scarica.cloudLight.mask !== mask) {
+          const tela = document.createElement("canvas");
+          tela.width = lato; tela.height = lato;
+          const g = tela.getContext("2d");
+          // Finite diffuse source. Radius stays constant through the pulse;
+          // brightness changes, so there is no expanding shock-wave ring.
+          const light = g.createRadialGradient(largo, largo, 0, largo, largo, largo);
+          light.addColorStop(0, "rgba(248,251,255,0.96)");
+          light.addColorStop(0.16, "rgba(241,247,255,0.82)");
+          light.addColorStop(0.44, "rgba(235,243,255,0.38)");
+          light.addColorStop(0.74, "rgba(232,240,255,0.07)");
+          light.addColorStop(1, "rgba(232,240,255,0)");
+          g.fillStyle = light;
+          g.fillRect(0, 0, lato, lato);
 
-        const nw = projectParticle(mascheraNube.west, mascheraNube.north, 0);
-        const se = projectParticle(mascheraNube.east, mascheraNube.south, 0);
-        if (!nw || !se || !(se.x > nw.x) || !(se.y > nw.y)) return;
-        tc.globalCompositeOperation = "destination-in";
-        tc.drawImage(mascheraNube.tela,
-          nw.x - (punto.x - largo), nw.y - (punto.y - largo),
-          se.x - nw.x, se.y - nw.y);
-        tc.globalCompositeOperation = "source-over";
-        // Due volte: la luce che esce da una nube spessa deve essere
-        // nettamente piu' forte del minimo tondo, o la sagoma non si legge.
-        context.drawImage(telaBagliore, punto.x - largo, punto.y - largo);
-        context.globalAlpha = 0.6;
-        context.drawImage(telaBagliore, punto.x - largo, punto.y - largo);
-        context.globalAlpha = 1;
+          // Submerged channels: blurred into the cloud, never crisp giant
+          // spiders on top of the satellite. Generated once per event/view.
+          g.save();
+          g.globalCompositeOperation = "lighter";
+          g.filter = "blur(5px)";
+          for (let f = 0; f < scarica.ragno.length; f++) {
+            const filo = scarica.ragno[f];
+            strokeSfumato(g, puntiFilamento(filo.forma, largo, largo,
+              largo * 0.43 * filo.lunghezza, filo.direzione),
+              2.5, "240,247,255", 0.24);
+          }
+          g.restore();
+
+          g.globalCompositeOperation = "destination-in";
+          const w = mask.tela.width, h = mask.tela.height;
+          g.setTransform((p.ne.x-p.nw.x)/w, (p.ne.y-p.nw.y)/w,
+            (p.sw.x-p.nw.x)/h, (p.sw.y-p.nw.y)/h,
+            p.nw.x-punto.x+largo, p.nw.y-punto.y+largo);
+          g.drawImage(mask.tela, 0, 0);
+          g.setTransform(1,0,0,1,0,0);
+          scarica.cloudLight = { key: key, mask: mask, tela: tela };
+        }
+        context.save();
+        // Screen blending preserves the underlying folds instead of painting
+        // an opaque tint. Brightening uses the same pixels as the shown frame.
+        context.globalCompositeOperation = "screen";
+        context.globalAlpha = Math.min(0.9, nube * 0.9);
+        context.drawImage(scarica.cloudLight.tela, punto.x-largo, punto.y-largo);
+        context.restore();
+        return true;
       }
 
       // ---- IL LAMPO, VISTO DALL'ALTO -----------------------------------
-      //
-      // Questa mappa guarda l'Italia da sopra. Un fulmine disegnato come una
-      // saetta verticale che sale dal punto di impatto e' un fulmine visto
-      // DI LATO: bello, ma in una veduta zenitale non ha senso, perche' da
-      // sopra quel canale sarebbe un punto.
-      //
-      // Chi vola sopra un temporale di notte non vede saette: vede la
-      // sommita' delle nubi ACCENDERSI DA DENTRO, come una lanterna di
-      // carta. Il canale sta dentro e sotto la nube, e quello che esce e'
-      // luce diffusa dal ghiaccio -- bianca, non azzurra: l'azzurro e' il
-      // colore del canale nudo a trentamila gradi, ma dopo qualche
-      // chilometro di nube attraversata resta un bianco appena caldo.
-      //
-      // L'unica cosa filiforme che si vede davvero da sopra sono i RAGNI:
-      // scariche intra-nube che strisciano orizzontali sulla sommita' anche
-      // per decine di chilometri, ramificandosi. Quelle si vedono, perche'
-      // corrono in superficie. Sono loro a dare al lampo dall'alto la sua
-      // forma riconoscibile.
-      //
-      // Restano invece veri, e quindi restano qui, i tre tempi:
-      //
-      //  1. la geometria e' frattale, per spostamento del punto medio -- lo
-      //     stesso procedimento dei profili di montagna: ogni raffinamento
-      //     sposta di poco piu' della meta' del precedente, e si ottiene
-      //     dettaglio a ogni scala, come nella scarica vera;
-      //  2. la scarica arriva in due tempi: il LEADER, debole, che si cerca
-      //     la strada in poche decine di millisecondi, e il COLPO DI
-      //     RITORNO, che la ripercorre e la fa esplodere di luce;
-      //  3. i colpi sono quasi sempre PIU' D'UNO, a qualche decina di
-      //     millisecondi l'uno dall'altro: e' lo sfarfallio che tutti
-      //     riconoscono, e che un lampo disegnato una volta sola non ha mai.
-      //
-      // Il disegno e' additivo, perche' la luce si somma e non copre: due
-      // ragni che si incrociano diventano piu' luminosi nel punto in cui si
-      // toccano, come luce vera.
-      //
-      // Tutta la geometria nasce dal seme della scarica e si calcola UNA
-      // volta sola: ricalcolarla a ogni fotogramma farebbe tremare il lampo
-      // invece di farlo brillare, e costerebbe sessanta volte tanto.
-
-      // Un lampo vero dura fra uno e due decimi di secondo, e quello che si
-      // vede da sopra e' ancora piu' breve. Qui si sta appena sopra, perche'
-      // sotto i due decimi chi non stava gia' guardando quel punto non lo
-      // vedrebbe affatto -- ma non oltre, o l'alone resta sulla mappa e
-      // copre le nuvole invece di illuminarle.
+      // Procedural diffuse emission: geometry, extent and pulse train are
+      // illustrative, not retrieved from the ground-network event. Cloud
+      // brightness is NOT cloud depth; dark folds are preserved, not new
+      // physically reconstructed 3D shadows. The satellite frame can precede
+      // the live event by minutes. Coordinates and timestamps stay untouched.
+      // NOAA: https://www.nssl.noaa.gov/education/svrwx101/lightning/faq/
+      // White / blue-white is an sRGB appearance, not one wavelength. The
+      // 777.4 nm line used by optical lightning sensors is NOT an RGB colour.
+      // Keep a stable seed per event. Millisecond pulse timings below are
+      // a legibility model, not observed optical timings or photon residence.
       const STRIKE_LEADER_MS = 80;
       const STRIKE_STROKE_MS = 150;
       // La nube illuminata si spegne in un terzo di secondo scarso: e' la
@@ -6824,11 +6751,8 @@
         return luce;
       }
 
-      // 2. LA NUBE: quello che si vede davvero di notte. Un fulmine non si
-      //    guarda, si vede illuminare la nube che lo contiene, e quella luce
-      //    non sfarfalla come il canale: sale col primo colpo e scende piano.
-      //    Non segue i singoli colpi -- li integra -- perche' una massa d'aria
-      //    illuminata non si spegne e riaccende in quaranta millisecondi.
+      // Short perceptual envelope blended with the distinct stroke pulses.
+      // This is not a claim that the cloud stores light for 100 ms.
       function luceNube(s, eta) {
         const dt = eta - STRIKE_LEADER_MS;
         if (dt < 0) return 0;
@@ -7169,7 +7093,7 @@
         context.globalCompositeOperation = "lighter";
         // Prima di ogni saetta: il nucleo e' la luce di fondo della cella, e
         // i lampi gli stanno dentro.
-        disegnaNuclei(context, adesso, scala);
+        if (!showSatelliteClouds && !strikeReducedMotion()) disegnaNuclei(context, adesso, scala);
         // La proiezione da coordinate geografiche a pixel si fa una volta
         // per scarica e per fotogramma, non due: i due passaggi la
         // condividono. Con qualche centinaio di scariche vive e il ciclo a
@@ -7182,92 +7106,22 @@
           preparaScarica(s);
           const punto = projectParticle(s.lon, s.lat, 0);
           punti[i] = punto;
-          if (!punto || eta > s.durata) continue;
+          s.cloudIlluminated = false;
+          if (eta > s.durata) { s.cloudLight = null; continue; }
+          if (!punto) continue;
+          if (strikeReducedMotion()) continue;
           const luce = luceScarica(s, eta);
           const nube = luceNube(s, eta);
-          const brace = luceBrace(s, eta);
-          if (luce < 0.012 && nube < 0.012 && brace < 0.012) continue;
-
-          // Quanto si estende il lampo sulla mappa. Un ragno vero striscia
-          // per chilometri sulla sommita', ma qui il raggio resta contenuto
-          // apposta: piu' e' largo, piu' copre la nube invece di accenderla.
-          const raggio = 58 * scala;
-          // Il leader: il filamento si cerca la strada strisciando, e
-          // finche' non ha finito il colpo di ritorno non c'e'.
-          const fino = eta < STRIKE_LEADER_MS
-            ? Math.min(1, eta / STRIKE_LEADER_MS)
-            : 1;
-
-          // LA NUBE CHE SI ACCENDE DA DENTRO. E' la cosa che si vede
-          // davvero dall'alto. Bianca appena calda, non azzurra: l'azzurro
-          // e' il colore del canale nudo, ma la luce che esce da una
-          // sommita' di nube ha attraversato chilometri di ghiaccio e ne
-          // esce bianca. Stretta e con il bordo che svanisce presto, cosi'
-          // la nube sotto continua a vedersi: e' illuminata, non coperta.
-          if (nube > 0.012) {
-            // Adesso che la luce e' ritagliata sulla nube, allargarla non
-            // vuol dire coprire di piu': vuol dire illuminare piu' nube,
-            // che e' esattamente quello che fa un lampo dentro un cumulo.
-            // Il limite resta, perche' oltre una certa scala si
-            // illuminerebbero celle diverse da quella che ha scaricato.
-            const largo = (58 + 52 * nube) * scala;
-            disegnaNubeIlluminata(context, punto, largo, nube);
-          }
-
-          // IL RAGNO. I filamenti che strisciano sulla sommita': sono
-          // l'unica cosa filiforme che si veda davvero da sopra, perche'
-          // corrono in superficie invece di stare dentro la nube.
-          //
-          // Tre passate sempre piu' strette e piu' chiare, e ognuna si
-          // assottiglia allontanandosi: la somma da' il nucleo
-          // incandescente senza che nessuna sia bianca piena, e il canale
-          // svanisce alla punta invece di finire di netto.
-          if (luce > 0.012) {
-            const passate = [
-              { larghezza: 9, tinta: "236,208,252", alfa: 0.30 },
-              { larghezza: 3.2, tinta: "250,238,255", alfa: 0.58 },
-              { larghezza: 1.3, tinta: "255,253,255", alfa: 1 }
-            ];
-            for (let p = 0; p < passate.length; p += 1) {
-              const passata = passate[p];
-              const largo = passata.larghezza * scala;
-              const alfa = passata.alfa * luce;
-              for (let f = 0; f < s.ragno.length; f += 1) {
-                const filo = s.ragno[f];
-                const lungo = filo.lunghezza * raggio;
-                strokeSfumato(context,
-                  puntiFilamento(filo.forma, punto.x, punto.y, lungo, filo.direzione, fino),
-                  largo, passata.tinta, alfa);
-                // I rami si accendono solo col colpo di ritorno: durante il
-                // leader il canale non si e' ancora biforcato.
-                if (eta < STRIKE_LEADER_MS) continue;
-                for (let r = 0; r < filo.rami.length; r += 1) {
-                  const ramo = filo.rami[r];
-                  const radice = puntoDelFilamento(filo.forma, ramo.nodo,
-                    punto.x, punto.y, lungo, filo.direzione);
-                  strokeSfumato(context,
-                    puntiFilamento(ramo.forma, radice.x, radice.y,
-                      ramo.lunghezza * raggio, ramo.direzione),
-                    largo * 0.6, passata.tinta, alfa * 0.8);
-                }
-              }
-            }
-          }
-
-          // LE BRACI. Finiti i colpi il canale non si spegne, si raffredda:
-          // resta un filo caldo che svanisce in un decimo di secondo e vira
-          // all'arancio mentre cala, com'e' giusto per qualcosa che perde
-          // temperatura. E' la differenza fra una luce che si spegne e una
-          // luce che muore.
-          if (brace > 0.012) {
-            for (let f = 0; f < s.ragno.length; f += 1) {
-              const filo = s.ragno[f];
-              strokeSfumato(context,
-                puntiFilamento(filo.forma, punto.x, punto.y,
-                  filo.lunghezza * raggio, filo.direzione),
-                1.6 * scala, "255,158,72", 0.5 * brace);
-            }
-          }
+          if (luce < 0.012 && nube < 0.012) continue;
+          // Bounded geographic footprint (visual model, not measured flash
+          // extent). Zooming out must not illuminate hundreds of kilometres.
+          const km = 18 + 12 * s.seme;
+          const edge = projectParticle(s.lon + km / (111.32
+            * Math.max(0.2, Math.cos(s.lat * Math.PI / 180))), s.lat, 0);
+          if (!edge) continue;
+          const largo = Math.min(148, Math.max(2, Math.hypot(edge.x-punto.x, edge.y-punto.y)));
+          s.cloudIlluminated = disegnaNubeIlluminata(strikeLightContext, punto, largo,
+            Math.min(1, 0.70 * nube + 0.40 * luce), s);
         }
 
 
@@ -7325,26 +7179,11 @@
           // e un simbolo sovrapposto la fa sembrare un disegno. Il glifo
           // compare quando la luce e' finita, ed e' li' che fa il suo
           // mestiere -- dire dove la scarica e' caduta.
-          if (eta < s.durata * 0.8) continue;
+          if (s.cloudIlluminated && eta < s.durata * 0.8) continue;
           const vita = 1 - eta / limite.eta;
           const opacita = clamp(vita * 2, 0, 1);
-          // Un battito lento sulle scariche fresche: l'occhio prende il
-          // movimento molto prima del colore, e fra cento segni uguali sono
-          // quelli degli ultimi secondi che contano.
-          const fresca = clamp(1 - eta / 12000, 0, 1);
-          const battito = 1 + 0.12 * fresca * Math.sin(eta / 210);
-          const dimensione = 10 * scala * battito;
-
-          // L'anello: una volta sola, nel primo secondo. Dice "questa e'
-          // nuova" senza aggiungere un altro colore alla mappa.
-          if (eta < 700) {
-            const t = eta / 700;
-            context.strokeStyle = "rgba(255,236,170," + (0.3 * (1 - t) * (1 - t)).toFixed(3) + ")";
-            context.lineWidth = 1.3 * scala;
-            context.beginPath();
-            context.arc(punto.x, punto.y, (10 + 30 * t) * scala, 0, Math.PI * 2);
-            context.stroke();
-          }
+          // Stable marker: age colour is a legend, not the optical spectrum.
+          const dimensione = 10 * scala;
 
           // Contorno scuro: sotto c'e' un'immagine notturna piena di luci,
           // e un glifo giallo senza stacco ci si perderebbe dentro.
@@ -7381,7 +7220,7 @@
         // Piena frequenza solo finche' qualcosa sta davvero brillando. La
         // durata non e' uguale per tutte: ogni scarica ha i suoi colpi di
         // ritorno, e s.durata dice quando ha finito.
-        const lampeggia = liveStrikes.some(function (s) {
+        const lampeggia = !strikeReducedMotion() && liveStrikes.some(function (s) {
           return s.durata === undefined || timestamp - s.nato < s.durata;
         });
         // Fra un lampo e l'altro non si sta fermi: il nucleo della cella
@@ -7427,6 +7266,9 @@
           ? liveStrikes.length + " scariche negli ultimi "
             + Math.round(STRIKE_LIFE_MS / 60000) + " minuti"
           : "collegato · nessuna scarica nel dominio";
+        if (showSatelliteClouds) label.textContent += " · luce simulata sul fotogramma satellite";
+        label.title = "Posizioni dalla rete a terra; luce, colore e canali simulati. "
+          + "Il satellite non è simultaneo e non misura la struttura 3D interna della nube.";
       }
 
       // ---- FULMINI DA SATELLITE ---------------------------------------
@@ -7621,9 +7463,9 @@
         ].join("|");
       }
 
-      function rememberCloudFrame(key, url, box, size) {
+      function rememberCloudFrame(key, url, box, size, texture) {
         if (cloudFrames.has(key)) return;
-        cloudFrames.set(key, { url: url, box: box, size: size });
+        cloudFrames.set(key, { url: url, box: box, size: size, texture: texture || null });
         while (cloudFrames.size > CLOUD_FRAME_LIMIT) {
           let vecchia = null;
           for (const candidata of cloudFrames.keys()) {
@@ -7701,17 +7543,18 @@
             canvas.width = image.naturalWidth || size.width;
             canvas.height = image.naturalHeight || size.height;
             canvas.getContext("2d").drawImage(image, 0, 0);
+            const texture = costruisciMascheraNube(canvas, box, product);
             if (typeof canvas.toBlob === "function"
                 && typeof URL.createObjectURL === "function") {
               canvas.toBlob(function (blob) {
                 if (!blob) { if (fatto) fatto(null); return; }
                 const url = URL.createObjectURL(blob);
-                rememberCloudFrame(key, url, box, size);
+                rememberCloudFrame(key, url, box, size, texture);
                 if (fatto) fatto(cloudFrames.get(key));
               }, "image/png");
               return;
             }
-            rememberCloudFrame(key, canvas.toDataURL("image/png"), box, size);
+            rememberCloudFrame(key, canvas.toDataURL("image/png"), box, size, texture);
           } catch (error) {
             if (fatto) fatto(null);
             return;
@@ -7810,6 +7653,7 @@
           return false;
         }
         map.setPaintProperty("satellite-clouds-layer", "raster-opacity", 1);
+        mascheraNube = frame.texture || null;
         cloudPublishedKey = cloudFrameKey(product, slot, box, size);
         cloudLoadedBox = frame.box;
         cloudLoadedMetres = frame.size.metres;
@@ -8423,6 +8267,7 @@
         showGraticule = false;
         stopParticles();
         vectorContext.clearRect(0, 0, window.innerWidth, window.innerHeight);
+        strikeLightContext.clearRect(0, 0, window.innerWidth, window.innerHeight);
         if (map && map.getLayer("weather-layer")) {
           map.setLayoutProperty("weather-layer", "visibility", "none");
         }
@@ -10974,7 +10819,8 @@
         const mobile = isMobile();
         const ratio = Math.min(window.devicePixelRatio || 1, mobile ? 2 : 2.15);
 
-        [[particleCanvas, particleContext], [vectorCanvas, vectorContext]].forEach(function (entry) {
+        [[particleCanvas, particleContext], [vectorCanvas, vectorContext],
+         [strikeLightCanvas, strikeLightContext]].forEach(function (entry) {
           const canvas = entry[0];
           const context = entry[1];
           canvas.width = Math.round(window.innerWidth * ratio);
@@ -11402,6 +11248,7 @@
 
       function clearVectors() {
         vectorContext.clearRect(0, 0, window.innerWidth, window.innerHeight);
+        strikeLightContext.clearRect(0, 0, window.innerWidth, window.innerHeight);
       }
 
       function uprightTextAngle(angle) {
@@ -15244,4 +15091,3 @@
     <script src="modern-ui.js"></script>
   </body>
 </html>
-
