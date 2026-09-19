@@ -35,12 +35,13 @@ const codice = ['STRIKE_LEADER_MS', 'STRIKE_STROKE_MS', 'STRIKE_BAGLIORE_MS',
   'CELLA_RAGGIO_KM',
   'STRIKE_LIFE_MS', 'STRIKE_MAX'].map(costante).join('\n')
   + '\n\n'
-  + ['semeCasuale', 'generaCanale', 'generaRami', 'preparaScarica', 'geometriaScarica',
-     'luceLeader', 'luceScarica', 'luceNube', 'luceBrace', 'aggregaCelle', 'limiteSegni']
-      .map(implementazione).join('\n\n');
+  + ['semeCasuale', 'generaCanale', 'generaRami', 'generaVenature', 'preparaScarica',
+     'geometriaScarica', 'luceLeader', 'luceScarica', 'luceNube', 'luceBrace',
+     'aggregaCelle', 'limiteSegni'].map(implementazione).join('\n\n');
 const modulo = new Function(codice
-  + '\nreturn {semeCasuale, generaCanale, generaRami, preparaScarica, geometriaScarica,'
-  + ' luceLeader, luceScarica, luceNube, luceBrace, aggregaCelle, limiteSegni};')();
+  + '\nreturn {semeCasuale, generaCanale, generaRami, generaVenature, preparaScarica,'
+  + ' geometriaScarica, luceLeader, luceScarica, luceNube, luceBrace,'
+  + ' aggregaCelle, limiteSegni};')();
 
 const CELLA_MAX_ATTESO = Number(costante('CELLA_MAX').match(/= (\d+)/)[1]);
 const STRIKE_MAX_ATTESO = Number(costante('STRIKE_MAX').match(/= (\d+)/)[1]);
@@ -67,7 +68,11 @@ prova('la stessa scarica da sempre lo stesso fulmine', () => {
   const a = scarica(0.37), b = scarica(0.37), c = scarica(0.38);
   assert.deepEqual(a.canale, b.canale, 'due scariche uguali danno canali diversi');
   assert.deepEqual(a.colpi, b.colpi, 'due scariche uguali danno colpi diversi');
+  assert.deepEqual(a.venature, b.venature,
+    'la stessa scarica cambia forma vista dall\'alto fra due fotogrammi');
   assert.notDeepEqual(a.canale, c.canale, 'semi diversi danno lo stesso canale');
+  assert.notDeepEqual(a.venature, c.venature,
+    'scariche diverse hanno la stessa rete vista dall\'alto');
 });
 
 prova('il canale scende sempre e arriva a terra', () => {
@@ -151,6 +156,27 @@ prova('i rami nascono dal canale e muoiono prima di toccare terra', () => {
         'un ramo arriva a quota ' + fine.toFixed(3) + ', cioe\' sottoterra');
       assert.ok(punti[0].y < fine, 'un ramo risale invece di scendere');
     }
+  }
+});
+
+prova('le venature viste dall\'alto partono dal dato e si diramano nella nube', () => {
+  for (let seme = 0; seme < 30; seme += 1) {
+    const vie = modulo.generaVenature(modulo.semeCasuale((seme + 1) / 31));
+    assert.ok(vie.length >= 3, 'una scarica non forma una rete luminosa');
+    let principali = 0, diramazioni = 0;
+    for (const via of vie) {
+      assert.ok(via.punti.length >= 3, 'una venatura e\' soltanto un segmento');
+      const primo = via.punti[0];
+      if (primo.x === 0 && primo.y === 0) principali += 1;
+      else diramazioni += 1;
+      const ultimo = via.punti[via.punti.length - 1];
+      assert.ok(Math.hypot(ultimo.x - primo.x, ultimo.y - primo.y) > 0.08,
+        'una venatura non si allontana dal proprio punto di origine');
+      assert.ok(Math.hypot(ultimo.x, ultimo.y) < 1.7,
+        'una venatura esce dalla coltre e sembra una linea sulla carta');
+    }
+    assert.ok(principali >= 3, 'mancano i canali principali dal punto osservato');
+    assert.ok(diramazioni >= 1, 'la rete non ha alcuna biforcazione laterale');
   }
 });
 
@@ -327,17 +353,20 @@ prova('i nuclei sono ordinati per attivita\' e limitati in numero', () => {
   }
 });
 
-prova('la saetta completa compare soltanto quando la scala la rende leggibile', () => {
+prova('la rete dall\'alto acquista dettaglio senza invadere la carta', () => {
   const lontano = modulo.geometriaScarica(5);
   const medio = modulo.geometriaScarica(6.5);
   const vicino = modulo.geometriaScarica(9);
-  assert.equal(lontano.canale, false, 'da lontano compare una saetta grande quanto una regione');
-  assert.equal(medio.canale, true, 'a scala intermedia il canale non compare');
-  assert.equal(medio.rami, false, 'i rami affollano gia\' la scala intermedia');
-  assert.equal(vicino.rami, true, 'da vicino mancano le biforcazioni');
-  assert.equal(vicino.impatto, true, 'da vicino manca il punto di impatto');
-  assert.ok(vicino.altezza > medio.altezza && vicino.altezza <= 78,
-    'la saetta non cresce in modo controllato con lo zoom');
+  assert.equal(lontano.venature, false,
+    'da lontano le venature sembrano linee geografiche');
+  assert.equal(medio.venature, true,
+    'a scala intermedia manca la struttura dentro la nube');
+  assert.equal(medio.ramificazioni, false,
+    'i rami secondari affollano gia\' la scala regionale');
+  assert.equal(vicino.ramificazioni, true,
+    'da vicino mancano le biforcazioni viste dall\'alto');
+  assert.ok(vicino.raggio > medio.raggio && vicino.raggio <= 50,
+    'la rete luminosa cresce oltre la scala della nube');
 });
 
 prova('da lontano si disegnano pochi segni, da vicino tutti', () => {
@@ -407,6 +436,17 @@ prova('la coltre e\' irregolare, riusata e accessibile', () => {
     'chi chiede meno movimento riceve ancora tutti i lampi');
   assert.doesNotMatch(html, /rgba\(255,150,64,/,
     'la persistenza del canale e\' ancora arancione come una scintilla');
+
+  const disegno = html.match(/function drawLiveStrikes\(\)[\s\S]*?\n {6}\}/);
+  assert.ok(disegno, 'manca il disegno delle scariche');
+  assert.match(disegno[0], /tracciaVenatura\(/,
+    'il lampo non viene disegnato come rete vista dall\'alto');
+  assert.doesNotMatch(disegno[0], /tracciaCanale\(/,
+    'il renderer mostra ancora la saetta verticale');
+  assert.doesNotMatch(disegno[0], /const pozza/,
+    'il renderer mostra ancora una pozza di luce a terra');
+  assert.match(disegno[0], /clamp\(\(eta - 220\) \/ 300, 0, 1\)/,
+    'il simbolo cartografico viene stampato sopra il flash');
 });
 
 prova('il tick non puo\' diventare un ronzio', () => {
