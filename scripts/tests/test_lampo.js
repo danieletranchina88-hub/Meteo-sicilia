@@ -66,6 +66,24 @@ const regioneLampo = (function () {
   return html.slice(da, html.indexOf(disegno[0]) + disegno[0].length);
 })();
 
+// Che cosa distingue la lavanda di un temporale vero dall'azzurro che
+// copriva le nuvole. Misurato sulla fotografia di riferimento, la luce
+// diffusa dalla nube ha SEMPRE il verde come canale piu' basso
+// (133,115,128 / 189,168,190 / 229,217,240): e' magenta chiaro. Un azzurro
+// no -- in 133,162,248 il verde sta in mezzo e il blu supera il rosso di
+// centoquindici. Sono due cose diverse, e la prova deve saperle distinguere
+// o finisce per vietare anche il colore giusto.
+function azzurro(c) {
+  if (c.b > c.r + 16) return true;
+  return c.b > c.r && c.g >= Math.min(c.r, c.b);
+}
+
+function ritaglioMinimo() {
+  const m = html.match(/function disegnaNubeIlluminata\([\s\S]*?\n {6}\}/);
+  assert.ok(m, 'manca il disegno della nube illuminata');
+  return m[0];
+}
+
 function scarica(seme) {
   const s = { seme: seme };
   modulo.preparaScarica(s);
@@ -313,8 +331,12 @@ prova('la luce esce dalle nubi, non da un disco', () => {
   // E il ritaglio non deve poter spegnere del tutto un lampo: la posizione
   // di una scarica ha un chilometro di incertezza, e basta che cada in uno
   // squarcio fra le nubi perche' la maschera le porti via tutta la luce.
-  assert.match(ritaglioMinimo(), /tondo\(0\.26\);/,
-    'senza un minimo garantito una scarica caduta fra due nubi diventa invisibile');
+  const minimo = ritaglioMinimo().match(/tondo\((0\.[0-9]+), largo \* [0-9.]+\);/);
+  assert.ok(minimo, 'non c\'e\' piu\' un minimo garantito: una scarica caduta fra '
+    + 'due nubi diventerebbe invisibile');
+  assert.ok(Number(minimo[1]) > 0.08 && Number(minimo[1]) < 0.45,
+    'il minimo tondo vale ' + minimo[1] + ': o non garantisce niente, o pareggia '
+    + 'la luce ritagliata e il ritaglio smette di dare forma');
   // E il minimo deve restare un minimo: se pareggiasse la passata
   // ritagliata, il ritaglio si limiterebbe a togliere luce invece di dare
   // forma, e il bagliore uscirebbe troppo debole per vedersi.
@@ -322,9 +344,6 @@ prova('la luce esce dalle nubi, non da un disco', () => {
   assert.ok(passate >= 2,
     'la luce ritagliata sulle nubi si somma una volta sola: non e\' abbastanza '
     + 'forte da farsi leggere come sagoma');
-  function ritaglioMinimo() {
-    return html.match(/function disegnaNubeIlluminata\([\s\S]*?\n {6}\}/)[0];
-  }
   const ritaglio = html.match(/function disegnaNubeIlluminata\([\s\S]*?\n {6}\}/);
   assert.ok(ritaglio, 'manca il disegno della nube illuminata');
   assert.match(ritaglio[0], /globalCompositeOperation = "destination-in"/,
@@ -349,13 +368,20 @@ prova('la luce del lampo e\' bianca calda, non azzurra', () => {
   // Solo i colori CHIARI: i contorni scuri del glifo sono quasi neri, e un
   // nero ha sempre piu' blu che rosso senza per questo essere azzurro.
   const chiari = colori.filter((c) => c.r + c.g + c.b > 320);
-  const freddi = chiari.filter((c) => c.b > c.r + 8);
+  // Che cosa distingue la lavanda di un temporale vero dall'azzurro che
+  // copriva le nuvole. Misurato sulla fotografia di riferimento, la luce
+  // diffusa dalla nube ha SEMPRE il verde come canale piu' basso
+  // (133,115,128 / 189,168,190 / 229,217,240): e' magenta chiaro. Un
+  // azzurro no -- in 133,162,248 il verde sta in mezzo, e il blu supera il
+  // rosso di centoquindici. Sono due cose diverse e la prova deve saperle
+  // distinguere, o vieta anche il colore giusto.
+  const freddi = chiari.filter(azzurro);
   // Gli unici colori freddi ammessi sono le due tappe piu' esterne del
   // gradiente della nube: la luce diffusa vira davvero al blu sul margine,
   // ma con un'opacita' che si conta in centesimi.
   const fringia = [...regioneLampo.matchAll(
     /g\.addColorStop\(([0-9.]+), "rgba\((\d+),(\d+),(\d+),([^"]*)"/g)]
-    .filter((m) => +m[4] > +m[2] + 8);
+    .filter((m) => azzurro({ r: +m[2], g: +m[3], b: +m[4] }));
   for (const m of fringia) {
     assert.ok(+m[1] >= 0.8,
       'la tinta fredda compare gia\' a ' + m[1] + ' del raggio: non e\' un '
@@ -385,9 +411,20 @@ prova('l\'alone illumina le nuvole invece di coprirle', () => {
   const largo = regioneLampo.match(/const largo = \((\d+) \+ (\d+) \* nube\) \* scala;/);
   assert.ok(largo, 'non trovo il raggio della nube illuminata');
   const massimo = Number(largo[1]) + Number(largo[2]);
-  assert.ok(massimo <= 90,
-    'la nube illuminata arriva a ' + massimo + ' pixel di raggio: a quella '
-    + 'dimensione non illumina la nube, la copre');
+  // Due limiti diversi, perche' sono due cose diverse. La luce RITAGLIATA
+  // puo' essere larga: allargarla illumina piu' nube, non copre di piu', ed
+  // e' quello che fa un lampo dentro un cumulo. Oltre una certa scala pero'
+  // illuminerebbe celle che non hanno scaricato.
+  assert.ok(massimo <= 140,
+    'la luce ritagliata arriva a ' + massimo + ' pixel: illuminerebbe celle '
+    + 'diverse da quella che ha scaricato');
+  // Il bagliore TONDO invece non sa dove sia la nube, quindi deve restare
+  // stretto: e' quello che prima copriva tutto.
+  const ridotto = ritaglioMinimo().match(/tondo\(1, largo \* ([0-9.]+)\);/);
+  assert.ok(ridotto, 'il bagliore tondo usa ancora il raggio pieno');
+  assert.ok(massimo * Number(ridotto[1]) <= 90,
+    'senza maschera il bagliore arriva a ' + Math.round(massimo * Number(ridotto[1]))
+    + ' pixel: li\' non illumina la nube, la copre');
   // E deve spegnersi in fretta.
   const s = scarica(0.44);
   assert.ok(modulo.luceNube(s, s.ultimoColpo + 250) < 0.12,

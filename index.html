@@ -6506,7 +6506,13 @@
 
           for (let i = 0; i < px.length; i += 4) {
             const luminanza = (px[i] * 0.2126 + px[i + 1] * 0.7152 + px[i + 2] * 0.0722) / 255;
-            const nuvolosita = clamp((luminanza - buio) / intervallo, 0, 1);
+            // Il contrasto si alza con una gamma: nella fotografia i lobi
+            // scuri davanti restano neri mentre il cuore della nube brucia,
+            // ed e' quel salto a far leggere la luce come interna alla
+            // nube. Una maschera lineare invece la spalma, e il risultato
+            // sembra nebbia illuminata.
+            const grezza = clamp((luminanza - buio) / intervallo, 0, 1);
+            const nuvolosita = grezza * grezza * (3 - 2 * grezza);
             // Il colore non serve: resta solo il canale alfa, che e' la
             // sagoma. Bianco pieno cosi' il ritaglio non tinge il bagliore.
             px[i] = 255; px[i + 1] = 255; px[i + 2] = 255;
@@ -6532,29 +6538,55 @@
         // perche' le due passate qui sotto hanno forze molto diverse: quella
         // ritagliata sulle nubi deve essere la luce vera, quella tonda solo
         // un minimo di sicurezza.
+        // La tavolozza non e' scelta a occhio: viene campionata da una
+        // fotografia vera di temporale illuminato dall'interno, misurando la
+        // tinta media per fascia di luminanza. Il risultato dice una cosa
+        // sola e chiara -- il VERDE e' sempre il canale piu' basso:
+        //
+        //   luminanza 0,38-0,58   133,115,128
+        //   luminanza 0,58-0,80   189,168,190
+        //   luminanza 0,80-1,00   229,217,240
+        //
+        // Non e' azzurro (li' il blu supererebbe il rosso di un centinaio) e
+        // non e' ambra: e' lavanda. Ha anche senso fisico, perche' lo
+        // spettro del fulmine e' dominato dall'azoto nel violetto piu' un
+        // po' di rosso, con un buco proprio nel verde; diffuso dal ghiaccio
+        // della nube resta questo.
         const tinte = function (g, forza) {
           const a = forza * nube;
-          g.addColorStop(0, "rgba(255,255,252," + (0.98 * a).toFixed(3) + ")");
-          g.addColorStop(0.18, "rgba(255,252,240," + (0.66 * a).toFixed(3) + ")");
-          g.addColorStop(0.42, "rgba(255,242,218," + (0.3 * a).toFixed(3) + ")");
-          g.addColorStop(0.68, "rgba(248,232,208," + (0.11 * a).toFixed(3) + ")");
-          g.addColorStop(0.85, "rgba(198,214,248," + (0.03 * a).toFixed(3) + ")");
-          g.addColorStop(1, "rgba(190,206,244,0)");
+          g.addColorStop(0, "rgba(253,250,255," + (0.98 * a).toFixed(3) + ")");
+          g.addColorStop(0.16, "rgba(250,236,255," + (0.72 * a).toFixed(3) + ")");
+          g.addColorStop(0.36, "rgba(238,214,248," + (0.42 * a).toFixed(3) + ")");
+          // E si SCALDA mentre si spegne, invece di virare al violetto: nella
+          // fotografia lo scarto fra blu e rosso passa da +11 nel cuore a -5
+          // nella fascia intermedia. E' il contrario di quello che verrebbe
+          // da disegnare, ed e' l'unica ragione per cui vale la pena
+          // misurare una foto invece di scegliere i colori a mano.
+          g.addColorStop(0.58, "rgba(208,182,208," + (0.2 * a).toFixed(3) + ")");
+          g.addColorStop(0.8, "rgba(178,154,174," + (0.07 * a).toFixed(3) + ")");
+          g.addColorStop(1, "rgba(162,140,156,0)");
         };
-        const tondo = function (forza) {
-          const g = context.createRadialGradient(punto.x, punto.y, 0, punto.x, punto.y, largo);
+        const tondo = function (forza, raggio) {
+          const g = context.createRadialGradient(punto.x, punto.y, 0, punto.x, punto.y, raggio);
           tinte(g, forza);
           context.fillStyle = g;
           context.beginPath();
-          context.arc(punto.x, punto.y, largo, 0, Math.PI * 2);
+          context.arc(punto.x, punto.y, raggio, 0, Math.PI * 2);
           context.fill();
         };
 
         // Senza maschera, o con la mappa inclinata -- dove il riquadro
         // dell'immagine non e' piu' un rettangolo sullo schermo -- resta
         // solo il bagliore tondo. Meno bello, ma mai sbagliato.
+        // Il raggio pieno vale solo per la luce RITAGLIATA: li' allargarsi
+        // vuol dire illuminare piu' nube. Il bagliore tondo, che non sa
+        // dove sia la nube, deve restare molto piu' stretto, o torna a
+        // essere la macchia che copriva tutto.
         const inclinata = map.getPitch && map.getPitch() > 4;
-        if (!mascheraNube || inclinata || !showSatelliteClouds) { tondo(1); return; }
+        if (!mascheraNube || inclinata || !showSatelliteClouds) {
+          tondo(1, largo * 0.62);
+          return;
+        }
 
         // Il bagliore si disegna in due parti, ed e' la seconda a dargli la
         // forma.
@@ -6567,7 +6599,7 @@
         // Copre anche i bordi del riquadro satellitare, dove la maschera
         // semplicemente non arriva. Resta pero' un quarto della luce piena:
         // deve garantire, non competere con la seconda passata.
-        tondo(0.26);
+        tondo(0.2, largo * 0.68);
 
         // La seconda e' la stessa luce ritagliata sulla sagoma delle nubi:
         // e' questa che fa vedere la sommita' accendersi, con i suoi bordi
@@ -7173,7 +7205,12 @@
           // esce bianca. Stretta e con il bordo che svanisce presto, cosi'
           // la nube sotto continua a vedersi: e' illuminata, non coperta.
           if (nube > 0.012) {
-            const largo = (38 + 34 * nube) * scala;
+            // Adesso che la luce e' ritagliata sulla nube, allargarla non
+            // vuol dire coprire di piu': vuol dire illuminare piu' nube,
+            // che e' esattamente quello che fa un lampo dentro un cumulo.
+            // Il limite resta, perche' oltre una certa scala si
+            // illuminerebbero celle diverse da quella che ha scaricato.
+            const largo = (58 + 52 * nube) * scala;
             disegnaNubeIlluminata(context, punto, largo, nube);
           }
 
@@ -7187,9 +7224,9 @@
           // svanisce alla punta invece di finire di netto.
           if (luce > 0.012) {
             const passate = [
-              { larghezza: 9, tinta: "255,228,184", alfa: 0.30 },
-              { larghezza: 3.2, tinta: "255,248,232", alfa: 0.58 },
-              { larghezza: 1.3, tinta: "255,255,253", alfa: 1 }
+              { larghezza: 9, tinta: "236,208,252", alfa: 0.30 },
+              { larghezza: 3.2, tinta: "250,238,255", alfa: 0.58 },
+              { larghezza: 1.3, tinta: "255,253,255", alfa: 1 }
             ];
             for (let p = 0; p < passate.length; p += 1) {
               const passata = passate[p];
