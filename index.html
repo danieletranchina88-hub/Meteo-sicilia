@@ -6544,6 +6544,51 @@
         return rami;
       }
 
+      // Venature viste dall'alto. Non sono raggi equidistanti: pochi canali
+      // principali vagano dentro la nube e generano diramazioni piu' corte.
+      // Tutto parte dalla coordinata osservata, che resta il centro esatto
+      // del lampo; la rete e' soltanto l'illuminazione ottica attorno.
+      function generaVenature(rng) {
+        const vie = [];
+        const principali = 3 + Math.floor(rng() * 3);
+        const orientamento = rng() * Math.PI * 2;
+        for (let i = 0; i < principali; i += 1) {
+          const punti = [{ x: 0, y: 0 }];
+          let x = 0, y = 0;
+          let angolo = orientamento + i * Math.PI * 2 / principali
+            + (rng() - 0.5) * 0.72;
+          const segmenti = 5 + Math.floor(rng() * 3);
+          const lunghezza = 0.58 + rng() * 0.42;
+          for (let k = 0; k < segmenti; k += 1) {
+            angolo += (rng() - 0.5) * 0.48;
+            const passo = lunghezza / segmenti * (0.78 + rng() * 0.44);
+            x += Math.cos(angolo) * passo;
+            y += Math.sin(angolo) * passo;
+            punti.push({ x: x, y: y });
+
+            // Una diramazione nasce dopo il centro e muore presto. Parte
+            // dalla venatura vera, quindi non forma una stella artificiale.
+            if (k >= 1 && k < segmenti - 2
+                && (k === Math.floor(segmenti / 2) || rng() < 0.22)) {
+              const ramo = [{ x: x, y: y }];
+              let rx = x, ry = y;
+              let ramoAngolo = angolo + (rng() < 0.5 ? -1 : 1) * (0.42 + rng() * 0.46);
+              const passiRamo = 2 + Math.floor(rng() * 2);
+              for (let j = 0; j < passiRamo; j += 1) {
+                ramoAngolo += (rng() - 0.5) * 0.42;
+                const rp = passo * (0.66 - j * 0.10);
+                rx += Math.cos(ramoAngolo) * rp;
+                ry += Math.sin(ramoAngolo) * rp;
+                ramo.push({ x: rx, y: ry });
+              }
+              vie.push({ punti: ramo, forza: 0.34 + rng() * 0.20 });
+            }
+          }
+          vie.push({ punti: punti, forza: 0.76 + rng() * 0.24 });
+        }
+        return vie;
+      }
+
       // Generatore deterministico: stessa scarica, stesso fulmine, per tutta
       // la sua vita e a qualunque zoom.
       function semeCasuale(seme) {
@@ -6580,6 +6625,10 @@
         // decina di gradi basta a togliere l'aria di simbolo.
         s.inclinazione = (rng() - 0.5) * 0.42;
         s.tono = 0.82 + rng() * 0.42;
+        s.venature = generaVenature(rng);
+        // Orientamento della struttura dentro la nube, non direzione del
+        // fulmine osservato: non viene esposto come dato meteorologico.
+        s.rotazioneNube = (rng() - 0.5) * Math.PI;
       }
 
       // La prospettiva cambia con lo zoom. Da lontano una saetta verticale
@@ -6587,13 +6636,12 @@
       // solo il lampo puntuale e la luce della cella. Il canale completo
       // compare quando la scala permette di leggerlo come effetto grafico.
       function geometriaScarica(zoom) {
-        const dettaglio = Math.max(0, Math.min(1, (zoom - 5.8) / 2.6));
+        const dettaglio = Math.max(0, Math.min(1, (zoom - 5.6) / 3.0));
         return {
-          canale: zoom >= 5.8,
-          rami: zoom >= 7.0,
-          impatto: zoom >= 8.2,
-          altezza: 32 + 46 * dettaglio,
-          larghezza: 9 + 10 * dettaglio
+          venature: zoom >= 5.6,
+          ramificazioni: zoom >= 7.2,
+          raggio: 20 + 30 * dettaglio,
+          coltre: 0.92 + 0.16 * dettaglio
         };
       }
 
@@ -6696,6 +6744,27 @@
           if (p.y > ultimo) break;
           const px = x + (p.x * larghezza) + p.y * altezza * inclinazione;
           const py = y - altezza * (1 - p.y);
+          if (i === 0) context.moveTo(px, py);
+          else context.lineTo(px, py);
+        }
+        context.stroke();
+      }
+
+      // Proiezione della rete sul piano della mappa. La compressione
+      // verticale la fa leggere come luce distesa sulla sommita' della nube,
+      // non come un fulmine frontale ruotato di novanta gradi.
+      function tracciaVenatura(context, punti, x, y, raggio, rotazione, fino) {
+        const limite = fino === undefined ? 1 : fino;
+        const coseno = Math.cos(rotazione), seno = Math.sin(rotazione);
+        context.beginPath();
+        for (let i = 0; i < punti.length; i += 1) {
+          const frazione = punti.length > 1 ? i / (punti.length - 1) : 1;
+          if (frazione > limite) break;
+          const p = punti[i];
+          const rx = p.x * coseno - p.y * seno;
+          const ry = p.x * seno + p.y * coseno;
+          const px = x + rx * raggio;
+          const py = y + ry * raggio * 0.68;
           if (i === 0) context.moveTo(px, py);
           else context.lineTo(px, py);
         }
@@ -6963,127 +7032,102 @@
           const leader = luceLeader(eta);
           if (luce < 0.012 && nube < 0.012 && brace < 0.012 && leader < 0.012) continue;
 
-          const altezza = geometria.altezza;
-          const larghezza = geometria.larghezza;
-          // Il leader avanza in otto passi riconoscibili invece di rivelare
-          // una linea continua; al colpo di ritorno il canale e' completo.
+          const raggioVenature = geometria.raggio * clamp(scala, 0.90, 1.35);
+          const rotazione = s.rotazioneNube;
+          // Il leader propaga la rete verso l'esterno a piccoli passi; il
+          // colpo di ritorno illumina la stessa identica geometria.
           const fino = leader > 0
             ? Math.min(1, (Math.floor((eta / STRIKE_LEADER_MS) * 8) + 1) / 8)
             : 1;
 
-          // LA NUBE CHE SI ACCENDE. E' la parte che si vede davvero di
-          // notte. Non e' un disco perfetto: una coltre ellittica e
-          // irregolare illumina una massa di nube, non un bersaglio sulla
-          // carta. Le varianti sono pre-disegnate e scelte dal seme.
+          // VISTA DALL'ALTO: la nube si accende attorno alla coordinata,
+          // senza una saetta verticale ne' una pozza a terra. La coltre
+          // irregolare viene schiacciata leggermente come una sommita' vista
+          // dal satellite e ruotata con la struttura delle venature.
           if (!STRIKE_REDUCED_MOTION && nube > 0.012) {
-            const alto = punto.y - altezza * 0.58;
-            const largo = (48 + 42 * nube) * clamp(scala, 0.85, 1.35);
+            const largo = (52 + 46 * nube) * clamp(scala, 0.85, 1.32) * geometria.coltre;
             const sprite = spriteColtre(Math.floor(s.seme * COLTRE_VARIANTI) % COLTRE_VARIANTI);
             context.save();
-            context.globalAlpha = (showSatelliteClouds ? 0.72 : 0.56) * nube;
-            context.translate(punto.x, alto);
-            context.rotate(s.inclinazione * 0.18);
-            context.drawImage(sprite, -largo, -largo * 0.64, largo * 2, largo * 1.28);
+            context.globalAlpha = (showSatelliteClouds ? 0.76 : 0.58) * nube;
+            context.translate(punto.x, punto.y);
+            context.rotate(rotazione * 0.28);
+            context.drawImage(sprite, -largo, -largo * 0.62, largo * 2, largo * 1.24);
             context.restore();
           }
 
-          // Il cielo illuminato stretto attorno al canale: piu' acceso della
-          // coltre, e segue i colpi invece di integrarli. Piu' largo quando
-          // la scarica e' piu' forte -- e' luce, non una bolla che si
-          // espande: farlo crescere mentre si spegne darebbe l'effetto
-          // sbagliato, quello dell'onda d'urto.
+          // Il cuore ottico e' piccolo e fermo sulla posizione osservata.
+          // Non cresce come un'onda d'urto: aumenta solo la luminosita'.
           if (!STRIKE_REDUCED_MOTION && luce > 0.012) {
-            const raggio = (22 + 42 * luce) * clamp(scala, 0.85, 1.45);
+            const raggio = (16 + 34 * luce) * clamp(scala, 0.85, 1.38);
             const alone = context.createRadialGradient(
-              punto.x, punto.y - altezza * 0.45, 0,
-              punto.x, punto.y - altezza * 0.45, raggio
+              punto.x, punto.y, 0, punto.x, punto.y, raggio
             );
-            alone.addColorStop(0, "rgba(186,212,255," + (0.78 * luce).toFixed(3) + ")");
-            alone.addColorStop(0.35, "rgba(128,168,244," + (0.34 * luce).toFixed(3) + ")");
-            alone.addColorStop(1, "rgba(90,130,220,0)");
+            alone.addColorStop(0, "rgba(255,255,248," + (0.88 * luce).toFixed(3) + ")");
+            alone.addColorStop(0.16, "rgba(196,222,255," + (0.60 * luce).toFixed(3) + ")");
+            alone.addColorStop(0.48, "rgba(126,164,245," + (0.24 * luce).toFixed(3) + ")");
+            alone.addColorStop(1, "rgba(92,124,224,0)");
             context.fillStyle = alone;
             context.beginPath();
-            context.arc(punto.x, punto.y - altezza * 0.45, raggio, 0, Math.PI * 2);
+            context.arc(punto.x, punto.y, raggio, 0, Math.PI * 2);
             context.fill();
           }
 
-          // La pozza di luce a terra: il terreno rischiarato sotto il punto
-          // di impatto. Schiacciata, perche' la mappa si guarda dall'alto.
-          if (!STRIKE_REDUCED_MOTION && geometria.impatto && luce > 0.012) {
-          context.save();
-          context.translate(punto.x, punto.y);
-          context.scale(1, 0.38);
-          const pozza = context.createRadialGradient(0, 0, 0, 0, 0, 46 * scala);
-          pozza.addColorStop(0, "rgba(255,248,228," + (0.8 * luce).toFixed(3) + ")");
-          pozza.addColorStop(0.5, "rgba(255,238,198," + (0.26 * luce).toFixed(3) + ")");
-          pozza.addColorStop(1, "rgba(255,230,180,0)");
-          context.fillStyle = pozza;
-          context.beginPath();
-          context.arc(0, 0, 46 * scala, 0, Math.PI * 2);
-          context.fill();
-          context.restore();
-          }
-
-          // I rami, piu' deboli del canale e spenti prima: si accendono solo
-          // al colpo di ritorno, mai durante il leader.
-          if (!STRIKE_REDUCED_MOTION && geometria.rami
-              && eta >= STRIKE_LEADER_MS && luce > 0.012) {
-            context.strokeStyle = "rgba(190,216,255," + (0.42 * luce).toFixed(3) + ")";
-            context.lineWidth = 2.4 * clamp(scala, 0.9, 1.5);
-            for (let r = 0; r < s.rami.length; r += 1) {
-              tracciaCanale(context, s.rami[r].punti, punto.x, punto.y,
-                altezza, larghezza, s.inclinazione);
-            }
-            context.strokeStyle = "rgba(255,253,246," + (0.70 * luce).toFixed(3) + ")";
-            context.lineWidth = 0.85 * clamp(scala, 0.9, 1.5);
-            for (let r = 0; r < s.rami.length; r += 1) {
-              tracciaCanale(context, s.rami[r].punti, punto.x, punto.y,
-                altezza, larghezza, s.inclinazione);
+          // Prima del flash le vene si cercano la strada dentro la nube.
+          if (!STRIKE_REDUCED_MOTION && geometria.venature && leader > 0.012) {
+            for (let v = 0; v < s.venature.length; v += 1) {
+              const vena = s.venature[v];
+              if (!geometria.ramificazioni && vena.forza < 0.70) continue;
+              context.strokeStyle = "rgba(132,174,255,"
+                + (0.66 * leader * vena.forza).toFixed(3) + ")";
+              context.lineWidth = (0.55 + 0.55 * vena.forza) * clamp(scala, 0.9, 1.35);
+              tracciaVenatura(context, vena.punti, punto.x, punto.y,
+                raggioVenature, rotazione, fino);
             }
           }
 
-          // Il leader e' una traccia debole che si costruisce a scatti. E'
-          // separato dal colpo: prima luceScarica valeva zero e il leader,
-          // pur calcolato, non arrivava mai sullo schermo.
-          if (!STRIKE_REDUCED_MOTION && geometria.canale && leader > 0.012) {
-            context.strokeStyle = "rgba(136,174,255," + (0.72 * leader).toFixed(3) + ")";
-            context.lineWidth = 1.05 * clamp(scala, 0.9, 1.45);
-            tracciaCanale(context, s.canale, punto.x, punto.y, altezza, larghezza,
-              s.inclinazione, fino);
+          // Il ritorno illumina la rete in tre passate: alone freddo,
+          // guaina azzurra e nucleo bianco sottilissimo. I rami secondari
+          // appaiono solo da vicino, mentre i principali restano leggibili
+          // alla scala regionale senza diventare una stella.
+          if (!STRIKE_REDUCED_MOTION && geometria.venature && luce > 0.012) {
+            const scalaLinea = clamp(scala, 0.9, 1.40);
+            for (let passaggio = 0; passaggio < 3; passaggio += 1) {
+              for (let v = 0; v < s.venature.length; v += 1) {
+                const vena = s.venature[v];
+                if (!geometria.ramificazioni && vena.forza < 0.70) continue;
+                if (passaggio === 0) {
+                  context.strokeStyle = "rgba(92,140,248,"
+                    + (0.30 * luce * vena.forza).toFixed(3) + ")";
+                  context.lineWidth = (3.2 + 2.2 * vena.forza) * scalaLinea;
+                } else if (passaggio === 1) {
+                  context.strokeStyle = "rgba(176,212,255,"
+                    + (0.56 * luce * vena.forza).toFixed(3) + ")";
+                  context.lineWidth = (1.35 + 1.25 * vena.forza) * scalaLinea;
+                } else {
+                  context.strokeStyle = "rgba(255,255,248,"
+                    + (0.92 * luce * vena.forza).toFixed(3) + ")";
+                  context.lineWidth = (0.48 + 0.46 * vena.forza) * scalaLinea;
+                }
+                tracciaVenatura(context, vena.punti, punto.x, punto.y,
+                  raggioVenature, rotazione);
+              }
+            }
           }
 
-          // Il colpo di ritorno: tre passate contenute, con un nucleo
-          // sottilissimo bianco caldo. La scala e' limitata perche' una
-          // scarica non sembri occupare decine di chilometri sulla carta.
-          if (!STRIKE_REDUCED_MOTION && geometria.canale && luce > 0.012) {
-            const scalaLinea = clamp(scala, 0.9, 1.5);
-            context.strokeStyle = "rgba(98,148,255," + (0.38 * luce).toFixed(3) + ")";
-            context.lineWidth = 7.5 * scalaLinea;
-            tracciaCanale(context, s.canale, punto.x, punto.y, altezza, larghezza,
-              s.inclinazione);
-            context.strokeStyle = "rgba(184,216,255," + (0.58 * luce).toFixed(3) + ")";
-            context.lineWidth = 3.1 * scalaLinea;
-            tracciaCanale(context, s.canale, punto.x, punto.y, altezza, larghezza,
-              s.inclinazione);
-            context.strokeStyle = "rgba(255,255,248," + (0.96 * luce).toFixed(3) + ")";
-            context.lineWidth = 1.15 * scalaLinea;
-            tracciaCanale(context, s.canale, punto.x, punto.y, altezza, larghezza,
-              s.inclinazione);
-          }
-
-          // PERSISTENZA DEL PLASMA. Molto breve e fredda: una coda arancio
-          // sembrava una scintilla o un incendio. Resta appena un filo
-          // bianco-violetto, distinto dal simbolo cartografico persistente.
-          if (!STRIKE_REDUCED_MOTION && geometria.canale && brace > 0.012) {
-            const scalaLinea = clamp(scala, 0.9, 1.5);
-            context.strokeStyle = "rgba(126,154,232," + (0.20 * brace).toFixed(3) + ")";
-            context.lineWidth = 2.4 * scalaLinea;
-            tracciaCanale(context, s.canale, punto.x, punto.y, altezza, larghezza,
-              s.inclinazione);
-            context.strokeStyle = "rgba(224,232,255," + (0.34 * brace).toFixed(3) + ")";
-            context.lineWidth = 0.9 * scalaLinea;
-            tracciaCanale(context, s.canale, punto.x, punto.y, altezza, larghezza,
-              s.inclinazione);
+          // Dopo l'ultimo impulso resta per un istante una traccia fredda,
+          // mai arancione: e' luce residua nella nube, non materiale in
+          // combustione o un secondo simbolo cartografico.
+          if (!STRIKE_REDUCED_MOTION && geometria.venature && brace > 0.012) {
+            const scalaLinea = clamp(scala, 0.9, 1.35);
+            for (let v = 0; v < s.venature.length; v += 1) {
+              const vena = s.venature[v];
+              if (!geometria.ramificazioni && vena.forza < 0.70) continue;
+              context.strokeStyle = "rgba(198,214,255,"
+                + (0.20 * brace * vena.forza).toFixed(3) + ")";
+              context.lineWidth = (0.55 + 0.45 * vena.forza) * scalaLinea;
+              tracciaVenatura(context, vena.punti, punto.x, punto.y,
+                raggioVenature, rotazione);
+            }
           }
         }
 
@@ -7138,26 +7182,20 @@
           // nella seconda: cosi' le scariche degli ultimi minuti si leggono
           // tutte allo stesso modo, e solo le piu' vecchie si spengono.
           const vita = 1 - eta / limite.eta;
-          const opacita = clamp(vita * 2, 0, 1);
-          // Un battito lento sulle scariche fresche: l'occhio prende il
-          // movimento molto prima del colore, e fra cento segni uguali sono
-          // quelli degli ultimi secondi che contano.
+          const opacitaBase = clamp(vita * 2, 0, 1);
+          // Il simbolo non viene stampato sopra il lampo: compare mentre la
+          // luce ottica finisce, e da quel momento racconta soltanto eta' e
+          // posizione. Movimento ridotto lo mostra subito.
+          const apparizione = STRIKE_REDUCED_MOTION
+            ? 1
+            : clamp((eta - 220) / 300, 0, 1);
+          const opacita = opacitaBase * apparizione;
+          if (opacita < 0.01) continue;
           const fresca = clamp(1 - eta / 12000, 0, 1);
           const battito = STRIKE_REDUCED_MOTION
             ? 1
-            : 1 + 0.08 * fresca * Math.sin(eta / 210);
+            : 1 + 0.06 * fresca * Math.sin(eta / 230);
           const dimensione = clamp(8 + (zoom - 5) * 0.8, 8, 14) * battito;
-
-          // Un anello corto segnala l'arrivo senza diventare un'onda
-          // d'urto. In movimento ridotto resta soltanto il segno.
-          if (!STRIKE_REDUCED_MOTION && eta < 420) {
-            const t = eta / 420;
-            context.strokeStyle = "rgba(255,236,184," + (0.24 * (1 - t) * (1 - t)).toFixed(3) + ")";
-            context.lineWidth = 1.15 * clamp(scala, 0.9, 1.4);
-            context.beginPath();
-            context.arc(punto.x, punto.y, (8 + 22 * t) * clamp(scala, 0.9, 1.4), 0, Math.PI * 2);
-            context.stroke();
-          }
 
           // Contorno scuro: sotto c'e' un'immagine notturna piena di luci,
           // e un glifo giallo senza stacco ci si perderebbe dentro.
@@ -7197,11 +7235,10 @@
         const lampeggia = !STRIKE_REDUCED_MOTION && liveStrikes.some(function (s) {
           return s.durata === undefined || timestamp - s.nato < s.durata;
         });
-        // Fra un lampo e l'altro non si sta fermi: il nucleo della cella
-        // respira, e a un fotogramma ogni secondo e mezzo il respiro
-        // diventerebbe uno scatto. Novanta millisecondi bastano perche' una
-        // pulsazione da sette centesimi appaia continua, e costano poco
-        // perche' senza lampi il disegno e' quasi solo copie di immagine.
+        // Fra un lampo e l'altro il nucleo continua a decadere secondo
+        // l'ultima scarica osservata. Novanta millisecondi bastano per un
+        // passaggio morbido e costano poco: senza flash il disegno e' quasi
+        // soltanto copia di immagini gia' preparate.
         if (timestamp - strikeLastDraw >= (lampeggia ? 0 : 90)) {
           strikeLastDraw = timestamp;
           drawVectors();
