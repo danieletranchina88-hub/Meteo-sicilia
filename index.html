@@ -6461,6 +6461,11 @@
       // guardando quel punto non lo vede affatto.
       const STRIKE_LEADER_MS = 95;
       const STRIKE_STROKE_MS = 190;
+      // Quanto dura la coda di luce dopo l'ultimo colpo di ritorno. Sono due
+      // cose diverse con due tempi diversi: la nube illuminata si spegne in
+      // mezzo secondo scarso, il canale incandescente molto prima.
+      const STRIKE_BAGLIORE_MS = 620;
+      const STRIKE_BRACE_MS = 260;
 
       // Il canale in coordinate sue: y da 0 (base della nube) a 1 (suolo),
       // x trasversale in unita' di semilarghezza. La scala in pixel si
@@ -6559,15 +6564,28 @@
           colpi.push({ quando: quando, forza: 0.78 - i * 0.22 });
         }
         s.colpi = colpi;
-        s.durata = quando + STRIKE_STROKE_MS;
+        s.ultimoColpo = quando;
+        // La durata non finisce con l'ultimo colpo: il bagliore della nube e
+        // il canale che si raffredda vivono oltre, e il ciclo di disegno usa
+        // questo numero per sapere fino a quando aggiornare a piena
+        // frequenza. Troncarlo all'ultimo colpo spegnerebbe il bagliore di
+        // scatto, che e' l'unica cosa che un lampo vero non fa mai.
+        s.durata = quando + STRIKE_BAGLIORE_MS;
         // Un'inclinazione leggera: le scariche non sono verticali, e una
         // decina di gradi basta a togliere l'aria di simbolo.
         s.inclinazione = (rng() - 0.5) * 0.42;
         s.tono = 0.82 + rng() * 0.42;
       }
 
-      // Quanta luce c'e' adesso: la somma dei colpi, ognuno con attacco
-      // ripido e coda esponenziale. E' l'inviluppo che si sente "elettrico".
+      // Un lampo non ha una luce sola, ne ha tre, e sono tre tempi diversi.
+      // E' la loro sovrapposizione a farlo sembrare vero: il canale sfarfalla
+      // in decimi di secondo, la nube attorno si accende e si spegne molto
+      // piu' piano, e quando tutto e' finito il canale resta caldo ancora un
+      // poco. Separarle in tre funzioni costa nulla e permette di dare a
+      // ognuna il suo tempo invece di un unico dissolvere.
+
+      // 1. IL CANALE: la somma dei colpi, ognuno con attacco ripido e coda
+      //    esponenziale. E' l'inviluppo che si sente "elettrico".
       function luceScarica(s, eta) {
         if (eta < 0) return 0;
         let luce = 0;
@@ -6580,6 +6598,34 @@
           luce = Math.max(luce, c.forza * attacco * Math.exp(-dt / 55));
         }
         return luce;
+      }
+
+      // 2. LA NUBE: quello che si vede davvero di notte. Un fulmine non si
+      //    guarda, si vede illuminare la nube che lo contiene, e quella luce
+      //    non sfarfalla come il canale: sale col primo colpo e scende piano.
+      //    Non segue i singoli colpi -- li integra -- perche' una massa d'aria
+      //    illuminata non si spegne e riaccende in quaranta millisecondi.
+      function luceNube(s, eta) {
+        const dt = eta - STRIKE_LEADER_MS;
+        if (dt < 0) return 0;
+        // Salita in 45 ms, discesa con costante di tempo 200 ms.
+        const salita = Math.min(1, dt / 45);
+        const discesa = Math.exp(-Math.max(0, dt - 45) / 200);
+        // I colpi successivi la ravvivano un po', senza farla lampeggiare.
+        const ravviva = 1 + 0.35 * (s.colpi.length - 1)
+          * Math.exp(-Math.max(0, eta - s.ultimoColpo) / 240);
+        return Math.min(1, salita * discesa * ravviva);
+      }
+
+      // 3. LE BRACI: finiti i colpi, il canale ionizzato non si spegne di
+      //    colpo, si raffredda. Dura poco piu' di un decimo di secondo e
+      //    vira al caldo mentre cala, com'e' giusto per qualcosa che perde
+      //    temperatura. E' un dettaglio piccolo, ma e' la differenza fra una
+      //    luce che si spegne e una luce che muore.
+      function luceBrace(s, eta) {
+        const dt = eta - s.ultimoColpo;
+        if (dt < 0 || dt > STRIKE_BRACE_MS) return 0;
+        return Math.exp(-dt / 95) * (1 - dt / STRIKE_BRACE_MS);
       }
 
       function tracciaCanale(context, punti, x, y, altezza, larghezza, inclinazione, fino) {
@@ -6612,6 +6658,206 @@
         else context.fill();
       }
 
+      // ---- IL NUCLEO DELLA CELLA --------------------------------------
+      //
+      // Quattrocento fulminetti disegnati uno per uno non raccontano un
+      // temporale: raccontano dei coriandoli. Quello che conta, guardando
+      // una mappa, non e' dov'e' caduta la singola scarica ma DOVE STA
+      // LAVORANDO la cella e con che ritmo -- ed e' anche la cosa piu' bella
+      // da vedere, perche' una cella attiva pulsa.
+      //
+      // Le scariche si sommano quindi in un campo di densita' con memoria
+      // che svanisce: ogni scarica pesa exp(-eta/tau), cosi' il valore di una
+      // cella e' in pratica "quante scariche negli ultimi tau secondi",
+      // cioe' un RITMO, non un totale. Una cella che ha smesso si spegne da
+      // sola senza bisogno di cancellare niente.
+      //
+      // La griglia e' in gradi e non in chilometri: alle latitudini
+      // dell'Italia 0,12 gradi di longitudine e 0,09 di latitudine fanno
+      // circa dieci chilometri per lato, che e' la taglia del nucleo di una
+      // cella temporalesca. Non serve di meglio: e' un'aggregazione visiva,
+      // non un'analisi.
+      // La griglia serve solo a raggruppare in fretta le scariche vicine: e'
+      // fine, circa cinque chilometri di lato alle latitudini italiane. Da
+      // sola pero' non basta, perche' dove cadono le sue linee e' arbitrario:
+      // un temporale a cavallo di una linea si spezzerebbe in due nuclei
+      // mezzi, e si vedrebbero due bolle deboli al posto di una forte --
+      // proprio il contrario di quello che il nucleo deve dire.
+      //
+      // Dopo la griglia si raggruppa quindi per vicinanza vera: si parte
+      // dalla casella piu' attiva e si assorbe tutto quello che le sta entro
+      // quindici chilometri, poi si passa alla piu' attiva fra le rimaste.
+      // Cosi' ogni nucleo ha un raggio limitato per costruzione, e una linea
+      // temporalesca lunga trecento chilometri resta una fila di nuclei
+      // invece di diventare una sola bolla enorme centrata sul nulla.
+      const CELLA_LAT = 0.045;
+      const CELLA_LON = 0.06;
+      const CELLA_RAGGIO_KM = 15;
+      const CELLA_TAU_MS = 90 * 1000;
+      // Oltre questo numero di nuclei si disegnano solo i piu' attivi: in un
+      // evento esteso i nuclei deboli non aggiungono informazione e
+      // costerebbero un disegno a testa per fotogramma.
+      const CELLA_MAX = 60;
+
+      let celleAggregate = [];
+      let celleCalcolateA = 0;
+
+      // Il ritmo di una cella, in scariche per tau. Sta fuori dal disegno
+      // perche' e' l'unica cosa che valga la pena provare a parte.
+      function aggregaCelle(scariche, adesso) {
+        const caselle = new Map();
+        for (let i = 0; i < scariche.length; i += 1) {
+          const s = scariche[i];
+          const eta = adesso - s.nato;
+          if (eta < 0) continue;
+          // Ogni scarica pesa quanto e' recente: il valore di un nucleo e'
+          // quindi "quante scariche negli ultimi tau secondi", cioe' un
+          // RITMO e non un totale. Una cella che ha smesso si spegne da
+          // sola, senza bisogno di cancellare niente.
+          const peso = Math.exp(-eta / CELLA_TAU_MS);
+          if (peso < 0.02) continue;
+          const chiave = Math.round(s.lat / CELLA_LAT) + ":" + Math.round(s.lon / CELLA_LON);
+          let casella = caselle.get(chiave);
+          if (!casella) {
+            casella = { peso: 0, lat: 0, lon: 0, ultima: -Infinity, quante: 0 };
+            caselle.set(chiave, casella);
+          }
+          casella.peso += peso;
+          casella.lat += s.lat * peso;
+          casella.lon += s.lon * peso;
+          casella.ultima = Math.max(casella.ultima, s.nato);
+          casella.quante += 1;
+        }
+
+        const resto = [];
+        caselle.forEach(function (c) {
+          resto.push({ peso: c.peso, lat: c.lat / c.peso, lon: c.lon / c.peso,
+                       sommaLat: c.lat, sommaLon: c.lon,
+                       quante: c.quante, ultima: c.ultima });
+        });
+        resto.sort(function (a, b) { return b.peso - a.peso; });
+
+        const nuclei = [];
+        const presa = new Array(resto.length).fill(false);
+        for (let i = 0; i < resto.length; i += 1) {
+          if (presa[i]) continue;
+          const seme = resto[i];
+          presa[i] = true;
+          let peso = seme.peso, sommaLat = seme.sommaLat, sommaLon = seme.sommaLon;
+          let quante = seme.quante, ultima = seme.ultima;
+          // Un grado di latitudine sono 111 km ovunque; uno di longitudine
+          // si accorcia col coseno, e a 45 gradi vale gia' il 71 per cento.
+          const kmPerLon = 111 * Math.cos(seme.lat * Math.PI / 180);
+          for (let k = i + 1; k < resto.length; k += 1) {
+            if (presa[k]) continue;
+            const altra = resto[k];
+            const distanza = Math.hypot((altra.lat - seme.lat) * 111,
+                                        (altra.lon - seme.lon) * kmPerLon);
+            if (distanza > CELLA_RAGGIO_KM) continue;
+            presa[k] = true;
+            peso += altra.peso;
+            sommaLat += altra.sommaLat;
+            sommaLon += altra.sommaLon;
+            quante += altra.quante;
+            ultima = Math.max(ultima, altra.ultima);
+          }
+          // Il nucleo si mette dove sta davvero l'attivita', con la media
+          // pesata di tutte le scariche che lo compongono, non al centro
+          // geometrico di una casella di griglia.
+          nuclei.push({ lat: sommaLat / peso, lon: sommaLon / peso,
+                        peso: peso, quante: quante, ultima: ultima });
+        }
+        nuclei.sort(function (a, b) { return b.peso - a.peso; });
+        return nuclei.slice(0, CELLA_MAX);
+      }
+
+      // Un gradiente radiale creato da capo per ogni nucleo e per ogni
+      // fotogramma costerebbe piu' di tutto il resto del disegno messo
+      // insieme. Si disegnano invece una volta sola tre bolle morbide, una
+      // per livello di attivita', e poi si copiano scalate: una copia di
+      // immagine e' un'operazione che la scheda grafica fa senza pensarci.
+      // Blu e ciano, mai bianco. Vale qui la stessa ragione della coltre: il
+      // nucleo sta quasi sempre sopra la sommita' di una nube, che
+      // nell'immagine satellitare e' gia' bianca, e sommare bianco a bianco
+      // non sposta niente -- si ottiene del cotone, non della luce. Uno
+      // scarto di tinta invece si vede, e si legge come elettricita'.
+      const NUCLEO_COLORI = [
+        [78, 116, 255],
+        [86, 178, 255],
+        [142, 216, 255]
+      ];
+      const nucleoBolle = [];
+      function bollaNucleo(livello) {
+        if (nucleoBolle[livello]) return nucleoBolle[livello];
+        const lato = 128;
+        const tela = document.createElement("canvas");
+        tela.width = lato; tela.height = lato;
+        const g = tela.getContext("2d");
+        const c = NUCLEO_COLORI[livello];
+        const grad = g.createRadialGradient(lato / 2, lato / 2, 0, lato / 2, lato / 2, lato / 2);
+        // Il bordo deve svanire -- una bolla che finisce di colpo si legge
+        // come un disco, e un disco su una mappa sembra un errore di disegno
+        // -- ma il corpo deve avere sostanza. Con una caduta troppo ripida
+        // il nucleo esisteva soltanto nei numeri: misurato, l'opacita' media
+        // sul suo ingombro stava all'otto per cento, cioe' niente. Qui il
+        // centro tiene fino a meta' raggio e solo l'ultimo terzo sfuma.
+        grad.addColorStop(0, "rgba(" + c[0] + "," + c[1] + "," + c[2] + ",1)");
+        grad.addColorStop(0.30, "rgba(" + c[0] + "," + c[1] + "," + c[2] + ",0.78)");
+        grad.addColorStop(0.58, "rgba(" + c[0] + "," + c[1] + "," + c[2] + ",0.38)");
+        grad.addColorStop(0.80, "rgba(" + c[0] + "," + c[1] + "," + c[2] + ",0.12)");
+        grad.addColorStop(1, "rgba(" + c[0] + "," + c[1] + "," + c[2] + ",0)");
+        g.fillStyle = grad;
+        g.fillRect(0, 0, lato, lato);
+        nucleoBolle[livello] = tela;
+        return tela;
+      }
+
+      function disegnaNuclei(context, adesso, scala) {
+        // L'aggregazione cambia piano: rifarla a ogni fotogramma mentre un
+        // lampo brilla sarebbe lavoro buttato.
+        if (adesso - celleCalcolateA > 600) {
+          celleAggregate = aggregaCelle(liveStrikes, adesso);
+          celleCalcolateA = adesso;
+        }
+        for (let i = 0; i < celleAggregate.length; i += 1) {
+          const cella = celleAggregate[i];
+          const punto = projectParticle(cella.lon, cella.lat, 0);
+          if (!punto) continue;
+          // Scala logaritmica: fra una scarica e dieci la differenza deve
+          // vedersi, fra cinquanta e sessanta no. Il fondo scala sta alto
+          // apposta -- una cella davvero attiva ne fa decine al minuto -- o
+          // tutto quello che supera la decina finirebbe schiacciato sullo
+          // stesso massimo, e una cella forte somiglierebbe a una debole.
+          const intensita = Math.min(1, Math.log1p(cella.peso) / Math.log(70));
+          if (intensita < 0.06) continue;
+          const livello = intensita > 0.72 ? 2 : (intensita > 0.34 ? 1 : 0);
+          // Il battito: piu' la cella e' attiva, piu' respira in fretta.
+          // E' quello che la fa sembrare viva invece di una macchia ferma.
+          const ritmo = 1400 - 700 * intensita;
+          const battito = 1 + 0.07 * Math.sin(adesso / ritmo + cella.lon * 7);
+          const raggio = (42 + 104 * intensita) * scala * battito;
+          context.globalAlpha = (0.10 + 0.34 * intensita) * battito;
+          const bolla = bollaNucleo(livello);
+          context.drawImage(bolla, punto.x - raggio, punto.y - raggio, raggio * 2, raggio * 2);
+        }
+        context.globalAlpha = 1;
+      }
+
+      // ---- QUANTI SEGNI DISEGNARE -------------------------------------
+      //
+      // A zoom cinque un glifo da dieci pixel copre una trentina di
+      // chilometri: quattrocento glifi non mostrano quattrocento scariche,
+      // mostrano una macchia continua che nasconde sia la mappa sia il
+      // temporale. Da lontano quindi restano il nucleo -- che quelle
+      // scariche le rappresenta tutte, ed e' il suo mestiere -- e solo le
+      // piu' fresche come segno singolo. Avvicinandosi il glifo torna a
+      // essere leggibile e si mostrano tutte.
+      function limiteSegni(zoom) {
+        if (zoom < 6.2) return { eta: 12000, quanti: 25 };
+        if (zoom < 7.6) return { eta: 45000, quanti: 90 };
+        return { eta: STRIKE_LIFE_MS, quanti: STRIKE_MAX };
+      }
+
       function drawLiveStrikes() {
         if (!showLiveLightning || !liveStrikes.length || !map) return;
         // Un flusso non ha archivio: queste scariche sono arrivate adesso e
@@ -6630,6 +6876,9 @@
         // questo passaggio e in nessun altro: cambiare modalita' di
         // composizione a ogni scarica costerebbe piu' del disegno stesso.
         context.globalCompositeOperation = "lighter";
+        // Prima di ogni saetta: il nucleo e' la luce di fondo della cella, e
+        // i lampi gli stanno dentro.
+        disegnaNuclei(context, adesso, scala);
         // La proiezione da coordinate geografiche a pixel si fa una volta
         // per scarica e per fotogramma, non due: i due passaggi la
         // condividono. Con qualche centinaio di scariche vive e il ciclo a
@@ -6644,7 +6893,9 @@
           punti[i] = punto;
           if (!punto || eta > s.durata) continue;
           const luce = luceScarica(s, eta);
-          if (luce < 0.012) continue;
+          const nube = luceNube(s, eta);
+          const brace = luceBrace(s, eta);
+          if (luce < 0.012 && nube < 0.012 && brace < 0.012) continue;
 
           const altezza = 84 * scala;
           const larghezza = 22 * scala;
@@ -6654,27 +6905,52 @@
             ? Math.min(1, eta / STRIKE_LEADER_MS)
             : 1;
 
-          // Il cielo illuminato attorno. E' la parte che si vede con la coda
-          // dell'occhio, ed e' quella che fa accorgere del fulmine anche a
-          // chi stava guardando dall'altra parte della mappa.
-          // Il bagliore e' piu' largo quando la scarica e' piu' forte: e'
-          // luce, non una bolla che si espande. Farlo crescere mentre si
-          // spegne darebbe l'effetto sbagliato, quello dell'onda d'urto.
-          const raggio = (34 + 74 * luce) * scala;
-          const alone = context.createRadialGradient(
-            punto.x, punto.y - altezza * 0.45, 0,
-            punto.x, punto.y - altezza * 0.45, raggio
-          );
-          alone.addColorStop(0, "rgba(186,212,255," + (0.78 * luce).toFixed(3) + ")");
-          alone.addColorStop(0.35, "rgba(128,168,244," + (0.34 * luce).toFixed(3) + ")");
-          alone.addColorStop(1, "rgba(90,130,220,0)");
-          context.fillStyle = alone;
-          context.beginPath();
-          context.arc(punto.x, punto.y - altezza * 0.45, raggio, 0, Math.PI * 2);
-          context.fill();
+          // LA NUBE CHE SI ACCENDE. E' la parte che si vede davvero di
+          // notte: larga, morbida, e con un tempo tutto suo -- sale col
+          // primo colpo e scende piano, senza seguire lo sfarfallio, perche'
+          // una massa d'aria illuminata non si spegne e riaccende in
+          // quaranta millisecondi. Il violetto non e' un vezzo: un bianco
+          // additivo sopra una nube gia' bianca non sposta niente, mentre
+          // uno scarto di tinta si vede anche sul GeoColour di giorno.
+          if (nube > 0.012) {
+            const alto = punto.y - altezza * 0.62;
+            const largo = (118 + 84 * nube) * scala;
+            const coltre = context.createRadialGradient(
+              punto.x, alto, 0, punto.x, alto, largo
+            );
+            coltre.addColorStop(0, "rgba(168,190,255," + (0.30 * nube).toFixed(3) + ")");
+            coltre.addColorStop(0.28, "rgba(140,164,250," + (0.15 * nube).toFixed(3) + ")");
+            coltre.addColorStop(0.62, "rgba(110,136,235," + (0.05 * nube).toFixed(3) + ")");
+            coltre.addColorStop(1, "rgba(96,120,225,0)");
+            context.fillStyle = coltre;
+            context.beginPath();
+            context.arc(punto.x, alto, largo, 0, Math.PI * 2);
+            context.fill();
+          }
+
+          // Il cielo illuminato stretto attorno al canale: piu' acceso della
+          // coltre, e segue i colpi invece di integrarli. Piu' largo quando
+          // la scarica e' piu' forte -- e' luce, non una bolla che si
+          // espande: farlo crescere mentre si spegne darebbe l'effetto
+          // sbagliato, quello dell'onda d'urto.
+          if (luce > 0.012) {
+            const raggio = (34 + 74 * luce) * scala;
+            const alone = context.createRadialGradient(
+              punto.x, punto.y - altezza * 0.45, 0,
+              punto.x, punto.y - altezza * 0.45, raggio
+            );
+            alone.addColorStop(0, "rgba(186,212,255," + (0.78 * luce).toFixed(3) + ")");
+            alone.addColorStop(0.35, "rgba(128,168,244," + (0.34 * luce).toFixed(3) + ")");
+            alone.addColorStop(1, "rgba(90,130,220,0)");
+            context.fillStyle = alone;
+            context.beginPath();
+            context.arc(punto.x, punto.y - altezza * 0.45, raggio, 0, Math.PI * 2);
+            context.fill();
+          }
 
           // La pozza di luce a terra: il terreno rischiarato sotto il punto
           // di impatto. Schiacciata, perche' la mappa si guarda dall'alto.
+          if (luce > 0.012) {
           context.save();
           context.translate(punto.x, punto.y);
           context.scale(1, 0.38);
@@ -6687,10 +6963,11 @@
           context.arc(0, 0, 46 * scala, 0, Math.PI * 2);
           context.fill();
           context.restore();
+          }
 
           // I rami, piu' deboli del canale e spenti prima: si accendono solo
           // al colpo di ritorno, mai durante il leader.
-          if (eta >= STRIKE_LEADER_MS) {
+          if (eta >= STRIKE_LEADER_MS && luce > 0.012) {
             context.strokeStyle = "rgba(196,220,255," + (0.5 * luce).toFixed(3) + ")";
             context.lineWidth = 3.4 * scala;
             for (let r = 0; r < s.rami.length; r += 1) {
@@ -6708,35 +6985,89 @@
           // Il canale, in tre passate sempre piu' strette e piu' chiare. La
           // somma delle tre da' il nucleo incandescente senza che nessuna
           // delle tre sia bianca: e' come si comporta la luce vera.
-          context.strokeStyle = "rgba(96,146,255," + (0.5 * luce).toFixed(3) + ")";
-          context.lineWidth = 11 * scala;
-          tracciaCanale(context, s.canale, punto.x, punto.y, altezza, larghezza,
-            s.inclinazione, fino);
-          context.strokeStyle = "rgba(170,206,255," + (0.62 * luce).toFixed(3) + ")";
-          context.lineWidth = 4.2 * scala;
-          tracciaCanale(context, s.canale, punto.x, punto.y, altezza, larghezza,
-            s.inclinazione, fino);
-          context.strokeStyle = "rgba(255,253,246," + (0.95 * luce).toFixed(3) + ")";
-          context.lineWidth = 1.5 * scala;
-          tracciaCanale(context, s.canale, punto.x, punto.y, altezza, larghezza,
-            s.inclinazione, fino);
+          if (luce > 0.012) {
+            context.strokeStyle = "rgba(96,146,255," + (0.5 * luce).toFixed(3) + ")";
+            context.lineWidth = 11 * scala;
+            tracciaCanale(context, s.canale, punto.x, punto.y, altezza, larghezza,
+              s.inclinazione, fino);
+            context.strokeStyle = "rgba(170,206,255," + (0.62 * luce).toFixed(3) + ")";
+            context.lineWidth = 4.2 * scala;
+            tracciaCanale(context, s.canale, punto.x, punto.y, altezza, larghezza,
+              s.inclinazione, fino);
+            context.strokeStyle = "rgba(255,253,246," + (0.95 * luce).toFixed(3) + ")";
+            context.lineWidth = 1.5 * scala;
+            tracciaCanale(context, s.canale, punto.x, punto.y, altezza, larghezza,
+              s.inclinazione, fino);
+          }
+
+          // LE BRACI. Finiti i colpi il canale non si spegne, si raffredda:
+          // resta un filo caldo che svanisce in un paio di decimi di
+          // secondo, e vira all'arancio mentre cala, com'e' giusto per
+          // qualcosa che perde temperatura. E' la differenza fra una luce
+          // che si spegne e una luce che muore.
+          if (brace > 0.012) {
+            context.strokeStyle = "rgba(255,150,64," + (0.30 * brace).toFixed(3) + ")";
+            context.lineWidth = 3.4 * scala;
+            tracciaCanale(context, s.canale, punto.x, punto.y, altezza, larghezza,
+              s.inclinazione);
+            context.strokeStyle = "rgba(255,226,170," + (0.55 * brace).toFixed(3) + ")";
+            context.lineWidth = 1.1 * scala;
+            tracciaCanale(context, s.canale, punto.x, punto.y, altezza, larghezza,
+              s.inclinazione);
+          }
         }
 
         // --- secondo passaggio: il segno che resta -----------------------
         // Non e' luce, e' un'etichetta: va disegnata normalmente, o su una
         // notturna additiva diventerebbe una macchia illeggibile.
         context.globalCompositeOperation = "source-over";
-        for (let i = 0; i < liveStrikes.length; i += 1) {
+        // Quanti segni ha senso disegnare a questo zoom, e da quanto possono
+        // essere vecchi. Si scorre dalla fine perche' liveStrikes e' in
+        // ordine di arrivo: le piu' recenti sono in fondo, e sono quelle che
+        // vanno tenute quando bisogna sceglierne poche.
+        const limite = limiteSegni(map.getZoom());
+        // E anche dentro il limite: due segni a meno di una quindicina di
+        // pixel l'uno dall'altro non mostrano due scariche, fanno un grumo.
+        // Nel cuore di una cella ne cadono decine nello stesso punto, e
+        // impilate diventano una macchia gialla che nasconde sia il lampo
+        // sia la mappa. Si tiene il piu' recente -- si scorre dal fondo, che
+        // e' dove stanno gli ultimi arrivati -- e gli altri li racconta il
+        // nucleo, che e' il suo mestiere. Nessuna informazione si perde: il
+        // conteggio vero resta scritto nel pannello.
+        const separazione = 11 * scala;
+        const occupate = new Map();
+        let disegnati = 0;
+        for (let i = liveStrikes.length - 1; i >= 0; i -= 1) {
+          if (disegnati >= limite.quanti) break;
           const s = liveStrikes[i];
           const eta = adesso - s.nato;
-          if (eta > STRIKE_LIFE_MS) continue;
+          if (eta > limite.eta) continue;
           const punto = punti[i];
           if (!punto) continue;
+          const cx = Math.round(punto.x / separazione);
+          const cy = Math.round(punto.y / separazione);
+          // La griglia serve solo a non confrontare ogni segno con tutti gli
+          // altri: si guardano le nove caselle attorno, ma poi si misura la
+          // distanza VERA. Scartare per sola casella toglierebbe anche segni
+          // lontani fino al doppio della soglia, e la cella piu' attiva
+          // finirebbe per mostrare meno fulmini di una debole.
+          let vicino = false;
+          for (let dy = -1; dy <= 1 && !vicino; dy += 1) {
+            for (let dx = -1; dx <= 1; dx += 1) {
+              const altro = occupate.get((cx + dx) + ":" + (cy + dy));
+              if (altro && Math.hypot(altro.x - punto.x, altro.y - punto.y) < separazione) {
+                vicino = true; break;
+              }
+            }
+          }
+          if (vicino) continue;
+          occupate.set(cx + ":" + cy, punto);
+          disegnati += 1;
 
           // Il segno resta pieno per la prima meta' della vita e sbiadisce
           // nella seconda: cosi' le scariche degli ultimi minuti si leggono
           // tutte allo stesso modo, e solo le piu' vecchie si spengono.
-          const vita = 1 - eta / STRIKE_LIFE_MS;
+          const vita = 1 - eta / limite.eta;
           const opacita = clamp(vita * 2, 0, 1);
           // Un battito lento sulle scariche fresche: l'occhio prende il
           // movimento molto prima del colore, e fra cento segni uguali sono
@@ -6794,7 +7125,12 @@
         const lampeggia = liveStrikes.some(function (s) {
           return s.durata === undefined || timestamp - s.nato < s.durata;
         });
-        if (timestamp - strikeLastDraw >= (lampeggia ? 0 : 1500)) {
+        // Fra un lampo e l'altro non si sta fermi: il nucleo della cella
+        // respira, e a un fotogramma ogni secondo e mezzo il respiro
+        // diventerebbe uno scatto. Novanta millisecondi bastano perche' una
+        // pulsazione da sette centesimi appaia continua, e costano poco
+        // perche' senza lampi il disegno e' quasi solo copie di immagine.
+        if (timestamp - strikeLastDraw >= (lampeggia ? 0 : 90)) {
           strikeLastDraw = timestamp;
           drawVectors();
         }
