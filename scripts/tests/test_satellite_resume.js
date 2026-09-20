@@ -78,5 +78,53 @@ prova('il ricarico forzato ignora la cache e riparte da un token nuovo', () => {
     'loadLightning non avanza piu\' il token: una richiesta vecchia in volo resterebbe valida');
 });
 
+function implementazione(nome) {
+  const re = new RegExp('      function ' + nome + '\\(');
+  const inizio = html.search(re);
+  assert.ok(inizio >= 0, 'manca ' + nome);
+  return html.slice(inizio, html.indexOf('\n      }', inizio) + 8);
+}
+
+prova('"l\'ultimo disponibile" non e\' piu\' lo stesso URL a ogni richiesta', () => {
+  // In diretta lo slot stimato manca spesso (la latenza di 10-20 minuti e'
+  // una media, non una garanzia), e il codice ripiega su "ultimo
+  // disponibile" -- un URL che OMETTE l'istante apposta, lasciando
+  // scegliere al servizio. Scorrendo il passato invece ogni istante ha il
+  // suo &time=... e non e' mai lo stesso URL due volte, quindi non puo'
+  // arrivare dalla cache del browser un byte vecchio. "Ultimo disponibile"
+  // richiesto piu' volte con lo stesso riquadro produceva pero' l'IDENTICO
+  // URL ogni volta: un invito a essere messo in cache, e "l'ultimo
+  // disponibile" del momento della cache poteva restare quello per ore --
+  // il motivo per cui in diretta si vedeva un'immagine vecchia mentre ogni
+  // istante passato restava perfetto.
+  const wms = html.match(/const CLOUD_WMS = "[^"]+";/);
+  assert.ok(wms, 'manca CLOUD_WMS');
+  const codice = [wms[0], implementazione('mercatorMetresX'), implementazione('mercatorMetresY'),
+    implementazione('cloudUrl')].join('\n\n');
+  const modulo = new Function(codice + '\nreturn {cloudUrl};')();
+  const box = { west: 12, east: 13, south: 37, north: 38 };
+  const size = { width: 512, height: 384 };
+  const product = { layer: 'mtg_fd:rgb_geocolour' };
+  const slot = { iso: '2026-09-20T12:00:00.000Z' };
+
+  const primo = modulo.cloudUrl(box, size, product, slot, true);
+  // Node non aspetta da solo: senza questo le due chiamate potrebbero
+  // cadere nello stesso millisecondo e la prova non proverebbe nulla.
+  const fine = Date.now() + 2;
+  while (Date.now() <= fine) { /* attesa attiva breve */ }
+  const secondo = modulo.cloudUrl(box, size, product, slot, true);
+  assert.notEqual(primo, secondo,
+    'due richieste di "ultimo disponibile" con lo stesso riquadro producono ancora lo stesso URL');
+
+  // Il ramo con l'istante esplicito e' gia' unico da solo: non deve
+  // guadagnare (ne perdere) la stessa aggiunta.
+  const storico1 = modulo.cloudUrl(box, size, product, slot, false);
+  const storico2 = modulo.cloudUrl(box, size, product, slot, false);
+  assert.equal(storico1, storico2,
+    'una richiesta con istante esplicito non dovrebbe cambiare da sola fra due chiamate identiche');
+  assert.match(storico1, /&time=2026-09-20T12:00:00\.000Z/,
+    'l\'istante esplicito e\' sparito dall\'URL');
+});
+
 console.log(ok ? 'ESITO: SUPERATO' : 'ESITO: DA RIVEDERE');
 process.exit(ok ? 0 : 1);

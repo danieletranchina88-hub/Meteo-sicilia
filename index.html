@@ -5942,6 +5942,21 @@
       }
 
       function cloudUrl(box, size, product, slot, latestAvailable) {
+        // Con un istante esplicito &time=... rende ogni richiesta unica da
+        // sola: scorrere la barra all'indietro chiede sempre un URL mai
+        // visto prima, quindi non puo' mai arrivare dalla cache del
+        // browser un byte vecchio. "Ultimo disponibile" invece OMETTE
+        // apposta l'istante, perche' e' il servizio a scegliere quale --
+        // ma questo rende l'URL identico ogni volta che lo si richiede con
+        // lo stesso riquadro, e in diretta e' proprio il ramo che si
+        // richiede piu' spesso (ogni volta che lo slot stimato non esiste
+        // ancora, il caso normale con la latenza reale del satellite).
+        // Un URL identico e' un invito a essere messo in cache -- dal
+        // browser o da un proxy in mezzo -- e "l'ultimo disponibile" del
+        // momento in cui e' stato messo in cache puo' restare quello per
+        // ore: e' cosi' che in diretta si vedeva un'immagine di ore prima,
+        // magari notturna, mentre ogni istante passato restava perfetto.
+        // Il numero cambia via via aggiornando; l'istante richiesto no.
         return CLOUD_WMS
           + "?service=WMS&version=1.1.1&request=GetMap&styles="
           + "&layers=" + encodeURIComponent(product.layer)
@@ -5951,7 +5966,7 @@
               mercatorMetresX(box.east), mercatorMetresY(box.north)
             ].map(function (value) { return value.toFixed(1); }).join(",")
           + "&width=" + size.width + "&height=" + size.height
-          + (latestAvailable ? "" : "&time=" + slot.iso);
+          + (latestAvailable ? "&_=" + Date.now() : "&time=" + slot.iso);
       }
 
       // Vale la pena rifare la richiesta? Solo se il riquadro esce da quello
