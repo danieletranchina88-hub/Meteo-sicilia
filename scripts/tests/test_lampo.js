@@ -494,7 +494,8 @@ prova('il bagliore ritagliato sul satellite e il ragno sulla mappa nuda sono piu
     'la terza tappa del gradiente satellitare non e\' piu\' luminosa');
   assert.match(ritaglio, /rgba\(233,242,255,0\.16\)/,
     'la quarta tappa del gradiente satellitare non e\' piu\' luminosa');
-  assert.match(ritaglio, /"242,248,255",0\.42\)/,
+  const canali = implementazione('disegnaCanaliSommersi');
+  assert.match(canali, /"242,248,255", 0\.9 \* forza\)/,
     'i canali interni sommersi non sono piu\' luminosi');
   assert.match(ritaglio, /globalAlpha=Math\.min\(0\.97,nube\*0\.97\)/,
     'l\'alfa finale del bagliore ritagliato non e\' stato alzato');
@@ -642,11 +643,35 @@ prova('sul satellite il lampo e\' bianco freddo e immerso, non una ragnatela vio
     assert.ok(Math.max(...colore) - Math.min(...colore) <= 25,
       'il bagliore e\' troppo saturo: ' + colore.join(','));
   }
-  assert.match(ritaglio, /g\.filter="blur\(5px\)"/,
+  const canali = implementazione('disegnaCanaliSommersi');
+  assert.match(canali, /context\.filter = "blur\(4px\)"/,
     'i canali interni sono di nuovo linee taglienti');
+  // Il canale vero (la passata additiva) resta bianco freddo come il resto
+  // del bagliore. La passata scura sotto e' un bordo di contrasto, non il
+  // colore del lampo, e per costruzione non puo' essere quasi bianca.
+  assert.match(canali, /"242,248,255", 0\.9 \* forza\)/,
+    'il canale chiaro non e\' piu\' bianco freddo');
+  assert.match(canali, /"8,13,22", 0\.34 \* forza\)/,
+    'il bordo scuro sotto il canale e\' sparito: di giorno tornerebbe invisibile');
   const disegno = implementazione('drawLiveStrikes');
-  assert.match(disegno, /if \(showSatelliteClouds\) \{[\s\S]*?disegnaNubeIlluminata\([\s\S]*?\n\s*continue;\s*\n\s*\}/,
-    'sopra il satellite vengono ancora disegnati i canali esterni');
+  assert.match(disegno, /if \(showSatelliteClouds\) \{[\s\S]*?disegnaNubeIlluminata\([\s\S]*?disegnaCanaliSommersi\([\s\S]*?\n\s*continue;\s*\n\s*\}/,
+    'sopra il satellite non si vede piu\' la ramificazione del lampo, solo la macchia diffusa');
+});
+
+prova('i canali interni si vedono anche quando la GPU accende gia\' la nube', () => {
+  // Prima di questa modifica, il ragno sfocato viveva solo dentro la tela
+  // del ripiego 2D: quando WebGL riusciva (il caso normale, su qualunque
+  // browser recente) s.cloudIlluminated era gia' vero e disegnaNubeIlluminata
+  // non veniva mai chiamata -- quindi nessuna ramificazione compariva mai
+  // davvero. Misurato rendering il vero shader in un contesto WebGL2: senza
+  // questa chiamata resta un'unica macchia diffusa, senza forma.
+  const disegno = implementazione('drawLiveStrikes');
+  assert.match(disegno,
+    /if \(!s\.cloudIlluminated\) \{\s*\n\s*s\.cloudIlluminated = disegnaNubeIlluminata\(/,
+    'manca il ramo del ripiego 2D');
+  assert.match(disegno,
+    /\}\s*\n\s*disegnaCanaliSommersi\(strikeLightContext, punto, largo, s,/,
+    'disegnaCanaliSommersi e\' tornata dentro il ramo del ripiego: sparisce non appena WebGL riesce');
 });
 
 prova('il bagliore e\' breve, accessibile e riusa il rendering preparato', () => {

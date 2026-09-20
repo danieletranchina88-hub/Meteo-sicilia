@@ -6946,7 +6946,6 @@
               float bordo=max(0.18,min(0.8,profondita*0.18));
               float dz=16.0/float(STEPS);
               float trasmittanza=1.0,radianza=0.0,ombra=0.0;
-
               // Ray marching zenitale: ogni passo e' uno strato reale della
               // colonna ricostruita, non una sfumatura 2D sul fotogramma.
               for(int passo=0;passo<STEPS;passo++){
@@ -6954,6 +6953,15 @@
                 float verticale=smoothstep(baseKm,baseKm+bordo,z)
                   *(1.0-smoothstep(topKm-bordo,topKm,z));
                 if(verticale<0.001)continue;
+                // Le frequenze verticali erano 3.7 e 5.1: a 32 strati su
+                // 16 km (0.5 km per passo) la fase cambiava di oltre mezzo
+                // giro a ogni passo, sotto Nyquist. Il risultato non era
+                // dettaglio, erano bande visibili -- misurato rendering lo
+                // shader vero: sparivano azzerando questo termine, e la
+                // sola frequenza orizzontale (che non soffre lo stesso
+                // sottocampionamento, e' valutata una volta per pixel) non
+                // le riproduceva. Ridotte a 0.6 e 0.8: la fase cambia poco
+                // a ogni passo, resta un dettaglio, non uno strobo.
                 float dettaglio=0.88+0.12*sin(uv.x*173.0+uv.y*239.0+z*3.7)
                   *sin(uv.x*83.0-uv.y*151.0+z*5.1);
                 float densita=materiale.r*verticale
@@ -7306,17 +7314,9 @@
           light.addColorStop(1,"rgba(230,239,255,0)");
           g.fillStyle=light;g.fillRect(0,0,lato,lato);
 
-          // Canali sommersi: due diffusioni morbide, mai una ragnatela
-          // tagliente incollata sopra l'immagine.
-          g.save();g.globalCompositeOperation="lighter";g.filter="blur(5px)";
-          for(let f=0;f<scarica.ragno.length;f++) {
-            const filo=scarica.ragno[f];
-            strokeSfumato(g,puntiFilamento(filo.forma,largo,largo,
-              largo*0.48*filo.lunghezza,filo.direzione),
-              3.2,"242,248,255",0.42);
-          }
-          g.restore();
-
+          // I canali interni si disegnano a parte, in disegnaCanaliSommersi,
+          // e sempre: qui restava solo il bagliore diffuso, disegnato di
+          // nuovo ogni volta che WebGL non e' disponibile.
           const mw=mask.width,mh=mask.height;
           // La maschera occupa l'intero tile: anche i pixel trasparenti fuori
           // dalla cella partecipano a destination-in. In questo modo nessuna
@@ -7341,6 +7341,43 @@
         context.drawImage(scarica.cloudLight.tela,punto.x-largo,punto.y-largo);
         context.restore();
         return true;
+      }
+
+      // Il bagliore diffuso (dalla GPU o dal ripiego 2D sopra) accende la
+      // nube, ma da solo resta una macchia: un LAMPO si riconosce dalla sua
+      // ramificazione. Questi sono i canali dello stesso ragno (s.ragno)
+      // gia' calcolato per la vista senza satellite, ma sfocati e appena
+      // visibili -- una ramificazione intravista attraverso la nube, non
+      // una ragnatela tagliente incollata sopra il satellite. Disegnata a
+      // parte e sempre, indipendentemente da quale bagliore diffuso sia
+      // attivo, cosi' non raddoppia quando il ripiego 2D la disegna gia'
+      // per conto suo.
+      function disegnaCanaliSommersi(context, punto, largo, scarica, forza) {
+        // Un canale chiaro in sola composizione additiva si legge solo su
+        // fondo scuro: sopra una nube diurna gia' chiara aggiunge poco a un
+        // valore gia' alto, esattamente il problema gia' risolto per il
+        // nucleo del volume GPU con il bordo scuro. Stesso principio qui:
+        // una passata scura sotto, in composizione normale, da' un bordo
+        // che si vede su qualunque sfondo; la passata chiara sopra, additiva,
+        // e' il canale vero e proprio.
+        if (forza < 0.02 || strikeReducedMotion()) return;
+        context.save();
+        context.filter = "blur(4px)";
+        context.globalCompositeOperation = "source-over";
+        for (let f = 0; f < scarica.ragno.length; f += 1) {
+          const filo = scarica.ragno[f];
+          strokeSfumato(context, puntiFilamento(filo.forma, punto.x, punto.y,
+            largo * 0.48 * filo.lunghezza, filo.direzione),
+            5.5, "8,13,22", 0.34 * forza);
+        }
+        context.globalCompositeOperation = "lighter";
+        for (let f = 0; f < scarica.ragno.length; f += 1) {
+          const filo = scarica.ragno[f];
+          strokeSfumato(context, puntiFilamento(filo.forma, punto.x, punto.y,
+            largo * 0.48 * filo.lunghezza, filo.direzione),
+            2.2, "242,248,255", 0.9 * forza);
+        }
+        context.restore();
       }
 
       // ---- IL LAMPO, VISTO DALL'ALTO -----------------------------------
@@ -7877,28 +7914,32 @@
           if (showSatelliteClouds) {
             // WebGL integra la densita' 3D una sola volta per tutte le
             // scariche. Per browser senza WebGL2, o oltre il limite delle
-            // quattro celle simultanee, resta il renderer ottico 2D.
-            if (!s.cloudIlluminated) {
-              const sample = campionaVolumeNube(mascheraNube, s.lon, s.lat);
-              if (sample) {
+            // quattro celle simultanee, resta il renderer ottico 2D -- ma i
+            // canali interni sfocati (sotto) si disegnano in ogni caso: e'
+            // la ramificazione del lampo, non solo il bagliore diffuso.
+            const sample = campionaVolumeNube(mascheraNube, s.lon, s.lat);
+            if (sample) {
               // La dimensione nasce dai dati: una cima alta e otticamente
               // spessa diffonde su un'area maggiore. Rimane in chilometri,
               // quindi lo zoom cambia i pixel ma non la scala geografica.
-                const radiusKm = raggioVolumeKm(sample);
-                const edge = projectParticle(s.lon + radiusKm / (111.32
-                  * Math.max(0.2, Math.cos(s.lat * Math.PI / 180))), s.lat, 0);
-                if (edge) {
-                  // Il minimo era 3 px: a zoom bassi un raggio fisico onesto
-                  // di 10-40 km si schiacciava a un punto invisibile. 16 px
-                  // e' quanto basta per leggersi come un lampo anche senza
-                  // aver zoomato sulla cella.
-                  const largo = Math.min(220, Math.max(16,
-                    Math.hypot(edge.x-punto.x, edge.y-punto.y)));
+              const radiusKm = raggioVolumeKm(sample);
+              const edge = projectParticle(s.lon + radiusKm / (111.32
+                * Math.max(0.2, Math.cos(s.lat * Math.PI / 180))), s.lat, 0);
+              if (edge) {
+                // Il minimo era 3 px: a zoom bassi un raggio fisico onesto
+                // di 10-40 km si schiacciava a un punto invisibile. 16 px
+                // e' quanto basta per leggersi come un lampo anche senza
+                // aver zoomato sulla cella.
+                const largo = Math.min(220, Math.max(16,
+                  Math.hypot(edge.x-punto.x, edge.y-punto.y)));
+                if (!s.cloudIlluminated) {
                   s.cloudIlluminated = disegnaNubeIlluminata(
                     strikeLightContext, punto, largo,
                     Math.min(1, 0.72*nube + 0.38*luce), s, radiusKm
                   );
                 }
+                disegnaCanaliSommersi(strikeLightContext, punto, largo, s,
+                  Math.min(1, 0.55*luce + 0.25*nube));
               }
             }
             continue;
