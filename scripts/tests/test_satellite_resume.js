@@ -126,5 +126,59 @@ prova('"l\'ultimo disponibile" non e\' piu\' lo stesso URL a ogni richiesta', ()
     'l\'istante esplicito e\' sparito dall\'URL');
 });
 
+prova('a scala europea non si scarica piu\' di quanto lo schermo possa mostrare', () => {
+  // Allargando l'osservato all'Europa il dettaglio nativo dello strumento
+  // vale oltre 9000 pixel, quindi si finiva sempre contro il tetto di 4096:
+  // misurato sul servizio vero, 23 MB per fotogramma. Su un telefono in 4G
+  // e' una richiesta ogni pochi minuti che non si puo' chiedere a nessuno.
+  // Il tetto nuovo guarda quanti pixel lo schermo puo' davvero mostrare.
+  const dom = html.match(/const CLOUD_DOMAIN = \{[^}]+\};/);
+  assert.ok(dom, 'manca CLOUD_DOMAIN');
+  const mod = html.match(/const MODEL_DOMAIN = \{[^}]+\};/);
+  const lato = html.match(/const CLOUD_MAX_SIDE = \d+;/);
+  const codice = [dom[0], mod[0], lato[0], implementazione('mercatorMetresX'),
+    implementazione('mercatorMetresY'), implementazione('cloudRequestSize')].join('\n\n');
+
+  const costruisci = (larghezzaCss, densita) => new Function(
+    'document', 'window', 'navigator',
+    codice + '\nreturn {cloudRequestSize, CLOUD_DOMAIN, MODEL_DOMAIN,'
+      + ' mercatorMetresX, CLOUD_MAX_SIDE};')(
+      { getElementById: () => ({ clientWidth: larghezzaCss }) },
+      { innerWidth: larghezzaCss, devicePixelRatio: densita },
+      { deviceMemory: 8 });
+
+  const prodotto = { metres: 1000 };
+  const telefono = costruisci(400, 3);
+  const grande = telefono.cloudRequestSize(telefono.CLOUD_DOMAIN, prodotto);
+  // La densita' si ferma a 2: sopra, l'occhio non ci arriva e i byte si
+  // raddoppiano per niente.
+  assert.ok(grande.width <= 400 * 2 * 1.5 + 1,
+    'su un telefono il riquadro europeo chiede ancora ' + grande.width + ' pixel di larghezza');
+  assert.ok(grande.width * grande.height < 2.5e6,
+    'il fotogramma europeo pesa ancora ' + (grande.width * grande.height / 1e6).toFixed(1)
+    + ' megapixel su un telefono');
+
+  // Ma il tetto non deve mordere dove il dettaglio serve davvero: su uno
+  // schermo grande e sul dominio del modello comanda ancora lo strumento.
+  const grosso = costruisci(1600, 2);
+  const italia = grosso.cloudRequestSize(grosso.MODEL_DOMAIN, prodotto);
+  // Non "sta sotto il tetto" -- quello lo soddisfa anche un tetto assurdo,
+  // ed e' il buco che questa prova aveva prima: deve COINCIDERE con il
+  // dettaglio nativo dello strumento, cioe' essere lo strumento a comandare.
+  const nativo = Math.ceil(
+    (grosso.mercatorMetresX(grosso.MODEL_DOMAIN.east)
+      - grosso.mercatorMetresX(grosso.MODEL_DOMAIN.west)) / prodotto.metres);
+  assert.equal(italia.width, Math.min(nativo, grosso.CLOUD_MAX_SIDE),
+    'su uno schermo grande il dominio del modello non arriva piu\' al dettaglio '
+    + 'nativo dello strumento: chiede ' + italia.width + ' invece di ' + nativo);
+
+  // E zoomando su una cella il riquadro resta piccolo: li' lo strumento ha
+  // davvero pochi campioni, non e' il tetto a limitare.
+  const cella = telefono.cloudRequestSize(
+    { west: 14, east: 15, south: 37, north: 38 }, prodotto);
+  assert.ok(cella.width <= 600,
+    'zoomando su una cella si chiedono ' + cella.width + ' pixel per un centinaio di campioni');
+});
+
 console.log(ok ? 'ESITO: SUPERATO' : 'ESITO: DA RIVEDERE');
 process.exit(ok ? 0 : 1);

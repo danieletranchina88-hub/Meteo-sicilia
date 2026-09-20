@@ -86,6 +86,13 @@ function setWeatherView(view) {
     if(showParticles) startParticles();
     updateTimeUi(); updateBufferUi(); scheduleFrameWarmup();
   }
+  // Il dominio percorribile si aggiorna QUI, in coda, non dentro i due rami:
+  // entrando nella vista satellite showSatelliteClouds viene acceso DOPO
+  // clearMeteorologicalLayers(), quindi un aggiornamento piu' in alto
+  // leggerebbe i flag a meta' strada e terrebbe la mappa stretta sul dominio
+  // del modello -- misurato: minZoom restava 4,52 invece di scendere a 2,80,
+  // e l'Atlantico non si raggiungeva.
+  aggiornaDominioNavigabile();
   document.body.classList.toggle('satellite-view',view === 'satellite');
   document.getElementById('satellite-status').hidden = view !== 'satellite';
   updateSatelliteControlsVisibility();

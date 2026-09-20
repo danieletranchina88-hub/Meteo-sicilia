@@ -179,13 +179,30 @@ async function test(name,fn) {await fn();console.log('PASS '+name);}
     showFronts:true,showFusion:false,showStations:false,showTerrain:false,showSatellite:false,show3D:false,showGraticule:false,
     showLightning:true,showRadar:true,showLiveLightning:true,liveStrikes:[{},{}],cloudTimeSelected:123456};
   for(const name of ['setPlaying','updateTerrain3D','updateSatelliteBase','updateSatelliteClouds','updateLightningLayer','updateSatelliteControlsVisibility','updateLayerUi','updateLegend','setDrawer','updateMapPresentation','updateIsobars','updateStationMarkers','renderWeather','requestVectorRender','updateTimeUi','updateBufferUi','scheduleFrameWarmup','stopStrikeAnimation'])ctx[name]=()=>{};
+  // Entrando nella vista satellite il dominio percorribile deve allargarsi,
+  // e va aggiornato QUANDO I FLAG SONO GIA' FERMI: showSatelliteClouds viene
+  // acceso DOPO clearMeteorologicalLayers(), quindi una chiamata piu' in alto
+  // leggerebbe lo stato a meta' strada e terrebbe la mappa stretta sul
+  // dominio del modello -- misurato sulla pagina vera: minZoom restava 4,52
+  // invece di scendere a 2,80, e l'Atlantico non si raggiungeva.
+  const dominioVisto=[];
+  ctx.aggiornaDominioNavigabile=()=>{dominioVisto.push(
+    {vista:ctx.weatherView,nubi:ctx.showSatelliteClouds});};
   let chiusure=0;ctx.blitzDisconnect=()=>chiusure++;
   ctx.clearMeteorologicalLayers=()=>{ctx.showVectors=false;ctx.showFronts=false;ctx.showIsobars=false;};
   vm.createContext(ctx);
   const source=fs.readFileSync(path.join(__dirname,'../../modern-ui.js'),'utf8');
   vm.runInContext(source.slice(source.indexOf('function setWeatherView'),source.indexOf('(function modernControls')),ctx);
-  ctx.setWeatherView('satellite');assert.equal(ctx.showVectors,false);assert.equal(ctx.showFronts,false);assert.equal(ctx.showSatelliteClouds,true);
-  ctx.setWeatherView('forecast');assert.equal(ctx.activeLayer,'wind');assert.equal(ctx.currentIndex,13);assert.equal(ctx.showVectors,true);assert.equal(ctx.showFronts,true);
+  ctx.setWeatherView('satellite');
+  assert.equal(dominioVisto.length,1,'entrando nel satellite il dominio percorribile non viene aggiornato');
+  assert.deepEqual(dominioVisto[0],{vista:'satellite',nubi:true},
+    'il dominio viene aggiornato prima che i flag siano fermi: la mappa resta stretta sul modello');
+  assert.equal(ctx.showVectors,false);assert.equal(ctx.showFronts,false);assert.equal(ctx.showSatelliteClouds,true);
+  ctx.setWeatherView('forecast');
+  assert.equal(dominioVisto.length,2,'uscendo dal satellite il dominio percorribile non torna quello del modello');
+  assert.deepEqual(dominioVisto[1],{vista:'forecast',nubi:false},
+    'tornando alla previsione il dominio viene aggiornato con i flag ancora a meta\' strada');
+  assert.equal(ctx.activeLayer,'wind');assert.equal(ctx.currentIndex,13);assert.equal(ctx.showVectors,true);assert.equal(ctx.showFronts,true);
   // I due livelli osservati vivono solo nella vista satellite, e l'ora scelta
   // con loro: rientrando nella previsione devono spegnersi e tornare in
   // diretta, altrimenti al giro dopo si riaprirebbe il satellite su

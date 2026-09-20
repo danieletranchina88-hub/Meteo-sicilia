@@ -101,8 +101,36 @@ assert.match(meteogramHtml, /function interpolateTileValue\(values, nx, rows, co
 // diventa il pavimento: si puo' entrare nel dettaglio, mai tornare al mondo.
 assert.match(html, /const MODEL_DOMAIN = \{ west: 3\.0, south: 33\.7, east: 22\.0, north: 48\.9 \};/,
   "i confini della mappa non coincidono con il dominio ICON-2I");
-assert.match(html, /const CLOUD_DOMAIN = MODEL_DOMAIN;/,
-  "il satellite non copre esattamente la stessa area del modello");
+// L'osservato NON ha piu' il dominio del previsto, ed e' il punto: erano la
+// stessa costante, e per questo il satellite si fermava ai bordi di ICON-2I
+// anche se MTG vede mezzo emisfero. Adesso il riquadro osservato deve
+// contenere quello del modello con margine vero da ogni lato -- altrimenti
+// una perturbazione atlantica si vedrebbe solo quando e' gia' arrivata.
+const numero = (nome, campo) => {
+  const trovato = html.match(
+    new RegExp("const " + nome + " = \\{[^}]*" + campo + ": (-?[0-9.]+)")
+  );
+  assert.ok(trovato, "manca " + campo + " in " + nome);
+  return Number(trovato[1]);
+};
+for (const campo of ["west", "south", "east", "north"]) {
+  assert.notEqual(numero("CLOUD_DOMAIN", campo), numero("MODEL_DOMAIN", campo),
+    "l'osservato ha ancora lo stesso " + campo + " del modello");
+}
+assert.ok(numero("CLOUD_DOMAIN", "west") <= -20,
+  "l'osservato non arriva in mezzo all'Atlantico: le perturbazioni si vedrebbero solo all'arrivo");
+assert.ok(numero("CLOUD_DOMAIN", "north") >= 60,
+  "l'osservato non arriva alle latitudini islandesi, dove nascono le saccature");
+assert.ok(numero("CLOUD_DOMAIN", "south") <= numero("MODEL_DOMAIN", "south")
+  && numero("CLOUD_DOMAIN", "east") >= numero("MODEL_DOMAIN", "east"),
+  "l'osservato non contiene piu' tutto il dominio del modello");
+// E deve restare dentro cio' che il servizio dichiara di avere: il
+// GetCapabilities di EUMETView da' +-70 gradi per l'infrarosso e per il
+// Lightning Imager, che sono i piu' stretti dei prodotti usati qui.
+for (const campo of ["west", "south", "east", "north"]) {
+  assert.ok(Math.abs(numero("CLOUD_DOMAIN", campo)) <= 70,
+    "l'osservato esce dai limiti dichiarati dal servizio su " + campo);
+}
 // Lo zoom iniziale adatta il dominio alla fascia UTILE, non all'altezza
 // intera: intestazione e timeline sono opachi, e quello che finisce sotto di
 // loro e' come se non ci fosse. Un centro barico sul bordo sud veniva
@@ -128,8 +156,27 @@ assert.match(html, /const fill = Math\.max\(zoomX, zoomY\);/,
   "manca lo zoom che riempie");
 assert.match(html, /function paddedModelBounds\(/,
   "i limiti non tengono conto della forma dello schermo");
-assert.match(html, /map\.setMaxBounds\(paddedModelBounds\(view\)\);/,
+assert.match(html, /map\.setMaxBounds\(paddedModelBounds\(view, dominio\)\);/,
   "dopo un ridimensionamento i limiti tornano a tagliare il dominio");
+// I limiti si azzerano PRIMA di riscriverli. MapLibre tiene la vista dentro
+// quelli vecchi mentre li si cambia, quindi passando dal dominio del modello
+// a quello dell'osservato la mappa restava incollata al bordo di ICON-2I e
+// l'Atlantico non si raggiungeva comunque.
+assert.match(html, /map\.setMaxBounds\(null\);\s*\n\s*map\.setMinZoom\(view\.zoom\);\s*\n\s*map\.setMaxBounds\(/,
+  "i limiti vecchi non vengono tolti prima di allargarli");
+// Accendere l'osservato deve cambiare il dominio percorribile, altrimenti il
+// satellite copre l'Europa ma la mappa non ci lascia arrivare.
+assert.match(html, /function dominioNavigabile\(\) \{\s*\n\s*return \(showSatelliteClouds \|\| showRadar \|\| showLightning\s*\n\s*\|\| showLiveLightning\) \? CLOUD_DOMAIN : MODEL_DOMAIN;/,
+  "il dominio percorribile non dipende dai livelli osservati accesi");
+// Il velo che copre il fuori-dominio dice "qui non c'e' previsione", ed e'
+// vero; sull'osservato e' il contrario, e lasciandolo acceso sbiancava
+// l'Europa al 72% lasciando in chiaro un rettangolo sull'Italia.
+assert.match(html, /map\.setLayoutProperty\("model-mask-layer", "visibility",\s*\n\s*largo \? "none" : "visible"\);/,
+  "il velo del fuori-modello resta acceso anche quando si guarda l'osservato");
+// Il bordo tratteggiato invece resta sempre: non copre niente e continua a
+// dire dove finisce la previsione.
+assert.doesNotMatch(html, /setLayoutProperty\("model-edge-layer", "visibility"/,
+  "anche il bordo del modello viene nascosto: si perde il confine della previsione");
 assert.match(html, /map\.resize\(\);\s*\n\s*lockMapToModelDomain\(false\);/,
   "ruotando il telefono il limite del dominio non viene ricalcolato");
 assert.match(meteogramHtml, /id="weather-strip"/,

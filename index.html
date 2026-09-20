@@ -5602,11 +5602,29 @@
       // ICON-2I; ora il WMS coincide esattamente con le 761 x 761 celle del
       // modello pubblicate dalla pipeline.
       const MODEL_DOMAIN = { west: 3.0, south: 33.7, east: 22.0, north: 48.9 };
-      const MODEL_BOUNDS = [
-        [MODEL_DOMAIN.west, MODEL_DOMAIN.south],
-        [MODEL_DOMAIN.east, MODEL_DOMAIN.north]
-      ];
-      const CLOUD_DOMAIN = MODEL_DOMAIN;
+
+      // L'OSSERVATO non ha lo stesso dominio del PREVISTO, e per questo non
+      // e' piu' lo stesso oggetto: erano la stessa costante, ed e' il motivo
+      // per cui il satellite si fermava ai bordi di ICON-2I.
+      //
+      // Il modello e' ad area limitata: fuori dalle sue 761 x 761 celle non
+      // esiste un dato previsto, punto. Il satellite invece e' MTG-I1 sul
+      // disco intero, e non gli costa nulla guardare piu' in la': i limiti
+      // dichiarati dal servizio (letti dal suo GetCapabilities, non
+      // supposti) sono +-81 gradi di longitudine e +-77 di latitudine per
+      // GeoColour, +-70 per l'infrarosso e per il Lightning Imager.
+      //
+      // Questo riquadro sta dentro entrambi con margine, e serve a una cosa
+      // precisa: vedere arrivare le perturbazioni atlantiche prima che
+      // tocchino l'Italia. A ovest arriva a meta' oceano, oltre le Azzorre;
+      // a nord prende Islanda e Capo Nord, dove nascono le saccature; a sud
+      // il Sahara e le Canarie, da cui arrivano polvere e avvezioni calde.
+      //
+      // Piu' in la' non si va apposta. MTG e' geostazionario sullo zero: piu'
+      // ci si allontana dal punto sub-satellitare, piu' la vista diventa
+      // obliqua e l'immagine si spalma. Il disco intero sarebbe tecnicamente
+      // servibile e visivamente inutile.
+      const CLOUD_DOMAIN = { west: -40.0, south: 26.0, east: 42.0, north: 68.0 };
       const CLOUD_SLOT_MS = 10 * 60 * 1000;
 
       // Istante osservato che si sta guardando. Zero significa "l'ultimo
@@ -5932,8 +5950,27 @@
         const native = Math.ceil(spanX / product.metres);
         const pixelLimitedWidth = Math.floor(Math.sqrt(maxPixels / Math.max(aspect, 0.01)));
         const sideLimitedWidth = Math.floor(CLOUD_MAX_SIDE / Math.max(aspect, 1));
+        // Tetto legato allo SCHERMO, non solo allo strumento. Serve da quando
+        // l'osservato copre l'Europa: su quel riquadro il dettaglio nativo
+        // vale piu' di 9000 pixel, quindi si finiva sempre contro il tetto
+        // di 4096 -- che a scala continentale pesa 23 MB per fotogramma
+        // (misurato sul servizio vero). Su un telefono in 4G e' una richiesta
+        // ogni pochi minuti che non si puo' chiedere a nessuno.
+        //
+        // Il tetto non e' un numero scelto a occhio: e' quanti pixel lo
+        // schermo puo' davvero mostrare. Larghezza in CSS per la densita'
+        // reale (sopra 2 l'occhio non ci arriva, e raddoppiare i byte per
+        // un telefono da 3x e' spesa persa), per 1,5 perche' il riquadro
+        // chiesto e' gia' piu' largo della vista -- e' il margine che evita
+        // di riscaricare al primo spostamento.
+        const mappaEl = document.getElementById("map");
+        const larghezzaCss = (mappaEl && mappaEl.clientWidth)
+          || window.innerWidth || 1280;
+        const densita = Math.min(2, Math.max(1, window.devicePixelRatio || 1));
+        const schermoLimitedWidth = Math.ceil(larghezzaCss * densita * 1.5);
         const width = Math.max(512, Math.min(
-          native, CLOUD_MAX_SIDE, sideLimitedWidth, pixelLimitedWidth
+          native, CLOUD_MAX_SIDE, sideLimitedWidth, pixelLimitedWidth,
+          schermoLimitedWidth
         ));
         const height = Math.max(384, Math.min(
           CLOUD_MAX_SIDE, Math.round(width * aspect)
@@ -9406,6 +9443,7 @@
         updateStationMarkers();
         updateIsobars();
         updateMapPresentation();
+        aggiornaDominioNavigabile();
         requestVectorRender();
         closeReadout();
       }
@@ -9509,6 +9547,7 @@
         updateStationMarkers();
         updateIsobars();
         updateMapPresentation();
+        aggiornaDominioNavigabile();
         updateLayerUi();
         updateLegend();
         renderWeather();
@@ -9668,6 +9707,7 @@
           // carta nuda, senza la coltre di nubi sopra.
           showSatelliteClouds = !showSatelliteClouds;
           updateSatelliteClouds();
+          aggiornaDominioNavigabile();
           if (!showSatelliteClouds) {
             strikeLightContext.clearRect(0,0,window.innerWidth,window.innerHeight);
             pulisciVolumeRenderer();
@@ -9681,6 +9721,7 @@
             return;
           }
           showRadar = !showRadar;
+          aggiornaDominioNavigabile();
           {
             const product = CLOUD_PRODUCTS[cloudProduct] || CLOUD_PRODUCTS.geocolour;
             // Il radar segue l'ora scelta sulla barra, non l'ora dell'orologio:
@@ -9708,6 +9749,7 @@
           }
         } else if (name === "livelightning") {
           showLiveLightning = !showLiveLightning;
+          aggiornaDominioNavigabile();
           if (showLiveLightning) {
             blitzRetryDelay = 2000;
             blitzConnect();
@@ -9738,6 +9780,7 @@
             return;
           }
           showLightning = !showLightning;
+          aggiornaDominioNavigabile();
           updateLightningLayer();
           if (showLightning) {
             // Va detto: chi cerca "i fulmini" pensa alla rete a terra, e la
@@ -15197,7 +15240,19 @@
         });
       }
 
-      function modelDomainView() {
+      // Quale dominio si puo' percorrere adesso. Con l'osservato acceso e'
+      // quello del satellite, perche' e' li' che c'e' qualcosa da vedere --
+      // ed e' il punto di tutto questo: seguire una perturbazione atlantica
+      // mentre attraversa l'oceano. Con il solo previsto resta quello del
+      // modello, come e' sempre stato: allontanarsi oltre i bordi di ICON-2I
+      // mostrerebbe una toppa colorata in mezzo al niente.
+      function dominioNavigabile() {
+        return (showSatelliteClouds || showRadar || showLightning
+          || showLiveLightning) ? CLOUD_DOMAIN : MODEL_DOMAIN;
+      }
+
+      function modelDomainView(dominio) {
+        const DOM = dominio || MODEL_DOMAIN;
         // Calcolo equivalente a fitBounds, ma disponibile gia' prima di creare
         // la mappa: il suo zoom diventa anche il limite minimo. In questo modo
         // non si puo' mai rimpicciolire il dominio ICON-2I fino a vedere il
@@ -15209,10 +15264,10 @@
           const phi = (lat * Math.PI) / 180;
           return Math.log(Math.tan(Math.PI / 4 + phi / 2));
         };
-        const southY = mercatorY(MODEL_DOMAIN.south);
-        const northY = mercatorY(MODEL_DOMAIN.north);
+        const southY = mercatorY(DOM.south);
+        const northY = mercatorY(DOM.north);
         const longitudeFraction =
-          (MODEL_DOMAIN.east - MODEL_DOMAIN.west) / 360;
+          (DOM.east - DOM.west) / 360;
         const latitudeFraction = (northY - southY) / (2 * Math.PI);
         // La mappa occupa tutto lo schermo, ma la fascia utile no: sopra c'e'
         // l'intestazione e sotto la timeline, che sono opachi. Inquadrare il
@@ -15248,7 +15303,7 @@
         const centreLatitude = Math.atan(Math.sinh(centreMercatorY)) * 180 / Math.PI;
         return {
           center: [
-            (MODEL_DOMAIN.west + MODEL_DOMAIN.east) / 2,
+            (DOM.west + DOM.east) / 2,
             centreLatitude
           ],
           zoom: zoom,
@@ -15264,7 +15319,8 @@
       // si fermava a 36-47 gradi contro un dominio di 33,7-48,9: il canale di
       // Sicilia e la costa africana non si potevano vedere, e un centro barico
       // che cadeva li' non era un difetto del rilevatore ma della cornice.
-      function paddedModelBounds(view) {
+      function paddedModelBounds(view, dominio) {
+        const DOM = dominio || MODEL_DOMAIN;
         const el = document.getElementById("map");
         const width = (el && el.clientWidth) || window.innerWidth || 1280;
         const height = (el && el.clientHeight) || window.innerHeight || 720;
@@ -15275,7 +15331,7 @@
         const lonSpan = (width / worldPx) * 360;
         const latSpanMercator = (height / worldPx) * 2 * Math.PI;
         const centreMercator =
-          (mercatorY(MODEL_DOMAIN.north) + mercatorY(MODEL_DOMAIN.south)) / 2;
+          (mercatorY(DOM.north) + mercatorY(DOM.south)) / 2;
         const northPadded = Math.atan(
           Math.sinh(centreMercator + latSpanMercator / 2)
         ) * 180 / Math.PI;
@@ -15283,21 +15339,26 @@
           Math.sinh(centreMercator - latSpanMercator / 2)
         ) * 180 / Math.PI;
         const lonPad = Math.max(
-          0, (lonSpan - (MODEL_DOMAIN.east - MODEL_DOMAIN.west)) / 2
+          0, (lonSpan - (DOM.east - DOM.west)) / 2
         );
         return [
-          [MODEL_DOMAIN.west - lonPad,
-           Math.min(MODEL_DOMAIN.south, southPadded)],
-          [MODEL_DOMAIN.east + lonPad,
-           Math.max(MODEL_DOMAIN.north, northPadded)]
+          [DOM.west - lonPad,
+           Math.min(DOM.south, southPadded)],
+          [DOM.east + lonPad,
+           Math.max(DOM.north, northPadded)]
         ];
       }
 
       function lockMapToModelDomain(resetView) {
         if (!map) return;
-        const view = modelDomainView();
-        map.setMaxBounds(paddedModelBounds(view));
+        const dominio = dominioNavigabile();
+        const view = modelDomainView(dominio);
+        // I limiti vanno tolti PRIMA di allargarli: MapLibre stringe la vista
+        // dentro quelli vecchi mentre li si cambia, e passando al dominio
+        // largo la mappa restava incollata al bordo di ICON-2I.
+        map.setMaxBounds(null);
         map.setMinZoom(view.zoom);
+        map.setMaxBounds(paddedModelBounds(view, dominio));
         if (resetView) {
           map.jumpTo({
             center: view.center, zoom: view.fillZoom, bearing: 0, pitch: 0
@@ -15305,6 +15366,35 @@
         } else if (map.getZoom() < view.zoom) {
           map.setZoom(view.zoom);
         }
+      }
+
+      // Il velo che copre tutto cio' che sta FUORI dal dominio del modello
+      // dice una cosa vera e utile finche' si guarda una previsione: li'
+      // fuori non c'e' niente di previsto. Sull'osservato e' invece
+      // esattamente il contrario -- il satellite li' fuori ci vede benissimo,
+      // ed e' il motivo per cui ci si e' andati. Lasciandolo acceso,
+      // allontanandosi si vedeva l'Europa sbiancata al 72% con un rettangolo
+      // in chiaro sull'Italia: sembrava un riquadro vecchio incollato sopra,
+      // e invece era il velo.
+      //
+      // Il bordo tratteggiato resta sempre: e' una linea sottile, non copre
+      // niente, e continua a dire onestamente dove finisce la previsione --
+      // cosa che guardando l'Atlantico serve sapere piu' che mai.
+      function aggiornaVeloModello() {
+        if (!map || !map.getLayer("model-mask-layer")) return;
+        const largo = dominioNavigabile() !== MODEL_DOMAIN;
+        map.setLayoutProperty("model-mask-layer", "visibility",
+          largo ? "none" : "visible");
+      }
+
+      // Accendere o spegnere un livello osservato cambia il dominio che si
+      // puo' percorrere: senza questo, il satellite copriva l'Europa ma la
+      // mappa restava inchiodata ai bordi del modello e non ci si poteva
+      // arrivare.
+      function aggiornaDominioNavigabile() {
+        if (!map || !mapLoaded) return;
+        aggiornaVeloModello();
+        lockMapToModelDomain(false);
       }
 
       function setupMap() {
