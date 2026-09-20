@@ -412,8 +412,68 @@ prova('il volume usa Cloud Type e IR dello stesso fotogramma satellitare', () =>
     'la cache del volume cresce senza limite');
   assert.match(prepara, /aggiornaTextureVolume\(renderer,(?:mascheraNube|volume)\)/,
     'la texture 3D viene caricata soltanto quando arriva il primo lampo');
-  assert.match(html, /#strike-light-canvas \{[\s\S]{0,100}mix-blend-mode: screen;/,
-    'la luce non si fonde otticamente con i pixel del satellite');
+  // screen non supera mai il bianco: sopra una nube diurna gia' chiara un
+  // lampo cosi' composito sparirebbe invece di essere visibile. Il
+  // compositing normale, con l'alfa quasi opaco del gradiente, e' l'unico
+  // modo per restare visibile anche di giorno.
+  assert.doesNotMatch(html, /#strike-light-canvas \{[\s\S]{0,150}mix-blend-mode/,
+    'la luce torna a fondersi con "screen": di giorno sparirebbe sulle nubi chiare');
+});
+
+prova('un fulmine senza satellite illumina comunque la nube', () => {
+  // Prima della riscrittura per il satellite, disegnaNubeIlluminata aveva un
+  // ripiego tondo per quando manca la maschera, la mappa e' inclinata o non
+  // c'e' il satellite: la riscrittura lo aveva tolto, e sulla mappa senza
+  // satellite un fulmine non accendeva piu' nessuna nube -- la chiamata in
+  // drawLiveStrikes restava, ma proiezioneNube torna sempre nullo senza
+  // satellite e la funzione usciva subito con false.
+  const ritaglio = implementazione('disegnaNubeIlluminata');
+  assert.match(ritaglio, /if\(!projection \|\| inclinata \|\| !scarica\) \{/,
+    'manca il ramo di ripiego senza satellite, mappa inclinata o scarica');
+  assert.match(ritaglio, /createRadialGradient\(punto\.x,punto\.y,0,punto\.x,punto\.y,raggio\)/,
+    'il ripiego non disegna piu\' un bagliore tondo');
+  assert.match(ritaglio, /return true;\s*\n\s*\}\s*\n\s*const component=componenteNube/,
+    'il ripiego tondo non restituisce successo prima del ritaglio sul satellite');
+  assert.doesNotMatch(ritaglio, /tondo\(/,
+    'e\' ricomparso un disco disegnato da una funzione a parte invece che inline');
+  const disegno = implementazione('drawLiveStrikes');
+  assert.match(disegno, /if \(nube > 0\.012\) \{[\s\S]*?disegnaNubeIlluminata\(context, punto, largo, nube\);/,
+    'la vista senza satellite non chiama piu\' il bagliore della nube');
+});
+
+prova('il bagliore satellitare abbaglia di piu\' e la sommita\' rivelata ha piu\' rilievo', () => {
+  const inizializza = implementazione('inizializzaVolumeRenderer');
+  assert.match(inizializza, /float alone=exp\(-0\.5\*pow\(distanza\/\(raggio\*2\.6\),1\.35\)\);/,
+    'manca l\'alone largo che imita il bloom di una sorgente sovraesposta');
+  assert.match(inizializza, /float campo=nucleo\+0\.55\*alone;/,
+    'l\'alone largo non contribuisce piu\' al campo luminoso');
+  assert.match(inizializza, /faccia=clamp\(0\.28\+0\.95\*dot\(normale,direzione\),0\.12,1\.35\)/,
+    'il contrasto fra lato illuminato e lato in ombra non e\' aumentato: la sommita\' rivelata resta piatta');
+  assert.match(inizializza, /radianza\+=trasmittanza\*densita\*luceLocale\*dz\*0\.72;/,
+    'l\'accumulo di radianza non e\' stato aumentato');
+  assert.match(inizializza, /bagliore=clamp\(1\.0-exp\(-radianza\*4\.2\),0\.0,1\.0\)/,
+    'la curva di esposizione non e\' piu\' ripida: il lampo non e\' abbagliante');
+  assert.match(inizializza, /clamp\(bagliore\*0\.98,0\.0,0\.985\)/,
+    'l\'alfa massimo del nucleo non e\' stato alzato verso l\'opaco');
+});
+
+prova('il bagliore ritagliato sul satellite e il ragno sulla mappa nuda sono piu\' luminosi', () => {
+  const ritaglio = implementazione('disegnaNubeIlluminata');
+  assert.match(ritaglio, /rgba\(245,249,255,0\.92\)/,
+    'la seconda tappa del gradiente satellitare non e\' piu\' luminosa');
+  assert.match(ritaglio, /rgba\(238,246,255,0\.58\)/,
+    'la terza tappa del gradiente satellitare non e\' piu\' luminosa');
+  assert.match(ritaglio, /rgba\(233,242,255,0\.16\)/,
+    'la quarta tappa del gradiente satellitare non e\' piu\' luminosa');
+  assert.match(ritaglio, /"242,248,255",0\.42\)/,
+    'i canali interni sommersi non sono piu\' luminosi');
+  assert.match(ritaglio, /globalAlpha=Math\.min\(0\.97,nube\*0\.97\)/,
+    'l\'alfa finale del bagliore ritagliato non e\' stato alzato');
+  const disegno = implementazione('drawLiveStrikes');
+  assert.match(disegno, /tinta: "236,208,252", alfa: 0\.40/,
+    'il lobo esterno del ragno sulla mappa nuda non e\' piu\' luminoso');
+  assert.match(disegno, /tinta: "250,238,255", alfa: 0\.72/,
+    'il lobo medio del ragno sulla mappa nuda non e\' piu\' luminoso');
 });
 
 prova('il nuovo motore integra un volume 3D e non una sfumatura 2D', () => {

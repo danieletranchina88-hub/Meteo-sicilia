@@ -158,12 +158,12 @@
         z-index: 5;
       }
 
-      /* La luce deve fondersi con i pixel WebGL del satellite. Su un canvas
-         trasparente normale "screen" non vedrebbe la nube sottostante; il
-         livello dedicato esegue la fusione nel compositing del browser. */
+      /* Compositing normale, non "screen": screen non supera mai il bianco,
+         quindi di giorno un lampo sopra una nube gia' chiara sparirebbe
+         invece di essere abbagliante. L'alfa quasi opaco del gradiente in
+         disegnaNubeIlluminata basta da solo a superare i pixel sottostanti. */
       #strike-light-canvas {
         z-index: 5;
-        mix-blend-mode: screen;
       }
 
       #vector-canvas {
@@ -6968,7 +6968,12 @@
                   vec3 verso=vec3(-dxy,fonte.z-z);
                   float distanza=max(0.25,length(verso));
                   float raggio=max(4.0,meta.x);
-                  float campo=exp(-2.15*pow(distanza/raggio,1.35));
+                  // Doppio lobo: nucleo stretto piu' un alone largo e debole,
+                  // che imita il bloom di una sorgente che sovraespone il
+                  // sensore senza un passaggio di sfocatura separato.
+                  float nucleo=exp(-2.15*pow(distanza/raggio,1.35));
+                  float alone=exp(-0.5*pow(distanza/(raggio*2.6),1.35));
+                  float campo=nucleo+0.55*alone;
                   // Attenuazione sorgente-campione: approssima l'integrale
                   // obliquo dentro la stessa massa nuvolosa.
                   float trasmissioneFonte=exp(-densita*distanza
@@ -6979,24 +6984,31 @@
                   // quella che punta verso la sorgente e poi esce verso il
                   // satellite (+Z): questo e' il vero angolo di scattering.
                   float fase=5.6*henyeyGreenstein(clamp(-direzione.z,-1.0,1.0),g);
-                  float faccia=clamp(0.42+0.72*dot(normale,direzione),0.2,1.16);
+                  // Escursione piu' ampia fra lato illuminato e lato in
+                  // ombra della colonna: e' il contrasto che fa leggere la
+                  // sommita' rivelata dal lampo come un rilievo vero, non
+                  // come una macchia piatta.
+                  float faccia=clamp(0.28+0.95*dot(normale,direzione),0.12,1.35);
                   luceLocale+=fonte.w*campo*trasmissioneFonte*fase*faccia*sagoma;
-                  ombraLocale+=fonte.w*campo*(1.0-faccia/1.16)
+                  ombraLocale+=fonte.w*campo*(1.0-faccia/1.35)
                     *densita*sagoma;
                 }
-                radianza+=trasmittanza*densita*luceLocale*dz*0.48;
-                ombra+=trasmittanza*ombraLocale*dz*0.018;
+                radianza+=trasmittanza*densita*luceLocale*dz*0.72;
+                ombra+=trasmittanza*ombraLocale*dz*0.024;
                 // Beer-Lambert lungo la linea di vista verso il satellite.
                 trasmittanza*=exp(-densita*(0.22+0.5*materiale.b)*dz);
                 if(trasmittanza<0.012)break;
               }
-              float bagliore=clamp(1.0-exp(-radianza*3.1),0.0,1.0);
-              float autoOmbra=clamp(ombra*(1.0-bagliore)*0.7,0.0,0.18);
+              float bagliore=clamp(1.0-exp(-radianza*4.2),0.0,1.0);
+              float autoOmbra=clamp(ombra*(1.0-bagliore)*0.7,0.0,0.22);
               if(bagliore<0.003&&autoOmbra<0.003)discard;
               if(bagliore>=autoOmbra*1.4){
+                // Il nucleo sale a bianco pieno molto prima del massimo
+                // fisico: e' la sovraesposizione di un lampo vero visto da
+                // vicino, non un tenue chiarore.
                 vec3 freddo=mix(vec3(0.90,0.95,1.0),vec3(1.0),
-                  clamp(bagliore*1.25,0.0,1.0));
-                fragColor=vec4(freddo,clamp(bagliore*0.92,0.0,0.94));
+                  clamp(bagliore*1.6,0.0,1.0));
+                fragColor=vec4(freddo,clamp(bagliore*0.98,0.0,0.985));
               }else{
                 fragColor=vec4(0.025,0.045,0.075,autoOmbra);
               }
@@ -7221,8 +7233,27 @@
       }
 
       function disegnaNubeIlluminata(context, punto, largo, nube, scarica, radiusKm) {
+        if(strikeReducedMotion()) return false;
         const mask=mascheraNube, projection=proiezioneNube(mask);
-        if(!projection || strikeReducedMotion()) return false;
+        const inclinata = map.getPitch && map.getPitch() > 4;
+        // Senza satellite, con la mappa inclinata o senza la scarica che
+        // individua la nube da ritagliare, la luce sagomata non si puo'
+        // disegnare. Resta un bagliore tondo: meno preciso, ma un fulmine
+        // non deve mai restare senza luce -- e' cosi' che si disegnava
+        // prima che il ritaglio sul satellite lo rendesse un caso speciale.
+        if(!projection || inclinata || !scarica) {
+          const raggio=largo*0.62;
+          const g=context.createRadialGradient(punto.x,punto.y,0,punto.x,punto.y,raggio);
+          g.addColorStop(0,"rgba(250,252,255,"+(0.9*nube).toFixed(3)+")");
+          g.addColorStop(0.3,"rgba(245,249,255,"+(0.5*nube).toFixed(3)+")");
+          g.addColorStop(0.65,"rgba(238,246,255,"+(0.18*nube).toFixed(3)+")");
+          g.addColorStop(1,"rgba(233,242,255,0)");
+          context.save();context.globalCompositeOperation="lighter";
+          context.fillStyle=g;context.beginPath();
+          context.arc(punto.x,punto.y,raggio,0,Math.PI*2);context.fill();
+          context.restore();
+          return true;
+        }
         const component=componenteNube(mask,scarica.lon,scarica.lat,radiusKm);
         if(!component) return false;
         const lato=Math.ceil(largo*2), p=projection;
@@ -7233,10 +7264,10 @@
           const tela=document.createElement("canvas");tela.width=lato;tela.height=lato;
           const g=tela.getContext("2d");
           const light=g.createRadialGradient(largo,largo,0,largo,largo,largo);
-          light.addColorStop(0,"rgba(250,252,255,0.98)");
-          light.addColorStop(0.14,"rgba(245,249,255,0.86)");
-          light.addColorStop(0.38,"rgba(238,246,255,0.43)");
-          light.addColorStop(0.68,"rgba(233,242,255,0.10)");
+          light.addColorStop(0,"rgba(250,252,255,0.995)");
+          light.addColorStop(0.14,"rgba(245,249,255,0.92)");
+          light.addColorStop(0.38,"rgba(238,246,255,0.58)");
+          light.addColorStop(0.68,"rgba(233,242,255,0.16)");
           light.addColorStop(1,"rgba(230,239,255,0)");
           g.fillStyle=light;g.fillRect(0,0,lato,lato);
 
@@ -7247,7 +7278,7 @@
             const filo=scarica.ragno[f];
             strokeSfumato(g,puntiFilamento(filo.forma,largo,largo,
               largo*0.48*filo.lunghezza,filo.direzione),
-              3.2,"242,248,255",0.3);
+              3.2,"242,248,255",0.42);
           }
           g.restore();
 
@@ -7271,7 +7302,7 @@
           scarica.cloudLight={key:key,mask:mask,tela:tela};
         }
         context.save();context.globalCompositeOperation="lighter";
-        context.globalAlpha=Math.min(0.92,nube*0.92);
+        context.globalAlpha=Math.min(0.97,nube*0.97);
         context.drawImage(scarica.cloudLight.tela,punto.x-largo,punto.y-largo);
         context.restore();
         return true;
@@ -7870,8 +7901,8 @@
           // svanisce alla punta invece di finire di netto.
           if (luce > 0.012) {
             const passate = [
-              { larghezza: 9, tinta: "236,208,252", alfa: 0.30 },
-              { larghezza: 3.2, tinta: "250,238,255", alfa: 0.58 },
+              { larghezza: 9, tinta: "236,208,252", alfa: 0.40 },
+              { larghezza: 3.2, tinta: "250,238,255", alfa: 0.72 },
               { larghezza: 1.3, tinta: "255,253,255", alfa: 1 }
             ];
             for (let p = 0; p < passate.length; p += 1) {
