@@ -6872,8 +6872,19 @@
       // trasparente sopra i pixel satellitari reali finche' il lampo non lo
       // rende osservabile.
       const VOLUME_GPU_EVENTS = 4;
-      const VOLUME_GPU_SOURCES = 12;
+      // Il bilancio dei segmenti si divide fra le scariche vive: un lampo
+      // isolato si dirama con quanti ne servono (in pratica una ventina --
+      // e' il ragno stesso a finire i rami prima del bilancio), quattro
+      // insieme ne prendono otto a testa e restano comunque canali, non
+      // punti. Misurato passando da 20 a 32: con tre scariche insieme
+      // l'alfa di punta sale da 200 a 245 e l'area accesa da 3,7% a 6,5%,
+      // mentre il lampo isolato non cambia affatto perche' non li usa.
+      const VOLUME_GPU_SEGMENTS = 32;
       const VOLUME_GPU_STEPS = 32;
+      // Campioni dell'ombra proiettata fra canale e punto illuminato. Tre
+      // bastano per far comparire il lato in ombra di una torre; di piu'
+      // costa, perche' e' un ciclo dentro due cicli.
+      const VOLUME_GPU_SHADOW_STEPS = 3;
       let volumeRenderer;
       let volumeComponentAtlas = null;
 
@@ -6907,7 +6918,8 @@
           const fragment=`#version 300 es
             precision highp float;
             const int STEPS=${VOLUME_GPU_STEPS};
-            const int MAX_SOURCES=${VOLUME_GPU_SOURCES};
+            const int MAX_SEG=${VOLUME_GPU_SEGMENTS};
+            const int OMBRA_PASSI=${VOLUME_GPU_SHADOW_STEPS};
             uniform sampler2D uMaterial;
             uniform sampler2D uComponents;
             uniform vec2 uCanvasCss;
@@ -6917,10 +6929,46 @@
             uniform vec2 uSW;
             uniform vec2 uDomainKm;
             uniform vec2 uTexel;
-            uniform int uSourceCount;
-            uniform vec4 uSources[MAX_SOURCES];
-            uniform vec4 uSourceMeta[MAX_SOURCES];
+            uniform int uSegCount;
+            // Il canale non e' un punto: e' una spezzata ramificata lunga
+            // chilometri dentro la nube. Ogni elemento e' un SEGMENTO --
+            // estremi in coordinate del riquadro (xy) e quota in km (z) --
+            // e la luce si calcola dalla distanza al segmento, non a un
+            // centro. E' questa la differenza fra una macchia tonda e un
+            // lampo che si dirama.
+            uniform vec4 uSegA[MAX_SEG];
+            uniform vec4 uSegB[MAX_SEG];
+            uniform vec4 uSegMeta[MAX_SEG];
             out vec4 fragColor;
+
+            // Spessore ottico della nube fra due punti qualsiasi della
+            // colonna: e' quello che produce le OMBRE. Senza questo la luce
+            // arriva ovunque uguale e la sommita' resta piatta; con questo
+            // una torre alta fra il canale e il campione lascia dietro di se'
+            // una zona buia, come succede davvero.
+            float schermoNube(vec3 partenza,vec3 verso,vec2 dominio,sampler2D materiale){
+              float lunghezza=length(verso);
+              if(lunghezza<0.05)return 1.0;
+              vec3 passo=verso/float(OMBRA_PASSI);
+              float lungoPasso=lunghezza/float(OMBRA_PASSI);
+              vec3 campione=partenza;
+              float trasmissione=1.0;
+              for(int s=0;s<OMBRA_PASSI;s++){
+                campione+=passo;
+                vec2 uvOmbra=campione.xy/dominio;
+                if(any(lessThan(uvOmbra,vec2(0.0)))
+                  ||any(greaterThan(uvOmbra,vec2(1.0))))break;
+                vec4 m=texture(materiale,uvOmbra);
+                float topS=2.0+12.5*m.g;
+                float profS=mix(0.7,7.0,pow(m.b,0.72));
+                float baseS=max(0.25,topS-profS);
+                float dentro=smoothstep(baseS,baseS+0.45,campione.z)
+                  *(1.0-smoothstep(topS-0.45,topS,campione.z));
+                trasmissione*=exp(-m.r*dentro*mix(0.24,0.62,m.b)*lungoPasso);
+                if(trasmissione<0.02)break;
+              }
+              return trasmissione;
+            }
 
             float componente(float indice,vec4 valore){
               if(indice<0.5)return valore.r;
@@ -6960,7 +7008,7 @@
               float baseKm=max(0.25,topKm-profondita);
               float bordo=max(0.18,min(0.8,profondita*0.18));
               float dz=16.0/float(STEPS);
-              float trasmittanza=1.0,radianza=0.0,ombra=0.0;
+              float trasmittanza=1.0,radianza=0.0,ombra=0.0,nucleoVista=0.0;
               // Ray marching zenitale: ogni passo e' uno strato reale della
               // colonna ricostruita, non una sfumatura 2D sul fotogramma.
               for(int passo=0;passo<STEPS;passo++){
@@ -6968,41 +7016,53 @@
                 float verticale=smoothstep(baseKm,baseKm+bordo,z)
                   *(1.0-smoothstep(topKm-bordo,topKm,z));
                 if(verticale<0.001)continue;
-                // Le frequenze verticali erano 3.7 e 5.1: a 32 strati su
-                // 16 km (0.5 km per passo) la fase cambiava di oltre mezzo
-                // giro a ogni passo, sotto Nyquist. Il risultato non era
-                // dettaglio, erano bande visibili -- misurato rendering lo
-                // shader vero: sparivano azzerando questo termine, e la
-                // sola frequenza orizzontale (che non soffre lo stesso
-                // sottocampionamento, e' valutata una volta per pixel) non
-                // le riproduceva. Ridotte a 0.6 e 0.8: la fase cambia poco
-                // a ogni passo, resta un dettaglio, non uno strobo.
-                float dettaglio=0.88+0.12*sin(uv.x*173.0+uv.y*239.0+z*3.7)
-                  *sin(uv.x*83.0-uv.y*151.0+z*5.1);
+                // Qui c'era un "dettaglio" sintetico: il prodotto di due
+                // seni ad alta frequenza, sommato su una dozzina di strati
+                // con fase diversa. Non aggiungeva struttura -- la
+                // struttura della nube arriva gia' dal satellite, ed e'
+                // quella vera -- ma produceva un tratteggio diagonale,
+                // invisibile finche' la luce era fioca e ben visibile da
+                // quando il canale illumina davvero. Tolto: la densita'
+                // adesso viene solo da cio' che e' osservato.
                 float densita=materiale.r*verticale
-                  *mix(0.58,1.34,materiale.b)*dettaglio;
-                float luceLocale=0.0,ombraLocale=0.0;
-                for(int j=0;j<MAX_SOURCES;j++){
-                  if(j>=uSourceCount)break;
-                  vec4 fonte=uSources[j],meta=uSourceMeta[j];
-                  float sagoma=componente(meta.w,parti);
+                  *mix(0.58,1.34,materiale.b);
+                vec3 posKm=vec3(uv*uDomainKm,z);
+                float luceLocale=0.0,ombraLocale=0.0,cuoreLocale=0.0;
+                for(int j=0;j<MAX_SEG;j++){
+                  if(j>=uSegCount)break;
+                  vec4 A=uSegA[j],B=uSegB[j],M=uSegMeta[j];
+                  float sagoma=componente(M.x,parti);
                   if(sagoma<0.002)continue;
-                  vec2 dxy=(uv-fonte.xy)*uDomainKm;
-                  vec3 verso=vec3(-dxy,fonte.z-z);
-                  float distanza=max(0.25,length(verso));
-                  float raggio=max(4.0,meta.x);
+                  // Punto piu' vicino sul SEGMENTO, non a un centro: la
+                  // luce esce da tutta la lunghezza del canale, quindi la
+                  // zona illuminata ha la forma del canale.
+                  vec3 a=vec3(A.xy*uDomainKm,A.z);
+                  vec3 b=vec3(B.xy*uDomainKm,B.z);
+                  vec3 ab=b-a;
+                  float tt=clamp(dot(posKm-a,ab)/max(dot(ab,ab),0.0001),0.0,1.0);
+                  vec3 verso=(a+ab*tt)-posKm;
+                  float raggio=max(3.0,B.w);
+                  // Scarto a buon mercato prima di qualunque conto caro:
+                  // oltre la portata il segmento non puo' contribuire, e
+                  // senza questo l'ombra marciata costerebbe troppo.
+                  float d2=dot(verso,verso);
+                  float portata=raggio*3.2;
+                  if(d2>portata*portata)continue;
+                  float distanza=max(0.15,sqrt(d2));
                   // Doppio lobo: nucleo stretto piu' un alone largo e debole,
                   // che imita il bloom di una sorgente che sovraespone il
                   // sensore senza un passaggio di sfocatura separato.
                   float nucleo=exp(-2.15*pow(distanza/raggio,1.35));
                   float alone=exp(-0.5*pow(distanza/(raggio*2.6),1.35));
                   float campo=nucleo+0.55*alone;
-                  // Attenuazione sorgente-campione: approssima l'integrale
-                  // obliquo dentro la stessa massa nuvolosa.
-                  float trasmissioneFonte=exp(-densita*distanza
-                    *(0.035+0.05*materiale.b));
+                  if(campo<0.004)continue;
                   vec3 direzione=verso/distanza;
-                  float g=mix(0.48,0.67,1.0-meta.y);
+                  // OMBRA VERA: quanta nube c'e' fra il canale e questo
+                  // punto. Prima era una stima locale (la densita' QUI per
+                  // la distanza), che non puo' produrre ombre perche' non
+                  // sa cosa c'e' in mezzo.
+                  float schermo=schermoNube(posKm,verso,uDomainKm,uMaterial);
+                  float g=mix(0.48,0.67,1.0-M.y);
                   // Il fotone arriva al campione nella direzione opposta a
                   // quella che punta verso la sorgente e poi esce verso il
                   // satellite (+Z): questo e' il vero angolo di scattering.
@@ -7012,27 +7072,69 @@
                   // sommita' rivelata dal lampo come un rilievo vero, non
                   // come una macchia piatta.
                   float faccia=clamp(0.28+0.95*dot(normale,direzione),0.12,1.35);
-                  luceLocale+=fonte.w*campo*trasmissioneFonte*fase*faccia*sagoma;
-                  ombraLocale+=fonte.w*campo*(1.0-faccia/1.35)
-                    *densita*sagoma;
-                  // Anello scuro legato solo alla distanza dal centro del
-                  // lampo, non all'orientamento della superficie: su una
-                  // sommita' quasi piatta la sola ombra di orientamento non
-                  // basta a dare contrasto, e un nucleo chiaro sopra una
-                  // nube diurna gia' quasi bianca sparisce qualunque sia la
-                  // sua opacita'. Zero dentro il nucleo, scende a zero
-                  // anche appena fuori dall'alone: e' un bordo, non un disco.
+                  // La LUCE si somma: due rami vicini illuminano davvero il
+                  // doppio.
+                  //
+                  // Ma non si somma con l'ombra PIENA. schermo e'
+                  // attenuazione BALISTICA: conta solo i fotoni che
+                  // arrivano in linea retta senza mai urtare una goccia.
+                  // Dentro una nube quasi nessun fotone fa quel viaggio --
+                  // fa un cammino casuale, e proprio per questo un
+                  // cumulonembo INTERO si accende quando scarica. Con
+                  // l'ombra balistica applicata anche al bagliore diffuso
+                  // risultava acceso il 3,8% del fotogramma e l'alfa
+                  // crollava da 164 a 25 in 40 px: misurato. Il fondo di
+                  // scattering multiplo lascia passare meta' della luce
+                  // anche dietro una torre, e l'area accesa sale all'11%
+                  // senza perdere il rilievo -- che continua a venire da
+                  // faccia, dall'anello scuro e dalla meta' di ombra
+                  // balistica che resta.
+                  float schermoDiffuso=mix(schermo,1.0,0.5);
+                  luceLocale+=A.w*campo*schermoDiffuso*fase*faccia*sagoma;
+                  // Il cuore: a ridosso del canale la nube e' bruciata, ed
+                  // e' quello che fa vedere il LAMPO e non solo il suo
+                  // effetto. Segue la spezzata, quindi si dirama.
+                  cuoreLocale+=A.w*exp(-pow(distanza/max(0.35,M.z),2.0))
+                    *schermo*sagoma;
+                  // L'OMBRA no: e' una proprieta' geometrica del posto, non
+                  // una grandezza che si accumula. Sommandola su decine di
+                  // segmenti invece che su tre sorgenti diventava circa
+                  // sette volte piu' scura e anneriva l'intera cella --
+                  // misurato appena passati ai segmenti. Si prende la piu'
+                  // forte, che e' quello che l'ombra vuol dire.
                   float u=distanza/raggio;
                   float anello=smoothstep(0.55,1.1,u)*(1.0-smoothstep(1.1,2.2,u));
-                  ombraLocale+=fonte.w*anello*sagoma*6.0;
+                  ombraLocale=max(ombraLocale,
+                    A.w*(campo*(1.0-faccia/1.35)*densita+anello*6.0)*sagoma);
                 }
+                // Il bagliore diffuso ha bisogno di nube che lo diffonda, e
+                // quindi va con la densita'. Il cuore del canale no: brilla
+                // di suo, e la nube lo puo' solo coprire -- percio' resta
+                // acceso anche dove la nube e' rada, ma la trasmittanza
+                // lungo la vista lo spegne quando sopra c'e' altra nube.
+                //
+                // I due viaggiano SEPARATI fino al pixel. Sommati, come
+                // erano prima, il canale spariva: appena il bagliore
+                // diffuso saturava -- e adesso satura, come deve -- il
+                // massimo era gia' raggiunto e il cuore non aveva piu'
+                // niente da aggiungere. In una fotografia il canale si
+                // legge perche' brucia il sensore MENTRE la nube attorno
+                // sta a meta' scala; qui si riproduce lasciando al diffuso
+                // solo la parte bassa della corsa e al canale la cima.
                 radianza+=trasmittanza*densita*luceLocale*dz*0.72;
+                nucleoVista+=trasmittanza*cuoreLocale*max(densita,0.2)
+                  *dz*1.75;
                 ombra+=trasmittanza*ombraLocale*dz*0.024;
                 // Beer-Lambert lungo la linea di vista verso il satellite.
                 trasmittanza*=exp(-densita*(0.22+0.5*materiale.b)*dz);
                 if(trasmittanza<0.012)break;
               }
-              float bagliore=clamp(1.0-exp(-radianza*4.2),0.0,1.0);
+              // Il diffuso si ferma a 0,82: il resto della corsa fino a
+              // bianco pieno appartiene al canale, ed e' quel margine a
+              // renderlo visibile sopra una nube gia' accesa.
+              float diffuso=clamp(1.0-exp(-radianza*6.5),0.0,1.0)*0.82;
+              float canale=clamp(1.0-exp(-nucleoVista*3.4),0.0,1.0);
+              float bagliore=clamp(diffuso+canale*(1.0-diffuso*0.55),0.0,1.0);
               // Piu' forte e con una portata maggiore che in passato: e' il
               // bordo scuro che da' contrasto al nucleo. Su una nube diurna
               // gia' quasi bianca un nucleo bianco da solo si confonde con
@@ -7046,8 +7148,15 @@
               // insieme in un solo pixel invece di scegliere l'uno o
               // l'altro: e' quel passaggio chiaro-poi-scuro a leggersi come
               // un lampo anche di giorno, quando il bianco da solo sparisce.
-              vec3 chiaro=mix(vec3(0.90,0.95,1.0),vec3(1.0),
-                clamp(bagliore*1.6,0.0,1.0));
+              // Separazione anche di COLORE, non solo di opacita': la
+              // nube accesa da lontano e' bianco-azzurra (e' luce diffusa
+              // da gocce, che disperdono di piu' il blu), il canale e'
+              // bianco bruciato. Cosi' il lampo resta distinguibile anche
+              // dove opacita' e' al massimo per entrambi -- di giorno,
+              // sopra una sommita' gia' bianca, e' l'unica differenza che
+              // sopravvive.
+              vec3 chiaro=mix(vec3(0.74,0.83,1.0),vec3(1.0),
+                clamp(canale*1.45+diffuso*0.42,0.0,1.0));
               vec3 scuro=vec3(0.025,0.045,0.075);
               float pesoChiaro=bagliore/(bagliore+autoOmbra+0.0001);
               vec3 colore=mix(scuro,chiaro,pesoChiaro);
@@ -7069,8 +7178,8 @@
               canvas:uniform("uCanvasCss"),scale:uniform("uRenderScale"),
               nw:uniform("uNW"),ne:uniform("uNE"),sw:uniform("uSW"),
               domain:uniform("uDomainKm"),texel:uniform("uTexel"),
-              count:uniform("uSourceCount"),sources:uniform("uSources[0]"),
-              meta:uniform("uSourceMeta[0]")}};
+              count:uniform("uSegCount"),segA:uniform("uSegA[0]"),
+              segB:uniform("uSegB[0]"),segMeta:uniform("uSegMeta[0]")}};
           strikeVolumeCanvas.addEventListener("webglcontextlost",function(event){
             event.preventDefault();volumeRenderer=undefined;
           },{once:true});
@@ -7113,9 +7222,9 @@
         renderer.componentKey=packed.key;
       }
 
-      function disegnaVolumeGpu(mask,projection,sources,packed) {
+      function disegnaVolumeGpu(mask,projection,segmenti,packed) {
         const renderer=inizializzaVolumeRenderer();
-        if(!renderer||!sources.length||!packed)return false;
+        if(!renderer||!segmenti.length||!packed)return false;
         const gl=renderer.gl;
         aggiornaTextureVolume(renderer,mask);
         aggiornaComponentiVolume(renderer,mask,packed);
@@ -7135,16 +7244,22 @@
         const domainY=(mask.north-mask.south)*111.32;
         gl.uniform2f(renderer.u.domain,domainX,domainY);
         gl.uniform2f(renderer.u.texel,1/mask.width,1/mask.height);
-        const count=Math.min(VOLUME_GPU_SOURCES,sources.length);
-        const valori=new Float32Array(VOLUME_GPU_SOURCES*4);
-        const meta=new Float32Array(VOLUME_GPU_SOURCES*4);
+        const count=Math.min(VOLUME_GPU_SEGMENTS,segmenti.length);
+        const estremoA=new Float32Array(VOLUME_GPU_SEGMENTS*4);
+        const estremoB=new Float32Array(VOLUME_GPU_SEGMENTS*4);
+        const meta=new Float32Array(VOLUME_GPU_SEGMENTS*4);
         for(let i=0;i<count;i++){
-          const s=sources[i],p=i*4;
-          valori[p]=s.x;valori[p+1]=s.y;valori[p+2]=s.z;valori[p+3]=s.intensity;
-          meta[p]=s.radius;meta[p+1]=s.phase;meta[p+2]=s.thickness;meta[p+3]=s.event;
+          const s=segmenti[i],p=i*4;
+          estremoA[p]=s.ax;estremoA[p+1]=s.ay;estremoA[p+2]=s.az;
+          estremoA[p+3]=s.intensity;
+          estremoB[p]=s.bx;estremoB[p+1]=s.by;estremoB[p+2]=s.bz;
+          estremoB[p+3]=s.radius;
+          meta[p]=s.event;meta[p+1]=s.phase;meta[p+2]=s.core;meta[p+3]=0;
         }
         gl.uniform1i(renderer.u.count,count);
-        gl.uniform4fv(renderer.u.sources,valori);gl.uniform4fv(renderer.u.meta,meta);
+        gl.uniform4fv(renderer.u.segA,estremoA);
+        gl.uniform4fv(renderer.u.segB,estremoB);
+        gl.uniform4fv(renderer.u.segMeta,meta);
         // La GPU lavora soltanto sul rettangolo che contiene le celle
         // connesse, non sull'intero schermo. E' una riduzione importante
         // durante i temporali piccoli e sui telefoni.
@@ -7232,6 +7347,87 @@
         return Math.min(VOLUME_GLOW_MAX_KM, Math.max(fisicoKm, minimo));
       }
 
+      // Dal ragno frattale ai segmenti che la GPU illumina. E' lo STESSO
+      // ragno gia' calcolato per il disegno (stesso seme, stessa forma,
+      // stessa funzione puntoDelFilamento): qui viene solo riletto in
+      // chilometri e in quota invece che in pixel, cosi' il canale che si
+      // vede e il volume che si accende non possono divergere.
+      //
+      // CONFINE FRA DATO E RESA, come per il resto del livello: la
+      // posizione e l'istante della scarica sono osservati (Blitzortung),
+      // la nube che si illumina e' osservata (Cloud Type + IR10.5), la
+      // QUOTA del canale e' stimata dalla sommita' e dallo spessore ottico
+      // -- e la forma ramificata e' una simulazione deterministica, come
+      // e' sempre stato dichiarato. Il fulmine dentro la nube non e'
+      // osservabile dal satellite: quello che si osserva e' la luce che ne
+      // esce, ed e' quella che questo motore calcola.
+      function segmentiCanale(strike,sample,raggioKm,mask,dominio,evento,
+          intensita,quanti,pxPerKm) {
+        const segmenti=[];
+        if(!strike.ragno||!strike.ragno.length)return segmenti;
+        const x0=(strike.lon-mask.west)/(mask.east-mask.west);
+        const y0=(mask.north-strike.lat)/(mask.north-mask.south);
+        const topKm=2+12.5*sample.top;
+        const depth=0.7+(7-0.7)*Math.pow(sample.thickness,0.72);
+        // Il canale intra-nube vive nel corpo freddo della cella, sotto la
+        // sommita' e sopra la base: non sul tetto, non al suolo.
+        const quota=Math.max(0.4,topKm-depth*(0.36+0.18*(1-sample.phase)));
+        // I rami piu' lunghi sono i canali principali: quando il bilancio
+        // e' stretto restano quelli, non i mozziconi.
+        const rami=strike.ragno.slice().sort(function(a,b){
+          return b.lunghezza-a.lunghezza;
+        });
+        // Meglio pochi rami ben spezzati che tanti stecchi dritti. La
+        // regola di prima pretendeva che il bilancio bastasse per TUTTI i
+        // rami a quella finezza, e appena non bastava ripiegava su un
+        // segmento per ramo: con tre scariche insieme il canale diventava
+        // una stella di righe diritte, che non si legge come un fulmine.
+        // Adesso si sceglie prima quanto spezzare il canale, poi si
+        // tengono i rami piu' lunghi che ci stanno -- quelli in testa,
+        // perche' sono gia' ordinati, cioe' i canali principali.
+        const pezzi=Math.max(2,Math.min(5,Math.floor(Math.sqrt(quanti))));
+        const quantiRami=Math.max(1,Math.floor(quanti/pezzi));
+        // Il cuore acceso ha un raggio vero di poche centinaia di metri,
+        // ma a zoom basso finirebbe sotto il pixel: sotto quella soglia
+        // conta la leggibilita', come per il raggio del bagliore.
+        const cuoreKm=Math.max(0.42,3.0/Math.max(0.0001,pxPerKm));
+        for(let f=0;f<rami.length&&f<quantiRami;f++){
+          const filo=rami[f];
+          const lungoKm=raggioKm*0.48*filo.lunghezza;
+          if(!(lungoKm>0.2))continue;
+          // Un ramo secondario e' piu' debole del canale principale: la
+          // corrente si divide a ogni biforcazione.
+          const forza=intensita*(f===0?1:Math.pow(0.72,f));
+          let prima=null;
+          for(let k=0;k<=pezzi;k++){
+            const punto=puntoDelFilamento(filo.forma,k/pezzi,0,0,lungoKm,
+              filo.direzione);
+            // Ondeggiamento verticale deterministico: un canale vero non
+            // sta su un piano, e senza questo le ombre sarebbero tutte
+            // uguali lungo il ramo.
+            const onda=(((f*7+k*13)%11)/11-0.5)*0.8;
+            const nodo={x:x0+punto.x/dominio.x,y:y0+punto.y/dominio.y,
+              z:Math.max(0.35,quota+onda)};
+            if(prima){
+              // Il canale si assottiglia e si spegne verso la punta: la
+              // corrente si e' gia' divisa nelle biforcazioni a monte. Un
+              // tubo di spessore e luce costanti si legge come un tratto
+              // disegnato, non come una scarica.
+              const lungoIlRamo=1-(k-0.5)/pezzi;
+              const calo=lungoIlRamo*lungoIlRamo;
+              segmenti.push({ax:prima.x,ay:prima.y,az:prima.z,
+                bx:nodo.x,by:nodo.y,bz:nodo.z,
+                intensity:forza*(0.28+0.72*calo),
+                radius:raggioKm*(0.55+0.45*calo),
+                phase:sample.phase,
+                core:cuoreKm*(0.45+0.55*calo),event:evento});
+            }
+            prima=nodo;
+          }
+        }
+        return segmenti;
+      }
+
       function renderVolumeLightning(adesso) {
         const mask=mascheraNube,projection=proiezioneNube(mask);
         for(let i=0;i<liveStrikes.length;i++)liveStrikes[i].volumeIlluminated=false;
@@ -7254,38 +7450,25 @@
         eventi.sort(function(a,b){return b.intensity-a.intensity;});
         eventi.length=Math.min(VOLUME_GPU_EVENTS,eventi.length);
         if(!eventi.length) { pulisciVolumeRenderer(); return false; }
-        const packed=impacchettaComponentiVolume(mask,eventi),sources=[];
+        const packed=impacchettaComponentiVolume(mask,eventi);
         const domainX=(mask.east-mask.west)*111.32*Math.max(0.2,
           Math.cos((mask.north+mask.south)*Math.PI/360));
         const domainY=(mask.north-mask.south)*111.32;
         const pxPerKm=Math.hypot(projection.ne.x-projection.nw.x,
           projection.ne.y-projection.nw.y)/Math.max(0.001,domainX);
+        // Il bilancio si divide fra le scariche vive: una sola si dirama
+        // con tutti i segmenti, quattro insieme ne prendono un quarto per
+        // ciascuna e restano comunque canali.
+        const perScarica=Math.max(2,
+          Math.floor(VOLUME_GPU_SEGMENTS/eventi.length));
+        let segmenti=[];
         for(let e=0;e<eventi.length;e++){
-          const item=eventi[e],strike=item.strike,sample=item.sample;
-          const x=(strike.lon-mask.west)/(mask.east-mask.west);
-          const y=(mask.north-strike.lat)/(mask.north-mask.south);
-          const topKm=2+12.5*sample.top;
-          const depth=0.7+(7-0.7)*Math.pow(sample.thickness,0.72);
-          const z=Math.max(0.4,topKm-depth*(0.36+0.18*(1-sample.phase)));
-          const raggioVisibile=raggioVisibileKm(item.radius,pxPerKm);
-          sources.push({x:x,y:y,z:z,intensity:item.intensity,
-            radius:raggioVisibile,phase:sample.phase,thickness:sample.thickness,event:e});
-          // Due nodi del canale intra-nube diventano sorgenti sommerse:
-          // la ramificazione si percepisce attraverso il volume senza essere
-          // disegnata come una ragnatela sopra il satellite.
-          for(let f=0;f<Math.min(2,strike.ragno.length);f++){
-            const filo=strike.ragno[f];
-            const distanza=item.radius*(0.17+0.15*filo.lunghezza);
-            sources.push({
-              x:clamp(x+Math.cos(filo.direzione)*distanza/domainX,0,1),
-              y:clamp(y+Math.sin(filo.direzione)*distanza/domainY,0,1),
-              z:Math.max(0.3,z-depth*(0.08+0.08*f)),
-              intensity:item.intensity*(f?0.38:0.55),radius:raggioVisibile*0.72,
-              phase:sample.phase,thickness:sample.thickness,event:e
-            });
-          }
+          const item=eventi[e];
+          segmenti=segmenti.concat(segmentiCanale(item.strike,item.sample,
+            raggioVisibileKm(item.radius,pxPerKm),mask,
+            {x:domainX,y:domainY},e,item.intensity,perScarica,pxPerKm));
         }
-        const rendered=disegnaVolumeGpu(mask,projection,sources,packed);
+        const rendered=disegnaVolumeGpu(mask,projection,segmenti,packed);
         if(rendered)for(let i=0;i<eventi.length;i++)eventi[i].strike.volumeIlluminated=true;
         return rendered;
       }
@@ -7945,8 +8128,18 @@
                 // di 10-40 km si schiacciava a un punto invisibile. 16 px
                 // e' quanto basta per leggersi come un lampo anche senza
                 // aver zoomato sulla cella.
-                const largo = Math.min(220, Math.max(16,
-                  Math.hypot(edge.x-punto.x, edge.y-punto.y)));
+                //
+                // E passa per la STESSA raggioVisibileKm che riceve la GPU,
+                // non per una sua catena di limiti: il ragno 2D e il canale
+                // acceso nel volume nascono dallo stesso ragno frattale e
+                // devono percio' avere anche la stessa lunghezza. Con due
+                // tetti diversi -- 220 px qui, 70 km di la' -- a zoom alto
+                // il canale illuminato usciva dal ragno disegnato, e si
+                // vedeva doppio.
+                const pxPerKmQui = Math.hypot(edge.x-punto.x, edge.y-punto.y)
+                  / Math.max(0.001, radiusKm);
+                const largo = Math.min(220,
+                  raggioVisibileKm(radiusKm, pxPerKmQui) * pxPerKmQui);
                 if (!s.cloudIlluminated) {
                   s.cloudIlluminated = disegnaNubeIlluminata(
                     strikeLightContext, punto, largo,

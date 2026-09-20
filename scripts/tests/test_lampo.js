@@ -451,8 +451,23 @@ prova('il bagliore satellitare abbaglia di piu\' e la sommita\' rivelata ha piu\
     'il contrasto fra lato illuminato e lato in ombra non e\' aumentato: la sommita\' rivelata resta piatta');
   assert.match(inizializza, /radianza\+=trasmittanza\*densita\*luceLocale\*dz\*0\.72;/,
     'l\'accumulo di radianza non e\' stato aumentato');
-  assert.match(inizializza, /bagliore=clamp\(1\.0-exp\(-radianza\*4\.2\),0\.0,1\.0\)/,
-    'la curva di esposizione non e\' piu\' ripida: il lampo non e\' abbagliante');
+  // Il diffuso e il canale NON si sommano piu' in un'unica grandezza.
+  // Sommati, il canale spariva: appena il bagliore diffuso saturava -- e
+  // adesso satura per davvero, perche' e' proprio la nube che si accende --
+  // il massimo era gia' raggiunto e il cuore non aveva piu' niente da
+  // aggiungere. Misurato: con la somma, 0 px dal canale dava alfa 242 e
+  // 40 px ne dava 209, cioe' un altopiano bianco senza forma. Separati, il
+  // diffuso si ferma a 0,82 e la cima della corsa resta al canale.
+  assert.match(inizializza, /diffuso=clamp\(1\.0-exp\(-radianza\*6\.5\),0\.0,1\.0\)\*0\.82/,
+    'la curva di esposizione del bagliore diffuso non e\' quella attesa');
+  assert.match(inizializza, /canale=clamp\(1\.0-exp\(-nucleoVista\*3\.4\),0\.0,1\.0\)/,
+    'il canale non ha piu\' una sua esposizione separata dal bagliore diffuso');
+  assert.match(inizializza, /bagliore=clamp\(diffuso\+canale\*\(1\.0-diffuso\*0\.55\),0\.0,1\.0\)/,
+    'il canale non si compone piu\' sopra il diffuso lasciandogli il margine');
+  assert.match(inizializza, /nucleoVista\+=trasmittanza\*cuoreLocale/,
+    'il cuore del canale non viene piu\' accumulato per conto suo');
+  assert.doesNotMatch(inizializza, /radianza\+=trasmittanza\*\(densita\*luceLocale/,
+    'diffuso e cuore tornano a sommarsi nella stessa grandezza: il canale sparisce nell\'altopiano saturo');
   assert.match(inizializza, /alfa=clamp\(max\(bagliore\*0\.98,autoOmbra\),0\.0,0\.985\)/,
     'l\'alfa massimo del nucleo non e\' stato alzato verso l\'opaco');
 });
@@ -482,8 +497,19 @@ prova('il bordo scuro attorno al nucleo da\' contrasto anche su una nube diurna 
     'manca la distanza normalizzata al raggio per l\'anello');
   assert.match(inizializza, /float anello=smoothstep\(0\.55,1\.1,u\)\*\(1\.0-smoothstep\(1\.1,2\.2,u\)\)/,
     'manca l\'anello scuro legato alla sola distanza dal centro del lampo');
-  assert.match(inizializza, /ombraLocale\+=fonte\.w\*anello\*sagoma\*6\.0;/,
+  // L'ombra si prende con max(), non sommando. E' una proprieta'
+  // geometrica del posto -- "quanto e' schermato questo punto" -- non una
+  // grandezza che si accumula come la luce. Finche' le sorgenti erano tre
+  // la somma passava inosservata; con venti e piu' segmenti lungo lo stesso
+  // canale diventava circa sette volte piu' scura e anneriva l'intera
+  // cella. Misurato appena passati ai segmenti.
+  assert.match(inizializza, /ombraLocale=max\(ombraLocale,/,
+    'l\'ombra torna a sommarsi su ogni segmento: lungo un canale di venti pezzi annerisce la cella');
+  assert.match(inizializza, /anello\*6\.0\)\*sagoma\)/,
     'l\'anello e\' troppo debole per dare contrasto su una nube diurna piatta');
+  // La LUCE invece si somma davvero: due rami vicini illuminano il doppio.
+  assert.match(inizializza, /luceLocale\+=A\.w\*campo\*schermoDiffuso/,
+    'la luce non si somma piu\' sui segmenti vicini');
 });
 
 prova('il bagliore ritagliato sul satellite e il ragno sulla mappa nuda sono piu\' luminosi', () => {
@@ -516,8 +542,19 @@ prova('il nuovo motore integra un volume 3D e non una sfumatura 2D', () => {
     'manca il ray marching lungo la colonna nuvolosa');
   assert.match(inizializza, /trasmittanza\*=exp\(-densita/,
     'manca l\'assorbimento Beer-Lambert lungo la vista');
-  assert.match(inizializza, /trasmissioneFonte=exp\(-densita\*distanza/,
-    'la luce non viene assorbita fra il canale e la sommita\'');
+  // L'assorbimento fra canale e sommita' non e' piu' una stima locale
+  // (la densita' QUI moltiplicata per la distanza), che non puo' produrre
+  // ombre perche' non sa cosa ci sia in mezzo: e' un raggio marciato
+  // davvero fra il canale e il campione, quindi una torre interposta
+  // lascia dietro di se' una zona buia.
+  assert.match(inizializza, /float schermoNube\(vec3 partenza,vec3 verso,vec2 dominio,sampler2D materiale\)/,
+    'manca la marcia d\'ombra fra il canale e il campione');
+  assert.match(inizializza, /for\(int s=0;s<OMBRA_PASSI;s\+\+\)/,
+    'l\'ombra non viene piu\' marciata passo per passo');
+  assert.match(inizializza, /trasmissione\*=exp\(-m\.r\*dentro/,
+    'la marcia d\'ombra non accumula piu\' l\'assorbimento di cio\' che incontra');
+  assert.match(inizializza, /float schermo=schermoNube\(posKm,verso,uDomainKm,uMaterial\);/,
+    'la luce del segmento non passa piu\' per l\'ombra marciata');
   assert.match(inizializza, /henyeyGreenstein/,
     'manca la diffusione anisotropa di acqua e ghiaccio');
   assert.match(inizializza, /topKm=2\.0\+12\.5\*materiale\.g/,
@@ -554,8 +591,8 @@ prova('ogni lampo volumetrico resta nella propria massa nuvolosa', () => {
   assert.match(pack, /if\(volumeComponentAtlas&&volumeComponentAtlas\.mask===mask/,
     'l\'atlante da oltre un megabyte viene riallocato a ogni fotogramma');
   const inizializza = implementazione('inizializzaVolumeRenderer');
-  assert.match(inizializza, /float sagoma=componente\(meta\.w,parti\)/,
-    'lo shader non seleziona la cella associata alla sorgente');
+  assert.match(inizializza, /float sagoma=componente\(M\.x,parti\)/,
+    'lo shader non seleziona la cella associata al segmento');
   assert.match(inizializza, /\*sagoma/,
     'la sagoma connessa non limita l\'emissione volumetrica');
   const render = implementazione('renderVolumeLightning');
@@ -607,21 +644,44 @@ prova('la dimensione resta geografica e cambia correttamente con lo zoom', () =>
   assert.match(disegno, /Math\.hypot\(edge\.x-punto\.x, edge\.y-punto\.y\)/,
     'la scala resta fissa in pixel durante lo zoom');
   // Il minimo era 3 px: un lampo senza zoom, su una vista che inquadra
-  // tutta l'Italia, si schiacciava a un punto invisibile.
-  assert.match(disegno, /Math\.min\(220, Math\.max\(16,/,
-    'il ripiego 2D torna a un minimo troppo piccolo per essere visto senza zoom');
+  // tutta l'Italia, si schiacciava a un punto invisibile. Adesso il
+  // pavimento non sta piu' scritto qui dentro -- sta in raggioVisibileKm,
+  // la stessa che serve la GPU -- quindi si misura eseguendolo invece di
+  // cercare l'espressione: e' il NUMERO a dover reggere, non la sua forma.
+  const visibile = new Function(
+    costante('VOLUME_GLOW_MIN_PX') + '\n' + costante('VOLUME_GLOW_MAX_KM') + '\n'
+    + implementazione('raggioVisibileKm')
+    + '\nreturn {raggioVisibileKm, VOLUME_GLOW_MIN_PX, VOLUME_GLOW_MAX_KM};')();
+  const MIN_PX = visibile.VOLUME_GLOW_MIN_PX;
+  // Italia intera su un telefono: circa 1100 km in 400 px.
+  const pxPerKmLarga = 400 / 1100;
+  const piccolo = visibile.raggioVisibileKm(9, pxPerKmLarga) * pxPerKmLarga;
+  assert.ok(piccolo >= MIN_PX - 0.001,
+    'da zoom largo un lampo di 9 km si schiaccia a ' + piccolo.toFixed(1)
+    + ' px, sotto il minimo di ' + MIN_PX);
+  // Zoomati sulla cella il raggio fisico comanda: il pavimento non deve
+  // gonfiare un lampo che sullo schermo e' gia' grande.
+  const pxPerKmStretta = 12;
+  assert.equal(visibile.raggioVisibileKm(9, pxPerKmStretta), 9,
+    'il pavimento gonfia il lampo anche quando sullo schermo e\' gia\' grande');
+  assert.equal(visibile.raggioVisibileKm(500, pxPerKmStretta),
+    visibile.VOLUME_GLOW_MAX_KM,
+    'manca il tetto: da molto lontano il lampo diventa enorme');
 });
 
 prova('il lampo volumetrico non sparisce quando si e\' zoomati indietro', () => {
   const render = implementazione('renderVolumeLightning');
   assert.match(render, /pxPerKm=Math\.hypot\(projection\.ne\.x-projection\.nw\.x,\s*\n\s*projection\.ne\.y-projection\.nw\.y\)\/Math\.max\(0\.001,domainX\)/,
     'manca il calcolo dei pixel per chilometro alla scala attuale');
-  assert.match(render, /raggioVisibile=raggioVisibileKm\(item\.radius,pxPerKm\)/,
+  assert.match(render, /raggioVisibileKm\(item\.radius,pxPerKm\)/,
     'il raggio inviato alla GPU non tiene conto dello zoom corrente');
-  assert.match(render, /radius:raggioVisibile,phase:sample\.phase/,
-    'la sorgente principale non usa il raggio corretto per lo zoom');
-  assert.match(render, /radius:raggioVisibile\*0\.72,/,
-    'le sorgenti sommerse dei rami non seguono lo stesso raggio corretto');
+  // E lo stesso raggio corretto deve valere anche per il ragno disegnato
+  // in 2D: nasce dallo stesso ragno frattale, quindi due tetti diversi
+  // (220 px di qua, 70 km di la') lo farebbero uscire dal canale acceso
+  // nel volume, e a zoom alto si vedrebbe doppio.
+  const disegnoZoom = implementazione('drawLiveStrikes');
+  assert.match(disegnoZoom, /raggioVisibileKm\(radiusKm, pxPerKmQui\) \* pxPerKmQui/,
+    'il ragno 2D non passa per lo stesso raggio visibile della GPU: a zoom alto si stacca dal canale acceso');
   const funzione = implementazione('raggioVisibileKm');
   assert.match(funzione, /Math\.max\(fisicoKm, minimo\)/,
     'il raggio fisico puo\' ancora restare sotto il minimo visibile sullo schermo');
@@ -672,6 +732,168 @@ prova('i canali interni si vedono anche quando la GPU accende gia\' la nube', ()
   assert.match(disegno,
     /\}\s*\n\s*disegnaCanaliSommersi\(strikeLightContext, punto, largo, s,/,
     'disegnaCanaliSommersi e\' tornata dentro il ramo del ripiego: sparisce non appena WebGL riesce');
+});
+
+prova('la luce esce da tutto il canale, non da qualche punto sulla sua linea', () => {
+  // Il difetto che questa prova sorveglia: con sorgenti PUNTIFORMI la zona
+  // illuminata e' un'unione di palle, e per quante se ne mettano lungo il
+  // canale resta una collana di macchie -- non prende mai la forma del
+  // ramo. Con i segmenti il punto piu' vicino si cerca sul SEGMENTO, e la
+  // regione accesa ha la forma della spezzata perche' e' il suo intorno.
+  const inizializza = implementazione('inizializzaVolumeRenderer');
+  assert.match(inizializza, /float tt=clamp\(dot\(posKm-a,ab\)\/max\(dot\(ab,ab\),0\.0001\),0\.0,1\.0\);/,
+    'lo shader non proietta piu\' il campione sul segmento: le sorgenti tornano puntiformi');
+  assert.match(inizializza, /vec3 verso=\(a\+ab\*tt\)-posKm;/,
+    'la distanza non si misura piu\' dal punto piu\' vicino del segmento');
+  assert.match(inizializza, /uniform vec4 uSegA\[MAX_SEG\]/,
+    'lo shader non riceve piu\' gli estremi dei segmenti');
+  assert.match(inizializza, /uniform vec4 uSegB\[MAX_SEG\]/,
+    'lo shader non riceve piu\' il secondo estremo dei segmenti');
+  assert.doesNotMatch(inizializza, /uniform vec4 uSources\[/,
+    'sono tornate le sorgenti puntiformi');
+});
+
+prova('dentro la nube la luce non viaggia solo in linea retta', () => {
+  // Misurato, e' la differenza fra un lampo e una lucina. schermoNube e'
+  // attenuazione BALISTICA: conta i soli fotoni che arrivano senza mai
+  // urtare una goccia. Dentro una nube quasi nessuno fa quel viaggio --
+  // fa un cammino casuale, ed e' esattamente il motivo per cui un
+  // cumulonembo INTERO si accende quando scarica. Applicandola anche al
+  // bagliore diffuso restava acceso il 3,8% del fotogramma e l'alfa
+  // crollava da 164 a 25 in 40 px; con il fondo di scattering multiplo
+  // l'area accesa sale all'11% e l'alfa regge oltre i 100 px.
+  const inizializza = implementazione('inizializzaVolumeRenderer');
+  assert.match(inizializza, /float schermoDiffuso=mix\(schermo,1\.0,0\.5\);/,
+    'il bagliore diffuso torna a spegnersi con l\'ombra balistica piena: la nube non si accende');
+  // Ma il CUORE del canale no: quello lo si guarda direttamente, e se c'e'
+  // una torre in mezzo deve sparire davvero. Sfumare anche quello
+  // farebbe vedere il canale attraverso la nube, che e' il difetto
+  // opposto.
+  assert.match(inizializza, /cuoreLocale\+=A\.w\*exp\(-pow\(distanza\/max\(0\.35,M\.z\),2\.0\)\)\s*\n\s*\*schermo\*sagoma;/,
+    'il cuore del canale non usa piu\' l\'ombra piena: si vedrebbe attraverso la nube');
+});
+
+prova('il canale acceso e il ragno disegnato sono la stessa figura', () => {
+  // Due generatori separati divergono sempre, e si vede: il bagliore si
+  // accende dove il ramo non c'e'. segmentiCanale non ha una sua
+  // geometria -- rilegge lo stesso ragno con la stessa puntoDelFilamento,
+  // solo in chilometri e in quota invece che in pixel.
+  const segmenti = implementazione('segmentiCanale');
+  assert.match(segmenti, /puntoDelFilamento\(filo\.forma,k\/pezzi,0,0,lungoKm,\s*\n\s*filo\.direzione\)/,
+    'i segmenti non nascono piu\' dallo stesso filamento che viene disegnato');
+  assert.match(segmenti, /strike\.ragno/,
+    'i segmenti non leggono piu\' il ragno gia\' preparato per la scarica');
+  // Lo stesso fattore 0,48 di disegnaCanaliSommersi: un ramo lungo la
+  // meta' in chilometri rispetto ai pixel si accenderebbe fuori dal
+  // ragno disegnato.
+  assert.match(segmenti, /raggioKm\*0\.48\*filo\.lunghezza/,
+    'la lunghezza del ramo acceso non segue piu\' quella del ramo disegnato');
+  const canali = implementazione('disegnaCanaliSommersi');
+  assert.match(canali, /largo \* 0\.48 \* filo\.lunghezza/,
+    'il ramo disegnato ha cambiato scala e non coincide piu\' con quello acceso');
+});
+
+prova('il canale acceso si assottiglia e si spegne verso la punta', () => {
+  // Un tubo di luce e spessore costanti si legge come un tratto disegnato.
+  // La corrente si e' gia' divisa nelle biforcazioni a monte, quindi
+  // intensita', raggio e cuore devono calare lungo il ramo. Qui si esegue
+  // il costruttore vero invece di leggerlo.
+  const costruttore = new Function(
+    ['STRIKE_LEADER_MS', 'STRIKE_STROKE_MS', 'STRIKE_BAGLIORE_MS', 'STRIKE_BRACE_MS']
+      .map(costante).join('\n')
+    + '\n' + costante('VOLUME_GPU_SEGMENTS') + '\n'
+    + ['semeCasuale', 'generaCanale', 'generaRagno', 'preparaScarica',
+       'puntoDelFilamento', 'segmentiCanale'].map(implementazione).join('\n\n')
+    + '\nreturn {preparaScarica, segmentiCanale, VOLUME_GPU_SEGMENTS};')();
+  const s = { seme: 0.41, lon: 14.25, lat: 37.2 };
+  costruttore.preparaScarica(s);
+  const mask = { west: 14.0, east: 14.51, south: 37.0, north: 37.405 };
+  const campione = { top: 0.80, thickness: 0.82, phase: 0.42 };
+  const segmenti = costruttore.segmentiCanale(s, campione, 24, mask,
+    { x: 45, y: 45 }, 0, 1, costruttore.VOLUME_GPU_SEGMENTS, 15.5);
+  assert.ok(segmenti.length >= 4,
+    'il canale si riduce a ' + segmenti.length + ' segmenti: non si dirama');
+  assert.ok(segmenti.length <= costruttore.VOLUME_GPU_SEGMENTS,
+    'il canale sfora il bilancio di uniform della GPU: ' + segmenti.length);
+
+  // Dentro un ramo, il pezzo verso la punta e' piu' debole e piu' sottile
+  // del pezzo alla base.
+  let confronti = 0;
+  for (let i = 1; i < segmenti.length; i += 1) {
+    const prima = segmenti[i - 1], dopo = segmenti[i];
+    // Stesso ramo: la punta di uno e' la base dell'altro.
+    if (Math.abs(prima.bx - dopo.ax) > 1e-9 || Math.abs(prima.by - dopo.ay) > 1e-9) continue;
+    confronti += 1;
+    assert.ok(dopo.intensity < prima.intensity,
+      'la luce non cala verso la punta del ramo');
+    assert.ok(dopo.radius < prima.radius,
+      'il raggio non si assottiglia verso la punta del ramo');
+    assert.ok(dopo.core < prima.core,
+      'il cuore acceso non si assottiglia verso la punta del ramo');
+  }
+  assert.ok(confronti >= 2,
+    'non si sono trovati pezzi consecutivi dello stesso ramo da confrontare');
+
+  // Ogni segmento resta dentro la cella e a una quota plausibile: sotto la
+  // sommita', sopra il suolo.
+  for (const g of segmenti) {
+    assert.ok(g.az > 0.3 && g.az < 15, 'quota del canale fuori scala: ' + g.az);
+    assert.ok(g.core > 0, 'un segmento senza cuore acceso non si vede');
+  }
+});
+
+prova('con il bilancio stretto il canale resta spezzato, non diventa uno stecco', () => {
+  // La regola di prima pretendeva che il bilancio bastasse per TUTTI i
+  // rami alla stessa finezza, e appena non bastava ripiegava su un
+  // segmento per ramo: con tre o quattro scariche insieme il fulmine
+  // diventava una stella di righe diritte. Un ramo con un pezzo solo e'
+  // una riga, e nessun numero di righe si legge come un fulmine: meglio
+  // pochi rami ben spezzati.
+  const costruttore = new Function(
+    ['STRIKE_LEADER_MS', 'STRIKE_STROKE_MS', 'STRIKE_BAGLIORE_MS', 'STRIKE_BRACE_MS']
+      .map(costante).join('\n') + '\n'
+    + ['semeCasuale', 'generaCanale', 'generaRagno', 'preparaScarica',
+       'puntoDelFilamento', 'segmentiCanale'].map(implementazione).join('\n\n')
+    + '\nreturn {preparaScarica, segmentiCanale};')();
+  const s = { seme: 0.41, lon: 14.25, lat: 37.2 };
+  costruttore.preparaScarica(s);
+  const mask = { west: 14.0, east: 14.51, south: 37.0, north: 37.405 };
+  const campione = { top: 0.80, thickness: 0.82, phase: 0.42 };
+
+  // Quattro scariche insieme: il bilancio per scarica si stringe.
+  for (const quanti of [6, 8, 10, 16, 32]) {
+    const segmenti = costruttore.segmentiCanale(s, campione, 24, mask,
+      { x: 45, y: 45 }, 0, 1, quanti, 15.5);
+    assert.ok(segmenti.length <= quanti,
+      'con bilancio ' + quanti + ' escono ' + segmenti.length + ' segmenti');
+    assert.ok(segmenti.length > 0, 'con bilancio ' + quanti + ' il canale sparisce');
+    // Conta i pezzi di ogni ramo: la punta di un pezzo e' la base del
+    // successivo, quindi un ramo e' una catena.
+    const perRamo = [];
+    let corrente = 1;
+    for (let i = 1; i < segmenti.length; i += 1) {
+      const a = segmenti[i - 1], b = segmenti[i];
+      if (Math.abs(a.bx - b.ax) < 1e-9 && Math.abs(a.by - b.ay) < 1e-9) corrente += 1;
+      else { perRamo.push(corrente); corrente = 1; }
+    }
+    perRamo.push(corrente);
+    const minimo = Math.min(...perRamo);
+    assert.ok(minimo >= 2,
+      'con bilancio ' + quanti + ' un ramo esce con ' + minimo
+      + ' pezzo: e\' uno stecco dritto, non un canale');
+  }
+});
+
+prova('il bilancio dei segmenti si divide fra le scariche vive', () => {
+  // Una sola scarica si dirama con tutti i segmenti; quattro insieme ne
+  // prendono un quarto per ciascuna e devono restare canali, non
+  // trasformarsi in quattro puntini.
+  const render = implementazione('renderVolumeLightning');
+  assert.match(render, /perScarica=Math\.max\(2,\s*\n\s*Math\.floor\(VOLUME_GPU_SEGMENTS\/eventi\.length\)\)/,
+    'il bilancio dei segmenti non si divide piu\' fra le scariche simultanee');
+  const disegna = implementazione('disegnaVolumeGpu');
+  assert.match(disegna, /Math\.min\(VOLUME_GPU_SEGMENTS,segmenti\.length\)/,
+    'niente piu\' tetto sui segmenti caricati: oltre MAX_SEG la GPU leggerebbe fuori dall\'array');
 });
 
 prova('il bagliore e\' breve, accessibile e riusa il rendering preparato', () => {
