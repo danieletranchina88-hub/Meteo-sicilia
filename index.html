@@ -137,6 +137,7 @@
 
       #particle-canvas,
       #vector-canvas,
+      #strike-volume-canvas,
       #strike-light-canvas,
       #map-vignette {
         position: fixed;
@@ -148,6 +149,13 @@
 
       #particle-canvas {
         z-index: 6;
+      }
+
+      /* Il volume WebGL sta sopra il satellite ma sotto simboli e particelle.
+         Il suo alfa contiene sia emissione sia ombra: source-over permette al
+         ray marcher di schiarire e scurire localmente la nube reale. */
+      #strike-volume-canvas {
+        z-index: 5;
       }
 
       /* La luce deve fondersi con i pixel WebGL del satellite. Su un canvas
@@ -2215,6 +2223,7 @@
   <body>
     <div id="map" aria-label="Mappa meteorologica interattiva"></div>
     <canvas id="particle-canvas" aria-hidden="true"></canvas>
+    <canvas id="strike-volume-canvas" aria-hidden="true"></canvas>
     <canvas id="strike-light-canvas" aria-hidden="true"></canvas>
     <canvas id="vector-canvas" aria-hidden="true"></canvas>
     <div id="sky-haze" aria-hidden="true"></div>
@@ -3812,6 +3821,7 @@
       const rasterContext = rasterCanvas.getContext("2d");
       const particleCanvas = document.getElementById("particle-canvas");
       const particleContext = particleCanvas.getContext("2d", { alpha: true });
+      const strikeVolumeCanvas = document.getElementById("strike-volume-canvas");
       const strikeLightCanvas = document.getElementById("strike-light-canvas");
       const strikeLightContext = strikeLightCanvas.getContext("2d", { alpha: true });
       const vectorCanvas = document.getElementById("vector-canvas");
@@ -6590,9 +6600,12 @@
       function decodificaCloudType(r, g, b) {
         // Ricetta EUMETSAT Cloud Type RGB:
         // R=NIR1.38 (quota), G=VIS0.64 (spessore ottico),
-        // B=NIR1.61 (fase acqua/ghiaccio, qui conservata come metadato).
-        const top = Math.pow(clamp(r, 0, 1), 0.9);
-        const thickness = Math.pow(clamp(g, 0, 1), 0.82);
+        // B=NIR1.61 (fase acqua/ghiaccio). Le potenze invertono, per quanto
+        // possibile da un RGB visuale, i gamma 1.5 / 0.75 / 1.0 pubblicati
+        // nella ricetta invece di scambiare il colore mostrato per una misura
+        // lineare. Per valori quantitativi resterebbe preferibile OCA L2.
+        const top = Math.pow(clamp(r, 0, 1), 1.5);
+        const thickness = Math.pow(clamp(g, 0, 1), 0.75);
         return { top: top, thickness: thickness, phase: clamp(b, 0, 1),
           cloud: clamp(0.62*thickness + 0.38*top - 0.1, 0, 1) };
       }
@@ -6713,6 +6726,8 @@
         if (volumeFrames.has(key)) {
           if (cloudPublishedKey === frameKey) {
             mascheraNube = volumeFrames.get(key);
+            const renderer=inizializzaVolumeRenderer();
+            if(renderer)aggiornaTextureVolume(renderer,mascheraNube);
             requestVectorRender();
           }
           return;
@@ -6734,6 +6749,8 @@
           if (token === volumeToken && cloudPublishedKey === frameKey
               && showLiveLightning && showSatelliteClouds && !cloudTimeSelected) {
             mascheraNube = volume;
+            const renderer=inizializzaVolumeRenderer();
+            if(renderer)aggiornaTextureVolume(renderer,volume);
             requestVectorRender();
           }
         };
@@ -6829,6 +6846,380 @@
         return nw&&ne&&sw ? {nw:nw,ne:ne,sw:sw} : null;
       }
 
+      // ---- VOLUME 3D RICOSTRUITO --------------------------------------
+      // Il satellite vincola ogni colonna con presenza della nube, quota
+      // della sommita', spessore ottico e fase. La base e la densita'
+      // verticale non sono osservabili attraverso una nube opaca: vengono
+      // stimate in modo conservativo e dichiarato. Il frammento WebGL
+      // integra poi davvero quella densita' lungo 32 campioni verticali,
+      // applicando Beer-Lambert e una fase di Henyey-Greenstein. Non e' una
+      // fotografia 3D inventata: e' un volume radiativo vincolato, lasciato
+      // trasparente sopra i pixel satellitari reali finche' il lampo non lo
+      // rende osservabile.
+      const VOLUME_GPU_EVENTS = 4;
+      const VOLUME_GPU_SOURCES = 12;
+      const VOLUME_GPU_STEPS = 32;
+      let volumeRenderer;
+      let volumeComponentAtlas = null;
+
+      function creaShaderVolume(gl, tipo, sorgente) {
+        const shader=gl.createShader(tipo);
+        gl.shaderSource(shader,sorgente);gl.compileShader(shader);
+        if(!gl.getShaderParameter(shader,gl.COMPILE_STATUS)) {
+          const errore=gl.getShaderInfoLog(shader)||"shader volumetrico non valido";
+          gl.deleteShader(shader);throw new Error(errore);
+        }
+        return shader;
+      }
+
+      function inizializzaVolumeRenderer() {
+        if(volumeRenderer===false) return null;
+        if(volumeRenderer) return volumeRenderer;
+        try {
+          const gl=strikeVolumeCanvas.getContext("webgl2",{
+            alpha:true,antialias:false,depth:false,stencil:false,
+            premultipliedAlpha:false,preserveDrawingBuffer:false,
+            powerPreference:"high-performance"
+          });
+          if(!gl) { volumeRenderer=false; return null; }
+          const vertex=`#version 300 es
+            precision highp float;
+            void main(){
+              vec2 p=gl_VertexID==0?vec2(-1.0,-1.0):
+                (gl_VertexID==1?vec2(3.0,-1.0):vec2(-1.0,3.0));
+              gl_Position=vec4(p,0.0,1.0);
+            }`;
+          const fragment=`#version 300 es
+            precision highp float;
+            const int STEPS=${VOLUME_GPU_STEPS};
+            const int MAX_SOURCES=${VOLUME_GPU_SOURCES};
+            uniform sampler2D uMaterial;
+            uniform sampler2D uComponents;
+            uniform vec2 uCanvasCss;
+            uniform float uRenderScale;
+            uniform vec2 uNW;
+            uniform vec2 uNE;
+            uniform vec2 uSW;
+            uniform vec2 uDomainKm;
+            uniform vec2 uTexel;
+            uniform int uSourceCount;
+            uniform vec4 uSources[MAX_SOURCES];
+            uniform vec4 uSourceMeta[MAX_SOURCES];
+            out vec4 fragColor;
+
+            float componente(float indice,vec4 valore){
+              if(indice<0.5)return valore.r;
+              if(indice<1.5)return valore.g;
+              if(indice<2.5)return valore.b;
+              return valore.a;
+            }
+
+            float henyeyGreenstein(float coseno,float g){
+              float d=max(0.08,1.0+g*g-2.0*g*coseno);
+              return (1.0-g*g)/(12.5663706*pow(d,1.5));
+            }
+
+            void main(){
+              vec2 schermo=vec2(gl_FragCoord.x/uRenderScale,
+                uCanvasCss.y-gl_FragCoord.y/uRenderScale);
+              vec2 vx=uNE-uNW,vy=uSW-uNW,q=schermo-uNW;
+              float det=vx.x*vy.y-vx.y*vy.x;
+              if(abs(det)<0.0001)discard;
+              vec2 uv=vec2((q.x*vy.y-q.y*vy.x)/det,
+                (vx.x*q.y-vx.y*q.x)/det);
+              if(any(lessThan(uv,vec2(0.0)))||any(greaterThan(uv,vec2(1.0))))discard;
+
+              vec4 materiale=texture(uMaterial,uv);
+              vec4 parti=texture(uComponents,uv);
+              if(materiale.r<0.025||dot(parti,vec4(1.0))<0.002)discard;
+
+              float sx=texture(uMaterial,clamp(uv+vec2(uTexel.x,0.0),0.0,1.0)).g
+                -texture(uMaterial,clamp(uv-vec2(uTexel.x,0.0),0.0,1.0)).g;
+              float sy=texture(uMaterial,clamp(uv+vec2(0.0,uTexel.y),0.0,1.0)).g
+                -texture(uMaterial,clamp(uv-vec2(0.0,uTexel.y),0.0,1.0)).g;
+              float passoX=max(0.1,2.0*uDomainKm.x*uTexel.x);
+              float passoY=max(0.1,2.0*uDomainKm.y*uTexel.y);
+              vec3 normale=normalize(vec3(-12.5*sx/passoX,-12.5*sy/passoY,1.0));
+              float topKm=2.0+12.5*materiale.g;
+              float profondita=mix(0.7,7.0,pow(materiale.b,0.72));
+              float baseKm=max(0.25,topKm-profondita);
+              float bordo=max(0.18,min(0.8,profondita*0.18));
+              float dz=16.0/float(STEPS);
+              float trasmittanza=1.0,radianza=0.0,ombra=0.0;
+
+              // Ray marching zenitale: ogni passo e' uno strato reale della
+              // colonna ricostruita, non una sfumatura 2D sul fotogramma.
+              for(int passo=0;passo<STEPS;passo++){
+                float z=16.0-(float(passo)+0.5)*dz;
+                float verticale=smoothstep(baseKm,baseKm+bordo,z)
+                  *(1.0-smoothstep(topKm-bordo,topKm,z));
+                if(verticale<0.001)continue;
+                float dettaglio=0.88+0.12*sin(uv.x*173.0+uv.y*239.0+z*3.7)
+                  *sin(uv.x*83.0-uv.y*151.0+z*5.1);
+                float densita=materiale.r*verticale
+                  *mix(0.58,1.34,materiale.b)*dettaglio;
+                float luceLocale=0.0,ombraLocale=0.0;
+                for(int j=0;j<MAX_SOURCES;j++){
+                  if(j>=uSourceCount)break;
+                  vec4 fonte=uSources[j],meta=uSourceMeta[j];
+                  float sagoma=componente(meta.w,parti);
+                  if(sagoma<0.002)continue;
+                  vec2 dxy=(uv-fonte.xy)*uDomainKm;
+                  vec3 verso=vec3(-dxy,fonte.z-z);
+                  float distanza=max(0.25,length(verso));
+                  float raggio=max(4.0,meta.x);
+                  float campo=exp(-2.15*pow(distanza/raggio,1.35));
+                  // Attenuazione sorgente-campione: approssima l'integrale
+                  // obliquo dentro la stessa massa nuvolosa.
+                  float trasmissioneFonte=exp(-densita*distanza
+                    *(0.035+0.05*materiale.b));
+                  vec3 direzione=verso/distanza;
+                  float g=mix(0.48,0.67,1.0-meta.y);
+                  // Il fotone arriva al campione nella direzione opposta a
+                  // quella che punta verso la sorgente e poi esce verso il
+                  // satellite (+Z): questo e' il vero angolo di scattering.
+                  float fase=5.6*henyeyGreenstein(clamp(-direzione.z,-1.0,1.0),g);
+                  float faccia=clamp(0.42+0.72*dot(normale,direzione),0.2,1.16);
+                  luceLocale+=fonte.w*campo*trasmissioneFonte*fase*faccia*sagoma;
+                  ombraLocale+=fonte.w*campo*(1.0-faccia/1.16)
+                    *densita*sagoma;
+                }
+                radianza+=trasmittanza*densita*luceLocale*dz*0.48;
+                ombra+=trasmittanza*ombraLocale*dz*0.018;
+                // Beer-Lambert lungo la linea di vista verso il satellite.
+                trasmittanza*=exp(-densita*(0.22+0.5*materiale.b)*dz);
+                if(trasmittanza<0.012)break;
+              }
+              float bagliore=clamp(1.0-exp(-radianza*3.1),0.0,1.0);
+              float autoOmbra=clamp(ombra*(1.0-bagliore)*0.7,0.0,0.18);
+              if(bagliore<0.003&&autoOmbra<0.003)discard;
+              if(bagliore>=autoOmbra*1.4){
+                vec3 freddo=mix(vec3(0.90,0.95,1.0),vec3(1.0),
+                  clamp(bagliore*1.25,0.0,1.0));
+                fragColor=vec4(freddo,clamp(bagliore*0.92,0.0,0.94));
+              }else{
+                fragColor=vec4(0.025,0.045,0.075,autoOmbra);
+              }
+            }`;
+          const vs=creaShaderVolume(gl,gl.VERTEX_SHADER,vertex);
+          const fs=creaShaderVolume(gl,gl.FRAGMENT_SHADER,fragment);
+          const program=gl.createProgram();gl.attachShader(program,vs);
+          gl.attachShader(program,fs);gl.linkProgram(program);
+          gl.deleteShader(vs);gl.deleteShader(fs);
+          if(!gl.getProgramParameter(program,gl.LINK_STATUS)) {
+            throw new Error(gl.getProgramInfoLog(program)||"programma volumetrico non valido");
+          }
+          const uniform=function(nome){return gl.getUniformLocation(program,nome);};
+          volumeRenderer={gl:gl,program:program,mask:null,componentKey:"",
+            material:gl.createTexture(),components:gl.createTexture(),
+            u:{material:uniform("uMaterial"),components:uniform("uComponents"),
+              canvas:uniform("uCanvasCss"),scale:uniform("uRenderScale"),
+              nw:uniform("uNW"),ne:uniform("uNE"),sw:uniform("uSW"),
+              domain:uniform("uDomainKm"),texel:uniform("uTexel"),
+              count:uniform("uSourceCount"),sources:uniform("uSources[0]"),
+              meta:uniform("uSourceMeta[0]")}};
+          strikeVolumeCanvas.addEventListener("webglcontextlost",function(event){
+            event.preventDefault();volumeRenderer=undefined;
+          },{once:true});
+          return volumeRenderer;
+        } catch(error) {
+          console.warn("Volume nuvoloso WebGL non disponibile",error);
+          volumeRenderer=false;return null;
+        }
+      }
+
+      function aggiornaTextureVolume(renderer,mask) {
+        if(renderer.mask===mask)return;
+        const gl=renderer.gl,n=mask.width*mask.height;
+        const data=new Uint8Array(n*4);
+        for(let p=0;p<n;p++){
+          data[p*4]=mask.cloud[p];data[p*4+1]=mask.top[p];
+          data[p*4+2]=mask.thickness[p];
+          data[p*4+3]=mask.phase?mask.phase[p]:128;
+        }
+        gl.activeTexture(gl.TEXTURE0);gl.bindTexture(gl.TEXTURE_2D,renderer.material);
+        gl.texParameteri(gl.TEXTURE_2D,gl.TEXTURE_MIN_FILTER,gl.LINEAR);
+        gl.texParameteri(gl.TEXTURE_2D,gl.TEXTURE_MAG_FILTER,gl.LINEAR);
+        gl.texParameteri(gl.TEXTURE_2D,gl.TEXTURE_WRAP_S,gl.CLAMP_TO_EDGE);
+        gl.texParameteri(gl.TEXTURE_2D,gl.TEXTURE_WRAP_T,gl.CLAMP_TO_EDGE);
+        gl.texImage2D(gl.TEXTURE_2D,0,gl.RGBA,mask.width,mask.height,0,
+          gl.RGBA,gl.UNSIGNED_BYTE,data);
+        renderer.mask=mask;renderer.componentKey="";
+      }
+
+      function aggiornaComponentiVolume(renderer,mask,packed) {
+        if(renderer.componentKey===packed.key)return;
+        const gl=renderer.gl;gl.activeTexture(gl.TEXTURE1);
+        gl.bindTexture(gl.TEXTURE_2D,renderer.components);
+        gl.texParameteri(gl.TEXTURE_2D,gl.TEXTURE_MIN_FILTER,gl.LINEAR);
+        gl.texParameteri(gl.TEXTURE_2D,gl.TEXTURE_MAG_FILTER,gl.LINEAR);
+        gl.texParameteri(gl.TEXTURE_2D,gl.TEXTURE_WRAP_S,gl.CLAMP_TO_EDGE);
+        gl.texParameteri(gl.TEXTURE_2D,gl.TEXTURE_WRAP_T,gl.CLAMP_TO_EDGE);
+        gl.texImage2D(gl.TEXTURE_2D,0,gl.RGBA,mask.width,mask.height,0,
+          gl.RGBA,gl.UNSIGNED_BYTE,packed.data);
+        renderer.componentKey=packed.key;
+      }
+
+      function disegnaVolumeGpu(mask,projection,sources,packed) {
+        const renderer=inizializzaVolumeRenderer();
+        if(!renderer||!sources.length||!packed)return false;
+        const gl=renderer.gl;
+        aggiornaTextureVolume(renderer,mask);
+        aggiornaComponentiVolume(renderer,mask,packed);
+        gl.viewport(0,0,strikeVolumeCanvas.width,strikeVolumeCanvas.height);
+        gl.disable(gl.DEPTH_TEST);gl.disable(gl.CULL_FACE);
+        gl.enable(gl.BLEND);gl.blendFunc(gl.SRC_ALPHA,gl.ONE_MINUS_SRC_ALPHA);
+        gl.clearColor(0,0,0,0);gl.clear(gl.COLOR_BUFFER_BIT);
+        gl.useProgram(renderer.program);
+        gl.uniform1i(renderer.u.material,0);gl.uniform1i(renderer.u.components,1);
+        gl.uniform2f(renderer.u.canvas,window.innerWidth,window.innerHeight);
+        gl.uniform1f(renderer.u.scale,strikeVolumeCanvas.width/window.innerWidth);
+        gl.uniform2f(renderer.u.nw,projection.nw.x,projection.nw.y);
+        gl.uniform2f(renderer.u.ne,projection.ne.x,projection.ne.y);
+        gl.uniform2f(renderer.u.sw,projection.sw.x,projection.sw.y);
+        const media=(mask.north+mask.south)/2*Math.PI/180;
+        const domainX=(mask.east-mask.west)*111.32*Math.max(0.2,Math.cos(media));
+        const domainY=(mask.north-mask.south)*111.32;
+        gl.uniform2f(renderer.u.domain,domainX,domainY);
+        gl.uniform2f(renderer.u.texel,1/mask.width,1/mask.height);
+        const count=Math.min(VOLUME_GPU_SOURCES,sources.length);
+        const valori=new Float32Array(VOLUME_GPU_SOURCES*4);
+        const meta=new Float32Array(VOLUME_GPU_SOURCES*4);
+        for(let i=0;i<count;i++){
+          const s=sources[i],p=i*4;
+          valori[p]=s.x;valori[p+1]=s.y;valori[p+2]=s.z;valori[p+3]=s.intensity;
+          meta[p]=s.radius;meta[p+1]=s.phase;meta[p+2]=s.thickness;meta[p+3]=s.event;
+        }
+        gl.uniform1i(renderer.u.count,count);
+        gl.uniform4fv(renderer.u.sources,valori);gl.uniform4fv(renderer.u.meta,meta);
+        // La GPU lavora soltanto sul rettangolo che contiene le celle
+        // connesse, non sull'intero schermo. E' una riduzione importante
+        // durante i temporali piccoli e sui telefoni.
+        if(packed.bounds){
+          const vx={x:projection.ne.x-projection.nw.x,y:projection.ne.y-projection.nw.y};
+          const vy={x:projection.sw.x-projection.nw.x,y:projection.sw.y-projection.nw.y};
+          const corners=[[packed.bounds.x0,packed.bounds.y0],
+            [packed.bounds.x1,packed.bounds.y0],[packed.bounds.x0,packed.bounds.y1],
+            [packed.bounds.x1,packed.bounds.y1]].map(function(point){
+              return {x:projection.nw.x+vx.x*point[0]/mask.width+vy.x*point[1]/mask.height,
+                y:projection.nw.y+vx.y*point[0]/mask.width+vy.y*point[1]/mask.height};
+            });
+          const scale=strikeVolumeCanvas.width/window.innerWidth;
+          const minX=clamp(Math.floor(Math.min.apply(null,corners.map(p=>p.x))*scale)-2,
+            0,strikeVolumeCanvas.width);
+          const maxX=clamp(Math.ceil(Math.max.apply(null,corners.map(p=>p.x))*scale)+2,
+            0,strikeVolumeCanvas.width);
+          const minY=clamp(Math.floor((window.innerHeight-
+            Math.max.apply(null,corners.map(p=>p.y)))*scale)-2,0,strikeVolumeCanvas.height);
+          const maxY=clamp(Math.ceil((window.innerHeight-
+            Math.min.apply(null,corners.map(p=>p.y)))*scale)+2,0,strikeVolumeCanvas.height);
+          gl.enable(gl.SCISSOR_TEST);gl.scissor(minX,minY,
+            Math.max(0,maxX-minX),Math.max(0,maxY-minY));
+        }
+        gl.drawArrays(gl.TRIANGLES,0,3);
+        gl.disable(gl.SCISSOR_TEST);
+        return !gl.isContextLost();
+      }
+
+      function pulisciVolumeRenderer() {
+        if(!volumeRenderer||volumeRenderer===false)return;
+        const gl=volumeRenderer.gl;
+        gl.viewport(0,0,strikeVolumeCanvas.width,strikeVolumeCanvas.height);
+        gl.clearColor(0,0,0,0);gl.clear(gl.COLOR_BUFFER_BIT);
+      }
+
+      function componenteVolumePerScarica(mask,scarica,radiusKm) {
+        const cache=scarica.volumeComponent;
+        if(cache&&cache.mask===mask&&Math.abs(cache.radius-radiusKm)<0.5)return cache.component;
+        const component=componenteNube(mask,scarica.lon,scarica.lat,radiusKm);
+        scarica.volumeComponent={mask:mask,radius:radiusKm,component:component};
+        return component;
+      }
+
+      function impacchettaComponentiVolume(mask,eventi) {
+        const chiavi=[];
+        for(let e=0;e<eventi.length;e++){
+          const s=eventi[e].strike;
+          chiavi.push(s.nato+":"+s.lon.toFixed(3)+":"+s.lat.toFixed(3)
+            +":"+eventi[e].radius.toFixed(1));
+        }
+        const key=[mask.slot||mask.source||"volume"].concat(chiavi).join("|");
+        if(volumeComponentAtlas&&volumeComponentAtlas.mask===mask
+            &&volumeComponentAtlas.key===key)return volumeComponentAtlas;
+        const data=new Uint8Array(mask.width*mask.height*4);
+        const bounds={x0:mask.width,y0:mask.height,x1:0,y1:0};
+        for(let e=0;e<eventi.length;e++){
+          const item=eventi[e],component=item.component;
+          bounds.x0=Math.min(bounds.x0,component.x);
+          bounds.y0=Math.min(bounds.y0,component.y);
+          bounds.x1=Math.max(bounds.x1,component.x+component.width);
+          bounds.y1=Math.max(bounds.y1,component.y+component.height);
+          const px=component.tela.getContext("2d").getImageData(
+            0,0,component.width,component.height).data;
+          for(let y=0;y<component.height;y++)for(let x=0;x<component.width;x++){
+            const alpha=px[(y*component.width+x)*4+3];
+            if(alpha)data[((y+component.y)*mask.width+x+component.x)*4+e]=alpha;
+          }
+        }
+        volumeComponentAtlas={mask:mask,data:data,key:key,bounds:bounds};
+        return volumeComponentAtlas;
+      }
+
+      function renderVolumeLightning(adesso) {
+        const mask=mascheraNube,projection=proiezioneNube(mask);
+        for(let i=0;i<liveStrikes.length;i++)liveStrikes[i].volumeIlluminated=false;
+        if(!projection||strikeReducedMotion()) { pulisciVolumeRenderer(); return false; }
+        const eventi=[];
+        for(let i=0;i<liveStrikes.length;i++){
+          const strike=liveStrikes[i],eta=adesso-strike.nato;
+          preparaScarica(strike);
+          if(eta<0||eta>strike.durata)continue;
+          const sample=campionaVolumeNube(mask,strike.lon,strike.lat);
+          if(!sample)continue;
+          const intensity=Math.min(1,0.72*luceNube(strike,eta)+0.38*luceScarica(strike,eta));
+          if(intensity<0.012)continue;
+          const radius=raggioVolumeKm(sample);
+          const component=componenteVolumePerScarica(mask,strike,radius);
+          if(!component)continue;
+          eventi.push({strike:strike,sample:sample,radius:radius,
+            component:component,intensity:intensity});
+        }
+        eventi.sort(function(a,b){return b.intensity-a.intensity;});
+        eventi.length=Math.min(VOLUME_GPU_EVENTS,eventi.length);
+        if(!eventi.length) { pulisciVolumeRenderer(); return false; }
+        const packed=impacchettaComponentiVolume(mask,eventi),sources=[];
+        const domainX=(mask.east-mask.west)*111.32*Math.max(0.2,
+          Math.cos((mask.north+mask.south)*Math.PI/360));
+        const domainY=(mask.north-mask.south)*111.32;
+        for(let e=0;e<eventi.length;e++){
+          const item=eventi[e],strike=item.strike,sample=item.sample;
+          const x=(strike.lon-mask.west)/(mask.east-mask.west);
+          const y=(mask.north-strike.lat)/(mask.north-mask.south);
+          const topKm=2+12.5*sample.top;
+          const depth=0.7+(7-0.7)*Math.pow(sample.thickness,0.72);
+          const z=Math.max(0.4,topKm-depth*(0.36+0.18*(1-sample.phase)));
+          sources.push({x:x,y:y,z:z,intensity:item.intensity,
+            radius:item.radius,phase:sample.phase,thickness:sample.thickness,event:e});
+          // Due nodi del canale intra-nube diventano sorgenti sommerse:
+          // la ramificazione si percepisce attraverso il volume senza essere
+          // disegnata come una ragnatela sopra il satellite.
+          for(let f=0;f<Math.min(2,strike.ragno.length);f++){
+            const filo=strike.ragno[f];
+            const distanza=item.radius*(0.17+0.15*filo.lunghezza);
+            sources.push({
+              x:clamp(x+Math.cos(filo.direzione)*distanza/domainX,0,1),
+              y:clamp(y+Math.sin(filo.direzione)*distanza/domainY,0,1),
+              z:Math.max(0.3,z-depth*(0.08+0.08*f)),
+              intensity:item.intensity*(f?0.38:0.55),radius:item.radius*0.72,
+              phase:sample.phase,thickness:sample.thickness,event:e
+            });
+          }
+        }
+        const rendered=disegnaVolumeGpu(mask,projection,sources,packed);
+        if(rendered)for(let i=0;i<eventi.length;i++)eventi[i].strike.volumeIlluminated=true;
+        return rendered;
+      }
+
       function disegnaNubeIlluminata(context, punto, largo, nube, scarica, radiusKm) {
         const mask=mascheraNube, projection=proiezioneNube(mask);
         if(!projection || strikeReducedMotion()) return false;
@@ -6891,9 +7282,10 @@
       // Posizione e tempo sono osservati dalla rete a terra. Cloud Type RGB
       // fornisce contributi legati a quota, spessore ottico e fase; IR10.5
       // aggiunge il contrasto delle sommità fredde. Il rendering ricostruisce
-      // quindi un rilievo ottico 2.5D della SOMMITA', non la geometria interna
-      // completa o la base della nube. Di notte Cloud Type non e' disponibile
-      // e la ricostruzione passa automaticamente a IR10.5 + immagine mostrata.
+      // colonne volumetriche e ne integra la densita', ma soltanto la SOMMITA'
+      // e' vincolata dal satellite: base e distribuzione interna sono stimate,
+      // non spacciate per misure. Di notte Cloud Type non e' disponibile e la
+      // ricostruzione passa automaticamente a IR10.5 + immagine mostrata.
       //
       // La luce visibile e' resa bianco-fredda a bassa saturazione. Non si
       // trasforma la riga a 777,4 nm del sensore ottico in viola RGB: una riga
@@ -7399,13 +7791,16 @@
         // piena frequenza durante un lampo, rifarla e' il costo piu' alto
         // dell'intero disegno.
         const punti = new Array(liveStrikes.length);
+        const volumeGpu = showSatelliteClouds
+          ? renderVolumeLightning(adesso)
+          : (pulisciVolumeRenderer(), false);
         for (let i = 0; i < liveStrikes.length; i += 1) {
           const s = liveStrikes[i];
           const eta = adesso - s.nato;
           preparaScarica(s);
           const punto = projectParticle(s.lon, s.lat, 0);
           punti[i] = punto;
-          s.cloudIlluminated = false;
+          s.cloudIlluminated = Boolean(volumeGpu && s.volumeIlluminated);
           if (eta > s.durata) { s.cloudLight = null; continue; }
           if (!punto || strikeReducedMotion()) continue;
           const luce = luceScarica(s, eta);
@@ -7414,21 +7809,26 @@
           if (luce < 0.012 && nube < 0.012 && brace < 0.012) continue;
 
           if (showSatelliteClouds) {
-            const sample = campionaVolumeNube(mascheraNube, s.lon, s.lat);
-            if (sample) {
+            // WebGL integra la densita' 3D una sola volta per tutte le
+            // scariche. Per browser senza WebGL2, o oltre il limite delle
+            // quattro celle simultanee, resta il renderer ottico 2D.
+            if (!s.cloudIlluminated) {
+              const sample = campionaVolumeNube(mascheraNube, s.lon, s.lat);
+              if (sample) {
               // La dimensione nasce dai dati: una cima alta e otticamente
               // spessa diffonde su un'area maggiore. Rimane in chilometri,
               // quindi lo zoom cambia i pixel ma non la scala geografica.
-              const radiusKm = raggioVolumeKm(sample);
-              const edge = projectParticle(s.lon + radiusKm / (111.32
-                * Math.max(0.2, Math.cos(s.lat * Math.PI / 180))), s.lat, 0);
-              if (edge) {
-                const largo = Math.min(220, Math.max(3,
-                  Math.hypot(edge.x-punto.x, edge.y-punto.y)));
-                s.cloudIlluminated = disegnaNubeIlluminata(
-                  strikeLightContext, punto, largo,
-                  Math.min(1, 0.72*nube + 0.38*luce), s, radiusKm
-                );
+                const radiusKm = raggioVolumeKm(sample);
+                const edge = projectParticle(s.lon + radiusKm / (111.32
+                  * Math.max(0.2, Math.cos(s.lat * Math.PI / 180))), s.lat, 0);
+                if (edge) {
+                  const largo = Math.min(220, Math.max(3,
+                    Math.hypot(edge.x-punto.x, edge.y-punto.y)));
+                  s.cloudIlluminated = disegnaNubeIlluminata(
+                    strikeLightContext, punto, largo,
+                    Math.min(1, 0.72*nube + 0.38*luce), s, radiusKm
+                  );
+                }
               }
             }
             continue;
@@ -7660,10 +8060,10 @@
             + Math.round(STRIKE_LIFE_MS / 60000) + " minuti"
           : "collegato · nessuna scarica nel dominio";
         if (showSatelliteClouds) {
-          label.textContent += " · volume Cloud Type + IR";
+          label.textContent += " · volume 3D Cloud Type + IR";
         }
-        label.title = "Posizione e tempo dalla rete a terra; volume ottico "
-          + "ricavato da Cloud Type e IR10.5 del fotogramma EUMETSAT.";
+        label.title = "Posizione e tempo dalla rete a terra; volume radiativo 3D "
+          + "ricostruito da Cloud Type e IR10.5 del fotogramma EUMETSAT.";
       }
 
       // ---- FULMINI DA SATELLITE ---------------------------------------
@@ -8676,6 +9076,7 @@
         stopParticles();
         vectorContext.clearRect(0, 0, window.innerWidth, window.innerHeight);
         strikeLightContext.clearRect(0, 0, window.innerWidth, window.innerHeight);
+        pulisciVolumeRenderer();
         if (map && map.getLayer("weather-layer")) {
           map.setLayoutProperty("weather-layer", "visibility", "none");
         }
@@ -8948,6 +9349,10 @@
           // carta nuda, senza la coltre di nubi sopra.
           showSatelliteClouds = !showSatelliteClouds;
           updateSatelliteClouds();
+          if (!showSatelliteClouds) {
+            strikeLightContext.clearRect(0,0,window.innerWidth,window.innerHeight);
+            pulisciVolumeRenderer();
+          }
           updateSatelliteControlsVisibility();
         } else if (name === "strikesound") {
           setStrikeSound(!strikeSoundOn);
@@ -8988,6 +9393,7 @@
             blitzRetryDelay = 2000;
             blitzConnect();
             startStrikeAnimation();
+            inizializzaVolumeRenderer();
             assicuraVolumeNubeCorrente();
             // Siamo dentro il clic: e' l'unico momento in cui il browser
             // lascia creare o risvegliare il contesto audio. Rimandarlo alla
@@ -9003,6 +9409,7 @@
             blitzDisconnect();
             stopStrikeAnimation();
             liveStrikes = [];
+            pulisciVolumeRenderer();
             requestVectorRender();
           }
           updateLiveLightningNote();
@@ -11239,6 +11646,15 @@
           canvas.style.height = window.innerHeight + "px";
           context.setTransform(ratio, 0, 0, ratio, 0, 0);
         });
+        // Il ray marcher lavora a risoluzione ridotta e viene poi filtrato dal
+        // browser: 32 campioni per pixel restano fluidi anche su mobile senza
+        // cambiare la scala geografica o la densita' del volume.
+        const volumeRatio = mobile ? 0.55 : 0.8;
+        strikeVolumeCanvas.width = Math.max(1, Math.round(window.innerWidth * volumeRatio));
+        strikeVolumeCanvas.height = Math.max(1, Math.round(window.innerHeight * volumeRatio));
+        strikeVolumeCanvas.style.width = window.innerWidth + "px";
+        strikeVolumeCanvas.style.height = window.innerHeight + "px";
+        pulisciVolumeRenderer();
 
         calculateParticleTarget();
         resetParticles();
@@ -11659,6 +12075,7 @@
       function clearVectors() {
         vectorContext.clearRect(0, 0, window.innerWidth, window.innerHeight);
         strikeLightContext.clearRect(0, 0, window.innerWidth, window.innerHeight);
+        pulisciVolumeRenderer();
       }
 
       function uprightTextAngle(angle) {

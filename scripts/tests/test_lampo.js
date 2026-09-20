@@ -410,8 +410,81 @@ prova('il volume usa Cloud Type e IR dello stesso fotogramma satellitare', () =>
     'i diagnostici non sono vincolati allo stesso istante e riquadro');
   assert.match(prepara, /volumeFrames\.size > VOLUME_CACHE_LIMIT/,
     'la cache del volume cresce senza limite');
+  assert.match(prepara, /aggiornaTextureVolume\(renderer,(?:mascheraNube|volume)\)/,
+    'la texture 3D viene caricata soltanto quando arriva il primo lampo');
   assert.match(html, /#strike-light-canvas \{[\s\S]{0,100}mix-blend-mode: screen;/,
     'la luce non si fonde otticamente con i pixel del satellite');
+});
+
+prova('il nuovo motore integra un volume 3D e non una sfumatura 2D', () => {
+  const inizializza = implementazione('inizializzaVolumeRenderer');
+  assert.match(inizializza, /getContext\("webgl2"/,
+    'il volume non usa WebGL2');
+  assert.match(inizializza, /const int STEPS=\$\{VOLUME_GPU_STEPS\}/,
+    'lo shader non riceve il numero di strati verticali');
+  assert.match(inizializza, /for\(int passo=0;passo<STEPS;passo\+\+\)/,
+    'manca il ray marching lungo la colonna nuvolosa');
+  assert.match(inizializza, /trasmittanza\*=exp\(-densita/,
+    'manca l\'assorbimento Beer-Lambert lungo la vista');
+  assert.match(inizializza, /trasmissioneFonte=exp\(-densita\*distanza/,
+    'la luce non viene assorbita fra il canale e la sommita\'');
+  assert.match(inizializza, /henyeyGreenstein/,
+    'manca la diffusione anisotropa di acqua e ghiaccio');
+  assert.match(inizializza, /topKm=2\.0\+12\.5\*materiale\.g/,
+    'la quota satellitare non determina la sommita\' del volume');
+  assert.match(inizializza, /profondita=mix\(0\.7,7\.0,pow\(materiale\.b,0\.72\)\)/,
+    'lo spessore ottico non determina la profondita\' ricostruita');
+});
+
+prova('il volume GPU riceve i quattro vincoli satellitari separati', () => {
+  const texture = implementazione('aggiornaTextureVolume');
+  assert.match(texture, /data\[p\*4\]=mask\.cloud\[p\]/,
+    'la presenza della nube non entra nella texture fisica');
+  assert.match(texture, /data\[p\*4\+1\]=mask\.top\[p\]/,
+    'la quota non entra nella texture fisica');
+  assert.match(texture, /data\[p\*4\+2\]=mask\.thickness\[p\]/,
+    'lo spessore non entra nella texture fisica');
+  assert.match(texture, /data\[p\*4\+3\]=mask\.phase\?mask\.phase\[p\]:128/,
+    'la fase acqua-ghiaccio non entra nella texture fisica');
+  const renderer = implementazione('disegnaVolumeGpu');
+  assert.match(renderer, /domainX=\(mask\.east-mask\.west\)\*111\.32/,
+    'il ray marcher non conserva le dimensioni geografiche');
+  assert.match(renderer, /strikeVolumeCanvas\.width\/window\.innerWidth/,
+    'la risoluzione interna viene confusa con lo zoom della mappa');
+  assert.match(renderer, /gl\.enable\(gl\.SCISSOR_TEST\);gl\.scissor/,
+    'il ray marcher calcola ogni pixel dello schermo invece della sola cella');
+});
+
+prova('ogni lampo volumetrico resta nella propria massa nuvolosa', () => {
+  const pack = implementazione('impacchettaComponentiVolume');
+  assert.match(pack, /new Uint8Array\(mask\.width\*mask\.height\*4\)/,
+    'manca l\'atlante delle quattro celle simultanee');
+  assert.match(pack, /\*4\+e\]=alpha/,
+    'le componenti connesse finiscono nello stesso canale');
+  assert.match(pack, /if\(volumeComponentAtlas&&volumeComponentAtlas\.mask===mask/,
+    'l\'atlante da oltre un megabyte viene riallocato a ogni fotogramma');
+  const inizializza = implementazione('inizializzaVolumeRenderer');
+  assert.match(inizializza, /float sagoma=componente\(meta\.w,parti\)/,
+    'lo shader non seleziona la cella associata alla sorgente');
+  assert.match(inizializza, /\*sagoma/,
+    'la sagoma connessa non limita l\'emissione volumetrica');
+  const render = implementazione('renderVolumeLightning');
+  assert.match(render, /eventi\.length=Math\.min\(VOLUME_GPU_EVENTS,eventi\.length\)/,
+    'manca il limite di lavoro per fotogramma');
+  assert.match(render, /componenteVolumePerScarica\(mask,strike,radius\)/,
+    'il ray marcher illumina anche nubi separate');
+});
+
+prova('WebGL degrada senza perdere i fulmini sui dispositivi incompatibili', () => {
+  const disegno = implementazione('drawLiveStrikes');
+  assert.match(disegno, /const volumeGpu = showSatelliteClouds\s*\n\s*\? renderVolumeLightning\(adesso\)/,
+    'il motore volumetrico non viene attivato sul satellite');
+  assert.match(disegno, /if \(!s\.cloudIlluminated\) \{[\s\S]*?disegnaNubeIlluminata\(/,
+    'manca il fallback ottico per WebGL2 assente o saturo');
+  assert.match(html, /const volumeRatio = mobile \? 0\.55 : 0\.8;/,
+    'il ray marcher gira a piena risoluzione anche sui telefoni');
+  assert.match(html, /volume 3D Cloud Type \+ IR/,
+    'l\'interfaccia non dichiara il volume ricostruito');
 });
 
 prova('la luce resta nella cella nuvolosa connessa al fulmine', () => {
