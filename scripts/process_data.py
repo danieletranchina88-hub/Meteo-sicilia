@@ -1,4 +1,5 @@
 import math
+import re
 import requests
 import xarray as xr
 import numpy as np
@@ -96,6 +97,7 @@ TEMP_DIR = "temp_processing"
 TEMP_FILE = "temp.grib2"
 FRONT_TEMP_DIR = "temp_front_processing"
 HAZARD_TEMP_DIR = "temp_hazard_processing"
+SURFACE_DIRECT_TEMP_DIR = "temp_surface_direct"
 # The API dataset identifier uses an underscore, while the public NWP
 # directory really uses a hyphen.  Keep the two identifiers separate.
 NWP_DIRECTORY_ID = "ICON-2I_SURFACE_PRESSURE_LEVELS"
@@ -1134,27 +1136,153 @@ def prepare_icon_hazard_fields(run_dt, source_inventory=None, raw_archive=None):
         return None
 
 
+def find_latest_nwp_direct_run():
+    """Find the newest ICON-2I run actually published in the public NWP
+    directory, independent of the opendata catalog API.
+
+    The catalog (the primary source below) has been observed to stall for
+    40+ hours while this directory already serves newer, complete runs --
+    the site then kept reprocessing the same stale run on every scheduled
+    trigger instead of failing loudly. This walks the run-folder listing
+    from newest to oldest and accepts the first one whose 2 m temperature
+    file (needed by every downstream consumer) is actually present, since a
+    folder can appear in the listing while MeteoHub is still writing into it.
+    """
+    index_url = f"{NWP_DIRECT_BASE}/{NWP_DIRECTORY_ID}/"
+    try:
+        r = requests.get(index_url, timeout=30)
+        r.raise_for_status()
+    except Exception as e:
+        print(f"   Elenco diretto NWP non raggiungibile: {e}", flush=True)
+        return None
+
+    run_tags = sorted(set(re.findall(r'href="(\d{10})/?"', r.text)))
+    for run_tag in reversed(run_tags):
+        marker_url = (
+            f"{NWP_DIRECT_BASE}/{NWP_DIRECTORY_ID}/{run_tag}/T_2M/"
+            f"ICON_2I_SURFACE_PRESSURE_LEVELS_{run_tag}_heightAboveGround-2.grib"
+        )
+        try:
+            head = requests.head(marker_url, timeout=15, allow_redirects=True)
+            if head.status_code == 200:
+                return datetime.strptime(run_tag, "%Y%m%d%H").replace(
+                    tzinfo=timezone.utc
+                )
+        except Exception:
+            continue
+    return None
+
+
 def get_latest_run_files():
     print("1. Cerco dati su MeteoHub...", flush=True)
+    catalog_run_dt = None
+    catalog_files = []
     try:
         r = requests.get(API_LIST_URL, timeout=30)
         r.raise_for_status()
         items = r.json()
+        runs = {}
+        for item in items:
+            if isinstance(item, dict) and 'date' in item and 'run' in item:
+                key = f"{item['date']} {item['run']}"
+                runs.setdefault(key, []).append(item['filename'])
+        if runs:
+            latest_key = sorted(runs.keys())[-1]
+            catalog_run_dt = datetime.strptime(
+                latest_key, "%Y-%m-%d %H:%M"
+            ).replace(tzinfo=timezone.utc)
+            catalog_files = sorted(runs[latest_key])
     except Exception as e:
         print(f"Errore connessione API: {e}")
-        return None, []
 
-    runs = {}
-    for item in items:
-        if isinstance(item, dict) and 'date' in item and 'run' in item:
-            key = f"{item['date']} {item['run']}"
-            runs.setdefault(key, []).append(item['filename'])
+    # The catalog and the public NWP directory are two independent views of
+    # the same runs, and the catalog can lag the directory by one or more
+    # runs. Reprocessing its stale run forever looks like a healthy green
+    # pipeline while the site quietly stops updating, so whichever source
+    # has the newer run wins.
+    direct_run_dt = find_latest_nwp_direct_run()
+    if direct_run_dt is not None and (
+        catalog_run_dt is None or direct_run_dt > catalog_run_dt
+    ):
+        print(
+            f"   Catalogo opendata fermo a {catalog_run_dt}; la directory "
+            f"NWP ha gia' il run {direct_run_dt}: uso quello direttamente.",
+            flush=True,
+        )
+        return direct_run_dt, ["__nwp_direct__"], "nwp-direct"
 
-    if not runs:
-        return None, []
-    latest_key = sorted(runs.keys())[-1]
-    run_dt = datetime.strptime(latest_key, "%Y-%m-%d %H:%M").replace(tzinfo=timezone.utc)
-    return run_dt, sorted(runs[latest_key])
+    if catalog_run_dt is None:
+        return None, [], "catalog"
+    return catalog_run_dt, catalog_files, "catalog"
+
+
+def download_surface_fields_direct(run_dt, source_inventory=None, raw_archive=None):
+    """Fetch the surface fields the opendata catalog normally bundles into
+    one aggregated file, straight from the public NWP directory instead.
+
+    Used only when get_latest_run_files() finds the catalog stuck behind the
+    directory. Same per-variable, per-level file layout already relied on by
+    prepare_icon_hazard_fields and prepare_icon_front_analyzer.
+    """
+    run_tag = run_dt.strftime("%Y%m%d%H")
+    common = f"ICON_2I_SURFACE_PRESSURE_LEVELS_{run_tag}"
+    run_base = f"{NWP_DIRECT_BASE}/{NWP_DIRECTORY_ID}/{run_tag}"
+    height_file_2 = f"{common}_heightAboveGround-2.grib"
+    height_file_10 = f"{common}_heightAboveGround-10.grib"
+    mean_sea_file = f"{common}_meanSea-0.grib"
+    surface_file = f"{common}_surface-0.grib"
+
+    requests_to_make = {
+        "t2m": (f"{run_base}/T_2M/{height_file_2}", "surf_t2m.grib"),
+        "td2m": (f"{run_base}/TD_2M/{height_file_2}", "surf_td2m.grib"),
+        "u10": (f"{run_base}/U_10M/{height_file_10}", "surf_u10.grib"),
+        "v10": (f"{run_base}/V_10M/{height_file_10}", "surf_v10.grib"),
+        "pmsl": (f"{run_base}/PMSL/{mean_sea_file}", "surf_pmsl.grib"),
+        "tot_prec": (f"{run_base}/TOT_PREC/{surface_file}", "surf_tot_prec.grib"),
+        "clct": (f"{run_base}/CLCT/{surface_file}", "surf_clct.grib"),
+    }
+
+    if os.path.exists(SURFACE_DIRECT_TEMP_DIR):
+        shutil.rmtree(SURFACE_DIRECT_TEMP_DIR)
+    os.makedirs(SURFACE_DIRECT_TEMP_DIR)
+
+    paths = {}
+    with ThreadPoolExecutor(max_workers=4) as executor:
+        futures = {
+            executor.submit(
+                download_grib_file,
+                url,
+                os.path.join(SURFACE_DIRECT_TEMP_DIR, filename),
+            ): (name, os.path.join(SURFACE_DIRECT_TEMP_DIR, filename))
+            for name, (url, filename) in requests_to_make.items()
+        }
+        for future in as_completed(futures):
+            name, destination = futures[future]
+            future.result()
+            paths[name] = destination
+            record_source_asset(
+                source_inventory,
+                name=name,
+                url=requests_to_make[name][0],
+                path=destination,
+                role="surface-run-direct",
+                required=True,
+                raw_archive=raw_archive,
+            )
+
+    ds_wind = xr.merge([
+        xr.open_dataset(paths["u10"], engine="cfgrib"),
+        xr.open_dataset(paths["v10"], engine="cfgrib"),
+    ])
+    ds_thermo = xr.merge([
+        xr.open_dataset(paths["t2m"], engine="cfgrib"),
+        xr.open_dataset(paths["td2m"], engine="cfgrib"),
+    ])
+    ds_press = xr.open_dataset(paths["pmsl"], engine="cfgrib")
+    ds_rain = xr.open_dataset(paths["tot_prec"], engine="cfgrib")
+    ds_cloud = try_open_cloud_dataset(paths["clct"])
+
+    return ds_wind, ds_thermo, ds_press, ds_rain, ds_cloud
 
 
 def calculate_rh_numpy(temp_k, dew_k):
@@ -1542,12 +1670,15 @@ def temperature_celsius(values):
 
 
 def process_data():
-    run_dt, file_list = get_latest_run_files()
+    run_dt, file_list, run_source = get_latest_run_files()
     if not file_list:
         print("Nessun dato trovato.")
         sys.exit(0)
 
-    print(f"2. Elaboro Run: {run_dt} ({len(file_list)} files)", flush=True)
+    print(
+        f"2. Elaboro Run: {run_dt} ({len(file_list)} files, fonte: {run_source})",
+        flush=True,
+    )
 
     # The raw archive is opt-in: a missing or malformed configuration fails
     # before the first download when raw retention was explicitly requested.
@@ -1595,72 +1726,90 @@ def process_data():
         run_dt, source_inventory=source_inventory, raw_archive=raw_archive
     )
     for idx, filename in enumerate(file_list):
-        print(f"   [{idx+1:02d}] DL {filename}...", end=" ", flush=True)
-
-        # Un singolo tentativo rendeva l'intero aggiornamento ostaggio di una
-        # disconnessione passeggera di MeteoHub: se la lista contiene un solo
-        # file, un "read timed out" faceva terminare la pipeline senza dati.
-        # Ritento la stessa richiesta, con attesa crescente. La lettura ha un
-        # limite piu' largo perche' questi GRIB pesano decine di megabyte e il
-        # timeout scatta sull'inattivita', non sulla durata totale.
-        downloaded = False
-        for attempt in range(1, 4):
+        if run_source == "nwp-direct":
+            # The opendata catalog does not have this run yet: fetch the same
+            # surface fields it would normally bundle into one aggregated
+            # file, straight from the public NWP directory instead.
+            print("   Campi di superficie dalla directory NWP diretta...", end=" ", flush=True)
             try:
-                with requests.get(
-                    f"{API_DOWNLOAD_URL}/{filename}",
-                    stream=True,
-                    timeout=(30, 180),
-                ) as r:
-                    r.raise_for_status()
-                    with open(TEMP_FILE, 'wb') as f:
-                        for chunk in r.iter_content(chunk_size=1024 * 1024):
-                            f.write(chunk)
-                downloaded = True
-                print("OK", end=" ", flush=True)
-                break
+                ds_wind, ds_thermo, ds_press, ds_rain, ds_cloud = (
+                    download_surface_fields_direct(
+                        run_dt,
+                        source_inventory=source_inventory,
+                        raw_archive=raw_archive,
+                    )
+                )
+                print("OK", flush=True)
             except Exception as e:
-                if attempt == 3:
-                    print(f"KO ({e})", flush=True)
-                else:
-                    print(f"retry {attempt}/3 ({e})...", end=" ", flush=True)
-                    time.sleep(attempt * 5)
-        if not downloaded:
-            continue
+                print(f" Skip (Grib Error: {e})")
+                continue
+        else:
+            print(f"   [{idx+1:02d}] DL {filename}...", end=" ", flush=True)
 
-        record_source_asset(
-            source_inventory,
-            name=filename,
-            url=f"{API_DOWNLOAD_URL}/{filename}",
-            path=TEMP_FILE,
-            role="surface-run",
-            required=True,
-            raw_archive=raw_archive,
-        )
+            # Un singolo tentativo rendeva l'intero aggiornamento ostaggio di una
+            # disconnessione passeggera di MeteoHub: se la lista contiene un solo
+            # file, un "read timed out" faceva terminare la pipeline senza dati.
+            # Ritento la stessa richiesta, con attesa crescente. La lettura ha un
+            # limite piu' largo perche' questi GRIB pesano decine di megabyte e il
+            # timeout scatta sull'inattivita', non sulla durata totale.
+            downloaded = False
+            for attempt in range(1, 4):
+                try:
+                    with requests.get(
+                        f"{API_DOWNLOAD_URL}/{filename}",
+                        stream=True,
+                        timeout=(30, 180),
+                    ) as r:
+                        r.raise_for_status()
+                        with open(TEMP_FILE, 'wb') as f:
+                            for chunk in r.iter_content(chunk_size=1024 * 1024):
+                                f.write(chunk)
+                    downloaded = True
+                    print("OK", end=" ", flush=True)
+                    break
+                except Exception as e:
+                    if attempt == 3:
+                        print(f"KO ({e})", flush=True)
+                    else:
+                        print(f"retry {attempt}/3 ({e})...", end=" ", flush=True)
+                        time.sleep(attempt * 5)
+            if not downloaded:
+                continue
 
-        if os.path.exists(f"{TEMP_FILE}.idx"):
-            os.remove(f"{TEMP_FILE}.idx")
+            record_source_asset(
+                source_inventory,
+                name=filename,
+                url=f"{API_DOWNLOAD_URL}/{filename}",
+                path=TEMP_FILE,
+                role="surface-run",
+                required=True,
+                raw_archive=raw_archive,
+            )
 
-        # Apertura con i TUOI blocchi try...except separati (sicurissimi)
-        try:
-            ds_wind = xr.open_dataset(TEMP_FILE, engine='cfgrib', backend_kwargs={'filter_by_keys': {'typeOfLevel': 'heightAboveGround', 'level': 10}})
-            
-            ds_thermo = None
-            try: ds_thermo = xr.open_dataset(TEMP_FILE, engine='cfgrib', backend_kwargs={'filter_by_keys': {'typeOfLevel': 'heightAboveGround', 'level': 2}})
-            except: pass
+            if os.path.exists(f"{TEMP_FILE}.idx"):
+                os.remove(f"{TEMP_FILE}.idx")
 
-            ds_press = None
-            try: ds_press = xr.open_dataset(TEMP_FILE, engine='cfgrib', backend_kwargs={'filter_by_keys': {'typeOfLevel': 'meanSea'}})
-            except: pass
+            # Apertura con i TUOI blocchi try...except separati (sicurissimi)
+            try:
+                ds_wind = xr.open_dataset(TEMP_FILE, engine='cfgrib', backend_kwargs={'filter_by_keys': {'typeOfLevel': 'heightAboveGround', 'level': 10}})
 
-            ds_rain = None
-            try: ds_rain = xr.open_dataset(TEMP_FILE, engine='cfgrib', backend_kwargs={'filter_by_keys': {'typeOfLevel': 'surface', 'stepType': 'accum'}})
-            except: pass
+                ds_thermo = None
+                try: ds_thermo = xr.open_dataset(TEMP_FILE, engine='cfgrib', backend_kwargs={'filter_by_keys': {'typeOfLevel': 'heightAboveGround', 'level': 2}})
+                except: pass
 
-            ds_cloud = try_open_cloud_dataset(TEMP_FILE)
-            
-        except Exception as e:
-            print(f" Skip (Grib Error: {e})")
-            continue
+                ds_press = None
+                try: ds_press = xr.open_dataset(TEMP_FILE, engine='cfgrib', backend_kwargs={'filter_by_keys': {'typeOfLevel': 'meanSea'}})
+                except: pass
+
+                ds_rain = None
+                try: ds_rain = xr.open_dataset(TEMP_FILE, engine='cfgrib', backend_kwargs={'filter_by_keys': {'typeOfLevel': 'surface', 'stepType': 'accum'}})
+                except: pass
+
+                ds_cloud = try_open_cloud_dataset(TEMP_FILE)
+
+            except Exception as e:
+                print(f" Skip (Grib Error: {e})")
+                continue
 
         steps = range(ds_wind.sizes.get('step', 1))
 
