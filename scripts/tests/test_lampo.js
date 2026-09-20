@@ -453,8 +453,37 @@ prova('il bagliore satellitare abbaglia di piu\' e la sommita\' rivelata ha piu\
     'l\'accumulo di radianza non e\' stato aumentato');
   assert.match(inizializza, /bagliore=clamp\(1\.0-exp\(-radianza\*4\.2\),0\.0,1\.0\)/,
     'la curva di esposizione non e\' piu\' ripida: il lampo non e\' abbagliante');
-  assert.match(inizializza, /clamp\(bagliore\*0\.98,0\.0,0\.985\)/,
+  assert.match(inizializza, /alfa=clamp\(max\(bagliore\*0\.98,autoOmbra\),0\.0,0\.985\)/,
     'l\'alfa massimo del nucleo non e\' stato alzato verso l\'opaco');
+});
+
+prova('il bordo scuro attorno al nucleo da\' contrasto anche su una nube diurna gia\' chiara', () => {
+  // Un nucleo bianco sopra una nube diurna gia\' quasi bianca e\' invisibile
+  // qualunque sia la sua opacita\': serve un bordo piu\' scuro dello sfondo,
+  // non solo un centro piu\' chiaro. Nucleo e ombra ora si compongono nello
+  // stesso pixel invece di scegliere l\'uno o l\'altro.
+  const inizializza = implementazione('inizializzaVolumeRenderer');
+  assert.match(inizializza, /autoOmbra=clamp\(ombra\*\(1\.0-bagliore\)\*1\.15,0\.0,0\.34\)/,
+    'il bordo d\'ombra non e\' stato rinforzato');
+  assert.doesNotMatch(inizializza, /if\(bagliore>=autoOmbra\*1\.4\)/,
+    'nucleo e ombra tornano a essere una scelta binaria invece di comporsi');
+  assert.match(inizializza, /pesoChiaro=bagliore\/\(bagliore\+autoOmbra\+0\.0001\)/,
+    'manca la miscela fra nucleo chiaro e bordo scuro');
+  assert.match(inizializza, /colore=mix\(scuro,chiaro,pesoChiaro\)/,
+    'il colore finale non fonde piu\' chiaro e scuro insieme');
+  // Misurato in un vero contesto WebGL2 (Playwright/Chromium), su una nube
+  // sintetica del tutto piatta (il caso peggiore: nessuna ombra di
+  // orientamento possibile): senza l'anello il nucleo composto su sfondo
+  // bianco puro si scostava di 2 unita' su 255 dal bianco, invisibile.
+  // Con l'anello lo scostamento arriva a 48 unita' subito fuori dal
+  // nucleo. La sola ombra di orientamento non basta: serve un bordo
+  // legato alla sola distanza dalla scarica.
+  assert.match(inizializza, /float u=distanza\/raggio;/,
+    'manca la distanza normalizzata al raggio per l\'anello');
+  assert.match(inizializza, /float anello=smoothstep\(0\.55,1\.1,u\)\*\(1\.0-smoothstep\(1\.1,2\.2,u\)\)/,
+    'manca l\'anello scuro legato alla sola distanza dal centro del lampo');
+  assert.match(inizializza, /ombraLocale\+=fonte\.w\*anello\*sagoma\*6\.0;/,
+    'l\'anello e\' troppo debole per dare contrasto su una nube diurna piatta');
 });
 
 prova('il bagliore ritagliato sul satellite e il ragno sulla mappa nuda sono piu\' luminosi', () => {
@@ -576,8 +605,30 @@ prova('la dimensione resta geografica e cambia correttamente con lo zoom', () =>
     'il raggio in chilometri non viene riproiettato sulla mappa');
   assert.match(disegno, /Math\.hypot\(edge\.x-punto\.x, edge\.y-punto\.y\)/,
     'la scala resta fissa in pixel durante lo zoom');
-  assert.match(disegno, /Math\.min\(220, Math\.max\(3,/,
-    'manca un limite protettivo alle scale di zoom estreme');
+  // Il minimo era 3 px: un lampo senza zoom, su una vista che inquadra
+  // tutta l'Italia, si schiacciava a un punto invisibile.
+  assert.match(disegno, /Math\.min\(220, Math\.max\(16,/,
+    'il ripiego 2D torna a un minimo troppo piccolo per essere visto senza zoom');
+});
+
+prova('il lampo volumetrico non sparisce quando si e\' zoomati indietro', () => {
+  const render = implementazione('renderVolumeLightning');
+  assert.match(render, /pxPerKm=Math\.hypot\(projection\.ne\.x-projection\.nw\.x,\s*\n\s*projection\.ne\.y-projection\.nw\.y\)\/Math\.max\(0\.001,domainX\)/,
+    'manca il calcolo dei pixel per chilometro alla scala attuale');
+  assert.match(render, /raggioVisibile=raggioVisibileKm\(item\.radius,pxPerKm\)/,
+    'il raggio inviato alla GPU non tiene conto dello zoom corrente');
+  assert.match(render, /radius:raggioVisibile,phase:sample\.phase/,
+    'la sorgente principale non usa il raggio corretto per lo zoom');
+  assert.match(render, /radius:raggioVisibile\*0\.72,/,
+    'le sorgenti sommerse dei rami non seguono lo stesso raggio corretto');
+  const funzione = implementazione('raggioVisibileKm');
+  assert.match(funzione, /Math\.max\(fisicoKm, minimo\)/,
+    'il raggio fisico puo\' ancora restare sotto il minimo visibile sullo schermo');
+  assert.match(funzione, /Math\.min\(VOLUME_GLOW_MAX_KM,/,
+    'manca un tetto che eviti un lampo enorme quando si e\' zoomati molto indietro');
+  const raggio = implementazione('componenteVolumePerScarica');
+  assert.match(raggio, /componenteNube\(mask,scarica\.lon,scarica\.lat,radiusKm\)/,
+    'la ricerca della nube connessa non usa piu\' il raggio fisico reale');
 });
 
 prova('sul satellite il lampo e\' bianco freddo e immerso, non una ragnatela viola', () => {

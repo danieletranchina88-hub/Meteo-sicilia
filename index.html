@@ -6992,6 +6992,16 @@
                   luceLocale+=fonte.w*campo*trasmissioneFonte*fase*faccia*sagoma;
                   ombraLocale+=fonte.w*campo*(1.0-faccia/1.35)
                     *densita*sagoma;
+                  // Anello scuro legato solo alla distanza dal centro del
+                  // lampo, non all'orientamento della superficie: su una
+                  // sommita' quasi piatta la sola ombra di orientamento non
+                  // basta a dare contrasto, e un nucleo chiaro sopra una
+                  // nube diurna gia' quasi bianca sparisce qualunque sia la
+                  // sua opacita'. Zero dentro il nucleo, scende a zero
+                  // anche appena fuori dall'alone: e' un bordo, non un disco.
+                  float u=distanza/raggio;
+                  float anello=smoothstep(0.55,1.1,u)*(1.0-smoothstep(1.1,2.2,u));
+                  ombraLocale+=fonte.w*anello*sagoma*6.0;
                 }
                 radianza+=trasmittanza*densita*luceLocale*dz*0.72;
                 ombra+=trasmittanza*ombraLocale*dz*0.024;
@@ -7000,18 +7010,26 @@
                 if(trasmittanza<0.012)break;
               }
               float bagliore=clamp(1.0-exp(-radianza*4.2),0.0,1.0);
-              float autoOmbra=clamp(ombra*(1.0-bagliore)*0.7,0.0,0.22);
+              // Piu' forte e con una portata maggiore che in passato: e' il
+              // bordo scuro che da' contrasto al nucleo. Su una nube diurna
+              // gia' quasi bianca un nucleo bianco da solo si confonde con
+              // lo sfondo qualunque sia la sua opacita' -- serve un bordo
+              // piu' scuro dello sfondo, non solo un centro piu' chiaro.
+              float autoOmbra=clamp(ombra*(1.0-bagliore)*1.15,0.0,0.34);
               if(bagliore<0.003&&autoOmbra<0.003)discard;
-              if(bagliore>=autoOmbra*1.4){
-                // Il nucleo sale a bianco pieno molto prima del massimo
-                // fisico: e' la sovraesposizione di un lampo vero visto da
-                // vicino, non un tenue chiarore.
-                vec3 freddo=mix(vec3(0.90,0.95,1.0),vec3(1.0),
-                  clamp(bagliore*1.6,0.0,1.0));
-                fragColor=vec4(freddo,clamp(bagliore*0.98,0.0,0.985));
-              }else{
-                fragColor=vec4(0.025,0.045,0.075,autoOmbra);
-              }
+              // Il nucleo sale a bianco pieno molto prima del massimo
+              // fisico: e' la sovraesposizione di un lampo vero visto da
+              // vicino, non un tenue chiarore. Nucleo e bordo si compongono
+              // insieme in un solo pixel invece di scegliere l'uno o
+              // l'altro: e' quel passaggio chiaro-poi-scuro a leggersi come
+              // un lampo anche di giorno, quando il bianco da solo sparisce.
+              vec3 chiaro=mix(vec3(0.90,0.95,1.0),vec3(1.0),
+                clamp(bagliore*1.6,0.0,1.0));
+              vec3 scuro=vec3(0.025,0.045,0.075);
+              float pesoChiaro=bagliore/(bagliore+autoOmbra+0.0001);
+              vec3 colore=mix(scuro,chiaro,pesoChiaro);
+              float alfa=clamp(max(bagliore*0.98,autoOmbra),0.0,0.985);
+              fragColor=vec4(colore,alfa);
             }`;
           const vs=creaShaderVolume(gl,gl.VERTEX_SHADER,vertex);
           const fs=creaShaderVolume(gl,gl.FRAGMENT_SHADER,fragment);
@@ -7177,6 +7195,20 @@
         return volumeComponentAtlas;
       }
 
+      // Un raggio fisico onesto puo' comunque sparire sullo schermo quando
+      // lo zoom e' basso: 10-40 km diventano pochi pixel su una vista che
+      // inquadra tutta l'Italia. Questo NON cambia il raggio usato per la
+      // ricerca della nube connessa, che resta quello fisico -- alza solo
+      // il raggio che il frammento GPU vede, cioe' quanto il lampo diventa
+      // visibile sullo schermo indipendentemente dallo zoom.
+      const VOLUME_GLOW_MIN_PX = 16;
+      const VOLUME_GLOW_MAX_KM = 70;
+      function raggioVisibileKm(fisicoKm, pxPerKm) {
+        if (!(pxPerKm > 0)) return fisicoKm;
+        const minimo = VOLUME_GLOW_MIN_PX / pxPerKm;
+        return Math.min(VOLUME_GLOW_MAX_KM, Math.max(fisicoKm, minimo));
+      }
+
       function renderVolumeLightning(adesso) {
         const mask=mascheraNube,projection=proiezioneNube(mask);
         for(let i=0;i<liveStrikes.length;i++)liveStrikes[i].volumeIlluminated=false;
@@ -7203,6 +7235,8 @@
         const domainX=(mask.east-mask.west)*111.32*Math.max(0.2,
           Math.cos((mask.north+mask.south)*Math.PI/360));
         const domainY=(mask.north-mask.south)*111.32;
+        const pxPerKm=Math.hypot(projection.ne.x-projection.nw.x,
+          projection.ne.y-projection.nw.y)/Math.max(0.001,domainX);
         for(let e=0;e<eventi.length;e++){
           const item=eventi[e],strike=item.strike,sample=item.sample;
           const x=(strike.lon-mask.west)/(mask.east-mask.west);
@@ -7210,8 +7244,9 @@
           const topKm=2+12.5*sample.top;
           const depth=0.7+(7-0.7)*Math.pow(sample.thickness,0.72);
           const z=Math.max(0.4,topKm-depth*(0.36+0.18*(1-sample.phase)));
+          const raggioVisibile=raggioVisibileKm(item.radius,pxPerKm);
           sources.push({x:x,y:y,z:z,intensity:item.intensity,
-            radius:item.radius,phase:sample.phase,thickness:sample.thickness,event:e});
+            radius:raggioVisibile,phase:sample.phase,thickness:sample.thickness,event:e});
           // Due nodi del canale intra-nube diventano sorgenti sommerse:
           // la ramificazione si percepisce attraverso il volume senza essere
           // disegnata come una ragnatela sopra il satellite.
@@ -7222,7 +7257,7 @@
               x:clamp(x+Math.cos(filo.direzione)*distanza/domainX,0,1),
               y:clamp(y+Math.sin(filo.direzione)*distanza/domainY,0,1),
               z:Math.max(0.3,z-depth*(0.08+0.08*f)),
-              intensity:item.intensity*(f?0.38:0.55),radius:item.radius*0.72,
+              intensity:item.intensity*(f?0.38:0.55),radius:raggioVisibile*0.72,
               phase:sample.phase,thickness:sample.thickness,event:e
             });
           }
@@ -7853,7 +7888,11 @@
                 const edge = projectParticle(s.lon + radiusKm / (111.32
                   * Math.max(0.2, Math.cos(s.lat * Math.PI / 180))), s.lat, 0);
                 if (edge) {
-                  const largo = Math.min(220, Math.max(3,
+                  // Il minimo era 3 px: a zoom bassi un raggio fisico onesto
+                  // di 10-40 km si schiacciava a un punto invisibile. 16 px
+                  // e' quanto basta per leggersi come un lampo anche senza
+                  // aver zoomato sulla cella.
+                  const largo = Math.min(220, Math.max(16,
                     Math.hypot(edge.x-punto.x, edge.y-punto.y)));
                   s.cloudIlluminated = disegnaNubeIlluminata(
                     strikeLightContext, punto, largo,
