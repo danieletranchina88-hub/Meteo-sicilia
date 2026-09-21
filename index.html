@@ -7346,7 +7346,11 @@
               // bianco pieno appartiene al canale, ed e' quel margine a
               // renderlo visibile sopra una nube gia' accesa.
               float diffuso=clamp(1.0-exp(-radianza*6.5),0.0,1.0)*0.82;
-              float canale=clamp(1.0-exp(-nucleoVista*3.4),0.0,1.0);
+              // Esposizione del canale alzata da 3,4 a 4,8: il cuore
+              // bianco arrivava a saturare su una striscia troppo sottile e
+              // si perdeva dentro l'alone lilla. Serve che il bianco abbia
+              // un po' di corpo, o il lampo non ha temperatura.
+              float canale=clamp(1.0-exp(-nucleoVista*4.8),0.0,1.0);
               float bagliore=clamp(diffuso+canale*(1.0-diffuso*0.55),0.0,1.0);
               // Piu' forte e con una portata maggiore che in passato: e' il
               // bordo scuro che da' contrasto al nucleo. Su una nube diurna
@@ -7361,16 +7365,27 @@
               // insieme in un solo pixel invece di scegliere l'uno o
               // l'altro: e' quel passaggio chiaro-poi-scuro a leggersi come
               // un lampo anche di giorno, quando il bianco da solo sparisce.
-              // Separazione anche di COLORE, non solo di opacita': la
-              // nube accesa da lontano e' bianco-azzurra (e' luce diffusa
-              // da gocce, che disperdono di piu' il blu), il canale e'
-              // bianco bruciato. Cosi' il lampo resta distinguibile anche
-              // dove opacita' e' al massimo per entrambi -- di giorno,
-              // sopra una sommita' gia' bianca, e' l'unica differenza che
-              // sopravvive.
-              vec3 chiaro=mix(vec3(0.74,0.83,1.0),vec3(1.0),
-                clamp(canale*1.45+diffuso*0.42,0.0,1.0));
-              vec3 scuro=vec3(0.025,0.045,0.075);
+              // IL COLORE DEL FULMINE, e non e' una scelta di gusto: e' la
+              // stessa separazione fra canale e diffuso, portata sul colore.
+              //
+              // Il canale in se' e' bianco incandescente -- e' plasma a
+              // decine di migliaia di gradi, e sovraespone qualunque
+              // sensore. Il lilla non nasce li': nasce dalla STRADA. La
+              // scarica eccita l'azoto, che emette forte nel violetto-blu,
+              // e piu' la luce attraversa nube e aria prima di uscire, piu'
+              // il rosso se ne va per strada e resta il viola. E' per
+              // questo che un lampo vicino e' bianco e uno lontano, o visto
+              // attraverso la nube, e' lilla.
+              //
+              // Quindi: il cuore va a bianco pieno, l'alone diffuso resta
+              // lilla, e fra i due c'e' una transizione continua guidata
+              // dal canale, non dalla luminosita'. Il termine sul diffuso
+              // resta piccolo apposta (0,18): alzandolo, il lilla sbiadisce
+              // proprio dove il bagliore e' piu' forte, cioe' dove lo si
+              // vuole vedere.
+              vec3 chiaro=mix(vec3(0.72,0.54,1.0),vec3(1.0),
+                clamp(canale*1.55+diffuso*0.18,0.0,1.0));
+              vec3 scuro=vec3(0.035,0.028,0.062);
               float pesoChiaro=bagliore/(bagliore+autoOmbra+0.0001);
               vec3 colore=mix(scuro,chiaro,pesoChiaro);
               float alfa=clamp(max(bagliore*0.98,autoOmbra),0.0,0.985);
@@ -7698,10 +7713,12 @@
         if(!projection || inclinata || !scarica) {
           const raggio=largo*0.62;
           const g=context.createRadialGradient(punto.x,punto.y,0,punto.x,punto.y,raggio);
-          g.addColorStop(0,"rgba(250,252,255,"+(0.9*nube).toFixed(3)+")");
-          g.addColorStop(0.3,"rgba(245,249,255,"+(0.5*nube).toFixed(3)+")");
-          g.addColorStop(0.65,"rgba(238,246,255,"+(0.18*nube).toFixed(3)+")");
-          g.addColorStop(1,"rgba(233,242,255,0)");
+          // Bianco al centro, lilla verso il bordo: la stessa legge del
+          // volume GPU, perche' i due non devono sembrare due lampi diversi.
+          g.addColorStop(0,"rgba(252,250,255,"+(0.9*nube).toFixed(3)+")");
+          g.addColorStop(0.3,"rgba(236,222,255,"+(0.5*nube).toFixed(3)+")");
+          g.addColorStop(0.65,"rgba(206,170,252,"+(0.18*nube).toFixed(3)+")");
+          g.addColorStop(1,"rgba(190,150,248,0)");
           context.save();context.globalCompositeOperation="lighter";
           context.fillStyle=g;context.beginPath();
           context.arc(punto.x,punto.y,raggio,0,Math.PI*2);context.fill();
@@ -7718,11 +7735,11 @@
           const tela=document.createElement("canvas");tela.width=lato;tela.height=lato;
           const g=tela.getContext("2d");
           const light=g.createRadialGradient(largo,largo,0,largo,largo,largo);
-          light.addColorStop(0,"rgba(250,252,255,0.995)");
-          light.addColorStop(0.14,"rgba(245,249,255,0.92)");
-          light.addColorStop(0.38,"rgba(238,246,255,0.58)");
-          light.addColorStop(0.68,"rgba(233,242,255,0.16)");
-          light.addColorStop(1,"rgba(230,239,255,0)");
+          light.addColorStop(0,"rgba(252,250,255,0.995)");
+          light.addColorStop(0.14,"rgba(240,229,255,0.92)");
+          light.addColorStop(0.38,"rgba(215,185,253,0.58)");
+          light.addColorStop(0.68,"rgba(198,158,250,0.16)");
+          light.addColorStop(1,"rgba(190,150,248,0)");
           g.fillStyle=light;g.fillRect(0,0,lato,lato);
 
           // I canali interni si disegnano a parte, in disegnaCanaliSommersi,
@@ -7781,12 +7798,23 @@
             largo * 0.48 * filo.lunghezza, filo.direzione),
             5.5, "8,13,22", 0.34 * forza);
         }
+        // Due passate additive invece di una, e sono la stessa cosa che fa
+        // il volume GPU con il colore: un alone LILLA largo, e dentro un
+        // cuore BIANCO stretto. Una passata sola, bianca, dava un filo di
+        // luce senza temperatura; due danno il passaggio da viola a bianco
+        // incandescente che e' quello che si vede in una fotografia.
         context.globalCompositeOperation = "lighter";
         for (let f = 0; f < scarica.ragno.length; f += 1) {
           const filo = scarica.ragno[f];
           strokeSfumato(context, puntiFilamento(filo.forma, punto.x, punto.y,
             largo * 0.48 * filo.lunghezza, filo.direzione),
-            2.2, "242,248,255", 0.9 * forza);
+            6.5, "168,120,248", 0.52 * forza);
+        }
+        for (let f = 0; f < scarica.ragno.length; f += 1) {
+          const filo = scarica.ragno[f];
+          strokeSfumato(context, puntiFilamento(filo.forma, punto.x, punto.y,
+            largo * 0.48 * filo.lunghezza, filo.direzione),
+            2.2, "252,250,255", 0.9 * forza);
         }
         context.restore();
       }

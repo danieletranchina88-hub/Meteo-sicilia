@@ -460,8 +460,17 @@ prova('il bagliore satellitare abbaglia di piu\' e la sommita\' rivelata ha piu\
   // diffuso si ferma a 0,82 e la cima della corsa resta al canale.
   assert.match(inizializza, /diffuso=clamp\(1\.0-exp\(-radianza\*6\.5\),0\.0,1\.0\)\*0\.82/,
     'la curva di esposizione del bagliore diffuso non e\' quella attesa');
-  assert.match(inizializza, /canale=clamp\(1\.0-exp\(-nucleoVista\*3\.4\),0\.0,1\.0\)/,
-    'il canale non ha piu\' una sua esposizione separata dal bagliore diffuso');
+  // L'esposizione del canale e' salita da 3,4 a 4,8: il cuore bianco
+  // saturava su una striscia troppo sottile e si perdeva dentro l'alone
+  // lilla. Qui si difende l'invariante, non il numero: il canale deve
+  // avere una sua esposizione, e piu' ripida di quella del diffuso --
+  // altrimenti non ha temperatura, e' solo un bagliore piu' chiaro.
+  const espCanale = inizializza.match(/canale=clamp\(1\.0-exp\(-nucleoVista\*([\d.]+)\)/);
+  assert.ok(espCanale, 'il canale non ha piu\' una sua esposizione separata dal bagliore diffuso');
+  const espDiffuso = inizializza.match(/diffuso=clamp\(1\.0-exp\(-radianza\*([\d.]+)\)/);
+  assert.ok(espDiffuso, 'manca l\'esposizione del bagliore diffuso');
+  assert.ok(+espCanale[1] >= 4,
+    'il cuore del canale satura troppo tardi per avere corpo: ' + espCanale[1]);
   assert.match(inizializza, /bagliore=clamp\(diffuso\+canale\*\(1\.0-diffuso\*0\.55\),0\.0,1\.0\)/,
     'il canale non si compone piu\' sopra il diffuso lasciandogli il margine');
   assert.match(inizializza, /nucleoVista\+=trasmittanza\*cuoreLocale/,
@@ -514,14 +523,28 @@ prova('il bordo scuro attorno al nucleo da\' contrasto anche su una nube diurna 
 
 prova('il bagliore ritagliato sul satellite e il ragno sulla mappa nuda sono piu\' luminosi', () => {
   const ritaglio = implementazione('disegnaNubeIlluminata');
-  assert.match(ritaglio, /rgba\(245,249,255,0\.92\)/,
-    'la seconda tappa del gradiente satellitare non e\' piu\' luminosa');
-  assert.match(ritaglio, /rgba\(238,246,255,0\.58\)/,
-    'la terza tappa del gradiente satellitare non e\' piu\' luminosa');
-  assert.match(ritaglio, /rgba\(233,242,255,0\.16\)/,
-    'la quarta tappa del gradiente satellitare non e\' piu\' luminosa');
+  // Le tinte adesso virano al lilla verso il bordo (il colore lo difende
+  // la prova dedicata); qui conta che il bagliore resti FORTE al centro e
+  // si spenga con continuita', senza gradini.
+  // Si guarda il gradiente ritagliato sul satellite (quello con le opacita'
+  // scritte per esteso), non quello di ripiego, che le calcola.
+  const alfe = [...ritaglio.matchAll(/light\.addColorStop\([\d.]+,"rgba\(\d+,\d+,\d+,([\d.]+)\)"\)/g)]
+    .map((m) => +m[1]);
+  assert.ok(alfe.length >= 5,
+    'mancano le tappe del bagliore ritagliato: ' + alfe.length);
+  assert.ok(alfe[0] >= 0.9,
+    'il centro del bagliore non e\' piu\' quasi opaco: il lampo non abbaglia');
+  for (let i = 1; i < alfe.length; i += 1) {
+    assert.ok(alfe[i] <= alfe[i - 1],
+      'il bagliore non cala con continuita\' verso il bordo: ' + alfe.join(' '));
+  }
+  assert.equal(alfe[alfe.length - 1], 0,
+    'il bagliore non si spegne al bordo: si vedrebbe il cerchio');
   const canali = implementazione('disegnaCanaliSommersi');
-  assert.match(canali, /"242,248,255", 0\.9 \* forza\)/,
+  // La tinta del cuore adesso e' bianco pieno invece di bianco freddo (il
+  // colore lo difende la prova dedicata); qui conta che la passata chiara
+  // resti quasi a piena forza, o il canale si spegne dentro il suo alone.
+  assert.match(canali, /, 0\.9 \* forza\);/,
     'i canali interni sommersi non sono piu\' luminosi');
   assert.match(ritaglio, /globalAlpha=Math\.min\(0\.97,nube\*0\.97\)/,
     'l\'alfa finale del bagliore ritagliato non e\' stato alzato');
@@ -692,30 +715,98 @@ prova('il lampo volumetrico non sparisce quando si e\' zoomati indietro', () => 
     'la ricerca della nube connessa non usa piu\' il raggio fisico reale');
 });
 
-prova('sul satellite il lampo e\' bianco freddo e immerso, non una ragnatela viola', () => {
-  const ritaglio = implementazione('disegnaNubeIlluminata');
-  const colori = [...ritaglio.matchAll(/rgba\((\d+),(\d+),(\d+),/g)]
-    .map((m) => [+m[1], +m[2], +m[3]]);
-  assert.ok(colori.length >= 5, 'mancano le tappe cromatiche del bagliore');
-  for (const colore of colori) {
-    assert.ok(Math.min(...colore) >= 230,
-      'il bagliore non e\' piu\' quasi bianco: ' + colore.join(','));
-    assert.ok(Math.max(...colore) - Math.min(...colore) <= 25,
-      'il bagliore e\' troppo saturo: ' + colore.join(','));
-  }
+prova('il fulmine ha il colore giusto: cuore bianco, alone lilla', () => {
+  // Il colore non e' una scelta di gusto, ed e' il motivo per cui la regola
+  // di prima -- "tutto quasi bianco sul satellite" -- era troppo grossolana.
+  //
+  // Il canale in se' e' bianco incandescente: e' plasma a decine di migliaia
+  // di gradi e sovraespone qualunque sensore. Il lilla nasce dalla STRADA:
+  // la scarica eccita l'azoto, che emette nel violetto-blu, e piu' la luce
+  // attraversa nube e aria prima di uscire piu' il rosso se ne va. Per
+  // questo un lampo vicino e' bianco e uno visto attraverso la nube e' lilla.
+  //
+  // L'invariante che conta e' STRUTTURALE, non il singolo valore: il viola
+  // sta nell'alone LARGO, il bianco nel cuore STRETTO. Invertendoli si
+  // torna esattamente al difetto di allora -- una ragnatela viola disegnata
+  // sopra la nube invece di luce che ne esce.
+  const inizializza = implementazione('inizializzaVolumeRenderer');
+  const base = inizializza.match(/vec3 chiaro=mix\(vec3\(([\d.]+),([\d.]+),([\d.]+)\),vec3\(1\.0\)/);
+  assert.ok(base, 'manca la miscela di colore del bagliore volumetrico');
+  const [r, g, b] = [+base[1], +base[2], +base[3]];
+  assert.ok(b > r && r > g,
+    'la base del bagliore diffuso non e\' piu\' lilla (blu > rosso > verde): '
+    + [r, g, b].join(','));
+  assert.ok(b - g >= 0.3,
+    'il lilla e\' troppo slavato per vedersi su una nube diurna: differenza '
+    + (b - g).toFixed(2));
+  // E il cuore deve arrivare a bianco PIENO, guidato dal canale e non dalla
+  // luminosita' diffusa: se comandasse il diffuso, il lilla sbiadirebbe
+  // proprio dove il bagliore e' piu' forte.
+  const spinta = inizializza.match(/clamp\(canale\*([\d.]+)\+diffuso\*([\d.]+),0\.0,1\.0\)/);
+  assert.ok(spinta, 'manca la spinta verso il bianco del cuore');
+  assert.ok(+spinta[1] >= 1.2, 'il cuore non arriva piu\' a bianco pieno');
+  assert.ok(+spinta[2] <= 0.25,
+    'e\' il bagliore diffuso a sbiancare il colore: il lilla sparisce dove serve');
+
+  // Le due passate additive del canale 2D: alone lilla LARGO, cuore bianco
+  // STRETTO. La larghezza e' l'invariante, non la tinta.
   const canali = implementazione('disegnaCanaliSommersi');
+  const passate = [...canali.matchAll(/strokeSfumato\([\s\S]*?\n\s*([\d.]+), "(\d+),(\d+),(\d+)"/g)]
+    .map((m) => ({ largo: +m[1], r: +m[2], g: +m[3], b: +m[4] }));
+  assert.ok(passate.length >= 3,
+    'mancano le passate del canale: trovate ' + passate.length);
+  const additive = passate.slice(1);
+  const alone = additive[0], cuore = additive[1];
+  assert.ok(alone.largo > cuore.largo,
+    'l\'alone non e\' piu\' largo del cuore: il canale torna un filo disegnato');
+  // Saturo, non solo "ordinato": il bianco (252,250,255) soddisfa
+  // blu > rosso > verde e passerebbe un controllo di solo ordine --
+  // se ne e' accorta la contro-prova, invertendo alone e cuore.
+  assert.ok(alone.b > alone.r && alone.r > alone.g,
+    'l\'alone del canale non e\' lilla: ' + [alone.r, alone.g, alone.b].join(','));
+  assert.ok(alone.b - alone.g >= 60,
+    'l\'alone del canale e\' troppo poco saturo per essere lilla: '
+    + [alone.r, alone.g, alone.b].join(',') + ' -- con l\'alone bianco e il cuore '
+    + 'viola si torna alla ragnatela disegnata');
+  assert.ok(Math.min(cuore.r, cuore.g, cuore.b) >= 240,
+    'il cuore del canale non e\' piu\' bianco incandescente: '
+    + [cuore.r, cuore.g, cuore.b].join(',') + ' -- cosi\' torna una ragnatela viola');
+
+  // Il bagliore resta IMMERSO, non una linea tagliente sopra la nube: e'
+  // l'altra meta' del difetto di allora.
   assert.match(canali, /context\.filter = "blur\(4px\)"/,
     'i canali interni sono di nuovo linee taglienti');
-  // Il canale vero (la passata additiva) resta bianco freddo come il resto
-  // del bagliore. La passata scura sotto e' un bordo di contrasto, non il
-  // colore del lampo, e per costruzione non puo' essere quasi bianca.
-  assert.match(canali, /"242,248,255", 0\.9 \* forza\)/,
-    'il canale chiaro non e\' piu\' bianco freddo');
   assert.match(canali, /"8,13,22", 0\.34 \* forza\)/,
     'il bordo scuro sotto il canale e\' sparito: di giorno tornerebbe invisibile');
-  const disegno = implementazione('drawLiveStrikes');
-  assert.match(disegno, /if \(showSatelliteClouds\) \{[\s\S]*?disegnaNubeIlluminata\([\s\S]*?disegnaCanaliSommersi\([\s\S]*?\n\s*continue;\s*\n\s*\}/,
-    'sopra il satellite non si vede piu\' la ramificazione del lampo, solo la macchia diffusa');
+
+  // Il bagliore tondo di ripiego segue la stessa legge: bianco al centro,
+  // lilla al bordo. Due lampi che si contraddicono nel colore sembrano due
+  // fenomeni diversi.
+  // I DUE gradienti si guardano separatamente, ognuno per nome. Prendendo
+  // le tappe tutte insieme e indicizzandole, si finiva per controllare
+  // sempre quello di ripiego e mai quello ritagliato sul satellite: l'ha
+  // mostrato la contro-prova, sbiancando il secondo senza far fallire
+  // niente.
+  const ritaglio = implementazione('disegnaNubeIlluminata');
+  const gradiente = (prefisso) => {
+    const re = new RegExp(prefisso + '\\.addColorStop\\([\\d.]+,"rgba\\((\\d+),(\\d+),(\\d+),', 'g');
+    return [...ritaglio.matchAll(re)].map((m) => [+m[1], +m[2], +m[3]]);
+  };
+  for (const nome of ['g', 'light']) {
+    const tappe = gradiente(nome);
+    assert.ok(tappe.length >= 4,
+      'il gradiente ' + nome + ' non ha abbastanza tappe: ' + tappe.length);
+    const centro = tappe[0], bordo = tappe[tappe.length - 1];
+    assert.ok(Math.min(...centro) >= 240,
+      'il centro del gradiente ' + nome + ' non e\' piu\' bianco: ' + centro.join(','));
+    assert.ok(bordo[2] - bordo[1] >= 40,
+      'il bordo del gradiente ' + nome + ' non vira al lilla: ' + bordo.join(','));
+    for (const t of tappe) {
+      assert.ok(t[2] >= t[0],
+        'una tappa di ' + nome + ' ha piu\' rosso che blu: il lampo virerebbe '
+        + 'al caldo, ' + t.join(','));
+    }
+  }
 });
 
 prova('i canali interni si vedono anche quando la GPU accende gia\' la nube', () => {
