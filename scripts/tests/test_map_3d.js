@@ -670,10 +670,19 @@ assert.match(html, /radar: showRadar,[\s\S]{0,120}?satclouds: showSatelliteCloud
   "gli stati indipendenti non sono riportati nell'interfaccia");
 assert.match(html, /setWeatherView\(weatherView === "satellite"/,
   "il satellite non usa la vista indipendente");
+// Le nubi si riaggiornano da sole a meta' della cadenza del prodotto. Il
+// giro adesso rilegge PRIMA la dichiarazione del servizio: e' quella ad
+// avanzare, e senza rileggerla si continuerebbe a chiedere lo stesso istante
+// all'infinito, cioe' la diretta si fermerebbe.
 assert.match(
   html,
-  /cloudTimer = setInterval\(function \(\) \{ loadSatelliteClouds\(false\); \},\s*\n\s*\(product\.slotMs \|\| CLOUD_SLOT_MS\) \/ 2\);/,
+  /cloudTimer = setInterval\(function \(\) \{\s*\n\s*if \(document\.hidden\) return;\s*\n\s*aggiornaIstantiDisponibili\(false\)\.then\(function \(avanzato\) \{\s*\n\s*loadSatelliteClouds\(false\);/,
   "le nubi non si aggiornano da sole: non sarebbero in tempo reale"
+);
+assert.match(
+  html,
+  /\}, \(product\.slotMs \|\| CLOUD_SLOT_MS\) \/ 2\);/,
+  "il controllo non segue piu' la cadenza del prodotto"
 );
 assert.match(html, /if \(typeof document\.hidden === "boolean" && document\.hidden\) return;/,
   "in secondo piano si continua a chiedere immagini al servizio");

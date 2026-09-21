@@ -85,45 +85,85 @@ function implementazione(nome) {
   return html.slice(inizio, html.indexOf('\n      }', inizio) + 8);
 }
 
-prova('"l\'ultimo disponibile" non e\' piu\' lo stesso URL a ogni richiesta', () => {
-  // In diretta lo slot stimato manca spesso (la latenza di 10-20 minuti e'
-  // una media, non una garanzia), e il codice ripiega su "ultimo
-  // disponibile" -- un URL che OMETTE l'istante apposta, lasciando
-  // scegliere al servizio. Scorrendo il passato invece ogni istante ha il
-  // suo &time=... e non e' mai lo stesso URL due volte, quindi non puo'
-  // arrivare dalla cache del browser un byte vecchio. "Ultimo disponibile"
-  // richiesto piu' volte con lo stesso riquadro produceva pero' l'IDENTICO
-  // URL ogni volta: un invito a essere messo in cache, e "l'ultimo
-  // disponibile" del momento della cache poteva restare quello per ore --
-  // il motivo per cui in diretta si vedeva un'immagine vecchia mentre ogni
-  // istante passato restava perfetto.
+prova('ogni richiesta porta un istante preciso: mai piu\' il mosaico', () => {
+  // Il satellite si vedeva a scacchi: riquadri diurni accanto a riquadri
+  // notturni con le luci delle citta'. Non era il disegno, era la richiesta.
+  // Questo WMS serve un MOSAICO di granuli, ognuno con il suo istante:
+  // omettendo &time= -- che e' come si diceva "dammi l'ultima disponibile" --
+  // il servizio non ne sceglie uno, compone ogni granulo con quello che ha,
+  // e granuli diversi vengono da passaggi diversi. Verificato chiedendo lo
+  // stesso riquadro con e senza istante: senza, a scacchi; con, coerente.
   const wms = html.match(/const CLOUD_WMS = "[^"]+";/);
   assert.ok(wms, 'manca CLOUD_WMS');
-  const codice = [wms[0], implementazione('mercatorMetresX'), implementazione('mercatorMetresY'),
-    implementazione('cloudUrl')].join('\n\n');
+  const codice = [wms[0], implementazione('mercatorMetresX'),
+    implementazione('mercatorMetresY'), implementazione('cloudUrl')].join('\n\n');
   const modulo = new Function(codice + '\nreturn {cloudUrl};')();
   const box = { west: 12, east: 13, south: 37, north: 38 };
   const size = { width: 512, height: 384 };
-  const product = { layer: 'mtg_fd:rgb_geocolour' };
   const slot = { iso: '2026-09-20T12:00:00.000Z' };
 
-  const primo = modulo.cloudUrl(box, size, product, slot, true);
-  // Node non aspetta da solo: senza questo le due chiamate potrebbero
-  // cadere nello stesso millisecondo e la prova non proverebbe nulla.
-  const fine = Date.now() + 2;
-  while (Date.now() <= fine) { /* attesa attiva breve */ }
-  const secondo = modulo.cloudUrl(box, size, product, slot, true);
-  assert.notEqual(primo, secondo,
-    'due richieste di "ultimo disponibile" con lo stesso riquadro producono ancora lo stesso URL');
+  const composito = modulo.cloudUrl(box, size,
+    { layer: 'mtg_fd:rgb_geocolour', mode: 'scene' }, slot);
+  const fulmini = modulo.cloudUrl(box, size, { layer: 'mtg_fd:li_afa' }, slot);
+  for (const coppia of [['composito', composito], ['fulmini', fulmini]]) {
+    assert.match(coppia[1], /&time=2026-09-20T12:00:00\.000Z/,
+      'la richiesta ' + coppia[0] + ' non porta piu\' l\'istante: il servizio '
+      + 'ricomporrebbe granuli di passaggi diversi nella stessa immagine');
+  }
+  // Nessun residuo del vecchio ripiego "senza istante, con un numero che
+  // cambia": serviva a sfuggire alla cache, e adesso ci pensa l'istante.
+  assert.doesNotMatch(composito, /[?&]_=/,
+    'e\' tornato il numero anti-cache: significa che si chiede senza istante');
 
-  // Il ramo con l'istante esplicito e' gia' unico da solo: non deve
-  // guadagnare (ne perdere) la stessa aggiunta.
-  const storico1 = modulo.cloudUrl(box, size, product, slot, false);
-  const storico2 = modulo.cloudUrl(box, size, product, slot, false);
-  assert.equal(storico1, storico2,
-    'una richiesta con istante esplicito non dovrebbe cambiare da sola fra due chiamate identiche');
-  assert.match(storico1, /&time=2026-09-20T12:00:00\.000Z/,
-    'l\'istante esplicito e\' sparito dall\'URL');
+  // Il formato: i compositi RGB non hanno il canale alfa (letto
+  // dall'intestazione del PNG che il servizio restituisce: tre canali),
+  // quindi il JPEG non perde niente e pesa quindici volte meno -- 217 kB
+  // contro 3,1 MB sul riquadro di un telefono. Il Lightning Imager invece e'
+  // RGBA e sta SOPRA le nubi: senza trasparenza le coprirebbe.
+  assert.match(composito, /&format=image\/jpeg/,
+    'i compositi opachi tornano in PNG: quindici volte piu\' byte per niente');
+  assert.doesNotMatch(composito, /transparent=true/,
+    'si chiede ancora la trasparenza su un formato che non ce l\'ha');
+  assert.match(fulmini, /&format=image\/png&transparent=true/,
+    'i fulmini perdono la trasparenza: coprirebbero le nubi invece di starci sopra');
+});
+
+prova('l\'istante in diretta e\' quello che il servizio dichiara, non una stima', () => {
+  // Indovinare l'istante dalla latenza media porta a chiederne uno che non
+  // esiste -- misurato sulla pagina vera: 09:40 e 09:30 rifiutati con 502,
+  // mentre il servizio dichiarava 08:00. E il ripiego di allora, chiedere
+  // senza istante, e' proprio cio' che produceva il mosaico.
+  const slot = implementazione('cloudSlot');
+  assert.match(slot, /const dichiarato = ultimoIstanteDichiarato\(selected\);/,
+    'l\'istante in diretta non viene piu\' dalla dichiarazione del servizio');
+  assert.match(slot, /const newest = dichiarato\s*\n\s*\? Math\.floor\(dichiarato \/ slotMs\) \* slotMs/,
+    'la dichiarazione non ha piu\' la precedenza sulla stima per latenza');
+  // La rilettura della dichiarazione non deve finire in cache: altrimenti
+  // l'ultimo istante non avanza mai e la diretta si blocca -- lo stesso
+  // tranello di prima, un piano piu' in alto.
+  const caps = implementazione('aggiornaIstantiDisponibili');
+  assert.match(caps, /CLOUD_CAPS_URL \+ "&_=" \+ adesso/,
+    'la rilettura della dichiarazione puo\' arrivare dalla cache: la diretta si fermerebbe');
+  assert.match(caps, /adesso - cloudCapsAt < CLOUD_CAPS_TTL_MS/,
+    'la dichiarazione viene riletta a ogni giro invece che a intervalli');
+  // Ogni prodotto ha il SUO istante: misurato, le nubi dichiaravano 08:00 e
+  // il Lightning Imager 09:50. Tenerne uno solo ne sprecherebbe uno.
+  assert.match(caps, /cloudCapsEnd\.set\(nome, fine\)/,
+    'la dichiarazione non viene piu\' tenuta per singolo prodotto');
+  // Quando l'istante non c'e', si arretra di un passo per volta restando
+  // sempre su un istante preciso.
+  const nubi = implementazione('loadSatelliteClouds');
+  assert.match(nubi, /slotArretrato\(product, slot, 1\)/,
+    'il ripiego non arretra piu\' di un passo: chiedendo senza istante torna il mosaico');
+  assert.doesNotMatch(nubi, /slot\.latest = true/,
+    'e\' tornato il ripiego "ultimo disponibile senza istante", che produce il mosaico');
+  // E quando la dichiarazione arriva DOPO che il tentativo e' partito con la
+  // stima, si salta direttamente all'istante dichiarato invece di scendere
+  // passo per passo. Senza, la stima puo' essere avanti di un'ora e mezza e
+  // i tentativi finiscono prima di arrivarci: misurato sulla pagina vera,
+  // cinque 502 di fila e satellite mai comparso.
+  assert.match(nubi, /const dichiarato = ultimoIstanteDichiarato\(product\);\s*\n\s*slot = \(dichiarato && dichiarato < slot\.value\)\s*\n\s*\? cloudSlot\(product\)/,
+    'il ripiego non salta all\'istante dichiarato quando questo arriva a tentativo avviato');
 });
 
 prova('a scala europea non si scarica piu\' di quanto lo schermo possa mostrare', () => {

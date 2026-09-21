@@ -5820,14 +5820,123 @@
 
       // Istante da chiedere al servizio, arrotondato al decadale del
       // satellite. Restituisce anche la data, per poterla mostrare.
+      // ---- QUALE ISTANTE ESISTE DAVVERO -------------------------------
+      //
+      // Il satellite si vedeva a scacchi: riquadri diurni incollati accanto a
+      // riquadri notturni con le luci delle citta'. Non era un difetto di
+      // disegno nostro, era la richiesta.
+      //
+      // Questo WMS serve un MOSAICO di granuli, e ogni granulo ha il suo
+      // istante. Omettendo &time= -- che e' quello che si faceva per dire
+      // "dammi l'ultima disponibile" -- il servizio non sceglie un istante:
+      // compone ogni granulo con quello che ha, e granuli diversi possono
+      // venire da passaggi diversi. Sul riquadro italiano si cadeva quasi
+      // sempre dentro un granulo solo e non si notava; da quando l'osservato
+      // copre l'Europa il riquadro ne attraversa parecchi, e il mosaico e'
+      // diventato evidente. Verificato chiedendo lo stesso riquadro con e
+      // senza istante: senza, a scacchi; con, immagine coerente.
+      //
+      // La soluzione non e' indovinare la latenza: il servizio DICHIARA cosa
+      // ha, nel GetCapabilities, come intervallo
+      // "inizio/fine/passo" (per esempio .../2026-09-21T08:00:00.000Z/PT10M).
+      // Si legge la fine e si chiede quella. La latenza stimata resta solo
+      // come ripiego per i primi istanti, finche' la dichiarazione non e'
+      // arrivata.
+      const CLOUD_CAPS_URL = "https://view.eumetsat.int/geoserver/mtg_fd/wms"
+        + "?service=WMS&version=1.3.0&request=GetCapabilities";
+      const CLOUD_CAPS_TTL_MS = 5 * 60 * 1000;
+      let cloudCapsAt = 0;
+      let cloudCapsPending = null;
+      const cloudCapsEnd = new Map();
+
+      function nomeSemplice(layer) {
+        const nome = String(layer || "");
+        const taglio = nome.indexOf(":");
+        return taglio >= 0 ? nome.slice(taglio + 1) : nome;
+      }
+
+      function ultimoIstanteDichiarato(product) {
+        if (!product) return 0;
+        const fine = cloudCapsEnd.get(nomeSemplice(product.layer));
+        return Number.isFinite(fine) ? fine : 0;
+      }
+
+      // Rilegge la dichiarazione, al massimo una volta ogni cinque minuti.
+      // La richiesta porta un numero che cambia: senza, la risposta resterebbe
+      // in cache e l'ultimo istante non avanzerebbe mai -- lo stesso tranello
+      // per cui in diretta si vedeva un'immagine vecchia.
+      function aggiornaIstantiDisponibili(forza) {
+        const adesso = Date.now();
+        if (!forza && adesso - cloudCapsAt < CLOUD_CAPS_TTL_MS) {
+          return Promise.resolve(false);
+        }
+        if (cloudCapsPending) return cloudCapsPending;
+        cloudCapsAt = adesso;
+        cloudCapsPending = fetch(CLOUD_CAPS_URL + "&_=" + adesso)
+          .then(function (risposta) {
+            if (!risposta.ok) throw new Error("capabilities " + risposta.status);
+            return risposta.text();
+          })
+          .then(function (testo) {
+            const xml = new DOMParser().parseFromString(testo, "text/xml");
+            let cambiato = false;
+            const strati = xml.getElementsByTagName("Layer");
+            for (let i = 0; i < strati.length; i++) {
+              const nodoNome = strati[i].getElementsByTagName("Name")[0];
+              if (!nodoNome) continue;
+              const nome = nomeSemplice(nodoNome.textContent.trim());
+              const dimensioni = strati[i].getElementsByTagName("Dimension");
+              for (let d = 0; d < dimensioni.length; d++) {
+                if (dimensioni[d].getAttribute("name") !== "time") continue;
+                // "inizio/fine/passo": la fine e' l'ultimo istante servito.
+                const pezzi = String(dimensioni[d].textContent || "")
+                  .trim().split(",").pop().split("/");
+                const fine = Date.parse(pezzi.length > 1 ? pezzi[1] : pezzi[0]);
+                if (!Number.isFinite(fine)) continue;
+                if (cloudCapsEnd.get(nome) !== fine) cambiato = true;
+                cloudCapsEnd.set(nome, fine);
+              }
+            }
+            return cambiato;
+          })
+          .catch(function () { return false; })
+          .then(function (cambiato) {
+            cloudCapsPending = null;
+            return cambiato;
+          });
+        return cloudCapsPending;
+      }
+
+      // Di quanti passi si puo' tornare indietro quando l'istante chiesto
+      // non c'e': un'ora scarsa di tentativi, poi si dichiara il guasto
+      // invece di insistere.
+      const CLOUD_MAX_PASSI_INDIETRO = 6;
+
+      function slotArretrato(product, slot, passi) {
+        const slotMs = (product && product.slotMs) || CLOUD_SLOT_MS;
+        const valore = slot.value - passi * slotMs;
+        return {
+          value: valore, newest: slot.newest, live: slot.live,
+          latest: slot.latest, date: new Date(valore),
+          iso: new Date(valore).toISOString().replace(/\.\d{3}Z$/, ".000Z")
+        };
+      }
+
       function cloudSlot(product) {
         const selected = product || CLOUD_PRODUCTS[cloudProduct] || CLOUD_PRODUCTS.geocolour;
         const slotMs = selected.slotMs || CLOUD_SLOT_MS;
         const latency = selected.latencyMinutes
           ? selected.latencyMinutes * 60 * 1000
           : CLOUD_LATENCY_MS;
-        // Il piu' recente che il servizio puo' avere, data la sua latenza.
-        const newest = Math.floor((Date.now() - latency) / slotMs) * slotMs;
+        // Il piu' recente che il servizio DICHIARA di avere. La stima per
+        // latenza resta solo finche' la dichiarazione non e' arrivata:
+        // indovinare l'istante porta a chiederne uno che non esiste, e il
+        // ripiego di allora -- chiedere senza istante -- e' esattamente cio'
+        // che faceva uscire il mosaico.
+        const dichiarato = ultimoIstanteDichiarato(selected);
+        const newest = dichiarato
+          ? Math.floor(dichiarato / slotMs) * slotMs
+          : Math.floor((Date.now() - latency) / slotMs) * slotMs;
         // L'istante scelto si arrotonda alla griglia DEL PRODOTTO, non a una
         // griglia sola: le nubi vanno a passo di dieci minuti e i fulmini di
         // cinque, e forzarli sulla stessa griglia butterebbe via meta' dei
@@ -5984,32 +6093,50 @@
         return { width: width, height: height, metres: spanX / width };
       }
 
-      function cloudUrl(box, size, product, slot, latestAvailable) {
-        // Con un istante esplicito &time=... rende ogni richiesta unica da
-        // sola: scorrere la barra all'indietro chiede sempre un URL mai
-        // visto prima, quindi non puo' mai arrivare dalla cache del
-        // browser un byte vecchio. "Ultimo disponibile" invece OMETTE
-        // apposta l'istante, perche' e' il servizio a scegliere quale --
-        // ma questo rende l'URL identico ogni volta che lo si richiede con
-        // lo stesso riquadro, e in diretta e' proprio il ramo che si
-        // richiede piu' spesso (ogni volta che lo slot stimato non esiste
-        // ancora, il caso normale con la latenza reale del satellite).
-        // Un URL identico e' un invito a essere messo in cache -- dal
-        // browser o da un proxy in mezzo -- e "l'ultimo disponibile" del
-        // momento in cui e' stato messo in cache puo' restare quello per
-        // ore: e' cosi' che in diretta si vedeva un'immagine di ore prima,
-        // magari notturna, mentre ogni istante passato restava perfetto.
-        // Il numero cambia via via aggiornando; l'istante richiesto no.
+      // Ogni richiesta porta SEMPRE l'istante, anche in diretta. Prima, per
+      // dire "l'ultima disponibile", lo si ometteva e si lasciava scegliere
+      // al servizio: ma questo serve un mosaico di granuli, e senza istante
+      // ne compone uno con quello che ciascuno ha -- riquadri di passaggi
+      // diversi nella stessa immagine, giorno accanto a notte.
+      //
+      // Un istante esplicito risolve anche il problema opposto e vecchio:
+      // l'URL cambia quando cambia l'istante, quindi non puo' restare in
+      // cache un byte di ore prima. A istante fermo l'URL e' identico, ed e'
+      // giusto che lo sia -- e' la stessa immagine. Ad avanzare e' la
+      // dichiarazione del servizio, riletta da aggiornaIstantiDisponibili.
+      function cloudUrl(box, size, product, slot) {
+        // PNG o JPEG, e non e' un dettaglio: sullo stesso riquadro di un
+        // telefono (1170x1255) il PNG pesa 3,1 MB e il JPEG 217 kB --
+        // quindici volte meno. In 4G e' la differenza fra aspettare cinque
+        // secondi e non accorgersene, a ogni panoramica.
+        //
+        // Si puo' fare perche' questi compositi RGB il canale alfa NON CE
+        // L'HANNO: controllato leggendo l'intestazione del PNG che il
+        // servizio restituisce -- e' a tre canali, quindi "transparent=true"
+        // non stava comprando niente. I prodotti che invece l'alfa ce l'hanno
+        // davvero restano PNG: il Lightning Imager e' RGBA e deve stare
+        // sopra le nubi, e pesa 5 kB, quindi non c'e' niente da guadagnare.
+        // L'infrarosso e' a palette e passa dalla nostra ricolorazione.
+        //
+        // Quanto costa in fedelta': differenza media 2,04 livelli su 255 fra
+        // PNG e JPEG sullo stesso fotogramma, massimo 28 su meno dell'1% dei
+        // pixel (i bordi netti delle nubi). Misurato, non stimato. In piu' il
+        // JPEG si decodifica prima: il primo tocco dei pixel scende da 204 a
+        // 123 ms su telefono emulato.
+        const compositoOpaco = product.mode === "scene";
         return CLOUD_WMS
           + "?service=WMS&version=1.1.1&request=GetMap&styles="
           + "&layers=" + encodeURIComponent(product.layer)
-          + "&srs=EPSG:3857&format=image/png&transparent=true"
+          + "&srs=EPSG:3857"
+          + (compositoOpaco
+              ? "&format=image/jpeg"
+              : "&format=image/png&transparent=true")
           + "&bbox=" + [
               mercatorMetresX(box.west), mercatorMetresY(box.south),
               mercatorMetresX(box.east), mercatorMetresY(box.north)
             ].map(function (value) { return value.toFixed(1); }).join(",")
           + "&width=" + size.width + "&height=" + size.height
-          + (latestAvailable ? "&_=" + Date.now() : "&time=" + slot.iso);
+          + "&time=" + slot.iso;
       }
 
       // Vale la pena rifare la richiesta? Solo se il riquadro esce da quello
@@ -6210,7 +6337,12 @@
         if (typeof document.hidden === "boolean" && document.hidden) return;
 
         const product = CLOUD_PRODUCTS[cloudProduct] || CLOUD_PRODUCTS.geocolour;
-        const slot = cloudSlot(product);
+        // Si tiene fresca la dichiarazione a ogni tentativo: la chiamata e'
+        // limitata a una ogni cinque minuti, quindi qui costa niente, ma
+        // garantisce che chi entra da una strada diversa da quella del
+        // pannello non parta comunque con una stima.
+        aggiornaIstantiDisponibili(false);
+        let slot = cloudSlot(product);
         const box = cloudRequestBox(0.22);
         const size = cloudRequestSize(box, product);
         if (!force && !cloudNeedsReload(cloudRequestBox(0), size, slot)) return;
@@ -6230,19 +6362,33 @@
             toast("Immagine satellitare non elaborabile");
           }
         };
+        // Alcune RGB arrivano un ciclo dopo il canale IR, e la
+        // dichiarazione del servizio puo' essere di qualche minuto avanti.
+        // Si torna indietro di un passo per volta, restando sempre su un
+        // istante PRECISO: il ripiego di prima -- chiedere senza istante --
+        // faceva comporre al servizio un mosaico di granuli di ore diverse.
+        let passiIndietro = 0;
         image.onerror = function () {
-          if (token !== cloudToken) return;
-          if (!slot.latest) {
-            // Alcune RGB possono arrivare un ciclo dopo il canale IR. Se lo
-            // slot stimato non esiste, EUMETView sceglie qui l'ultimo frame
-            // realmente pubblicato invece di lasciare il livello vuoto.
-            slot.latest = true;
-            image.src = cloudUrl(box, size, product, slot, true);
+          if (token !== cloudToken || !showSatelliteClouds) return;
+          passiIndietro += 1;
+          if (passiIndietro <= CLOUD_MAX_PASSI_INDIETRO) {
+            // Se nel frattempo e' arrivata la dichiarazione e indica un
+            // istante piu' indietro di quello che stiamo tentando, si salta
+            // direttamente li' invece di scendere passo per passo. Senza
+            // questo, chi parte con la stima -- che puo' essere avanti di
+            // un'ora e mezza -- consuma tutti i tentativi prima di arrivarci,
+            // e il satellite non compare affatto: misurato, cinque 502 di
+            // fila e schermo vuoto.
+            const dichiarato = ultimoIstanteDichiarato(product);
+            slot = (dichiarato && dichiarato < slot.value)
+              ? cloudSlot(product)
+              : slotArretrato(product, slot, 1);
+            image.src = cloudUrl(box, size, product, slot);
             return;
           }
           toast("Satellite EUMETSAT non raggiungibile");
         };
-        image.src = cloudUrl(box, size, product, slot, Boolean(slot.latest));
+        image.src = cloudUrl(box, size, product, slot);
       }
 
       // ---- FULMINI IN DIRETTA (Blitzortung) ----------------------------
@@ -8482,7 +8628,7 @@
         if (!map.getSource("satellite-lightning")) return;
         if (typeof document.hidden === "boolean" && document.hidden) return;
 
-        const slot = cloudSlot(LIGHTNING_PRODUCT);
+        let slot = cloudSlot(LIGHTNING_PRODUCT);
         const box = cloudRequestBox(0.22);
         const size = cloudRequestSize(box, LIGHTNING_PRODUCT);
         if (!force && !lightningNeedsReload(cloudRequestBox(0), size, slot)) return;
@@ -8538,21 +8684,35 @@
             publish(canvas.toDataURL("image/png"), false);
           }
         };
+        let passiIndietro = 0;
         image.onerror = function () {
-          if (token !== lightningToken) return;
-          if (!slot.latest) {
-            // Due casi, stesso rimedio. Lo slot stimato puo' non essere ancora
-            // pubblicato (la latenza di venti minuti e' una media, non una
-            // garanzia), e il servizio puo' rispondere 500 quando e' sotto
-            // carico. In entrambi, chiedere "l'ultimo disponibile" lascia
-            // scegliere a lui invece di lasciare il livello vuoto.
-            slot.latest = true;
-            image.src = cloudUrl(box, size, LIGHTNING_PRODUCT, slot, true);
+          if (token !== lightningToken || !showLightning) return;
+          // Due casi, stesso rimedio. L'istante puo' non essere ancora
+          // pubblicato per questo prodotto, e il servizio puo' rispondere 500
+          // quando e' sotto carico. In entrambi si torna indietro di un passo,
+          // restando su un istante PRECISO: chiedere "l'ultimo disponibile"
+          // senza istante, come si faceva, lascia comporre al servizio un
+          // mosaico di granuli presi a ore diverse.
+          passiIndietro += 1;
+          if (passiIndietro <= CLOUD_MAX_PASSI_INDIETRO) {
+            // Se nel frattempo e' arrivata la dichiarazione e indica un
+            // istante piu' indietro di quello che stiamo tentando, si salta
+            // direttamente li' invece di scendere passo per passo. Senza
+            // questo, chi parte con la stima -- che puo' essere avanti di
+            // un'ora e mezza -- consuma tutti i tentativi prima di arrivarci,
+            // e il satellite non compare affatto: misurato, cinque 502 di
+            // fila e schermo vuoto.
+            const dichiarato = ultimoIstanteDichiarato(LIGHTNING_PRODUCT);
+            slot = (dichiarato && dichiarato < slot.value)
+              ? cloudSlot(LIGHTNING_PRODUCT)
+              : slotArretrato(LIGHTNING_PRODUCT, slot, 1);
+            image.src = cloudUrl(box, size, LIGHTNING_PRODUCT, slot);
             return;
           }
           updateLightningNote(null);
-          // Un solo tentativo differito: se anche l'ultimo disponibile fallisce
-          // il servizio e' davvero in difficolta', e insistere lo peggiora.
+          // Un solo tentativo differito: se dopo tutti i passi indietro non
+          // c'e' ancora niente, il servizio e' davvero in difficolta', e
+          // insistere lo peggiora.
           if (lightningRetryTimer) return;
           lightningRetryTimer = setTimeout(function () {
             lightningRetryTimer = 0;
@@ -8972,11 +9132,38 @@
           // qualunque sia il riquadro.
           cloudLoadedBox = null;
         }
-        loadSatelliteClouds(true);
+        // Prima di chiedere l'immagine si chiede al servizio COSA HA: e'
+        // quello che decide l'istante, e senza la sua risposta si ripiega
+        // sulla latenza stimata, che puo' indicare un istante inesistente.
+        // Quando la dichiarazione avanza, si ricarica -- e' questo, adesso,
+        // il modo in cui la diretta resta diretta.
+        // Si aspetta la dichiarazione PRIMA di chiedere l'immagine, quando
+        // non se ne ha ancora una: senza, la stima per latenza chiede un
+        // istante che spesso non esiste e il servizio risponde 502 -- due
+        // richieste buttate e il primo disegno in ritardo (misurato: 09:40 e
+        // 09:30 rifiutati, poi 08:00 dichiarato e servito). Se la
+        // dichiarazione tarda piu' di due secondi e mezzo si parte lo stesso
+        // con la stima: meglio un tentativo che uno schermo vuoto.
+        const giaNota = ultimoIstanteDichiarato(product) > 0;
+        let partito = false;
+        const parti = function () {
+          if (partito) return;
+          partito = true;
+          if (showSatelliteClouds) loadSatelliteClouds(true);
+          if (showLightning) loadLightning(true);
+        };
+        aggiornaIstantiDisponibili(true).then(parti);
+        if (giaNota) parti();
+        else setTimeout(parti, 2500);
         // Controllo a meta' della cadenza del prodotto (5 o 10 minuti): la
         // richiesta parte solo se lo slot e' davvero cambiato.
-        cloudTimer = setInterval(function () { loadSatelliteClouds(false); },
-          (product.slotMs || CLOUD_SLOT_MS) / 2);
+        cloudTimer = setInterval(function () {
+          if (document.hidden) return;
+          aggiornaIstantiDisponibili(false).then(function (avanzato) {
+            loadSatelliteClouds(false);
+            if (avanzato && showLightning) loadLightning(false);
+          });
+        }, (product.slotMs || CLOUD_SLOT_MS) / 2);
         const selectedProduct = CLOUD_PRODUCTS[cloudProduct] || CLOUD_PRODUCTS.geocolour;
         toast("Satellite MTG · " + selectedProduct.name
           + " · osservazione satellitare");
