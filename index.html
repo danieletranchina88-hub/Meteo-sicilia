@@ -137,8 +137,6 @@
 
       #particle-canvas,
       #vector-canvas,
-      #strike-volume-canvas,
-      #strike-light-canvas,
       #map-vignette {
         position: fixed;
         inset: 0;
@@ -149,21 +147,6 @@
 
       #particle-canvas {
         z-index: 6;
-      }
-
-      /* Il volume WebGL sta sopra il satellite ma sotto simboli e particelle.
-         Il suo alfa contiene sia emissione sia ombra: source-over permette al
-         ray marcher di schiarire e scurire localmente la nube reale. */
-      #strike-volume-canvas {
-        z-index: 5;
-      }
-
-      /* Compositing normale, non "screen": screen non supera mai il bianco,
-         quindi di giorno un lampo sopra una nube gia' chiara sparirebbe
-         invece di essere abbagliante. L'alfa quasi opaco del gradiente in
-         disegnaNubeIlluminata basta da solo a superare i pixel sottostanti. */
-      #strike-light-canvas {
-        z-index: 5;
       }
 
       #vector-canvas {
@@ -2223,8 +2206,6 @@
   <body>
     <div id="map" aria-label="Mappa meteorologica interattiva"></div>
     <canvas id="particle-canvas" aria-hidden="true"></canvas>
-    <canvas id="strike-volume-canvas" aria-hidden="true"></canvas>
-    <canvas id="strike-light-canvas" aria-hidden="true"></canvas>
     <canvas id="vector-canvas" aria-hidden="true"></canvas>
     <div id="sky-haze" aria-hidden="true"></div>
     <div id="paper-wash" aria-hidden="true"></div>
@@ -3821,9 +3802,6 @@
       const rasterContext = rasterCanvas.getContext("2d");
       const particleCanvas = document.getElementById("particle-canvas");
       const particleContext = particleCanvas.getContext("2d", { alpha: true });
-      const strikeVolumeCanvas = document.getElementById("strike-volume-canvas");
-      const strikeLightCanvas = document.getElementById("strike-light-canvas");
-      const strikeLightContext = strikeLightCanvas.getContext("2d", { alpha: true });
       const vectorCanvas = document.getElementById("vector-canvas");
       const vectorContext = vectorCanvas.getContext("2d", { alpha: true });
 
@@ -6204,7 +6182,6 @@
             );
             mascheraNube = maschera;
             cloudPublishedKey = frameKey;
-            preparaVolumeNube(maschera, primaryCanvas, product, box, slot, frameKey);
             cloudLoadedBox = box;
             cloudLoadedMetres = size.metres;
             cloudLoadedSlot = slot.value;
@@ -6710,1152 +6687,265 @@
       //
       // Costa una volta per fotogramma satellitare, cioe' ogni cinque o
       // dieci minuti, non a ogni lampo.
-      // Lato massimo della maschera delle nubi. E' il ritaglio che dice al
-      // lampo DOVE la nube c'e' davvero, e si ricostruisce a ogni fotogramma
-      // satellitare -- cioe' anche a ogni panoramica che esaurisce il
-      // riquadro gia' scaricato.
-      //
-      // Costa un singolo blocco del thread, e non e' piccolo: misurato su
-      // telefono emulato con CPU rallentata sei volte, 670 millisecondi in
-      // una chiamata sola. Non e' il ciclo per pixel -- quello e' aritmetica
-      // banale -- sono il ridimensionamento della sorgente e la rilettura
-      // dei pixel, che crescono col quadrato del lato.
-      //
-      // Sul telefono si dimezza: 384 su uno schermo da 390 punti resta circa
-      // un texel per punto, cioe' tutta la sagoma che lo schermo puo'
-      // comunque mostrare. Sul PC resta 768.
-      function mascheraLato() {
-        return isMobile() ? 384 : 768;
-      }
-      // Lato della griglia volumetrica. Segue la maschera: tenerlo a 768
-      // mentre sul telefono la maschera sta a 384 non aggiungeva nessun
-      // dettaglio -- lo INVENTAVA, ingrandendo una sorgente piu' piccola --
-      // e intanto quadruplicava la texture che la GPU deve tenere e
-      // campionare a ogni fotogramma.
-      function volumeLato() {
-        return mascheraLato();
-      }
-      const VOLUME_CACHE_LIMIT = 4;
+      const MASCHERA_LATO = 512;
       let mascheraNube = null;
-      let volumeToken = 0;
-      const volumeFrames = new Map();
-
-      function canvasRidotta(sorgente, width, height) {
-        if (!sorgente || !sorgente.width || !sorgente.height) return null;
-        const tela = document.createElement("canvas");
-        tela.width = width; tela.height = height;
-        const ctx = tela.getContext("2d", { willReadFrequently: true });
-        ctx.drawImage(sorgente, 0, 0, width, height);
-        return { tela: tela, ctx: ctx, dati: ctx.getImageData(0, 0, width, height) };
-      }
-
-      function percentileCanale(px, canale, q) {
-        const hist = new Uint32Array(256);
-        let count = 0;
-        for (let i = 0; i < px.length; i += 4) {
-          if (px[i + 3] < 16) continue;
-          const value = canale < 0
-            ? Math.round(0.2126 * px[i] + 0.7152 * px[i + 1] + 0.0722 * px[i + 2])
-            : px[i + canale];
-          hist[value]++; count++;
-        }
-        if (!count) return 0;
-        let seen = 0;
-        for (let value = 0; value < 256; value++) {
-          seen += hist[value];
-          if (seen >= count * q) return value;
-        }
-        return 255;
-      }
 
       function costruisciMascheraNube(sorgente, box, product) {
-        // Fallback dal solo fotogramma mostrato. La vera struttura volumetrica
-        // viene poi fusa da Cloud Type + IR10.5; questa mantiene utilizzabile
-        // l'effetto mentre i due prodotti ausiliari stanno arrivando.
+        // Non tutti i tredici canali sono adatti: quelli "diagnostici" --
+        // fase delle nubi, tipo di nube, nebbia, polvere, neve -- sono RGB
+        // artificiali dove il rosa o il verde acceso segnalano una diagnosi
+        // (ghiaccio piccolo, polvere, manto nevoso), non "piu' luminoso
+        // uguale piu' nube". Usarne la luminanza come sagoma illuminerebbe
+        // la mappa secondo una scala che non e' spessore di nube: sarebbe
+        // fisica finta con l'aria di essere vera. Restano buoni solo il
+        // grigio dell'infrarosso e del visibile ("grey") e i compositi a
+        // colori naturali ("scene"), dove chiaro vuol dire davvero denso.
         if (!product || !["scene", "grey"].includes(product.mode)) return null;
         try {
-          const scala = Math.min(1, mascheraLato() / Math.max(sorgente.width, sorgente.height));
-          const w = Math.max(1, Math.round(sorgente.width * scala));
-          const h = Math.max(1, Math.round(sorgente.height * scala));
-          const raster = canvasRidotta(sorgente, w, h);
-          if (!raster) return null;
-          const px = raster.dati.data;
-          const low = Math.max(18, percentileCanale(px, -1, 0.18));
-          const high = percentileCanale(px, -1, 0.94);
-          if (high - low < 18) return null;
-          const cloud = new Uint8ClampedArray(w * h);
-          const height = new Uint8ClampedArray(w * h);
-          const thickness = new Uint8ClampedArray(w * h);
-          for (let i = 0, p = 0; i < px.length; i += 4, p++) {
-            const r = px[i], g = px[i + 1], b = px[i + 2];
-            const alpha = px[i + 3] / 255;
-            const luminance = 0.2126 * r + 0.7152 * g + 0.0722 * b;
-            const level = clamp((luminance - low) / (high - low), 0, 1);
-            const saturation = (Math.max(r,g,b) - Math.min(r,g,b)) / Math.max(1,r,g,b);
-            const neutral = product.mode === "scene"
-              ? 1 - clamp((saturation - 0.12) / 0.5, 0, 1)
-              : 1;
-            const amount = level * level * (3 - 2 * level) * neutral * alpha;
-            cloud[p] = Math.round(255 * amount);
-            height[p] = Math.round(255 * level);
-            thickness[p] = Math.round(255 * amount);
-            const relief = 0.68 + 0.32 * level;
-            px[i] = px[i + 1] = px[i + 2] = Math.round(255 * relief);
-            px[i + 3] = cloud[p];
+          const largo = sorgente.width, alto = sorgente.height;
+          if (!largo || !alto) return null;
+          // Ridotta: la maschera serve a dare una forma a un bagliore, non a
+          // essere guardata. Mezzo migliaio di pixel di lato bastano, e
+          // tengono il costo di lettura sotto il millisecondo.
+          const scala = Math.min(1, MASCHERA_LATO / Math.max(largo, alto));
+          const mw = Math.max(1, Math.round(largo * scala));
+          const mh = Math.max(1, Math.round(alto * scala));
+          const piccola = document.createElement("canvas");
+          piccola.width = mw; piccola.height = mh;
+          const pc = piccola.getContext("2d", { willReadFrequently: true });
+          pc.drawImage(sorgente, 0, 0, mw, mh);
+          const dati = pc.getImageData(0, 0, mw, mh);
+          const px = dati.data;
+
+          // Quanto e' "nube" un pixel si misura dalla luminanza percepita:
+          // nel visibile le nubi sono chiare, nell'infrarosso le sommita'
+          // fredde sono chiare, e in entrambi mare e terra sono piu' scuri.
+          //
+          // La soglia pero' NON puo' essere fissa. I tredici canali hanno
+          // dinamiche molto diverse, e soprattutto la stessa GeoColour di
+          // notte mostra nubi grigio-azzurre scure invece che bianche: con
+          // una soglia tarata sul giorno la maschera notturna usciva quasi
+          // trasparente, e il bagliore -- misurato -- restava al sette per
+          // cento di opacita', cioe' invisibile. La soglia si ricava quindi
+          // dall'immagine stessa, per percentili: il quindicesimo e' la
+          // superficie piu' scura presente, il novantesimo la nube piu'
+          // spessa. In mezzo c'e' tutto quello che diffonde luce.
+          const istogramma = new Uint32Array(64);
+          let quanti = 0;
+          for (let i = 0; i < px.length; i += 4) {
+            if (px[i + 3] < 8) continue;
+            const l = (px[i] * 0.2126 + px[i + 1] * 0.7152 + px[i + 2] * 0.0722) / 255;
+            istogramma[Math.min(63, Math.max(0, Math.round(l * 63)))] += 1;
+            quanti += 1;
           }
-          raster.ctx.putImageData(raster.dati, 0, 0);
-          return { tela: raster.tela, width: w, height: h, cloud: cloud,
-            top: height, thickness: thickness, west: box.west, east: box.east,
-            north: box.north, south: box.south, source: product.layer };
-        } catch (_) { return null; }
-      }
-
-      function dimensioneVolumeNube(box) {
-        const spanX = Math.max(1, mercatorMetresX(box.east) - mercatorMetresX(box.west));
-        const spanY = Math.max(1, mercatorMetresY(box.north) - mercatorMetresY(box.south));
-        const aspect = spanY / spanX;
-        const lato = volumeLato();
-        const width = aspect > 1 ? Math.max(256, Math.round(lato / aspect)) : lato;
-        const height = aspect > 1 ? lato : Math.max(256, Math.round(lato * aspect));
-        return { width: width, height: height, metres: spanX / width };
-      }
-
-      function chiaveVolumeNube(slot, box, size) {
-        return [slot.value, size.width, size.height, box.west.toFixed(3),
-          box.east.toFixed(3), box.south.toFixed(3), box.north.toFixed(3)].join("|");
-      }
-
-      function decodificaCloudType(r, g, b) {
-        // Ricetta EUMETSAT Cloud Type RGB:
-        // R=NIR1.38 (quota), G=VIS0.64 (spessore ottico),
-        // B=NIR1.61 (fase acqua/ghiaccio). Le potenze invertono, per quanto
-        // possibile da un RGB visuale, i gamma 1.5 / 0.75 / 1.0 pubblicati
-        // nella ricetta invece di scambiare il colore mostrato per una misura
-        // lineare. Per valori quantitativi resterebbe preferibile OCA L2.
-        const top = Math.pow(clamp(r, 0, 1), 1.5);
-        const thickness = Math.pow(clamp(g, 0, 1), 0.75);
-        return { top: top, thickness: thickness, phase: clamp(b, 0, 1),
-          cloud: clamp(0.62*thickness + 0.38*top - 0.1, 0, 1) };
-      }
-
-      function raggioVolumeKm(sample) {
-        const ice = 1 - (Number.isFinite(sample.phase) ? sample.phase : 0.5);
-        return clamp(10 + 22*Math.sqrt(sample.thickness) + 7*sample.top
-          + 3*ice*sample.top, 10, 42);
-      }
-
-      function costruisciVolumeNube(base, tipo, infra, box, slot) {
-        try {
-          const size = dimensioneVolumeNube(box), w = size.width, h = size.height;
-          const baseRaster = base && canvasRidotta(base.tela, w, h);
-          const typeRaster = tipo && canvasRidotta(tipo, w, h);
-          const irRaster = infra && canvasRidotta(infra, w, h);
-          if (!baseRaster && !typeRaster && !irRaster) return null;
-
-          const basePx = baseRaster && baseRaster.dati.data;
-          const typePx = typeRaster && typeRaster.dati.data;
-          const irPx = irRaster && irRaster.dati.data;
-          const typeRange = typePx ? Math.max(
-            percentileCanale(typePx, 0, 0.94) - percentileCanale(typePx, 0, 0.08),
-            percentileCanale(typePx, 1, 0.94) - percentileCanale(typePx, 1, 0.08)
-          ) : 0;
-          const typeValid = typeRange >= 22;
-          const irLow = irPx ? percentileCanale(irPx, -1, 0.16) : 0;
-          const irHigh = irPx ? percentileCanale(irPx, -1, 0.94) : 0;
-          const irValid = irHigh - irLow >= 18;
-          if (!baseRaster && !typeValid && !irValid) return null;
-
-          const n = w * h;
-          const cloud = new Uint8ClampedArray(n);
-          const top = new Uint8ClampedArray(n);
-          const thickness = new Uint8ClampedArray(n);
-          const phase = new Uint8ClampedArray(n);
-          for (let p = 0; p < n; p++) {
-            const i = p * 4;
-            const baseCloud = basePx ? basePx[i + 3] / 255 : 0;
-            const tr = typeValid ? typePx[i] / 255 : 0;
-            const tg = typeValid ? typePx[i + 1] / 255 : 0;
-            const tb = typeValid ? typePx[i + 2] / 255 : 0;
-            // Cloud Type RGB: R=NIR1.38 (altezza), G=VIS0.64
-            // (spessore ottico), B=NIR1.61 (fase). Non trattiamo il colore
-            // visuale come una fotografia: decodifichiamo i contributi fisici.
-            const decoded = typeValid ? decodificaCloudType(tr,tg,tb)
-              : {top:0,thickness:0,phase:0,cloud:0};
-            const typeCloud = decoded.cloud;
-            const irLum = irValid
-              ? (0.2126 * irPx[i] + 0.7152 * irPx[i + 1] + 0.0722 * irPx[i + 2])
-              : 0;
-            const cold = irValid ? clamp((irLum - irLow) / (irHigh - irLow), 0, 1) : 0;
-            const support = Math.max(baseCloud,
-              typeCloud * (0.46 + 0.54 * Math.max(cold, baseCloud)),
-              cold * baseCloud);
-            const amount = clamp(support, 0, 1);
-            const highTop = clamp((typeValid ? 0.58 * decoded.top : 0)
-              + (irValid ? 0.42 * cold : 0)
-              + (!typeValid && !irValid ? baseCloud : 0), 0, 1);
-            const optical = clamp((typeValid ? 0.68 * decoded.thickness : 0)
-              + 0.32 * Math.max(baseCloud, cold * baseCloud), 0, 1);
-            cloud[p] = Math.round(255 * amount);
-            top[p] = Math.round(255 * highTop);
-            thickness[p] = Math.round(255 * optical);
-            phase[p] = Math.round(255 * decoded.phase);
-          }
-
-          const tela = document.createElement("canvas");
-          tela.width = w; tela.height = h;
-          const ctx = tela.getContext("2d", { willReadFrequently: true });
-          const image = ctx.createImageData(w, h), out = image.data;
-          for (let y = 0; y < h; y++) {
-            for (let x = 0; x < w; x++) {
-              const p = y * w + x, i = p * 4;
-              const left = top[y*w+Math.max(0,x-1)] / 255;
-              const right = top[y*w+Math.min(w-1,x+1)] / 255;
-              const above = top[Math.max(0,y-1)*w+x] / 255;
-              const below = top[Math.min(h-1,y+1)*w+x] / 255;
-              const edge = clamp(Math.hypot(right-left, below-above) * 2.8, 0, 1);
-              // Rilievo neutro: modula quanta emissione emerge, senza
-              // colorare il prodotto né inventare ombre sulla mappa.
-              const relief = clamp(0.5 + 0.27 * top[p] / 255
-                + 0.15 * thickness[p] / 255 + 0.12 * edge
-                + 0.04 * (1-phase[p]/255), 0.42, 1);
-              out[i] = out[i+1] = out[i+2] = Math.round(255 * relief);
-              out[i+3] = cloud[p];
+          const percentile = function (frazione) {
+            let visti = 0;
+            const bersaglio = quanti * frazione;
+            for (let b = 0; b < 64; b += 1) {
+              visti += istogramma[b];
+              if (visti >= bersaglio) return b / 63;
             }
+            return 1;
+          };
+          const buio = quanti ? percentile(0.15) : 0.2;
+          const pieno = quanti ? percentile(0.9) : 0.75;
+          // Se l'immagine e' tutta uguale -- cielo sereno da un capo
+          // all'altro, o una schermata nera -- non c'e' sagoma da ricavare:
+          // meglio nessuna maschera che una maschera casuale.
+          const intervallo = pieno - buio;
+          if (!quanti || intervallo < 0.06) return null;
+
+          for (let i = 0; i < px.length; i += 4) {
+            const r = px[i], g = px[i + 1], b = px[i + 2], alfaSorgente = px[i + 3] / 255;
+            const luminanza = (r * 0.2126 + g * 0.7152 + b * 0.0722) / 255;
+            // Il contrasto si alza con una gamma: nella fotografia i lobi
+            // scuri davanti restano neri mentre il cuore della nube brucia,
+            // ed e' quel salto a far leggere la luce come interna alla
+            // nube. Una maschera lineare invece la spalma, e il risultato
+            // sembra nebbia illuminata.
+            const grezza = clamp((luminanza - buio) / intervallo, 0, 1);
+            // Sui compositi a colori naturali resta un problema che la sola
+            // luminanza non vede: un deserto, un tetto assolato o le luci
+            // di una citta' possono essere chiari quanto una nube, ma sono
+            // COLORATI -- terra e luci hanno una tinta netta, la sommita'
+            // di un cumulo no. Si penalizza quindi la saturazione, e solo
+            // sui compositi a colore: sul grigio dell'infrarosso non c'e'
+            // colore da giudicare, e la tinta sarebbe solo rumore del jpeg.
+            const saturazione = (Math.max(r, g, b) - Math.min(r, g, b)) / Math.max(1, r, g, b);
+            const neutro = product.mode === "scene"
+              ? 1 - clamp((saturazione - 0.12) / 0.5, 0, 1)
+              : 1;
+            const nuvolosita = grezza * grezza * (3 - 2 * grezza) * neutro * alfaSorgente;
+            // Il colore non serve: resta solo il canale alfa, che e' la
+            // sagoma. Bianco pieno cosi' il ritaglio non tinge il bagliore.
+            px[i] = 255; px[i + 1] = 255; px[i + 2] = 255;
+            px[i + 3] = Math.round(255 * nuvolosita);
           }
-          ctx.putImageData(image, 0, 0);
-          return { tela: tela, width: w, height: h, cloud: cloud, top: top,
-            thickness: thickness, phase: phase, west: box.west, east: box.east,
-            north: box.north, south: box.south, slot: slot.value,
-            source: typeValid && irValid ? "cloudtype+ir105"
-              : (typeValid ? "cloudtype" : (irValid ? "ir105" : "display")) };
-        } catch (_) { return base || null; }
+          pc.putImageData(dati, 0, 0);
+          return { tela: piccola, west: box.west, east: box.east,
+                   south: box.south, north: box.north, layer: product.layer };
+        } catch (error) {
+          // Canvas "sporca" o memoria insufficiente: si ripiega sul disco
+          // morbido, che e' meno bello ma non e' un guasto.
+          return null;
+        }
       }
 
-      function caricaRasterVolume(product, box, size, slot, done) {
-        const image = new Image();
-        image.crossOrigin = "anonymous";
-        image.onload = function () {
-          try {
-            const canvas = document.createElement("canvas");
-            canvas.width = image.naturalWidth || size.width;
-            canvas.height = image.naturalHeight || size.height;
-            canvas.getContext("2d").drawImage(image, 0, 0);
-            done(canvas);
-          } catch (_) { done(null); }
+      // Il bagliore ritagliato sulla sagoma delle nubi. Si disegna su una
+      // tela di servizio, ci si ritaglia dentro la maschera, e il risultato
+      // si somma alla mappa: e' l'unico modo di far uscire la luce solo
+      // dalle nubi con una sola passata di composizione.
+      let telaBagliore = null;
+      function disegnaNubeIlluminata(context, punto, largo, nube) {
+        // Le tappe del bagliore, con un fattore che ne scala la forza. Serve
+        // perche' le due passate qui sotto hanno forze molto diverse: quella
+        // ritagliata sulle nubi deve essere la luce vera, quella tonda solo
+        // un minimo di sicurezza.
+        // La tavolozza non e' scelta a occhio: viene campionata da una
+        // fotografia vera di temporale illuminato dall'interno, misurando la
+        // tinta media per fascia di luminanza. Il risultato dice una cosa
+        // sola e chiara -- il VERDE e' sempre il canale piu' basso:
+        //
+        //   luminanza 0,38-0,58   133,115,128
+        //   luminanza 0,58-0,80   189,168,190
+        //   luminanza 0,80-1,00   229,217,240
+        //
+        // Non e' azzurro (li' il blu supererebbe il rosso di un centinaio) e
+        // non e' ambra: e' lavanda. Ha anche senso fisico, perche' lo
+        // spettro del fulmine e' dominato dall'azoto nel violetto piu' un
+        // po' di rosso, con un buco proprio nel verde; diffuso dal ghiaccio
+        // della nube resta questo.
+        const tinte = function (g, forza) {
+          const a = forza * nube;
+          g.addColorStop(0, "rgba(253,250,255," + (0.98 * a).toFixed(3) + ")");
+          g.addColorStop(0.16, "rgba(250,236,255," + (0.72 * a).toFixed(3) + ")");
+          g.addColorStop(0.36, "rgba(238,214,248," + (0.42 * a).toFixed(3) + ")");
+          // E si SCALDA mentre si spegne, invece di virare al violetto: nella
+          // fotografia lo scarto fra blu e rosso passa da +11 nel cuore a -5
+          // nella fascia intermedia. E' il contrario di quello che verrebbe
+          // da disegnare, ed e' l'unica ragione per cui vale la pena
+          // misurare una foto invece di scegliere i colori a mano.
+          g.addColorStop(0.58, "rgba(208,182,208," + (0.2 * a).toFixed(3) + ")");
+          g.addColorStop(0.8, "rgba(178,154,174," + (0.07 * a).toFixed(3) + ")");
+          g.addColorStop(1, "rgba(162,140,156,0)");
         };
-        image.onerror = function () { done(null); };
-        image.src = cloudUrl(box, size, product, slot, Boolean(slot.latest));
-      }
+        const tondo = function (forza, raggio) {
+          const g = context.createRadialGradient(punto.x, punto.y, 0, punto.x, punto.y, raggio);
+          tinte(g, forza);
+          context.fillStyle = g;
+          context.beginPath();
+          context.arc(punto.x, punto.y, raggio, 0, Math.PI * 2);
+          context.fill();
+        };
 
-      function preparaVolumeNube(base, primaryCanvas, primaryProduct, box, slot, frameKey) {
-        if (!showLiveLightning || !showSatelliteClouds || cloudTimeSelected) return;
-        const size = dimensioneVolumeNube(box);
-        const key = chiaveVolumeNube(slot, box, size);
-        if (volumeFrames.has(key)) {
-          if (cloudPublishedKey === frameKey) {
-            mascheraNube = volumeFrames.get(key);
-            const renderer=inizializzaVolumeRenderer();
-            if(renderer)aggiornaTextureVolume(renderer,mascheraNube);
-            requestVectorRender();
-          }
+        // Senza maschera, o con la mappa inclinata -- dove il riquadro
+        // dell'immagine non e' piu' un rettangolo sullo schermo -- resta
+        // solo il bagliore tondo. Meno bello, ma mai sbagliato.
+        // Il raggio pieno vale solo per la luce RITAGLIATA: li' allargarsi
+        // vuol dire illuminare piu' nube. Il bagliore tondo, che non sa
+        // dove sia la nube, deve restare molto piu' stretto, o torna a
+        // essere la macchia che copriva tutto.
+        const inclinata = map.getPitch && map.getPitch() > 4;
+        if (!mascheraNube || inclinata || !showSatelliteClouds) {
+          tondo(1, largo * 0.62);
           return;
         }
-        const token = ++volumeToken;
-        let tipo = primaryProduct && primaryProduct.layer === CLOUD_PRODUCTS.cloudtype.layer
-          ? primaryCanvas : null;
-        let infra = primaryProduct && primaryProduct.layer === CLOUD_PRODUCTS.ir105.layer
-          ? primaryCanvas : null;
-        let pending = (tipo ? 0 : 1) + (infra ? 0 : 1);
-        const finish = function () {
-          if (pending) return;
-          const volume = costruisciVolumeNube(base, tipo, infra, box, slot);
-          if (!volume) return;
-          volumeFrames.set(key, volume);
-          while (volumeFrames.size > VOLUME_CACHE_LIMIT) {
-            volumeFrames.delete(volumeFrames.keys().next().value);
-          }
-          if (token === volumeToken && cloudPublishedKey === frameKey
-              && showLiveLightning && showSatelliteClouds && !cloudTimeSelected) {
-            mascheraNube = volume;
-            const renderer=inizializzaVolumeRenderer();
-            if(renderer)aggiornaTextureVolume(renderer,volume);
-            requestVectorRender();
-          }
-        };
-        if (!tipo) {
-          caricaRasterVolume(CLOUD_PRODUCTS.cloudtype, box, size, slot, function (canvas) {
-            tipo = canvas; pending--; finish();
-          });
+
+        // Il bagliore si disegna in due parti, ed e' la seconda a dargli la
+        // forma.
+        //
+        // La prima e' un minimo garantito, tondo e tenue. Serve perche' la
+        // maschera da sola e' troppo severa: la posizione di una scarica ha
+        // un chilometro buono di incertezza, e basta che cada in uno
+        // squarcio fra le nubi perche' il ritaglio le porti via tutta la
+        // luce. Un lampo invisibile e' peggio di un lampo un po' tondo.
+        // Copre anche i bordi del riquadro satellitare, dove la maschera
+        // semplicemente non arriva. Resta pero' un quarto della luce piena:
+        // deve garantire, non competere con la seconda passata.
+        tondo(0.2, largo * 0.68);
+
+        // La seconda e' la stessa luce ritagliata sulla sagoma delle nubi:
+        // e' questa che fa vedere la sommita' accendersi, con i suoi bordi
+        // frastagliati e i suoi buchi, invece di un cerchio. Ed e' molto
+        // piu' forte del minimo, o il ritaglio si limiterebbe a togliere
+        // luce invece di dare forma -- misurato, con le due passate quasi
+        // pari il bagliore usciva al sette per cento di opacita' media,
+        // cioe' non si vedeva affatto.
+        const lato = Math.ceil(largo * 2);
+        if (!telaBagliore) telaBagliore = document.createElement("canvas");
+        if (telaBagliore.width !== lato || telaBagliore.height !== lato) {
+          telaBagliore.width = lato; telaBagliore.height = lato;
         }
-        if (!infra) {
-          caricaRasterVolume(CLOUD_PRODUCTS.ir105, box, size, slot, function (canvas) {
-            infra = canvas; pending--; finish();
-          });
-        }
-        finish();
-      }
+        const tc = telaBagliore.getContext("2d");
+        tc.setTransform(1, 0, 0, 1, 0, 0);
+        tc.clearRect(0, 0, lato, lato);
+        const g = tc.createRadialGradient(largo, largo, 0, largo, largo, largo);
+        tinte(g, 1);
+        tc.fillStyle = g;
+        tc.fillRect(0, 0, lato, lato);
 
-      function assicuraVolumeNubeCorrente() {
-        const frame = cloudFrames.get(cloudPublishedKey);
-        if (!frame || !cloudLoadedSlot) return;
-        const slot = { value: cloudLoadedSlot, date: new Date(cloudLoadedSlot),
-          iso: new Date(cloudLoadedSlot).toISOString().replace(/\.\d{3}Z$/, ".000Z") };
-        const product = CLOUD_PRODUCTS[cloudProduct] || CLOUD_PRODUCTS.geocolour;
-        preparaVolumeNube(frame.maschera || null, null, product,
-          frame.box, slot, cloudPublishedKey);
-      }
-
-      function campionaVolumeNube(mask, longitude, latitude) {
-        if (!mask || longitude < mask.west || longitude > mask.east
-            || latitude < mask.south || latitude > mask.north) return null;
-        const x = clamp(Math.round((longitude-mask.west)/(mask.east-mask.west)*(mask.width-1)),0,mask.width-1);
-        const y = clamp(Math.round((mask.north-latitude)/(mask.north-mask.south)*(mask.height-1)),0,mask.height-1);
-        let best = -1, index = y * mask.width + x;
-        for (let dy = -5; dy <= 5; dy++) {
-          for (let dx = -5; dx <= 5; dx++) {
-            const xx=x+dx, yy=y+dy;
-            if (xx<0 || yy<0 || xx>=mask.width || yy>=mask.height) continue;
-            const p=yy*mask.width+xx;
-            const score=mask.cloud[p]+0.25*mask.thickness[p];
-            if (score>best) { best=score; index=p; }
-          }
-        }
-        if (mask.cloud[index] < 18) return null;
-        return { index:index, x:index%mask.width, y:Math.floor(index/mask.width),
-          cloud:mask.cloud[index]/255, top:mask.top[index]/255,
-          thickness:mask.thickness[index]/255,
-          phase:mask.phase ? mask.phase[index]/255 : 0.5 };
-      }
-
-      function componenteNube(mask, longitude, latitude, radiusKm) {
-        const sample = campionaVolumeNube(mask, longitude, latitude);
-        if (!sample) return null;
-        const cosLat = Math.max(0.2, Math.cos(latitude*Math.PI/180));
-        const rx = Math.max(3, Math.ceil(radiusKm / ((mask.east-mask.west)*111.32*cosLat) * mask.width));
-        const ry = Math.max(3, Math.ceil(radiusKm / ((mask.north-mask.south)*111.32) * mask.height));
-        const x0=Math.max(0,sample.x-rx), x1=Math.min(mask.width-1,sample.x+rx);
-        const y0=Math.max(0,sample.y-ry), y1=Math.min(mask.height-1,sample.y+ry);
-        const w=x1-x0+1, h=y1-y0+1, visited=new Uint8Array(w*h);
-        const stack=[(sample.y-y0)*w+(sample.x-x0)];
-        const threshold=Math.max(12,Math.round(mask.cloud[sample.index]*0.08));
-        while(stack.length) {
-          const q=stack.pop();
-          if(visited[q]) continue;
-          const lx=q%w, ly=Math.floor(q/w), gx=x0+lx, gy=y0+ly;
-          if(mask.cloud[gy*mask.width+gx]<threshold) continue;
-          const ex=(gx-sample.x)/rx, ey=(gy-sample.y)/ry;
-          if(ex*ex+ey*ey>1) continue;
-          visited[q]=1;
-          for(let dy=-1;dy<=1;dy++) for(let dx=-1;dx<=1;dx++) {
-            if(!dx&&!dy) continue;
-            const nx=lx+dx, ny=ly+dy;
-            if(nx>=0&&ny>=0&&nx<w&&ny<h&&!visited[ny*w+nx]) stack.push(ny*w+nx);
-          }
-        }
-        const source=mask.tela.getContext("2d").getImageData(x0,y0,w,h);
-        for(let p=0;p<visited.length;p++) if(!visited[p]) source.data[p*4+3]=0;
-        const canvas=document.createElement("canvas");canvas.width=w;canvas.height=h;
-        canvas.getContext("2d").putImageData(source,0,0);
-        return {tela:canvas,x:x0,y:y0,width:w,height:h,sample:sample};
-      }
-
-      function strikeReducedMotion() {
-        return Boolean(window.matchMedia
-          && window.matchMedia("(prefers-reduced-motion: reduce)").matches);
-      }
-
-      function proiezioneNube(mask) {
-        if (!mask || !showSatelliteClouds || cloudTimeSelected
-            || (map.getPitch && map.getPitch()>1)) return null;
-        if (map.isSourceLoaded && !map.isSourceLoaded("satellite-clouds")) return null;
-        const nw=projectParticle(mask.west,mask.north,0);
-        const ne=projectParticle(mask.east,mask.north,0);
-        const sw=projectParticle(mask.west,mask.south,0);
-        return nw&&ne&&sw ? {nw:nw,ne:ne,sw:sw} : null;
-      }
-
-      // ---- VOLUME 3D RICOSTRUITO --------------------------------------
-      // Il satellite vincola ogni colonna con presenza della nube, quota
-      // della sommita', spessore ottico e fase. La base e la densita'
-      // verticale non sono osservabili attraverso una nube opaca: vengono
-      // stimate in modo conservativo e dichiarato. Il frammento WebGL
-      // integra poi davvero quella densita' lungo 32 campioni verticali,
-      // applicando Beer-Lambert e una fase di Henyey-Greenstein. Non e' una
-      // fotografia 3D inventata: e' un volume radiativo vincolato, lasciato
-      // trasparente sopra i pixel satellitari reali finche' il lampo non lo
-      // rende osservabile.
-      const VOLUME_GPU_EVENTS = 4;
-      // Il bilancio dei segmenti si divide fra le scariche vive: un lampo
-      // isolato si dirama con quanti ne servono (in pratica una ventina --
-      // e' il ragno stesso a finire i rami prima del bilancio), quattro
-      // insieme ne prendono otto a testa e restano comunque canali, non
-      // punti. Misurato passando da 20 a 32: con tre scariche insieme
-      // l'alfa di punta sale da 200 a 245 e l'area accesa da 3,7% a 6,5%,
-      // mentre il lampo isolato non cambia affatto perche' non li usa.
-      const VOLUME_GPU_SEGMENTS = 32;
-      const VOLUME_GPU_STEPS = 32;
-      // Campioni dell'ombra proiettata fra canale e punto illuminato. Tre
-      // bastano per far comparire il lato in ombra di una torre; di piu'
-      // costa, perche' e' un ciclo dentro due cicli.
-      const VOLUME_GPU_SHADOW_STEPS = 3;
-      let volumeRenderer;
-      let volumeComponentAtlas = null;
-
-      function creaShaderVolume(gl, tipo, sorgente) {
-        const shader=gl.createShader(tipo);
-        gl.shaderSource(shader,sorgente);gl.compileShader(shader);
-        if(!gl.getShaderParameter(shader,gl.COMPILE_STATUS)) {
-          const errore=gl.getShaderInfoLog(shader)||"shader volumetrico non valido";
-          gl.deleteShader(shader);throw new Error(errore);
-        }
-        return shader;
-      }
-
-      function inizializzaVolumeRenderer() {
-        if(volumeRenderer===false) return null;
-        if(volumeRenderer) return volumeRenderer;
-        try {
-          const gl=strikeVolumeCanvas.getContext("webgl2",{
-            alpha:true,antialias:false,depth:false,stencil:false,
-            premultipliedAlpha:false,preserveDrawingBuffer:false,
-            powerPreference:"high-performance"
-          });
-          if(!gl) { volumeRenderer=false; return null; }
-          const vertex=`#version 300 es
-            precision highp float;
-            void main(){
-              vec2 p=gl_VertexID==0?vec2(-1.0,-1.0):
-                (gl_VertexID==1?vec2(3.0,-1.0):vec2(-1.0,3.0));
-              gl_Position=vec4(p,0.0,1.0);
-            }`;
-          const fragment=`#version 300 es
-            precision highp float;
-            const int STEPS=${VOLUME_GPU_STEPS};
-            const int MAX_SEG=${VOLUME_GPU_SEGMENTS};
-            const int OMBRA_PASSI=${VOLUME_GPU_SHADOW_STEPS};
-            uniform sampler2D uMaterial;
-            uniform sampler2D uComponents;
-            uniform vec2 uCanvasCss;
-            uniform float uRenderScale;
-            uniform vec2 uNW;
-            uniform vec2 uNE;
-            uniform vec2 uSW;
-            uniform vec2 uDomainKm;
-            uniform vec2 uTexel;
-            uniform int uSegCount;
-            // Il canale non e' un punto: e' una spezzata ramificata lunga
-            // chilometri dentro la nube. Ogni elemento e' un SEGMENTO --
-            // estremi in coordinate del riquadro (xy) e quota in km (z) --
-            // e la luce si calcola dalla distanza al segmento, non a un
-            // centro. E' questa la differenza fra una macchia tonda e un
-            // lampo che si dirama.
-            uniform vec4 uSegA[MAX_SEG];
-            uniform vec4 uSegB[MAX_SEG];
-            uniform vec4 uSegMeta[MAX_SEG];
-            out vec4 fragColor;
-
-            // Spessore ottico della nube fra due punti qualsiasi della
-            // colonna: e' quello che produce le OMBRE. Senza questo la luce
-            // arriva ovunque uguale e la sommita' resta piatta; con questo
-            // una torre alta fra il canale e il campione lascia dietro di se'
-            // una zona buia, come succede davvero.
-            float schermoNube(vec3 partenza,vec3 verso,vec2 dominio,sampler2D materiale){
-              float lunghezza=length(verso);
-              if(lunghezza<0.05)return 1.0;
-              vec3 passo=verso/float(OMBRA_PASSI);
-              float lungoPasso=lunghezza/float(OMBRA_PASSI);
-              vec3 campione=partenza;
-              float trasmissione=1.0;
-              for(int s=0;s<OMBRA_PASSI;s++){
-                campione+=passo;
-                vec2 uvOmbra=campione.xy/dominio;
-                if(any(lessThan(uvOmbra,vec2(0.0)))
-                  ||any(greaterThan(uvOmbra,vec2(1.0))))break;
-                vec4 m=texture(materiale,uvOmbra);
-                float topS=2.0+12.5*m.g;
-                float profS=mix(0.7,7.0,pow(m.b,0.72));
-                float baseS=max(0.25,topS-profS);
-                float dentro=smoothstep(baseS,baseS+0.45,campione.z)
-                  *(1.0-smoothstep(topS-0.45,topS,campione.z));
-                trasmissione*=exp(-m.r*dentro*mix(0.24,0.62,m.b)*lungoPasso);
-                if(trasmissione<0.02)break;
-              }
-              return trasmissione;
-            }
-
-            float componente(float indice,vec4 valore){
-              if(indice<0.5)return valore.r;
-              if(indice<1.5)return valore.g;
-              if(indice<2.5)return valore.b;
-              return valore.a;
-            }
-
-            float henyeyGreenstein(float coseno,float g){
-              float d=max(0.08,1.0+g*g-2.0*g*coseno);
-              return (1.0-g*g)/(12.5663706*pow(d,1.5));
-            }
-
-            void main(){
-              vec2 schermo=vec2(gl_FragCoord.x/uRenderScale,
-                uCanvasCss.y-gl_FragCoord.y/uRenderScale);
-              vec2 vx=uNE-uNW,vy=uSW-uNW,q=schermo-uNW;
-              float det=vx.x*vy.y-vx.y*vy.x;
-              if(abs(det)<0.0001)discard;
-              vec2 uv=vec2((q.x*vy.y-q.y*vy.x)/det,
-                (vx.x*q.y-vx.y*q.x)/det);
-              if(any(lessThan(uv,vec2(0.0)))||any(greaterThan(uv,vec2(1.0))))discard;
-
-              vec4 materiale=texture(uMaterial,uv);
-              vec4 parti=texture(uComponents,uv);
-              if(materiale.r<0.025||dot(parti,vec4(1.0))<0.002)discard;
-
-              float sx=texture(uMaterial,clamp(uv+vec2(uTexel.x,0.0),0.0,1.0)).g
-                -texture(uMaterial,clamp(uv-vec2(uTexel.x,0.0),0.0,1.0)).g;
-              float sy=texture(uMaterial,clamp(uv+vec2(0.0,uTexel.y),0.0,1.0)).g
-                -texture(uMaterial,clamp(uv-vec2(0.0,uTexel.y),0.0,1.0)).g;
-              float passoX=max(0.1,2.0*uDomainKm.x*uTexel.x);
-              float passoY=max(0.1,2.0*uDomainKm.y*uTexel.y);
-              vec3 normale=normalize(vec3(-12.5*sx/passoX,-12.5*sy/passoY,1.0));
-              float topKm=2.0+12.5*materiale.g;
-              float profondita=mix(0.7,7.0,pow(materiale.b,0.72));
-              float baseKm=max(0.25,topKm-profondita);
-              float bordo=max(0.18,min(0.8,profondita*0.18));
-              float dz=16.0/float(STEPS);
-              float trasmittanza=1.0,radianza=0.0,ombra=0.0,nucleoVista=0.0;
-              // Ray marching zenitale: ogni passo e' uno strato reale della
-              // colonna ricostruita, non una sfumatura 2D sul fotogramma.
-              for(int passo=0;passo<STEPS;passo++){
-                float z=16.0-(float(passo)+0.5)*dz;
-                float verticale=smoothstep(baseKm,baseKm+bordo,z)
-                  *(1.0-smoothstep(topKm-bordo,topKm,z));
-                if(verticale<0.001)continue;
-                // Qui c'era un "dettaglio" sintetico: il prodotto di due
-                // seni ad alta frequenza, sommato su una dozzina di strati
-                // con fase diversa. Non aggiungeva struttura -- la
-                // struttura della nube arriva gia' dal satellite, ed e'
-                // quella vera -- ma produceva un tratteggio diagonale,
-                // invisibile finche' la luce era fioca e ben visibile da
-                // quando il canale illumina davvero. Tolto: la densita'
-                // adesso viene solo da cio' che e' osservato.
-                float densita=materiale.r*verticale
-                  *mix(0.58,1.34,materiale.b);
-                vec3 posKm=vec3(uv*uDomainKm,z);
-                float luceLocale=0.0,ombraLocale=0.0,cuoreLocale=0.0;
-                for(int j=0;j<MAX_SEG;j++){
-                  if(j>=uSegCount)break;
-                  vec4 A=uSegA[j],B=uSegB[j],M=uSegMeta[j];
-                  float sagoma=componente(M.x,parti);
-                  if(sagoma<0.002)continue;
-                  // Punto piu' vicino sul SEGMENTO, non a un centro: la
-                  // luce esce da tutta la lunghezza del canale, quindi la
-                  // zona illuminata ha la forma del canale.
-                  vec3 a=vec3(A.xy*uDomainKm,A.z);
-                  vec3 b=vec3(B.xy*uDomainKm,B.z);
-                  vec3 ab=b-a;
-                  float tt=clamp(dot(posKm-a,ab)/max(dot(ab,ab),0.0001),0.0,1.0);
-                  vec3 verso=(a+ab*tt)-posKm;
-                  float raggio=max(3.0,B.w);
-                  // Scarto a buon mercato prima di qualunque conto caro:
-                  // oltre la portata il segmento non puo' contribuire, e
-                  // senza questo l'ombra marciata costerebbe troppo.
-                  float d2=dot(verso,verso);
-                  float portata=raggio*3.2;
-                  if(d2>portata*portata)continue;
-                  float distanza=max(0.15,sqrt(d2));
-                  // Doppio lobo: nucleo stretto piu' un alone largo e debole,
-                  // che imita il bloom di una sorgente che sovraespone il
-                  // sensore senza un passaggio di sfocatura separato.
-                  float nucleo=exp(-2.15*pow(distanza/raggio,1.35));
-                  float alone=exp(-0.5*pow(distanza/(raggio*2.6),1.35));
-                  float campo=nucleo+0.55*alone;
-                  if(campo<0.004)continue;
-                  vec3 direzione=verso/distanza;
-                  // OMBRA VERA: quanta nube c'e' fra il canale e questo
-                  // punto. Prima era una stima locale (la densita' QUI per
-                  // la distanza), che non puo' produrre ombre perche' non
-                  // sa cosa c'e' in mezzo.
-                  float schermo=schermoNube(posKm,verso,uDomainKm,uMaterial);
-                  float g=mix(0.48,0.67,1.0-M.y);
-                  // Il fotone arriva al campione nella direzione opposta a
-                  // quella che punta verso la sorgente e poi esce verso il
-                  // satellite (+Z): questo e' il vero angolo di scattering.
-                  float fase=5.6*henyeyGreenstein(clamp(-direzione.z,-1.0,1.0),g);
-                  // Escursione piu' ampia fra lato illuminato e lato in
-                  // ombra della colonna: e' il contrasto che fa leggere la
-                  // sommita' rivelata dal lampo come un rilievo vero, non
-                  // come una macchia piatta.
-                  float faccia=clamp(0.28+0.95*dot(normale,direzione),0.12,1.35);
-                  // La LUCE si somma: due rami vicini illuminano davvero il
-                  // doppio.
-                  //
-                  // Ma non si somma con l'ombra PIENA. schermo e'
-                  // attenuazione BALISTICA: conta solo i fotoni che
-                  // arrivano in linea retta senza mai urtare una goccia.
-                  // Dentro una nube quasi nessun fotone fa quel viaggio --
-                  // fa un cammino casuale, e proprio per questo un
-                  // cumulonembo INTERO si accende quando scarica. Con
-                  // l'ombra balistica applicata anche al bagliore diffuso
-                  // risultava acceso il 3,8% del fotogramma e l'alfa
-                  // crollava da 164 a 25 in 40 px: misurato. Il fondo di
-                  // scattering multiplo lascia passare meta' della luce
-                  // anche dietro una torre, e l'area accesa sale all'11%
-                  // senza perdere il rilievo -- che continua a venire da
-                  // faccia, dall'anello scuro e dalla meta' di ombra
-                  // balistica che resta.
-                  float schermoDiffuso=mix(schermo,1.0,0.5);
-                  luceLocale+=A.w*campo*schermoDiffuso*fase*faccia*sagoma;
-                  // Il cuore: a ridosso del canale la nube e' bruciata, ed
-                  // e' quello che fa vedere il LAMPO e non solo il suo
-                  // effetto. Segue la spezzata, quindi si dirama.
-                  cuoreLocale+=A.w*exp(-pow(distanza/max(0.35,M.z),2.0))
-                    *schermo*sagoma;
-                  // L'OMBRA no: e' una proprieta' geometrica del posto, non
-                  // una grandezza che si accumula. Sommandola su decine di
-                  // segmenti invece che su tre sorgenti diventava circa
-                  // sette volte piu' scura e anneriva l'intera cella --
-                  // misurato appena passati ai segmenti. Si prende la piu'
-                  // forte, che e' quello che l'ombra vuol dire.
-                  //
-                  // QUI C'ERA UN ANELLO SCURO, e adesso non c'e' piu'.
-                  // Dipendeva dalla sola distanza dal canale, quindi a una
-                  // certa distanza disegnava un cerchio: attorno alla cella
-                  // compariva un alone scuro rotondo, che non assomiglia a
-                  // niente di atmosferico e si vedeva come un difetto.
-                  //
-                  // Era stato messo per un motivo che non esiste piu'. Di
-                  // giorno, quando il bagliore era bianco su una sommita'
-                  // gia' bianca, serviva un bordo PIU' SCURO dello sfondo o
-                  // il lampo spariva. Adesso il bagliore e' lilla: a fare
-                  // il contrasto sulla nube bianca ci pensa il colore.
-                  // Misurato togliendolo: lo scarto diurno passa da -53 a
-                  // -51 su 255, cioe' due unita' -- invisibile. Si pagava un
-                  // cerchio scuro per niente.
-                  //
-                  // Resta l'ombra di ORIENTAMENTO, che e' un'altra cosa:
-                  // segue il rilievo della sommita' e non puo' essere
-                  // rotonda, perche' nasce da come la superficie e' girata
-                  // rispetto al canale. E' quella che da' il volume.
-                  ombraLocale=max(ombraLocale,
-                    A.w*campo*(1.0-faccia/1.35)*densita*sagoma);
-                }
-                // Il bagliore diffuso ha bisogno di nube che lo diffonda, e
-                // quindi va con la densita'. Il cuore del canale no: brilla
-                // di suo, e la nube lo puo' solo coprire -- percio' resta
-                // acceso anche dove la nube e' rada, ma la trasmittanza
-                // lungo la vista lo spegne quando sopra c'e' altra nube.
-                //
-                // I due viaggiano SEPARATI fino al pixel. Sommati, come
-                // erano prima, il canale spariva: appena il bagliore
-                // diffuso saturava -- e adesso satura, come deve -- il
-                // massimo era gia' raggiunto e il cuore non aveva piu'
-                // niente da aggiungere. In una fotografia il canale si
-                // legge perche' brucia il sensore MENTRE la nube attorno
-                // sta a meta' scala; qui si riproduce lasciando al diffuso
-                // solo la parte bassa della corsa e al canale la cima.
-                radianza+=trasmittanza*densita*luceLocale*dz*0.72;
-                nucleoVista+=trasmittanza*cuoreLocale*max(densita,0.2)
-                  *dz*1.75;
-                ombra+=trasmittanza*ombraLocale*dz*0.024;
-                // Beer-Lambert lungo la linea di vista verso il satellite.
-                trasmittanza*=exp(-densita*(0.22+0.5*materiale.b)*dz);
-                if(trasmittanza<0.012)break;
-              }
-              // Il diffuso si ferma a 0,82: il resto della corsa fino a
-              // bianco pieno appartiene al canale, ed e' quel margine a
-              // renderlo visibile sopra una nube gia' accesa.
-              float diffuso=clamp(1.0-exp(-radianza*6.5),0.0,1.0)*0.82;
-              // Esposizione del canale alzata da 3,4 a 4,8: il cuore
-              // bianco arrivava a saturare su una striscia troppo sottile e
-              // si perdeva dentro l'alone lilla. Serve che il bianco abbia
-              // un po' di corpo, o il lampo non ha temperatura.
-              float canale=clamp(1.0-exp(-nucleoVista*4.8),0.0,1.0);
-              float bagliore=clamp(diffuso+canale*(1.0-diffuso*0.55),0.0,1.0);
-              // Piu' forte e con una portata maggiore che in passato: e' il
-              // bordo scuro che da' contrasto al nucleo. Su una nube diurna
-              // gia' quasi bianca un nucleo bianco da solo si confonde con
-              // lo sfondo qualunque sia la sua opacita' -- serve un bordo
-              // piu' scuro dello sfondo, non solo un centro piu' chiaro.
-              float autoOmbra=clamp(ombra*(1.0-bagliore)*1.15,0.0,0.34);
-              if(bagliore<0.003&&autoOmbra<0.003)discard;
-              // Il nucleo sale a bianco pieno molto prima del massimo
-              // fisico: e' la sovraesposizione di un lampo vero visto da
-              // vicino, non un tenue chiarore. Nucleo e bordo si compongono
-              // insieme in un solo pixel invece di scegliere l'uno o
-              // l'altro: e' quel passaggio chiaro-poi-scuro a leggersi come
-              // un lampo anche di giorno, quando il bianco da solo sparisce.
-              // IL COLORE DEL FULMINE, e non e' una scelta di gusto: e' la
-              // stessa separazione fra canale e diffuso, portata sul colore.
-              //
-              // Il canale in se' e' bianco incandescente -- e' plasma a
-              // decine di migliaia di gradi, e sovraespone qualunque
-              // sensore. Il lilla non nasce li': nasce dalla STRADA. La
-              // scarica eccita l'azoto, che emette forte nel violetto-blu,
-              // e piu' la luce attraversa nube e aria prima di uscire, piu'
-              // il rosso se ne va per strada e resta il viola. E' per
-              // questo che un lampo vicino e' bianco e uno lontano, o visto
-              // attraverso la nube, e' lilla.
-              //
-              // Quindi: il cuore va a bianco pieno, l'alone diffuso resta
-              // lilla, e fra i due c'e' una transizione continua guidata
-              // dal canale, non dalla luminosita'. Il termine sul diffuso
-              // resta piccolo apposta (0,18): alzandolo, il lilla sbiadisce
-              // proprio dove il bagliore e' piu' forte, cioe' dove lo si
-              // vuole vedere.
-              vec3 chiaro=mix(vec3(0.72,0.54,1.0),vec3(1.0),
-                clamp(canale*1.55+diffuso*0.18,0.0,1.0));
-              vec3 scuro=vec3(0.035,0.028,0.062);
-              float pesoChiaro=bagliore/(bagliore+autoOmbra+0.0001);
-              vec3 colore=mix(scuro,chiaro,pesoChiaro);
-              float alfa=clamp(max(bagliore*0.98,autoOmbra),0.0,0.985);
-              fragColor=vec4(colore,alfa);
-            }`;
-          const vs=creaShaderVolume(gl,gl.VERTEX_SHADER,vertex);
-          const fs=creaShaderVolume(gl,gl.FRAGMENT_SHADER,fragment);
-          const program=gl.createProgram();gl.attachShader(program,vs);
-          gl.attachShader(program,fs);gl.linkProgram(program);
-          gl.deleteShader(vs);gl.deleteShader(fs);
-          if(!gl.getProgramParameter(program,gl.LINK_STATUS)) {
-            throw new Error(gl.getProgramInfoLog(program)||"programma volumetrico non valido");
-          }
-          const uniform=function(nome){return gl.getUniformLocation(program,nome);};
-          volumeRenderer={gl:gl,program:program,mask:null,componentKey:"",
-            material:gl.createTexture(),components:gl.createTexture(),
-            u:{material:uniform("uMaterial"),components:uniform("uComponents"),
-              canvas:uniform("uCanvasCss"),scale:uniform("uRenderScale"),
-              nw:uniform("uNW"),ne:uniform("uNE"),sw:uniform("uSW"),
-              domain:uniform("uDomainKm"),texel:uniform("uTexel"),
-              count:uniform("uSegCount"),segA:uniform("uSegA[0]"),
-              segB:uniform("uSegB[0]"),segMeta:uniform("uSegMeta[0]")}};
-          strikeVolumeCanvas.addEventListener("webglcontextlost",function(event){
-            event.preventDefault();volumeRenderer=undefined;
-          },{once:true});
-          return volumeRenderer;
-        } catch(error) {
-          console.warn("Volume nuvoloso WebGL non disponibile",error);
-          volumeRenderer=false;return null;
-        }
-      }
-
-      function aggiornaTextureVolume(renderer,mask) {
-        if(renderer.mask===mask)return;
-        const gl=renderer.gl,n=mask.width*mask.height;
-        const data=new Uint8Array(n*4);
-        for(let p=0;p<n;p++){
-          data[p*4]=mask.cloud[p];data[p*4+1]=mask.top[p];
-          data[p*4+2]=mask.thickness[p];
-          data[p*4+3]=mask.phase?mask.phase[p]:128;
-        }
-        gl.activeTexture(gl.TEXTURE0);gl.bindTexture(gl.TEXTURE_2D,renderer.material);
-        gl.texParameteri(gl.TEXTURE_2D,gl.TEXTURE_MIN_FILTER,gl.LINEAR);
-        gl.texParameteri(gl.TEXTURE_2D,gl.TEXTURE_MAG_FILTER,gl.LINEAR);
-        gl.texParameteri(gl.TEXTURE_2D,gl.TEXTURE_WRAP_S,gl.CLAMP_TO_EDGE);
-        gl.texParameteri(gl.TEXTURE_2D,gl.TEXTURE_WRAP_T,gl.CLAMP_TO_EDGE);
-        gl.texImage2D(gl.TEXTURE_2D,0,gl.RGBA,mask.width,mask.height,0,
-          gl.RGBA,gl.UNSIGNED_BYTE,data);
-        renderer.mask=mask;renderer.componentKey="";
-      }
-
-      function aggiornaComponentiVolume(renderer,mask,packed) {
-        if(renderer.componentKey===packed.key)return;
-        const gl=renderer.gl;gl.activeTexture(gl.TEXTURE1);
-        gl.bindTexture(gl.TEXTURE_2D,renderer.components);
-        gl.texParameteri(gl.TEXTURE_2D,gl.TEXTURE_MIN_FILTER,gl.LINEAR);
-        gl.texParameteri(gl.TEXTURE_2D,gl.TEXTURE_MAG_FILTER,gl.LINEAR);
-        gl.texParameteri(gl.TEXTURE_2D,gl.TEXTURE_WRAP_S,gl.CLAMP_TO_EDGE);
-        gl.texParameteri(gl.TEXTURE_2D,gl.TEXTURE_WRAP_T,gl.CLAMP_TO_EDGE);
-        gl.texImage2D(gl.TEXTURE_2D,0,gl.RGBA,mask.width,mask.height,0,
-          gl.RGBA,gl.UNSIGNED_BYTE,packed.data);
-        renderer.componentKey=packed.key;
-      }
-
-      function disegnaVolumeGpu(mask,projection,segmenti,packed) {
-        const renderer=inizializzaVolumeRenderer();
-        if(!renderer||!segmenti.length||!packed)return false;
-        const gl=renderer.gl;
-        aggiornaTextureVolume(renderer,mask);
-        aggiornaComponentiVolume(renderer,mask,packed);
-        gl.viewport(0,0,strikeVolumeCanvas.width,strikeVolumeCanvas.height);
-        gl.disable(gl.DEPTH_TEST);gl.disable(gl.CULL_FACE);
-        gl.enable(gl.BLEND);gl.blendFunc(gl.SRC_ALPHA,gl.ONE_MINUS_SRC_ALPHA);
-        gl.clearColor(0,0,0,0);gl.clear(gl.COLOR_BUFFER_BIT);
-        gl.useProgram(renderer.program);
-        gl.uniform1i(renderer.u.material,0);gl.uniform1i(renderer.u.components,1);
-        gl.uniform2f(renderer.u.canvas,window.innerWidth,window.innerHeight);
-        gl.uniform1f(renderer.u.scale,strikeVolumeCanvas.width/window.innerWidth);
-        gl.uniform2f(renderer.u.nw,projection.nw.x,projection.nw.y);
-        gl.uniform2f(renderer.u.ne,projection.ne.x,projection.ne.y);
-        gl.uniform2f(renderer.u.sw,projection.sw.x,projection.sw.y);
-        const media=(mask.north+mask.south)/2*Math.PI/180;
-        const domainX=(mask.east-mask.west)*111.32*Math.max(0.2,Math.cos(media));
-        const domainY=(mask.north-mask.south)*111.32;
-        gl.uniform2f(renderer.u.domain,domainX,domainY);
-        gl.uniform2f(renderer.u.texel,1/mask.width,1/mask.height);
-        const count=Math.min(VOLUME_GPU_SEGMENTS,segmenti.length);
-        const estremoA=new Float32Array(VOLUME_GPU_SEGMENTS*4);
-        const estremoB=new Float32Array(VOLUME_GPU_SEGMENTS*4);
-        const meta=new Float32Array(VOLUME_GPU_SEGMENTS*4);
-        for(let i=0;i<count;i++){
-          const s=segmenti[i],p=i*4;
-          estremoA[p]=s.ax;estremoA[p+1]=s.ay;estremoA[p+2]=s.az;
-          estremoA[p+3]=s.intensity;
-          estremoB[p]=s.bx;estremoB[p+1]=s.by;estremoB[p+2]=s.bz;
-          estremoB[p+3]=s.radius;
-          meta[p]=s.event;meta[p+1]=s.phase;meta[p+2]=s.core;meta[p+3]=0;
-        }
-        gl.uniform1i(renderer.u.count,count);
-        gl.uniform4fv(renderer.u.segA,estremoA);
-        gl.uniform4fv(renderer.u.segB,estremoB);
-        gl.uniform4fv(renderer.u.segMeta,meta);
-        // La GPU lavora soltanto sul rettangolo che contiene le celle
-        // connesse, non sull'intero schermo. E' una riduzione importante
-        // durante i temporali piccoli e sui telefoni.
-        if(packed.bounds){
-          const vx={x:projection.ne.x-projection.nw.x,y:projection.ne.y-projection.nw.y};
-          const vy={x:projection.sw.x-projection.nw.x,y:projection.sw.y-projection.nw.y};
-          const corners=[[packed.bounds.x0,packed.bounds.y0],
-            [packed.bounds.x1,packed.bounds.y0],[packed.bounds.x0,packed.bounds.y1],
-            [packed.bounds.x1,packed.bounds.y1]].map(function(point){
-              return {x:projection.nw.x+vx.x*point[0]/mask.width+vy.x*point[1]/mask.height,
-                y:projection.nw.y+vx.y*point[0]/mask.width+vy.y*point[1]/mask.height};
-            });
-          const scale=strikeVolumeCanvas.width/window.innerWidth;
-          const minX=clamp(Math.floor(Math.min.apply(null,corners.map(p=>p.x))*scale)-2,
-            0,strikeVolumeCanvas.width);
-          const maxX=clamp(Math.ceil(Math.max.apply(null,corners.map(p=>p.x))*scale)+2,
-            0,strikeVolumeCanvas.width);
-          const minY=clamp(Math.floor((window.innerHeight-
-            Math.max.apply(null,corners.map(p=>p.y)))*scale)-2,0,strikeVolumeCanvas.height);
-          const maxY=clamp(Math.ceil((window.innerHeight-
-            Math.min.apply(null,corners.map(p=>p.y)))*scale)+2,0,strikeVolumeCanvas.height);
-          gl.enable(gl.SCISSOR_TEST);gl.scissor(minX,minY,
-            Math.max(0,maxX-minX),Math.max(0,maxY-minY));
-        }
-        gl.drawArrays(gl.TRIANGLES,0,3);
-        gl.disable(gl.SCISSOR_TEST);
-        return !gl.isContextLost();
-      }
-
-      function pulisciVolumeRenderer() {
-        if(!volumeRenderer||volumeRenderer===false)return;
-        const gl=volumeRenderer.gl;
-        gl.viewport(0,0,strikeVolumeCanvas.width,strikeVolumeCanvas.height);
-        gl.clearColor(0,0,0,0);gl.clear(gl.COLOR_BUFFER_BIT);
-      }
-
-      function componenteVolumePerScarica(mask,scarica,radiusKm) {
-        const cache=scarica.volumeComponent;
-        if(cache&&cache.mask===mask&&Math.abs(cache.radius-radiusKm)<0.5)return cache.component;
-        const component=componenteNube(mask,scarica.lon,scarica.lat,radiusKm);
-        scarica.volumeComponent={mask:mask,radius:radiusKm,component:component};
-        return component;
-      }
-
-      function impacchettaComponentiVolume(mask,eventi) {
-        const chiavi=[];
-        for(let e=0;e<eventi.length;e++){
-          const s=eventi[e].strike;
-          chiavi.push(s.nato+":"+s.lon.toFixed(3)+":"+s.lat.toFixed(3)
-            +":"+eventi[e].radius.toFixed(1));
-        }
-        const key=[mask.slot||mask.source||"volume"].concat(chiavi).join("|");
-        if(volumeComponentAtlas&&volumeComponentAtlas.mask===mask
-            &&volumeComponentAtlas.key===key)return volumeComponentAtlas;
-        const data=new Uint8Array(mask.width*mask.height*4);
-        const bounds={x0:mask.width,y0:mask.height,x1:0,y1:0};
-        for(let e=0;e<eventi.length;e++){
-          const item=eventi[e],component=item.component;
-          bounds.x0=Math.min(bounds.x0,component.x);
-          bounds.y0=Math.min(bounds.y0,component.y);
-          bounds.x1=Math.max(bounds.x1,component.x+component.width);
-          bounds.y1=Math.max(bounds.y1,component.y+component.height);
-          const px=component.tela.getContext("2d").getImageData(
-            0,0,component.width,component.height).data;
-          for(let y=0;y<component.height;y++)for(let x=0;x<component.width;x++){
-            const alpha=px[(y*component.width+x)*4+3];
-            if(alpha)data[((y+component.y)*mask.width+x+component.x)*4+e]=alpha;
-          }
-        }
-        volumeComponentAtlas={mask:mask,data:data,key:key,bounds:bounds};
-        return volumeComponentAtlas;
-      }
-
-      // Un raggio fisico onesto puo' comunque sparire sullo schermo quando
-      // lo zoom e' basso: 10-40 km diventano pochi pixel su una vista che
-      // inquadra tutta l'Italia. Questo NON cambia il raggio usato per la
-      // ricerca della nube connessa, che resta quello fisico -- alza solo
-      // il raggio che il frammento GPU vede, cioe' quanto il lampo diventa
-      // visibile sullo schermo indipendentemente dallo zoom.
-      const VOLUME_GLOW_MIN_PX = 16;
-      const VOLUME_GLOW_MAX_KM = 70;
-      function raggioVisibileKm(fisicoKm, pxPerKm) {
-        if (!(pxPerKm > 0)) return fisicoKm;
-        const minimo = VOLUME_GLOW_MIN_PX / pxPerKm;
-        return Math.min(VOLUME_GLOW_MAX_KM, Math.max(fisicoKm, minimo));
-      }
-
-      // Dal ragno frattale ai segmenti che la GPU illumina. E' lo STESSO
-      // ragno gia' calcolato per il disegno (stesso seme, stessa forma,
-      // stessa funzione puntoDelFilamento): qui viene solo riletto in
-      // chilometri e in quota invece che in pixel, cosi' il canale che si
-      // vede e il volume che si accende non possono divergere.
-      //
-      // CONFINE FRA DATO E RESA, come per il resto del livello: la
-      // posizione e l'istante della scarica sono osservati (Blitzortung),
-      // la nube che si illumina e' osservata (Cloud Type + IR10.5), la
-      // QUOTA del canale e' stimata dalla sommita' e dallo spessore ottico
-      // -- e la forma ramificata e' una simulazione deterministica, come
-      // e' sempre stato dichiarato. Il fulmine dentro la nube non e'
-      // osservabile dal satellite: quello che si osserva e' la luce che ne
-      // esce, ed e' quella che questo motore calcola.
-      function segmentiCanale(strike,sample,raggioKm,mask,dominio,evento,
-          intensita,quanti,pxPerKm) {
-        const segmenti=[];
-        if(!strike.ragno||!strike.ragno.length)return segmenti;
-        const x0=(strike.lon-mask.west)/(mask.east-mask.west);
-        const y0=(mask.north-strike.lat)/(mask.north-mask.south);
-        const topKm=2+12.5*sample.top;
-        const depth=0.7+(7-0.7)*Math.pow(sample.thickness,0.72);
-        // Il canale intra-nube vive nel corpo freddo della cella, sotto la
-        // sommita' e sopra la base: non sul tetto, non al suolo.
-        const quota=Math.max(0.4,topKm-depth*(0.36+0.18*(1-sample.phase)));
-        // I rami piu' lunghi sono i canali principali: quando il bilancio
-        // e' stretto restano quelli, non i mozziconi.
-        const rami=strike.ragno.slice().sort(function(a,b){
-          return b.lunghezza-a.lunghezza;
-        });
-        // Meglio pochi rami ben spezzati che tanti stecchi dritti. La
-        // regola di prima pretendeva che il bilancio bastasse per TUTTI i
-        // rami a quella finezza, e appena non bastava ripiegava su un
-        // segmento per ramo: con tre scariche insieme il canale diventava
-        // una stella di righe diritte, che non si legge come un fulmine.
-        // Adesso si sceglie prima quanto spezzare il canale, poi si
-        // tengono i rami piu' lunghi che ci stanno -- quelli in testa,
-        // perche' sono gia' ordinati, cioe' i canali principali.
-        const pezzi=Math.max(2,Math.min(5,Math.floor(Math.sqrt(quanti))));
-        const quantiRami=Math.max(1,Math.floor(quanti/pezzi));
-        // Il cuore acceso ha un raggio vero di poche centinaia di metri,
-        // ma a zoom basso finirebbe sotto il pixel: sotto quella soglia
-        // conta la leggibilita', come per il raggio del bagliore.
-        const cuoreKm=Math.max(0.42,3.0/Math.max(0.0001,pxPerKm));
-        for(let f=0;f<rami.length&&f<quantiRami;f++){
-          const filo=rami[f];
-          const lungoKm=raggioKm*0.48*filo.lunghezza;
-          if(!(lungoKm>0.2))continue;
-          // Un ramo secondario e' piu' debole del canale principale: la
-          // corrente si divide a ogni biforcazione.
-          const forza=intensita*(f===0?1:Math.pow(0.72,f));
-          let prima=null;
-          for(let k=0;k<=pezzi;k++){
-            const punto=puntoDelFilamento(filo.forma,k/pezzi,0,0,lungoKm,
-              filo.direzione);
-            // Ondeggiamento verticale deterministico: un canale vero non
-            // sta su un piano, e senza questo le ombre sarebbero tutte
-            // uguali lungo il ramo.
-            const onda=(((f*7+k*13)%11)/11-0.5)*0.8;
-            const nodo={x:x0+punto.x/dominio.x,y:y0+punto.y/dominio.y,
-              z:Math.max(0.35,quota+onda)};
-            if(prima){
-              // Il canale si assottiglia e si spegne verso la punta: la
-              // corrente si e' gia' divisa nelle biforcazioni a monte. Un
-              // tubo di spessore e luce costanti si legge come un tratto
-              // disegnato, non come una scarica.
-              const lungoIlRamo=1-(k-0.5)/pezzi;
-              const calo=lungoIlRamo*lungoIlRamo;
-              segmenti.push({ax:prima.x,ay:prima.y,az:prima.z,
-                bx:nodo.x,by:nodo.y,bz:nodo.z,
-                intensity:forza*(0.28+0.72*calo),
-                radius:raggioKm*(0.55+0.45*calo),
-                phase:sample.phase,
-                core:cuoreKm*(0.45+0.55*calo),event:evento});
-            }
-            prima=nodo;
-          }
-        }
-        return segmenti;
-      }
-
-      function renderVolumeLightning(adesso) {
-        const mask=mascheraNube,projection=proiezioneNube(mask);
-        for(let i=0;i<liveStrikes.length;i++)liveStrikes[i].volumeIlluminated=false;
-        if(!projection||strikeReducedMotion()) { pulisciVolumeRenderer(); return false; }
-        const eventi=[];
-        for(let i=0;i<liveStrikes.length;i++){
-          const strike=liveStrikes[i],eta=adesso-strike.nato;
-          preparaScarica(strike);
-          if(eta<0||eta>strike.durata)continue;
-          const sample=campionaVolumeNube(mask,strike.lon,strike.lat);
-          if(!sample)continue;
-          const intensity=Math.min(1,0.72*luceNube(strike,eta)+0.38*luceScarica(strike,eta));
-          if(intensity<0.012)continue;
-          const radius=raggioVolumeKm(sample);
-          const component=componenteVolumePerScarica(mask,strike,radius);
-          if(!component)continue;
-          eventi.push({strike:strike,sample:sample,radius:radius,
-            component:component,intensity:intensity});
-        }
-        eventi.sort(function(a,b){return b.intensity-a.intensity;});
-        eventi.length=Math.min(VOLUME_GPU_EVENTS,eventi.length);
-        if(!eventi.length) { pulisciVolumeRenderer(); return false; }
-        const packed=impacchettaComponentiVolume(mask,eventi);
-        const domainX=(mask.east-mask.west)*111.32*Math.max(0.2,
-          Math.cos((mask.north+mask.south)*Math.PI/360));
-        const domainY=(mask.north-mask.south)*111.32;
-        const pxPerKm=Math.hypot(projection.ne.x-projection.nw.x,
-          projection.ne.y-projection.nw.y)/Math.max(0.001,domainX);
-        // Il bilancio si divide fra le scariche vive: una sola si dirama
-        // con tutti i segmenti, quattro insieme ne prendono un quarto per
-        // ciascuna e restano comunque canali.
-        const perScarica=Math.max(2,
-          Math.floor(VOLUME_GPU_SEGMENTS/eventi.length));
-        let segmenti=[];
-        for(let e=0;e<eventi.length;e++){
-          const item=eventi[e];
-          segmenti=segmenti.concat(segmentiCanale(item.strike,item.sample,
-            raggioVisibileKm(item.radius,pxPerKm),mask,
-            {x:domainX,y:domainY},e,item.intensity,perScarica,pxPerKm));
-        }
-        const rendered=disegnaVolumeGpu(mask,projection,segmenti,packed);
-        if(rendered)for(let i=0;i<eventi.length;i++)eventi[i].strike.volumeIlluminated=true;
-        return rendered;
-      }
-
-      function disegnaNubeIlluminata(context, punto, largo, nube, scarica, radiusKm) {
-        if(strikeReducedMotion()) return false;
-        const mask=mascheraNube, projection=proiezioneNube(mask);
-        const inclinata = map.getPitch && map.getPitch() > 4;
-        // Senza satellite, con la mappa inclinata o senza la scarica che
-        // individua la nube da ritagliare, la luce sagomata non si puo'
-        // disegnare. Resta un bagliore tondo: meno preciso, ma un fulmine
-        // non deve mai restare senza luce -- e' cosi' che si disegnava
-        // prima che il ritaglio sul satellite lo rendesse un caso speciale.
-        if(!projection || inclinata || !scarica) {
-          const raggio=largo*0.62;
-          const g=context.createRadialGradient(punto.x,punto.y,0,punto.x,punto.y,raggio);
-          // Bianco al centro, lilla verso il bordo: la stessa legge del
-          // volume GPU, perche' i due non devono sembrare due lampi diversi.
-          g.addColorStop(0,"rgba(252,250,255,"+(0.9*nube).toFixed(3)+")");
-          g.addColorStop(0.3,"rgba(236,222,255,"+(0.5*nube).toFixed(3)+")");
-          g.addColorStop(0.65,"rgba(206,170,252,"+(0.18*nube).toFixed(3)+")");
-          g.addColorStop(1,"rgba(190,150,248,0)");
-          context.save();context.globalCompositeOperation="lighter";
-          context.fillStyle=g;context.beginPath();
-          context.arc(punto.x,punto.y,raggio,0,Math.PI*2);context.fill();
-          context.restore();
-          return true;
-        }
-        const component=componenteNube(mask,scarica.lon,scarica.lat,radiusKm);
-        if(!component) return false;
-        const lato=Math.ceil(largo*2), p=projection;
-        const key=[lato,punto.x,punto.y,p.nw.x,p.nw.y,p.ne.x,p.ne.y,
-          p.sw.x,p.sw.y].map(v=>v.toFixed(2)).join("|");
-        if(!scarica.cloudLight || scarica.cloudLight.key!==key
-            || scarica.cloudLight.mask!==mask) {
-          const tela=document.createElement("canvas");tela.width=lato;tela.height=lato;
-          const g=tela.getContext("2d");
-          const light=g.createRadialGradient(largo,largo,0,largo,largo,largo);
-          light.addColorStop(0,"rgba(252,250,255,0.995)");
-          light.addColorStop(0.14,"rgba(240,229,255,0.92)");
-          light.addColorStop(0.38,"rgba(215,185,253,0.58)");
-          light.addColorStop(0.68,"rgba(198,158,250,0.16)");
-          light.addColorStop(1,"rgba(190,150,248,0)");
-          g.fillStyle=light;g.fillRect(0,0,lato,lato);
-
-          // I canali interni si disegnano a parte, in disegnaCanaliSommersi,
-          // e sempre: qui restava solo il bagliore diffuso, disegnato di
-          // nuovo ogni volta che WebGL non e' disponibile.
-          const mw=mask.width,mh=mask.height;
-          // La maschera occupa l'intero tile: anche i pixel trasparenti fuori
-          // dalla cella partecipano a destination-in. In questo modo nessuna
-          // parte del gradiente circolare puo' filtrare nel cielo sereno.
-          const clip=document.createElement("canvas");clip.width=lato;clip.height=lato;
-          const cg=clip.getContext("2d");
-          cg.setTransform((p.ne.x-p.nw.x)/mw,(p.ne.y-p.nw.y)/mw,
-            (p.sw.x-p.nw.x)/mh,(p.sw.y-p.nw.y)/mh,
-            p.nw.x-punto.x+largo,p.nw.y-punto.y+largo);
-          cg.drawImage(component.tela,component.x,component.y);
-          g.globalCompositeOperation="destination-in";
-          g.drawImage(clip,0,0);
-          // Il grigio del materiale contiene quota, spessore e gradiente:
-          // source-atop conserva esattamente l'alfa della sagoma connessa.
-          g.globalCompositeOperation="source-atop";g.globalAlpha=0.42;
-          g.drawImage(clip,0,0);
-          g.globalAlpha=1;
-          scarica.cloudLight={key:key,mask:mask,tela:tela};
-        }
-        context.save();context.globalCompositeOperation="lighter";
-        context.globalAlpha=Math.min(0.97,nube*0.97);
-        context.drawImage(scarica.cloudLight.tela,punto.x-largo,punto.y-largo);
-        context.restore();
-        return true;
-      }
-
-      // Il bagliore diffuso (dalla GPU o dal ripiego 2D sopra) accende la
-      // nube, ma da solo resta una macchia: un LAMPO si riconosce dalla sua
-      // ramificazione. Questi sono i canali dello stesso ragno (s.ragno)
-      // gia' calcolato per la vista senza satellite, ma sfocati e appena
-      // visibili -- una ramificazione intravista attraverso la nube, non
-      // una ragnatela tagliente incollata sopra il satellite. Disegnata a
-      // parte e sempre, indipendentemente da quale bagliore diffuso sia
-      // attivo, cosi' non raddoppia quando il ripiego 2D la disegna gia'
-      // per conto suo.
-      function disegnaCanaliSommersi(context, punto, largo, scarica, forza) {
-        // Un canale chiaro in sola composizione additiva si legge solo su
-        // fondo scuro: sopra una nube diurna gia' chiara aggiunge poco a un
-        // valore gia' alto, esattamente il problema gia' risolto per il
-        // nucleo del volume GPU con il bordo scuro. Stesso principio qui:
-        // una passata scura sotto, in composizione normale, da' un bordo
-        // che si vede su qualunque sfondo; la passata chiara sopra, additiva,
-        // e' il canale vero e proprio.
-        if (forza < 0.02 || strikeReducedMotion()) return;
-        context.save();
-        context.filter = "blur(4px)";
-        context.globalCompositeOperation = "source-over";
-        for (let f = 0; f < scarica.ragno.length; f += 1) {
-          const filo = scarica.ragno[f];
-          strokeSfumato(context, puntiFilamento(filo.forma, punto.x, punto.y,
-            largo * 0.48 * filo.lunghezza, filo.direzione),
-            5.5, "8,13,22", 0.34 * forza);
-        }
-        // Due passate additive invece di una, e sono la stessa cosa che fa
-        // il volume GPU con il colore: un alone LILLA largo, e dentro un
-        // cuore BIANCO stretto. Una passata sola, bianca, dava un filo di
-        // luce senza temperatura; due danno il passaggio da viola a bianco
-        // incandescente che e' quello che si vede in una fotografia.
-        context.globalCompositeOperation = "lighter";
-        for (let f = 0; f < scarica.ragno.length; f += 1) {
-          const filo = scarica.ragno[f];
-          strokeSfumato(context, puntiFilamento(filo.forma, punto.x, punto.y,
-            largo * 0.48 * filo.lunghezza, filo.direzione),
-            6.5, "168,120,248", 0.52 * forza);
-        }
-        for (let f = 0; f < scarica.ragno.length; f += 1) {
-          const filo = scarica.ragno[f];
-          strokeSfumato(context, puntiFilamento(filo.forma, punto.x, punto.y,
-            largo * 0.48 * filo.lunghezza, filo.direzione),
-            2.2, "252,250,255", 0.9 * forza);
-        }
-        context.restore();
+        const nw = projectParticle(mascheraNube.west, mascheraNube.north, 0);
+        const se = projectParticle(mascheraNube.east, mascheraNube.south, 0);
+        if (!nw || !se || !(se.x > nw.x) || !(se.y > nw.y)) return;
+        tc.globalCompositeOperation = "destination-in";
+        tc.drawImage(mascheraNube.tela,
+          nw.x - (punto.x - largo), nw.y - (punto.y - largo),
+          se.x - nw.x, se.y - nw.y);
+        tc.globalCompositeOperation = "source-over";
+        // Due volte: la luce che esce da una nube spessa deve essere
+        // nettamente piu' forte del minimo tondo, o la sagoma non si legge.
+        context.drawImage(telaBagliore, punto.x - largo, punto.y - largo);
+        context.globalAlpha = 0.6;
+        context.drawImage(telaBagliore, punto.x - largo, punto.y - largo);
+        context.globalAlpha = 1;
       }
 
       // ---- IL LAMPO, VISTO DALL'ALTO -----------------------------------
       //
-      // Posizione e tempo sono osservati dalla rete a terra. Cloud Type RGB
-      // fornisce contributi legati a quota, spessore ottico e fase; IR10.5
-      // aggiunge il contrasto delle sommità fredde. Il rendering ricostruisce
-      // colonne volumetriche e ne integra la densita', ma soltanto la SOMMITA'
-      // e' vincolata dal satellite: base e distribuzione interna sono stimate,
-      // non spacciate per misure. Di notte Cloud Type non e' disponibile e la
-      // ricostruzione passa automaticamente a IR10.5 + immagine mostrata.
+      // Questa mappa guarda l'Italia da sopra. Un fulmine disegnato come una
+      // saetta verticale che sale dal punto di impatto e' un fulmine visto
+      // DI LATO: bello, ma in una veduta zenitale non ha senso, perche' da
+      // sopra quel canale sarebbe un punto.
       //
-      // La luce visibile e' resa bianco-fredda a bassa saturazione. Non si
-      // trasforma la riga a 777,4 nm del sensore ottico in viola RGB: una riga
-      // strumentale non e' il colore fotografico dell'intero evento.
+      // Chi vola sopra un temporale di notte non vede saette: vede la
+      // sommita' delle nubi ACCENDERSI DA DENTRO, come una lanterna di
+      // carta. Il canale sta dentro e sotto la nube, e quello che esce e'
+      // luce diffusa dal ghiaccio -- bianca, non azzurra: l'azzurro e' il
+      // colore del canale nudo a trentamila gradi, ma dopo qualche
+      // chilometro di nube attraversata resta un bianco appena caldo.
       //
-      // L'estensione viene calcolata in chilometri dal materiale nuvoloso e
-      // riproiettata a ogni frame. La componente connessa impedisce che una
-      // scarica illumini una nube vicina separata. Canali e tempi restano una
-      // simulazione deterministica, mentre coordinate e fotogrammi non vengono
-      // modificati.
+      // L'unica cosa filiforme che si vede davvero da sopra sono i RAGNI:
+      // scariche intra-nube che strisciano orizzontali sulla sommita' anche
+      // per decine di chilometri, ramificandosi. Quelle si vedono, perche'
+      // corrono in superficie. Sono loro a dare al lampo dall'alto la sua
+      // forma riconoscibile.
+      //
+      // Restano invece veri, e quindi restano qui, i tre tempi:
+      //
+      //  1. la geometria e' frattale, per spostamento del punto medio -- lo
+      //     stesso procedimento dei profili di montagna: ogni raffinamento
+      //     sposta di poco piu' della meta' del precedente, e si ottiene
+      //     dettaglio a ogni scala, come nella scarica vera;
+      //  2. la scarica arriva in due tempi: il LEADER, debole, che si cerca
+      //     la strada in poche decine di millisecondi, e il COLPO DI
+      //     RITORNO, che la ripercorre e la fa esplodere di luce;
+      //  3. i colpi sono quasi sempre PIU' D'UNO, a qualche decina di
+      //     millisecondi l'uno dall'altro: e' lo sfarfallio che tutti
+      //     riconoscono, e che un lampo disegnato una volta sola non ha mai.
+      //
+      // Il disegno e' additivo, perche' la luce si somma e non copre: due
+      // ragni che si incrociano diventano piu' luminosi nel punto in cui si
+      // toccano, come luce vera.
+      //
+      // Tutta la geometria nasce dal seme della scarica e si calcola UNA
+      // volta sola: ricalcolarla a ogni fotogramma farebbe tremare il lampo
+      // invece di farlo brillare, e costerebbe sessanta volte tanto.
+
+      // Un lampo vero dura fra uno e due decimi di secondo, e quello che si
+      // vede da sopra e' ancora piu' breve. Qui si sta appena sopra, perche'
+      // sotto i due decimi chi non stava gia' guardando quel punto non lo
+      // vedrebbe affatto -- ma non oltre, o l'alone resta sulla mappa e
+      // copre le nuvole invece di illuminarle.
       const STRIKE_LEADER_MS = 80;
       const STRIKE_STROKE_MS = 150;
       // La nube illuminata si spegne in un terzo di secondo scarso: e' la
@@ -8342,75 +7432,24 @@
         context.globalCompositeOperation = "lighter";
         // Prima di ogni saetta: il nucleo e' la luce di fondo della cella, e
         // i lampi gli stanno dentro.
-        if (!showSatelliteClouds && !strikeReducedMotion()) {
-          disegnaNuclei(context, adesso, scala);
-        }
+        disegnaNuclei(context, adesso, scala);
         // La proiezione da coordinate geografiche a pixel si fa una volta
         // per scarica e per fotogramma, non due: i due passaggi la
         // condividono. Con qualche centinaio di scariche vive e il ciclo a
         // piena frequenza durante un lampo, rifarla e' il costo piu' alto
         // dell'intero disegno.
         const punti = new Array(liveStrikes.length);
-        const volumeGpu = showSatelliteClouds
-          ? renderVolumeLightning(adesso)
-          : (pulisciVolumeRenderer(), false);
         for (let i = 0; i < liveStrikes.length; i += 1) {
           const s = liveStrikes[i];
           const eta = adesso - s.nato;
           preparaScarica(s);
           const punto = projectParticle(s.lon, s.lat, 0);
           punti[i] = punto;
-          s.cloudIlluminated = Boolean(volumeGpu && s.volumeIlluminated);
-          if (eta > s.durata) { s.cloudLight = null; continue; }
-          if (!punto || strikeReducedMotion()) continue;
+          if (!punto || eta > s.durata) continue;
           const luce = luceScarica(s, eta);
           const nube = luceNube(s, eta);
           const brace = luceBrace(s, eta);
           if (luce < 0.012 && nube < 0.012 && brace < 0.012) continue;
-
-          if (showSatelliteClouds) {
-            // WebGL integra la densita' 3D una sola volta per tutte le
-            // scariche. Per browser senza WebGL2, o oltre il limite delle
-            // quattro celle simultanee, resta il renderer ottico 2D -- ma i
-            // canali interni sfocati (sotto) si disegnano in ogni caso: e'
-            // la ramificazione del lampo, non solo il bagliore diffuso.
-            const sample = campionaVolumeNube(mascheraNube, s.lon, s.lat);
-            if (sample) {
-              // La dimensione nasce dai dati: una cima alta e otticamente
-              // spessa diffonde su un'area maggiore. Rimane in chilometri,
-              // quindi lo zoom cambia i pixel ma non la scala geografica.
-              const radiusKm = raggioVolumeKm(sample);
-              const edge = projectParticle(s.lon + radiusKm / (111.32
-                * Math.max(0.2, Math.cos(s.lat * Math.PI / 180))), s.lat, 0);
-              if (edge) {
-                // Il minimo era 3 px: a zoom bassi un raggio fisico onesto
-                // di 10-40 km si schiacciava a un punto invisibile. 16 px
-                // e' quanto basta per leggersi come un lampo anche senza
-                // aver zoomato sulla cella.
-                //
-                // E passa per la STESSA raggioVisibileKm che riceve la GPU,
-                // non per una sua catena di limiti: il ragno 2D e il canale
-                // acceso nel volume nascono dallo stesso ragno frattale e
-                // devono percio' avere anche la stessa lunghezza. Con due
-                // tetti diversi -- 220 px qui, 70 km di la' -- a zoom alto
-                // il canale illuminato usciva dal ragno disegnato, e si
-                // vedeva doppio.
-                const pxPerKmQui = Math.hypot(edge.x-punto.x, edge.y-punto.y)
-                  / Math.max(0.001, radiusKm);
-                const largo = Math.min(220,
-                  raggioVisibileKm(radiusKm, pxPerKmQui) * pxPerKmQui);
-                if (!s.cloudIlluminated) {
-                  s.cloudIlluminated = disegnaNubeIlluminata(
-                    strikeLightContext, punto, largo,
-                    Math.min(1, 0.72*nube + 0.38*luce), s, radiusKm
-                  );
-                }
-                disegnaCanaliSommersi(strikeLightContext, punto, largo, s,
-                  Math.min(1, 0.55*luce + 0.25*nube));
-              }
-            }
-            continue;
-          }
 
           // Quanto si estende il lampo sulla mappa. Un ragno vero striscia
           // per chilometri sulla sommita', ma qui il raggio resta contenuto
@@ -8448,8 +7487,8 @@
           // svanisce alla punta invece di finire di netto.
           if (luce > 0.012) {
             const passate = [
-              { larghezza: 9, tinta: "236,208,252", alfa: 0.40 },
-              { larghezza: 3.2, tinta: "250,238,255", alfa: 0.72 },
+              { larghezza: 9, tinta: "236,208,252", alfa: 0.30 },
+              { larghezza: 3.2, tinta: "250,238,255", alfa: 0.58 },
               { larghezza: 1.3, tinta: "255,253,255", alfa: 1 }
             ];
             for (let p = 0; p < passate.length; p += 1) {
@@ -8549,12 +7588,26 @@
           // e un simbolo sovrapposto la fa sembrare un disegno. Il glifo
           // compare quando la luce e' finita, ed e' li' che fa il suo
           // mestiere -- dire dove la scarica e' caduta.
-          if (!strikeReducedMotion() && eta < s.durata * 0.8
-              && (!showSatelliteClouds || s.cloudIlluminated)) continue;
+          if (eta < s.durata * 0.8) continue;
           const vita = 1 - eta / limite.eta;
           const opacita = clamp(vita * 2, 0, 1);
-          // Il segno e' una legenda stabile, separata dal fenomeno ottico.
-          const dimensione = 10 * scala;
+          // Un battito lento sulle scariche fresche: l'occhio prende il
+          // movimento molto prima del colore, e fra cento segni uguali sono
+          // quelli degli ultimi secondi che contano.
+          const fresca = clamp(1 - eta / 12000, 0, 1);
+          const battito = 1 + 0.12 * fresca * Math.sin(eta / 210);
+          const dimensione = 10 * scala * battito;
+
+          // L'anello: una volta sola, nel primo secondo. Dice "questa e'
+          // nuova" senza aggiungere un altro colore alla mappa.
+          if (eta < 700) {
+            const t = eta / 700;
+            context.strokeStyle = "rgba(255,236,170," + (0.3 * (1 - t) * (1 - t)).toFixed(3) + ")";
+            context.lineWidth = 1.3 * scala;
+            context.beginPath();
+            context.arc(punto.x, punto.y, (10 + 30 * t) * scala, 0, Math.PI * 2);
+            context.stroke();
+          }
 
           // Contorno scuro: sotto c'e' un'immagine notturna piena di luci,
           // e un glifo giallo senza stacco ci si perderebbe dentro.
@@ -8591,7 +7644,7 @@
         // Piena frequenza solo finche' qualcosa sta davvero brillando. La
         // durata non e' uguale per tutte: ogni scarica ha i suoi colpi di
         // ritorno, e s.durata dice quando ha finito.
-        const lampeggia = !strikeReducedMotion() && liveStrikes.some(function (s) {
+        const lampeggia = !prefersReducedMotion && liveStrikes.some(function (s) {
           return s.durata === undefined || timestamp - s.nato < s.durata;
         });
         // Fra un lampo e l'altro non si sta fermi: il nucleo della cella
@@ -9053,8 +8106,6 @@
         map.setPaintProperty("satellite-clouds-layer", "raster-opacity", 1);
         cloudPublishedKey = frameKey;
         mascheraNube = frame.maschera || null;
-        preparaVolumeNube(frame.maschera || null, null, product,
-          frame.box, slot, frameKey);
         cloudLoadedBox = frame.box;
         cloudLoadedMetres = frame.size.metres;
         cloudLoadedSlot = slot.value;
@@ -9694,8 +8745,6 @@
         showGraticule = false;
         stopParticles();
         vectorContext.clearRect(0, 0, window.innerWidth, window.innerHeight);
-        strikeLightContext.clearRect(0, 0, window.innerWidth, window.innerHeight);
-        pulisciVolumeRenderer();
         if (map && map.getLayer("weather-layer")) {
           map.setLayoutProperty("weather-layer", "visibility", "none");
         }
@@ -9971,10 +9020,6 @@
           showSatelliteClouds = !showSatelliteClouds;
           updateSatelliteClouds();
           aggiornaDominioNavigabile();
-          if (!showSatelliteClouds) {
-            strikeLightContext.clearRect(0,0,window.innerWidth,window.innerHeight);
-            pulisciVolumeRenderer();
-          }
           updateSatelliteControlsVisibility();
         } else if (name === "strikesound") {
           setStrikeSound(!strikeSoundOn);
@@ -10017,8 +9062,6 @@
             blitzRetryDelay = 2000;
             blitzConnect();
             startStrikeAnimation();
-            inizializzaVolumeRenderer();
-            assicuraVolumeNubeCorrente();
             // Siamo dentro il clic: e' l'unico momento in cui il browser
             // lascia creare o risvegliare il contesto audio. Rimandarlo alla
             // prima scarica lo farebbe rifiutare in silenzio, e il tick non
@@ -10029,11 +9072,9 @@
               + "di pochi secondi. Uso personale e non commerciale."
             );
           } else {
-            volumeToken++;
             blitzDisconnect();
             stopStrikeAnimation();
             liveStrikes = [];
-            pulisciVolumeRenderer();
             requestVectorRender();
           }
           updateLiveLightningNote();
@@ -12281,8 +11322,8 @@
         const tetto = soloLampi ? 1.25 : (mobile ? 2 : 2.15);
         const ratio = Math.min(window.devicePixelRatio || 1, tetto);
 
-        [[particleCanvas, particleContext], [vectorCanvas, vectorContext],
-         [strikeLightCanvas, strikeLightContext]].forEach(function (entry) {
+        [[particleCanvas, particleContext],
+         [vectorCanvas, vectorContext]].forEach(function (entry) {
           const canvas = entry[0];
           const context = entry[1];
           canvas.width = Math.round(window.innerWidth * ratio);
@@ -12291,15 +11332,6 @@
           canvas.style.height = window.innerHeight + "px";
           context.setTransform(ratio, 0, 0, ratio, 0, 0);
         });
-        // Il ray marcher lavora a risoluzione ridotta e viene poi filtrato dal
-        // browser: 32 campioni per pixel restano fluidi anche su mobile senza
-        // cambiare la scala geografica o la densita' del volume.
-        const volumeRatio = mobile ? 0.55 : 0.8;
-        strikeVolumeCanvas.width = Math.max(1, Math.round(window.innerWidth * volumeRatio));
-        strikeVolumeCanvas.height = Math.max(1, Math.round(window.innerHeight * volumeRatio));
-        strikeVolumeCanvas.style.width = window.innerWidth + "px";
-        strikeVolumeCanvas.style.height = window.innerHeight + "px";
-        pulisciVolumeRenderer();
 
         calculateParticleTarget();
         resetParticles();
@@ -12719,8 +11751,6 @@
 
       function clearVectors() {
         vectorContext.clearRect(0, 0, window.innerWidth, window.innerHeight);
-        strikeLightContext.clearRect(0, 0, window.innerWidth, window.innerHeight);
-        pulisciVolumeRenderer();
       }
 
       function uprightTextAngle(angle) {

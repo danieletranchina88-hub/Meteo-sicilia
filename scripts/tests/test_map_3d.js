@@ -1950,27 +1950,15 @@ assert.doesNotMatch(html, /const ratio = Math\.min\(window\.devicePixelRatio \|\
 assert.match(modernUi, /resizeCanvases\(\);\s*\n\s*document\.body\.classList\.toggle\('satellite-view'/,
   "cambiando vista le canvas non vengono rimisurate: la densita' resta quella di prima");
 
-// La maschera delle nubi si ricostruisce a ogni fotogramma satellitare, ed
-// e' un blocco unico del thread. Sul telefono si dimezza il lato: a 390
-// punti di schermo, 384 texel restano circa un texel per punto.
-const lati = new Function('window', 'MOBILE_BREAKPOINT',
-  implementazione('isMobile') + '\n' + implementazione('mascheraLato') + '\n'
-  + implementazione('volumeLato')
-  + '\nreturn {mascheraLato, volumeLato};');
-const suTelefono = lati({ innerWidth: 390 }, 900);
-const suPc = lati({ innerWidth: 1440 }, 900);
-assert.ok(suTelefono.mascheraLato() < suPc.mascheraLato(),
-  "la maschera delle nubi non e' piu' leggera sul telefono");
-assert.equal(suPc.mascheraLato(), 768,
-  "il lato della maschera sul PC e' cambiato: non doveva");
-// Griglia volumetrica e maschera devono avere la STESSA scala: tenere il
-// volume a 768 con la maschera a 384 non aggiunge dettaglio, lo inventa
-// ingrandendo, e intanto quadruplica la texture che la GPU campiona a
-// ogni fotogramma.
-assert.equal(suTelefono.volumeLato(), suTelefono.mascheraLato(),
-  "sul telefono il volume ingrandisce una maschera piu' piccola: dettaglio inventato e texture quadrupla");
-assert.equal(suPc.volumeLato(), suPc.mascheraLato(),
-  "sul PC volume e maschera non hanno piu' la stessa scala");
+// La maschera delle nubi si ricostruisce a ogni fotogramma satellitare ed e'
+// un blocco unico del thread, quindi il suo lato va tenuto d'occhio. Il
+// motore volumetrico l'aveva portata a 768 (e a 384 sul telefono, per
+// alleggerirla); tornando al lampo lavanda 2D e' di nuovo 512 per tutti,
+// che era il valore originale ed e' gia' piu' leggero del 768.
+const latoMaschera = html.match(/const MASCHERA_LATO = (\d+);/);
+assert.ok(latoMaschera, "manca il lato della maschera delle nubi");
+assert.ok(+latoMaschera[1] <= 512,
+  "la maschera delle nubi e' tornata pesante: lato " + latoMaschera[1]);
 
 // Il tetto sulla taglia dell'immagine satellitare resta sulla sola
 // larghezza. Provato a metterlo anche sull'altezza: sul telefono cambiava
