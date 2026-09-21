@@ -728,6 +728,124 @@ prova('il tick non puo\' diventare un ronzio', () => {
     'il contesto audio non viene creato dentro il gesto dell\'utente');
 });
 
+prova('la vibrazione alla scarica: un colpo breve, e non un ronzio', () => {
+  // Stesso evento del tick raccontato a un altro senso, e quindi le stesse
+  // guardie -- piu' una in piu', perche' un motore di vibrazione ha una sua
+  // inerzia: colpi piu' fitti del suo tempo di avvio si fondono in un ronzio
+  // continuo, che e' peggio del silenzio, e intanto consumano batteria.
+  const gap = html.match(/const STRIKE_HAPTIC_MIN_GAP_MS = (\d+);/);
+  assert.ok(gap, 'manca il limite di frequenza della vibrazione');
+  const gapTick = html.match(/const STRIKE_SOUND_MIN_GAP_MS = (\d+);/);
+  assert.ok(Number(gap[1]) > Number(gapTick[1]),
+    'la vibrazione puo\' ripetersi fitta quanto il tick (' + gap[1] + ' ms): diventa un ronzio');
+  assert.ok(Number(gap[1]) >= 300,
+    'la vibrazione si ripete ogni ' + gap[1] + ' ms: troppo per un motore vero');
+
+  // La si esegue davvero, invece di leggerla soltanto. Lo stato che conta
+  // (strikeLastHaptic, l'orologio) vive DENTRO il modulo costruito qui:
+  // passarlo come parametro lo renderebbe immutabile fra una chiamata e
+  // l'altra, e il limite di frequenza -- che e' proprio cio' che si vuole
+  // verificare -- non si potrebbe esercitare affatto.
+  const banco = (opzioni) => {
+    const colpi = [];
+    const stato = { ora: 100000 };
+    const sorgente = [
+      html.match(/const STRIKE_HAPTIC_MIN_GAP_MS = \d+;/)[0],
+      'let strikeHapticOn = ' + (opzioni.spento ? 'false' : 'true') + ';',
+      'let strikeLastHaptic = 0;',
+      'const cloudTimeSelected = ' + (opzioni.passato ? 'Date.now()' : '0') + ';',
+      'const document = { hidden: ' + Boolean(opzioni.nascosto) + ' };',
+      'const performance = { now: () => stato.ora };',
+      'const map = { getBounds: () => ({ getWest: () => 10, getEast: () => 20,'
+        + ' getSouth: () => 35, getNorth: () => 45 }),'
+        + ' getCenter: () => ({ lng: 15, lat: 40 }) };',
+      implementazione('volumeScarica'),
+      implementazione('vibraScarica'),
+    ].join('\n\n');
+    const finto = {
+      vibrate: opzioni.senzaMotore
+        ? undefined
+        : (d) => { colpi.push(d); return true; },
+    };
+    const mod = new Function('navigator', 'stato', 'colpi',
+      sorgente + '\nreturn {vibraScarica};')(finto, stato, colpi);
+    return { colpi, stato, vibra: mod.vibraScarica };
+  };
+
+  // Al centro dello schermo il colpo e' piu' lungo che al bordo.
+  const vicino = banco({});
+  vicino.vibra(15, 40);
+  vicino.stato.ora += 5000;
+  vicino.vibra(19.8, 44.8);
+  assert.equal(vicino.colpi.length, 2,
+    'due scariche ben distanziate non danno due colpi: ' + vicino.colpi.join(','));
+  assert.ok(vicino.colpi[0] > vicino.colpi[1],
+    'il colpo non si accorcia allontanandosi dal centro: ' + vicino.colpi.join(','));
+  assert.ok(vicino.colpi[0] >= 8 && vicino.colpi[0] <= 30,
+    'il colpo dura ' + vicino.colpi[0] + ' ms: fuori dall\'intervallo utile');
+
+  // Sei scariche fitte: ne deve passare UNA sola.
+  const raffica = banco({});
+  for (let i = 0; i < 6; i += 1) { raffica.vibra(15, 40); raffica.stato.ora += 60; }
+  assert.equal(raffica.colpi.length, 1,
+    'sotto raffica passano ' + raffica.colpi.length + ' colpi invece di uno: e\' un ronzio');
+
+  // Fuori schermo, spenta, nel passato, e senza motore: mai un colpo.
+  for (const caso of [
+    { nome: 'spenta', opz: { spento: true }, dove: [15, 40] },
+    { nome: 'scheda nascosta', opz: { nascosto: true }, dove: [15, 40] },
+    { nome: 'scorrendo il passato', opz: { passato: true }, dove: [15, 40] },
+    { nome: 'senza motore di vibrazione', opz: { senzaMotore: true }, dove: [15, 40] },
+    { nome: 'scarica fuori dallo schermo', opz: {}, dove: [40, 60] },
+  ]) {
+    const b = banco(caso.opz);
+    b.vibra(caso.dove[0], caso.dove[1]);
+    assert.equal(b.colpi.length, 0,
+      'con "' + caso.nome + '" il telefono vibra lo stesso');
+  }
+
+
+  // Le guardie: fuori schermo, scheda nascosta, spento, e nel passato.
+  const corpo = implementazione('vibraScarica');
+  assert.match(corpo, /if \(!strikeHapticOn \|\| document\.hidden\) return;/,
+    'la vibrazione parte anche spenta o con la scheda in secondo piano');
+  assert.match(corpo, /if \(cloudTimeSelected\) return;/,
+    'scorrendo il passato il telefono vibra per scariche di un\'ora fa');
+  assert.match(corpo, /const forza = volumeScarica\(lon, lat\);\s*\n\s*if \(forza <= 0\) return;/,
+    'vibra anche per scariche che non si vedono sullo schermo');
+  assert.match(corpo, /if \(adesso - strikeLastHaptic < STRIKE_HAPTIC_MIN_GAP_MS\) return;/,
+    'il limite di frequenza e\' dichiarato ma non applicato');
+  assert.match(corpo, /try \{ navigator\.vibrate\(durata\); \} catch/,
+    'un rifiuto del browser diventerebbe un errore invece di passare inosservato');
+
+  // E si chiama dove si chiama il tick: stesso evento, stesso punto.
+  const arrivo = implementazione('addLiveStrike');
+  assert.match(arrivo, /suonaTick\([^\n]*\);\s*\n\s*vibraScarica\(lon, lat\);/,
+    'la vibrazione non parte alla scarica, o parte in un punto diverso dal tick');
+});
+
+prova('dove non c\'e\' un motore di vibrazione, il comando non si mostra', () => {
+  // Safari su iPhone non espone questa interfaccia, e un computer non ha
+  // niente da far vibrare. Offrire un interruttore che non fa succedere
+  // nulla e' peggio che non offrirlo.
+  assert.match(html, /function vibrazioneDisponibile\(\) \{[\s\S]{0,200}typeof navigator\.vibrate === "function"/,
+    'manca il controllo di esistenza del motore di vibrazione');
+  assert.match(html, /vibraChip\.hidden = !showLiveLightning \|\| !vibrazioneDisponibile\(\);/,
+    'il comando della vibrazione compare anche dove non puo\' funzionare');
+  // E la scelta si ricorda, come quella del tick.
+  assert.match(html, /const STRIKE_HAPTIC_KEY = "meteo\.vibrazioneScariche";/,
+    'la scelta sulla vibrazione non ha una sua chiave di memoria');
+  assert.match(html, /localStorage\.setItem\(STRIKE_HAPTIC_KEY, strikeHapticOn \? "1" : "0"\)/,
+    'la scelta sulla vibrazione non viene ricordata');
+  // Un colpo di conferma dentro il clic: e' l'unico momento in cui il
+  // browser lo lascia partire di sicuro, e fa sentire com'e' fatto.
+  const accensione = implementazione('setStrikeHaptic');
+  assert.match(accensione, /navigator\.vibrate\(18\)/,
+    'accendendo la vibrazione non si sente il colpo di conferma');
+  assert.match(accensione, /navigator\.vibrate\(0\)/,
+    'spegnendola non si ferma una vibrazione in corso');
+});
+
 prova('il volume cala verso il bordo e si azzera fuori', () => {
   const volume = new Function(implementazione('volumeScarica')
     + '\nreturn volumeScarica;');
