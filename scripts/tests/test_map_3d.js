@@ -10,6 +10,11 @@ const path = require("node:path");
 const root = path.resolve(__dirname, "../..");
 const html = fs.readFileSync(path.join(root, "index.html"), "utf8");
 const modernUi = fs.readFileSync(path.join(root, "modern-ui.js"), "utf8");
+function implementazione(nome) {
+  const i = html.search(new RegExp("      function " + nome + "\\("));
+  assert.ok(i >= 0, "manca " + nome);
+  return html.slice(i, html.indexOf("\n      }", i) + 8);
+}
 const radarHtml = fs.readFileSync(path.join(root, "radar.html"), "utf8");
 const meteogramHtml = fs.readFileSync(path.join(root, "meteograms.html"), "utf8");
 
@@ -1916,3 +1921,82 @@ assert.match(html, /const CAPE_STOPS = \[\s*\{ v: 0, c: \[238, 244, 240\], a: 0 
 
 console.log("3D map regression checks: OK");
 
+// --- fluidita' sul telefono -------------------------------------------
+// Misurato su telefono emulato (390x844, densita' 3, CPU rallentata sei
+// volte) con quaranta scariche vive: 43,5 ms a fotogramma prima, 17,0 dopo.
+// La leva e' una sola, e non e' quella che sembrava: non il numero di
+// scariche (quaranta o dieci cambiava 13 fps contro 12) ne' lo shader
+// volumetrico (spegnerlo adesso non sposta la mediana), ma quanti pixel
+// hanno le canvas a tutto schermo, che vengono cancellate e ricaricate a
+// OGNI fotogramma finche' un lampo brilla.
+assert.match(html, /const soloLampi = mobile && weatherView === "satellite";/,
+  "la densita' delle canvas non distingue piu' la vista satellite");
+assert.match(html, /const tetto = soloLampi \? 1\.25 : \(mobile \? 2 : 2\.15\);/,
+  "la densita' ridotta non e' piu' riservata al telefono in vista satellite");
+// Il PC non deve cambiare: 2.15 resta 2.15, e nessun ramo lo tocca.
+assert.doesNotMatch(html, /const ratio = Math\.min\(window\.devicePixelRatio \|\| 1, mobile \? [0-9.]+ : [0-9.]+\);/,
+  "la densita' torna a essere decisa senza guardare la vista");
+// Cambiando vista le canvas vanno rimisurate, o la densita' nuova non
+// arriva mai: e' il passo che rende effettiva la riga qui sopra.
+assert.match(modernUi, /resizeCanvases\(\);\s*\n\s*document\.body\.classList\.toggle\('satellite-view'/,
+  "cambiando vista le canvas non vengono rimisurate: la densita' resta quella di prima");
+
+// La maschera delle nubi si ricostruisce a ogni fotogramma satellitare, ed
+// e' un blocco unico del thread. Sul telefono si dimezza il lato: a 390
+// punti di schermo, 384 texel restano circa un texel per punto.
+const lati = new Function('window', 'MOBILE_BREAKPOINT',
+  implementazione('isMobile') + '\n' + implementazione('mascheraLato') + '\n'
+  + implementazione('volumeLato')
+  + '\nreturn {mascheraLato, volumeLato};');
+const suTelefono = lati({ innerWidth: 390 }, 900);
+const suPc = lati({ innerWidth: 1440 }, 900);
+assert.ok(suTelefono.mascheraLato() < suPc.mascheraLato(),
+  "la maschera delle nubi non e' piu' leggera sul telefono");
+assert.equal(suPc.mascheraLato(), 768,
+  "il lato della maschera sul PC e' cambiato: non doveva");
+// Griglia volumetrica e maschera devono avere la STESSA scala: tenere il
+// volume a 768 con la maschera a 384 non aggiunge dettaglio, lo inventa
+// ingrandendo, e intanto quadruplica la texture che la GPU campiona a
+// ogni fotogramma.
+assert.equal(suTelefono.volumeLato(), suTelefono.mascheraLato(),
+  "sul telefono il volume ingrandisce una maschera piu' piccola: dettaglio inventato e texture quadrupla");
+assert.equal(suPc.volumeLato(), suPc.mascheraLato(),
+  "sul PC volume e maschera non hanno piu' la stessa scala");
+
+// Il tetto sulla taglia dell'immagine satellitare resta sulla sola
+// larghezza. Provato a metterlo anche sull'altezza: sul telefono cambiava
+// quasi niente (2,9 megapixel invece di 3,0) e sul PC tagliava l'immagine
+// da 1920 a 1203 pixel, cioe' peggiorava proprio il caso da non toccare.
+// E si verifica ESEGUENDO, non cercando una scrittura: la prima stesura di
+// questa prova cercava il nome di una variabile, e una riscrittura
+// equivalente le sarebbe passata sotto il naso -- provato, e infatti passava.
+const taglia = (larghezza, altezza, densita) => new Function(
+  'document', 'window', 'navigator',
+  [html.match(/const CLOUD_MAX_SIDE = \d+;/)[0],
+   implementazione('mercatorMetresX'), implementazione('mercatorMetresY'),
+   implementazione('cloudRequestSize')].join('\n\n')
+  + '\nreturn cloudRequestSize;')(
+    { getElementById: () => ({ clientWidth: larghezza, clientHeight: altezza }) },
+    { innerWidth: larghezza, innerHeight: altezza, devicePixelRatio: densita },
+    { deviceMemory: 8 });
+// La proprieta' esatta da difendere e' questa: la larghezza richiesta non
+// deve dipendere dall'ALTEZZA dello schermo. Un tetto sull'altezza la
+// farebbe dipendere, ed e' quello che tagliava il PC da 1920 a 1203.
+// (Prima stesura sbagliata: avevo scelto un riquadro dove a comandare era
+// il dettaglio nativo dello strumento, non il tetto, quindi la prova
+// falliva sull'albero pulito. Qui si usa il dominio osservato, dove il
+// tetto dello schermo comanda davvero.)
+const dominioOsservato = (() => {
+  const m = html.match(/const CLOUD_DOMAIN = \{ west: (-?[0-9.]+), south: (-?[0-9.]+), east: (-?[0-9.]+), north: (-?[0-9.]+) \};/);
+  assert.ok(m, "manca CLOUD_DOMAIN");
+  return { west: +m[1], south: +m[2], east: +m[3], north: +m[4] };
+})();
+const schermoAlto = taglia(1280, 860, 1)(dominioOsservato, { metres: 1000 });
+const schermoBasso = taglia(1280, 300, 1)(dominioOsservato, { metres: 1000 });
+assert.ok(schermoAlto.width >= 1900,
+  "sul PC il tetto dello schermo non arriva piu' a 1920 pixel: chiede "
+  + schermoAlto.width);
+assert.equal(schermoAlto.width, schermoBasso.width,
+  "la larghezza richiesta cambia con l'ALTEZZA dello schermo ("
+  + schermoAlto.width + " contro " + schermoBasso.width
+  + "): un tetto sull'altezza sta mordendo, ed e' quello che peggiorava il PC");

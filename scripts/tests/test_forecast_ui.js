@@ -188,6 +188,12 @@ async function test(name,fn) {await fn();console.log('PASS '+name);}
   const dominioVisto=[];
   ctx.aggiornaDominioNavigabile=()=>{dominioVisto.push(
     {vista:ctx.weatherView,nubi:ctx.showSatelliteClouds});};
+  // Le canvas a tutto schermo cambiano densita' con la vista (in satellite ci
+  // sono sopra solo i fulmini, e sul telefono quella densita' in meno vale
+  // 43 millisecondi a fotogramma contro 17). Senza rimisurarle qui, la
+  // densita' nuova non entra mai in vigore.
+  const rimisurate=[];
+  ctx.resizeCanvases=()=>{rimisurate.push(ctx.weatherView);};
   let chiusure=0;ctx.blitzDisconnect=()=>chiusure++;
   ctx.clearMeteorologicalLayers=()=>{ctx.showVectors=false;ctx.showFronts=false;ctx.showIsobars=false;};
   vm.createContext(ctx);
@@ -197,11 +203,15 @@ async function test(name,fn) {await fn();console.log('PASS '+name);}
   assert.equal(dominioVisto.length,1,'entrando nel satellite il dominio percorribile non viene aggiornato');
   assert.deepEqual(dominioVisto[0],{vista:'satellite',nubi:true},
     'il dominio viene aggiornato prima che i flag siano fermi: la mappa resta stretta sul modello');
+  assert.deepEqual(rimisurate,['satellite'],
+    'entrando nel satellite le canvas non vengono rimisurate: la densita\' ridotta non entra in vigore');
   assert.equal(ctx.showVectors,false);assert.equal(ctx.showFronts,false);assert.equal(ctx.showSatelliteClouds,true);
   ctx.setWeatherView('forecast');
   assert.equal(dominioVisto.length,2,'uscendo dal satellite il dominio percorribile non torna quello del modello');
   assert.deepEqual(dominioVisto[1],{vista:'forecast',nubi:false},
     'tornando alla previsione il dominio viene aggiornato con i flag ancora a meta\' strada');
+  assert.deepEqual(rimisurate,['satellite','forecast'],
+    'tornando alla previsione le canvas non tornano alla densita\' piena: il testo resterebbe sgranato');
   assert.equal(ctx.activeLayer,'wind');assert.equal(ctx.currentIndex,13);assert.equal(ctx.showVectors,true);assert.equal(ctx.showFronts,true);
   // I due livelli osservati vivono solo nella vista satellite, e l'ora scelta
   // con loro: rientrando nella previsione devono spegnersi e tornare in

@@ -5967,6 +5967,12 @@
         const larghezzaCss = (mappaEl && mappaEl.clientWidth)
           || window.innerWidth || 1280;
         const densita = Math.min(2, Math.max(1, window.devicePixelRatio || 1));
+        // Il tetto resta sulla sola LARGHEZZA, e non e' una svista. Provato
+        // a metterlo anche sull'altezza, per via del riquadro alto e stretto
+        // che inquadra un telefono in verticale: sul telefono non cambiava
+        // quasi niente (2,9 megapixel invece di 3,0) mentre sul PC tagliava
+        // l'immagine da 1920 a 1203 pixel di larghezza, cioe' peggiorava
+        // proprio cio' che non va toccato. Misurato, e tolto.
         const schermoLimitedWidth = Math.ceil(larghezzaCss * densita * 1.5);
         const width = Math.max(512, Math.min(
           native, CLOUD_MAX_SIDE, sideLimitedWidth, pixelLimitedWidth,
@@ -6558,8 +6564,31 @@
       //
       // Costa una volta per fotogramma satellitare, cioe' ogni cinque o
       // dieci minuti, non a ogni lampo.
-      const MASCHERA_LATO = 768;
-      const VOLUME_LATO = 768;
+      // Lato massimo della maschera delle nubi. E' il ritaglio che dice al
+      // lampo DOVE la nube c'e' davvero, e si ricostruisce a ogni fotogramma
+      // satellitare -- cioe' anche a ogni panoramica che esaurisce il
+      // riquadro gia' scaricato.
+      //
+      // Costa un singolo blocco del thread, e non e' piccolo: misurato su
+      // telefono emulato con CPU rallentata sei volte, 670 millisecondi in
+      // una chiamata sola. Non e' il ciclo per pixel -- quello e' aritmetica
+      // banale -- sono il ridimensionamento della sorgente e la rilettura
+      // dei pixel, che crescono col quadrato del lato.
+      //
+      // Sul telefono si dimezza: 384 su uno schermo da 390 punti resta circa
+      // un texel per punto, cioe' tutta la sagoma che lo schermo puo'
+      // comunque mostrare. Sul PC resta 768.
+      function mascheraLato() {
+        return isMobile() ? 384 : 768;
+      }
+      // Lato della griglia volumetrica. Segue la maschera: tenerlo a 768
+      // mentre sul telefono la maschera sta a 384 non aggiungeva nessun
+      // dettaglio -- lo INVENTAVA, ingrandendo una sorgente piu' piccola --
+      // e intanto quadruplicava la texture che la GPU deve tenere e
+      // campionare a ogni fotogramma.
+      function volumeLato() {
+        return mascheraLato();
+      }
       const VOLUME_CACHE_LIMIT = 4;
       let mascheraNube = null;
       let volumeToken = 0;
@@ -6599,7 +6628,7 @@
         // l'effetto mentre i due prodotti ausiliari stanno arrivando.
         if (!product || !["scene", "grey"].includes(product.mode)) return null;
         try {
-          const scala = Math.min(1, MASCHERA_LATO / Math.max(sorgente.width, sorgente.height));
+          const scala = Math.min(1, mascheraLato() / Math.max(sorgente.width, sorgente.height));
           const w = Math.max(1, Math.round(sorgente.width * scala));
           const h = Math.max(1, Math.round(sorgente.height * scala));
           const raster = canvasRidotta(sorgente, w, h);
@@ -6639,8 +6668,9 @@
         const spanX = Math.max(1, mercatorMetresX(box.east) - mercatorMetresX(box.west));
         const spanY = Math.max(1, mercatorMetresY(box.north) - mercatorMetresY(box.south));
         const aspect = spanY / spanX;
-        const width = aspect > 1 ? Math.max(256, Math.round(VOLUME_LATO / aspect)) : VOLUME_LATO;
-        const height = aspect > 1 ? VOLUME_LATO : Math.max(256, Math.round(VOLUME_LATO * aspect));
+        const lato = volumeLato();
+        const width = aspect > 1 ? Math.max(256, Math.round(lato / aspect)) : lato;
+        const height = aspect > 1 ? lato : Math.max(256, Math.round(lato * aspect));
         return { width: width, height: height, metres: spanX / width };
       }
 
@@ -11996,7 +12026,27 @@
 
       function resizeCanvases() {
         const mobile = isMobile();
-        const ratio = Math.min(window.devicePixelRatio || 1, mobile ? 2 : 2.15);
+        // Quanti pixel veri dare alle canvas a tutto schermo. E' la leva che
+        // conta piu' di ogni altra sul telefono: queste canvas vengono
+        // cancellate e ricaricate a OGNI fotogramma finche' un lampo brilla,
+        // e a 390x844 con densita' 2 sono 1,3 milioni di pixel per volta.
+        // Misurato su telefono emulato con CPU rallentata sei volte e
+        // quaranta scariche vive: 43,5 ms a fotogramma con densita' 2,
+        // 17,0 ms con densita' 1,25 -- due volte e mezzo piu' fluido. Il
+        // numero di scariche, invece, non cambia quasi niente (12 fps contro
+        // 13 passando da quaranta a dieci): non era li' il costo.
+        //
+        // Si abbassa SOLO sul telefono e SOLO in vista satellite, e non e'
+        // un compromesso al buio: li' sopra questa canvas non c'e' altro che
+        // i fulmini. Isobare, fronti, isoterme e toponimi sono tutti spenti
+        // in quella vista -- lo fa clearMeteorologicalLayers() -- quindi
+        // non c'e' nessun testo ne' nessuna linea sottile da mantenere
+        // nitida: solo bagliori, che sono gia' sfocati di loro. Sulla
+        // previsione, dove il testo c'e', la densita' resta quella di prima;
+        // sul PC non cambia niente.
+        const soloLampi = mobile && weatherView === "satellite";
+        const tetto = soloLampi ? 1.25 : (mobile ? 2 : 2.15);
+        const ratio = Math.min(window.devicePixelRatio || 1, tetto);
 
         [[particleCanvas, particleContext], [vectorCanvas, vectorContext],
          [strikeLightCanvas, strikeLightContext]].forEach(function (entry) {

@@ -93,6 +93,10 @@ function setWeatherView(view) {
   // del modello -- misurato: minZoom restava 4,52 invece di scendere a 2,80,
   // e l'Atlantico non si raggiungeva.
   aggiornaDominioNavigabile();
+  // Le canvas a tutto schermo cambiano risoluzione con la vista: in satellite
+  // ci sono sopra solo i fulmini, e sul telefono quella densita' in meno e'
+  // la differenza fra 43 e 17 millisecondi a fotogramma.
+  resizeCanvases();
   document.body.classList.toggle('satellite-view',view === 'satellite');
   document.getElementById('satellite-status').hidden = view !== 'satellite';
   updateSatelliteControlsVisibility();
