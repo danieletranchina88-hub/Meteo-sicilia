@@ -481,7 +481,7 @@ prova('il bagliore satellitare abbaglia di piu\' e la sommita\' rivelata ha piu\
     'l\'alfa massimo del nucleo non e\' stato alzato verso l\'opaco');
 });
 
-prova('il bordo scuro attorno al nucleo da\' contrasto anche su una nube diurna gia\' chiara', () => {
+prova('l\'ombra segue il rilievo, non disegna un anello attorno alla cella', () => {
   // Un nucleo bianco sopra una nube diurna gia\' quasi bianca e\' invisibile
   // qualunque sia la sua opacita\': serve un bordo piu\' scuro dello sfondo,
   // non solo un centro piu\' chiaro. Nucleo e ombra ora si compongono nello
@@ -495,17 +495,33 @@ prova('il bordo scuro attorno al nucleo da\' contrasto anche su una nube diurna 
     'manca la miscela fra nucleo chiaro e bordo scuro');
   assert.match(inizializza, /colore=mix\(scuro,chiaro,pesoChiaro\)/,
     'il colore finale non fonde piu\' chiaro e scuro insieme');
-  // Misurato in un vero contesto WebGL2 (Playwright/Chromium), su una nube
-  // sintetica del tutto piatta (il caso peggiore: nessuna ombra di
-  // orientamento possibile): senza l'anello il nucleo composto su sfondo
-  // bianco puro si scostava di 2 unita' su 255 dal bianco, invisibile.
-  // Con l'anello lo scostamento arriva a 48 unita' subito fuori dal
-  // nucleo. La sola ombra di orientamento non basta: serve un bordo
-  // legato alla sola distanza dalla scarica.
-  assert.match(inizializza, /float u=distanza\/raggio;/,
-    'manca la distanza normalizzata al raggio per l\'anello');
-  assert.match(inizializza, /float anello=smoothstep\(0\.55,1\.1,u\)\*\(1\.0-smoothstep\(1\.1,2\.2,u\)\)/,
-    'manca l\'anello scuro legato alla sola distanza dal centro del lampo');
+  // QUI C'ERA UN ANELLO SCURO, e adesso deve restare fuori.
+  //
+  // Era un termine che dipendeva dalla SOLA distanza dal canale, quindi a
+  // una certa distanza disegnava un cerchio: attorno alla cella compariva
+  // un alone scuro rotondo, che non assomiglia a niente di atmosferico.
+  // Misurato sul profilo radiale con fondo notturno: da 180 a 300 pixel il
+  // composito stava sotto il livello dello sfondo (-0,1 / -0,2 su 255) in
+  // una fascia continua; tolto l'anello, quegli stessi raggi tornano a 0,0.
+  //
+  // Era stato messo quando il bagliore era BIANCO su una sommita' gia'
+  // bianca e serviva un bordo piu' scuro dello sfondo, o di giorno il lampo
+  // spariva. Adesso il bagliore e' lilla e a fare contrasto ci pensa il
+  // colore: togliendo l'anello lo scarto diurno passa da -53 a -51 su 255,
+  // cioe' due unita'. Si pagava un cerchio scuro per niente.
+  assert.doesNotMatch(inizializza, /float anello\s*=/,
+    'e\' tornato l\'anello scuro: disegna un cerchio attorno alla cella');
+  assert.doesNotMatch(inizializza, /float u=distanza\/raggio;/,
+    'e\' tornata la distanza normalizzata al raggio, che serviva solo all\'anello');
+  // L'ombra che resta deve nascere dall'ORIENTAMENTO della superficie
+  // rispetto al canale, non dalla distanza: e' quella che segue il rilievo
+  // della sommita' e che per costruzione non puo' essere rotonda.
+  const ombraTermine = inizializza.match(/ombraLocale=max\(ombraLocale,\s*\n\s*([^;]+)\);/);
+  assert.ok(ombraTermine, 'manca il termine d\'ombra');
+  assert.match(ombraTermine[1], /faccia/,
+    'l\'ombra non dipende piu\' da come la superficie e\' girata: perde il rilievo');
+  assert.doesNotMatch(ombraTermine[1], /distanza|\bu\b/,
+    'l\'ombra e\' tornata a dipendere dalla distanza: e\' cosi\' che nasce un alone rotondo');
   // L'ombra si prende con max(), non sommando. E' una proprieta'
   // geometrica del posto -- "quanto e' schermato questo punto" -- non una
   // grandezza che si accumula come la luce. Finche' le sorgenti erano tre
@@ -514,8 +530,8 @@ prova('il bordo scuro attorno al nucleo da\' contrasto anche su una nube diurna 
   // cella. Misurato appena passati ai segmenti.
   assert.match(inizializza, /ombraLocale=max\(ombraLocale,/,
     'l\'ombra torna a sommarsi su ogni segmento: lungo un canale di venti pezzi annerisce la cella');
-  assert.match(inizializza, /anello\*6\.0\)\*sagoma\)/,
-    'l\'anello e\' troppo debole per dare contrasto su una nube diurna piatta');
+  assert.match(inizializza, /\*densita\*sagoma\);/,
+    'l\'ombra non e\' piu\' pesata dalla densita\' e dalla cella: uscirebbe dal cielo sereno');
   // La LUCE invece si somma davvero: due rami vicini illuminano il doppio.
   assert.match(inizializza, /luceLocale\+=A\.w\*campo\*schermoDiffuso/,
     'la luce non si somma piu\' sui segmenti vicini');
