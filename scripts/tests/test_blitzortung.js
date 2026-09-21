@@ -61,8 +61,10 @@ prova('il tempo arriva in nanosecondi e va portato a millisecondi', () => {
   const anno = new Date(ms).getUTCFullYear();
   assert.ok(anno >= 2024 && anno <= 2100,
     'la conversione del tempo produce l\'anno ' + anno);
-  assert.match(html, /Number\(payload\.time\) \/ 1e6/,
+  assert.match(html, /function tempoScaricaMillis\([\s\S]*?numero \/ 1e6/,
     'il sito non converte piu\' i nanosecondi in millisecondi');
+  assert.match(html, /tempoScaricaMillis\(payload && payload\.time\)/,
+    'la rilevazione non usa la conversione del timestamp della sorgente');
 });
 
 prova('una stringa vuota non fa esplodere il decodificatore', () => {

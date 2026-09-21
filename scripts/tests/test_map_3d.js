@@ -662,9 +662,9 @@ assert.match(
 // Radar e satellite restano sincronizzati quando sono entrambi accesi, ma
 // ciascuno ha il proprio comando: il radar può essere rimosso senza perdere
 // l'immagine satellitare.
-assert.match(html, /data-toggle="satclouds"[\s\S]{0,220}?<b>Satellite MTG<\/b>/,
+assert.match(html, /data-toggle="satclouds"[\s\S]{0,500}?<b>Satellite MTG<\/b>/,
   "manca il controllo satellitare indipendente");
-assert.match(html, /data-toggle="radar"[\s\S]{0,220}?<b>Radar precipitazioni<\/b>/,
+assert.match(html, /data-toggle="radar"[\s\S]{0,500}?<b>Radar precipitazioni<\/b>/,
   "manca il controllo radar indipendente");
 assert.match(html, /radar: showRadar,[\s\S]{0,120}?satclouds: showSatelliteClouds,/,
   "gli stati indipendenti non sono riportati nell'interfaccia");
@@ -1914,8 +1914,10 @@ assert.match(html, /const CAPE_STOPS = \[\s*\{ v: 0, c: \[238, 244, 240\], a: 0 
     "manca la pubblicazione senza rete");
   const scorrimento = html.match(/scrub\.addEventListener\("input"[\s\S]*?\n {8}\}\);/);
   assert.ok(scorrimento, "manca il gestore dello scorrimento");
-  assert.match(scorrimento[0], /if \(pubblicaFotogrammaInCache\(\)\)/,
-    "lo scorrimento non prova piu' la cache prima della rete");
+  assert.match(scorrimento[0], /pubblicaFotogrammaInCache\(\)/,
+    "lo scorrimento non prova piu' la cache delle nubi prima della rete");
+  assert.match(scorrimento[0], /pubblicaLightningInCache\(\)/,
+    "lo scorrimento non prova la cache dei fulmini prima della rete");
   // Il precaricamento deve restare UNO ALLA VOLTA e distanziato, o brucia
   // l'intera finestra di richieste del servizio in un gesto.
   assert.match(html, /const CLOUD_PREFETCH_GAP_MS = \d{3,};/,
@@ -1924,7 +1926,7 @@ assert.match(html, /const CAPE_STOPS = \[\s*\{ v: 0, c: \[238, 244, 240\], a: 0 
     "il precaricamento puo' partire in parallelo con se stesso");
   // Sfrattare il fotogramma in mostra ne libererebbe l'object URL, e la
   // mappa resterebbe vuota.
-  assert.match(html, /if \(candidata !== cloudPublishedKey\)/,
+  assert.match(html, /if \(candidata !== cloudPublishedKey\s*&&\s*candidata !== lightningPublishedKey\)/,
     "lo sfratto dalla cache puo' cancellare l'immagine in mostra");
 }
 
@@ -1950,15 +1952,11 @@ assert.doesNotMatch(html, /const ratio = Math\.min\(window\.devicePixelRatio \|\
 assert.match(modernUi, /resizeCanvases\(\);\s*\n\s*document\.body\.classList\.toggle\('satellite-view'/,
   "cambiando vista le canvas non vengono rimisurate: la densita' resta quella di prima");
 
-// La maschera delle nubi si ricostruisce a ogni fotogramma satellitare ed e'
-// un blocco unico del thread, quindi il suo lato va tenuto d'occhio. Il
-// motore volumetrico l'aveva portata a 768 (e a 384 sul telefono, per
-// alleggerirla); tornando al lampo lavanda 2D e' di nuovo 512 per tutti,
-// che era il valore originale ed e' gia' piu' leggero del 768.
-const latoMaschera = html.match(/const MASCHERA_LATO = (\d+);/);
-assert.ok(latoMaschera, "manca il lato della maschera delle nubi");
-assert.ok(+latoMaschera[1] <= 512,
-  "la maschera delle nubi e' tornata pesante: lato " + latoMaschera[1]);
+// La rete a terra non misura radiance o footprint della nube: ricostruire
+// una maschera da un raster RGB e usarla per inventare il bagliore del lampo
+// era costoso e fisicamente ingannevole. Il renderer nuovo non la costruisce.
+assert.doesNotMatch(html, /MASCHERA_LATO|costruisciMascheraNube|mascheraNube/,
+  "il live torna a inventare un'illuminazione della nube dai pixel satellitari");
 
 // Il tetto sulla taglia dell'immagine satellitare resta sulla sola
 // larghezza. Provato a metterlo anche sull'altezza: sul telefono cambiava
