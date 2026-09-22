@@ -6207,6 +6207,12 @@
         // un'immagine superata sopra quella giusta gia' in mostra.
         const publicationToken = cloudToken;
         const frameKey = cloudFrameKey(product, slot, box, size);
+        // La sagoma si tiene in locale finche' non siamo sicuri che questa
+        // sia ancora la richiesta piu' recente: diventa quella vera --
+        // mascheraNube -- solo dentro update(). Altrimenti la codifica piu'
+        // lenta di una richiesta vecchia lascerebbe ai fulmini la nube di
+        // prima.
+        let maschera = null;
         const corners = [
           [box.west, box.north], [box.east, box.north],
           [box.east, box.south], [box.west, box.south]
@@ -6222,6 +6228,7 @@
               "satellite-clouds-layer", "raster-opacity", 1
             );
             cloudPublishedKey = frameKey;
+            mascheraNube = maschera;
             cloudLoadedBox = box;
             cloudLoadedMetres = size.metres;
             cloudLoadedSlot = slot.value;
@@ -6256,6 +6263,11 @@
           canvas.width = image.naturalWidth || size.width;
           canvas.height = image.naturalHeight || size.height;
           canvas.getContext("2d").drawImage(image, 0, 0);
+          // L'immagine e' gia' qui, su una canvas nostra: costa pochissimo
+          // ricavarne anche la sagoma delle nubi, che serve al campo di
+          // attivita' per accendersi dove la nube c'e' davvero invece che
+          // in un disco.
+          maschera = costruisciMascheraNube(canvas, box, product);
           if (typeof canvas.toBlob === "function"
               && typeof URL.createObjectURL === "function") {
             canvas.toBlob(function (blob) {
@@ -6265,13 +6277,13 @@
               // In cache prima di pubblicare: tornando su questo istante non
               // si chiedera' piu' nulla alla rete. La cache possiede l'URL,
               // quindi update non lo deve liberare.
-              rememberCloudFrame(frameKey, url, box, size);
+              rememberCloudFrame(frameKey, url, box, size, maschera);
               update(url, false);
               scheduleCloudPrefetch();
             }, "image/png");
           } else {
             const dataUrl = canvas.toDataURL("image/png");
-            rememberCloudFrame(frameKey, dataUrl, box, size);
+            rememberCloudFrame(frameKey, dataUrl, box, size, maschera);
             update(dataUrl, false);
           }
         } catch (error) {
@@ -6712,7 +6724,9 @@
             + ":" + Math.round(s.lon / STRIKE_CELL_LON);
           let cella = caselle.get(chiave);
           if (!cella) {
-            cella = { peso: 0, lat: 0, lon: 0, quante: 0, stazioni: 0 };
+            cella = {
+              peso: 0, lat: 0, lon: 0, quante: 0, stazioni: 0, ultima: 0
+            };
             caselle.set(chiave, cella);
           }
           cella.peso += peso;
@@ -6720,6 +6734,10 @@
           cella.lon += s.lon * peso;
           cella.quante += 1;
           cella.stazioni += s.stazioni || 0;
+          // L'istante della scarica piu' fresca della cella: e' quello che
+          // fa battere il respiro. Non e' una grandezza nuova, e' il dato
+          // che la rete manda gia' con ogni rilevazione.
+          if (s.at > cella.ultima) cella.ultima = s.at;
         }
         const nuclei = [];
         caselle.forEach(function (cella) {
@@ -6728,11 +6746,36 @@
             lon: cella.lon / cella.peso,
             peso: cella.peso,
             quante: cella.quante,
-            stazioni: cella.stazioni
+            stazioni: cella.stazioni,
+            ultima: cella.ultima
           });
         });
         nuclei.sort(function (a, b) { return b.peso - a.peso; });
-        return nuclei.slice(0, STRIKE_ACTIVITY_MAX);
+        const scelte = nuclei.slice(0, STRIKE_ACTIVITY_MAX);
+        // Quante celle condividono lo stesso alone. Le caselle sono da
+        // cinque chilometri e l'alone ha raggio quindici: dentro un
+        // temporale ogni casella ne ha nove o dieci addosso, e sommando la
+        // luce tale e quale il nucleo satura a bianco su ogni cella un po'
+        // seria -- misurato, opacita' di picco 1,00 contro lo 0,58
+        // dichiarato. Contarle permette di dividere la luce fra chi la
+        // condivide invece di sommarla nove volte.
+        //
+        // Sessanta celle al massimo, quindi tremilaseicento distanze ogni
+        // settecento millisecondi: costo irrilevante.
+        for (let i = 0; i < scelte.length; i += 1) {
+          const coseno = Math.cos(scelte[i].lat * Math.PI / 180);
+          let vicine = 0;
+          for (let j = 0; j < scelte.length; j += 1) {
+            const dy = (scelte[i].lat - scelte[j].lat) * 111.32;
+            const dx = (scelte[i].lon - scelte[j].lon) * 111.32 * coseno;
+            if (dx * dx + dy * dy
+                <= STRIKE_ACTIVITY_RADIUS_KM * STRIKE_ACTIVITY_RADIUS_KM) {
+              vicine += 1;
+            }
+          }
+          scelte[i].vicine = vicine;
+        }
+        return scelte;
       }
 
       function raggioKmInPixel(lon, lat, chilometri) {
@@ -6750,37 +6793,480 @@
         return { eta: STRIKE_LIFE_MS, quanti: STRIKE_MAX };
       }
 
+      // ---- LA NUBE CHE SI ACCENDE --------------------------------------
+      //
+      // Un lampo visto dall'alto non illumina un cerchio: illumina LA NUBE.
+      // La luce esce dove c'e' ghiaccio che la diffonde e non esce dove il
+      // cielo e' sereno, quindi la macchia luminosa ha la forma della
+      // sommita' nuvolosa -- frastagliata, con i suoi bordi e i suoi buchi.
+      // Un disco morbido, per quanto ben sfumato, si riconosce subito come
+      // disegnato.
+      //
+      // La sagoma non va inventata ne' chiesta a nessuno: l'immagine
+      // satellitare passa gia' da una canvas nostra prima di essere
+      // pubblicata, quindi i pixel delle nubi li abbiamo in mano. Da quelli
+      // si ricava una maschera in scala di grigi -- chiaro dove c'e' nube,
+      // trasparente dove non ce n'e' -- e il bagliore ci viene ritagliato
+      // dentro.
+      //
+      // Costa una volta per fotogramma satellitare, cioe' ogni cinque o
+      // dieci minuti, non a ogni lampo.
+      const MASCHERA_LATO = 512;
+      let mascheraNube = null;
+
+      function costruisciMascheraNube(sorgente, box, product) {
+        // Non tutti i tredici canali sono adatti: quelli "diagnostici" --
+        // fase delle nubi, tipo di nube, nebbia, polvere, neve -- sono RGB
+        // artificiali dove il rosa o il verde acceso segnalano una diagnosi
+        // (ghiaccio piccolo, polvere, manto nevoso), non "piu' luminoso
+        // uguale piu' nube". Usarne la luminanza come sagoma illuminerebbe
+        // la mappa secondo una scala che non e' spessore di nube: sarebbe
+        // fisica finta con l'aria di essere vera. Restano buoni solo il
+        // grigio dell'infrarosso e del visibile ("grey") e i compositi a
+        // colori naturali ("scene"), dove chiaro vuol dire davvero denso.
+        if (!product || !["scene", "grey"].includes(product.mode)) return null;
+        try {
+          const largo = sorgente.width, alto = sorgente.height;
+          if (!largo || !alto) return null;
+          // Ridotta: la maschera serve a dare una forma a un bagliore, non a
+          // essere guardata. Mezzo migliaio di pixel di lato bastano, e
+          // tengono il costo di lettura sotto il millisecondo.
+          const scala = Math.min(1, MASCHERA_LATO / Math.max(largo, alto));
+          const mw = Math.max(1, Math.round(largo * scala));
+          const mh = Math.max(1, Math.round(alto * scala));
+          const piccola = document.createElement("canvas");
+          piccola.width = mw; piccola.height = mh;
+          const pc = piccola.getContext("2d", { willReadFrequently: true });
+          pc.drawImage(sorgente, 0, 0, mw, mh);
+          const dati = pc.getImageData(0, 0, mw, mh);
+          const px = dati.data;
+
+          // Quanto e' "nube" un pixel si misura dalla luminanza percepita:
+          // nel visibile le nubi sono chiare, nell'infrarosso le sommita'
+          // fredde sono chiare, e in entrambi mare e terra sono piu' scuri.
+          //
+          // La soglia pero' NON puo' essere fissa. I tredici canali hanno
+          // dinamiche molto diverse, e soprattutto la stessa GeoColour di
+          // notte mostra nubi grigio-azzurre scure invece che bianche: con
+          // una soglia tarata sul giorno la maschera notturna usciva quasi
+          // trasparente, e il bagliore -- misurato -- restava al sette per
+          // cento di opacita', cioe' invisibile. La soglia si ricava quindi
+          // dall'immagine stessa, per percentili: il quindicesimo e' la
+          // superficie piu' scura presente, il novantesimo la nube piu'
+          // spessa. In mezzo c'e' tutto quello che diffonde luce.
+          const istogramma = new Uint32Array(64);
+          const luminanze = new Float32Array(mw * mh);
+          let quanti = 0;
+          for (let i = 0, k = 0; i < px.length; i += 4, k += 1) {
+            const l = (px[i] * 0.2126 + px[i + 1] * 0.7152 + px[i + 2] * 0.0722) / 255;
+            luminanze[k] = l;
+            if (px[i + 3] < 8) continue;
+            istogramma[Math.min(63, Math.max(0, Math.round(l * 63)))] += 1;
+            quanti += 1;
+          }
+          const daIstogramma = function (bidoni, totale, frazione, fondoScala) {
+            let visti = 0;
+            const bersaglio = totale * frazione;
+            for (let b = 0; b < bidoni.length; b += 1) {
+              visti += bidoni[b];
+              if (visti >= bersaglio) return b / (bidoni.length - 1) * fondoScala;
+            }
+            return fondoScala;
+          };
+          const percentile = function (frazione) {
+            return daIstogramma(istogramma, quanti, frazione, 1);
+          };
+          const buio = quanti ? percentile(0.15) : 0.2;
+          const pieno = quanti ? percentile(0.9) : 0.75;
+          // Se l'immagine e' tutta uguale -- cielo sereno da un capo
+          // all'altro, o una schermata nera -- non c'e' sagoma da ricavare:
+          // meglio nessuna maschera che una maschera casuale.
+          const intervallo = pieno - buio;
+          if (!quanti || intervallo < 0.06) return null;
+
+          // LE LUCI DI CITTA'. Di notte, sui compositi a colori naturali,
+          // il punto piu' chiaro della scena non e' una nube: e' Milano.
+          // La penalita' di saturazione qui sotto non le prende, e non e'
+          // un difetto di taratura ma un limite della scala: misurata su
+          // una scena vera, a mezzo migliaio di pixel di lato la
+          // saturazione delle luci vale 0,12, esattamente come quella delle
+          // nubi, perche' il ridimensionamento le ha gia' mediate con il
+          // nero attorno.
+          //
+          // Quello che il ridimensionamento NON cancella e' la forma: le
+          // luci restano uno spruzzo di punti, le nubi sono lisce. Quindi
+          // si misura la ruvidezza locale -- deviazione standard della
+          // luminanza su tre per tre -- e si penalizza quella. La soglia si
+          // ricava di nuovo per percentili dall'immagine stessa, perche'
+          // una scena tutta nubi e una scena tutta costa hanno ruvidezze
+          // medie molto diverse.
+          const ruvidezza = new Float32Array(mw * mh);
+          const istogrammaRuvido = new Uint32Array(64);
+          const RUVIDO_FONDO = 0.5;
+          for (let y = 0; y < mh; y += 1) {
+            for (let x = 0; x < mw; x += 1) {
+              let somma = 0, sommaQuadri = 0, contati = 0;
+              const y0 = Math.max(0, y - 1), y1 = Math.min(mh - 1, y + 1);
+              const x0 = Math.max(0, x - 1), x1 = Math.min(mw - 1, x + 1);
+              for (let yy = y0; yy <= y1; yy += 1) {
+                for (let xx = x0; xx <= x1; xx += 1) {
+                  const v = luminanze[yy * mw + xx];
+                  somma += v; sommaQuadri += v * v; contati += 1;
+                }
+              }
+              const media = somma / contati;
+              const sigma = Math.sqrt(
+                Math.max(0, sommaQuadri / contati - media * media)
+              );
+              ruvidezza[y * mw + x] = sigma;
+              istogrammaRuvido[Math.min(63, Math.round(
+                sigma / RUVIDO_FONDO * 63
+              ))] += 1;
+            }
+          }
+          const ruvidoBasso = daIstogramma(
+            istogrammaRuvido, mw * mh, 0.70, RUVIDO_FONDO
+          );
+          const ruvidoAlto = Math.max(
+            ruvidoBasso + 1e-4,
+            daIstogramma(istogrammaRuvido, mw * mh, 0.97, RUVIDO_FONDO)
+          );
+
+          for (let i = 0, k = 0; i < px.length; i += 4, k += 1) {
+            const r = px[i], g = px[i + 1], b = px[i + 2], alfaSorgente = px[i + 3] / 255;
+            const luminanza = luminanze[k];
+            // Il contrasto si alza con una gamma: nella fotografia i lobi
+            // scuri davanti restano neri mentre il cuore della nube brucia,
+            // ed e' quel salto a far leggere la luce come interna alla
+            // nube. Una maschera lineare invece la spalma, e il risultato
+            // sembra nebbia illuminata.
+            const grezza = clamp((luminanza - buio) / intervallo, 0, 1);
+            // Sui compositi a colori naturali resta un problema che la sola
+            // luminanza non vede: un deserto, un tetto assolato o le luci
+            // di una citta' possono essere chiari quanto una nube, ma sono
+            // COLORATI -- terra e luci hanno una tinta netta, la sommita'
+            // di un cumulo no. Si penalizza quindi la saturazione, e solo
+            // sui compositi a colore: sul grigio dell'infrarosso non c'e'
+            // colore da giudicare, e la tinta sarebbe solo rumore del jpeg.
+            const saturazione = (Math.max(r, g, b) - Math.min(r, g, b)) / Math.max(1, r, g, b);
+            const neutro = product.mode === "scene"
+              ? 1 - clamp((saturazione - 0.12) / 0.5, 0, 1)
+              : 1;
+            const liscio = 1 - clamp(
+              (ruvidezza[k] - ruvidoBasso) / (ruvidoAlto - ruvidoBasso), 0, 1
+            );
+            const nuvolosita = grezza * grezza * (3 - 2 * grezza)
+              * neutro * liscio * alfaSorgente;
+            // Il colore non serve: resta solo il canale alfa, che e' la
+            // sagoma. Bianco pieno cosi' il ritaglio non tinge il bagliore.
+            px[i] = 255; px[i + 1] = 255; px[i + 2] = 255;
+            px[i + 3] = Math.round(255 * nuvolosita);
+          }
+          pc.putImageData(dati, 0, 0);
+          return { tela: piccola, west: box.west, east: box.east,
+                   south: box.south, north: box.north, layer: product.layer };
+        } catch (error) {
+          // Canvas "sporca" o memoria insufficiente: si ripiega sul disco
+          // morbido, che e' meno bello ma non e' un guasto.
+          return null;
+        }
+      }
+
+      // ---- LA CELLA CHE RESPIRA ----------------------------------------
+      //
+      // Il campo di attivita' qui sopra e' un numero: la somma pesata delle
+      // scariche vive dentro una casella di circa cinque chilometri, con
+      // memoria esponenziale di novanta secondi. Resta da decidere che
+      // faccia dargli.
+      //
+      // Un disco arancio sopra la mappa dice "qui c'e' densita'", ed e'
+      // corretto, ma non somiglia a niente di quello che si vede davvero.
+      // Dall'alto un temporale attivo fa una cosa sola: la sua sommita' si
+      // accende da dentro, a intermittenza, e la luce esce SOLO dove c'e'
+      // ghiaccio che la diffonde. Quindi la cella si disegna cosi' --
+      // ritagliata sulla sagoma satellitare, con un chiarore di fondo pari
+      // all'attivita' e un colpo piu' forte a ogni scarica nuova.
+      //
+      // Niente di questo aggiunge dati che la rete non ha: posizione,
+      // tempo e conteggio sono gli stessi di prima. Cambia solo la forma
+      // in cui vengono mostrati.
+      //
+      // Il colore non e' scelto a occhio. E' campionato da una fotografia
+      // vera di temporale illuminato dall'interno, misurando la tinta media
+      // per fascia di luminanza:
+      //
+      //   luminanza 0,38-0,58   133,115,128
+      //   luminanza 0,58-0,80   189,168,190
+      //   luminanza 0,80-1,00   229,217,240
+      //
+      // Il verde e' sempre il canale piu' basso: e' lavanda, non azzurro.
+      // Ha anche senso fisico -- lo spettro del fulmine e' dominato
+      // dall'azoto nel violetto piu' un po' di rosso, con un buco proprio
+      // nel verde -- e diffuso dal ghiaccio della nube resta questo.
+      //
+      // E si SCALDA mentre si spegne invece di virare al violetto: nella
+      // fotografia lo scarto fra blu e rosso passa da +11 nel cuore a -5
+      // nella fascia intermedia. E' il contrario di quello che verrebbe da
+      // disegnare, ed e' l'unica ragione per cui vale la pena misurare una
+      // foto invece di scegliere i colori a mano.
+      const ATTIVITA_RESPIRO_MS = 620;
+      let telaAttivita = null;
+
+      function tinteCella(g, forza) {
+        const a = forza;
+        g.addColorStop(0, "rgba(253,250,255," + (0.98 * a).toFixed(3) + ")");
+        g.addColorStop(0.16, "rgba(250,236,255," + (0.72 * a).toFixed(3) + ")");
+        g.addColorStop(0.36, "rgba(238,214,248," + (0.42 * a).toFixed(3) + ")");
+        g.addColorStop(0.58, "rgba(208,182,208," + (0.2 * a).toFixed(3) + ")");
+        g.addColorStop(0.8, "rgba(178,154,174," + (0.07 * a).toFixed(3) + ")");
+        g.addColorStop(1, "rgba(162,140,156,0)");
+      }
+
+      // Da cella a disegno: intensita' dal peso, respiro dall'ultima
+      // scarica, raggio dai chilometri del kernel. Separata dal disegno
+      // perche' e' l'unica parte con dentro delle scelte, e va poter essere
+      // verificata senza una mappa e senza una canvas.
+      function cellaIlluminata(cella, adessoEpoca, raggioPixel) {
+        const intensita = clamp(Math.log1p(cella.peso) / Math.log(28), 0, 1);
+        const dallUltima = adessoEpoca - (cella.ultima || 0);
+        // Il colpo: ogni scarica nuova accende la cella e si spegne in meno
+        // di un secondo. L'esponente maggiore di uno fa salire subito e
+        // scendere piano, che e' come si comporta la luce diffusa da una
+        // nube, non il canale.
+        const respiro = !prefersReducedMotion
+          && dallUltima >= 0 && dallUltima < ATTIVITA_RESPIRO_MS
+          ? Math.pow(1 - dallUltima / ATTIVITA_RESPIRO_MS, 2.6)
+          : 0;
+        // Fra un colpo e l'altro la cella NON oscilla. C'era un respiro
+        // lento, sinusoidale, e va detto perche' e' stato tolto: primo,
+        // era l'unico movimento non osservato del disegno -- il resto viene
+        // tutto dalla rete; secondo, non si sarebbe nemmeno visto come un
+        // respiro. Fra un arrivo e l'altro il renderer ridisegna una volta
+        // al secondo per non consumare batteria (animateStrikes), e una
+        // sinusoide da nove secondi campionata nove volte non respira:
+        // scatta.
+        //
+        // Il respiro vero ce l'ha gia' il temporale: e' la sequenza delle
+        // sue scariche. Una cella attiva ne riceve una ogni pochi secondi e
+        // pulsa a ognuna; una cella che si spegne resta ferma, che e'
+        // esattamente quello che sta facendo.
+
+        // La luce di fondo si divide fra le celle che condividono l'alone,
+        // con la radice invece che con il numero pieno: un ammasso di dieci
+        // celle resta piu' luminoso di una cella sola -- di circa tre volte,
+        // non di dieci -- e la scala di grigi non si schiaccia sul bianco.
+        //
+        // Il COLPO no. Il chiarore di fondo e' un campo di densita', e
+        // sommare dieci volte lo stesso kernel sarebbe contarlo dieci
+        // volte; il colpo invece e' un evento singolo, una scarica sola in
+        // una cella sola, e non ha nessun vicino con cui dividersi. Dividere
+        // anche quello lo rendeva invisibile proprio dentro i temporali
+        // piu' attivi, cioe' dove serve -- misurato, un terzo della luce.
+        const condivisione = 1 / Math.sqrt(Math.max(1, cella.vicine || 1));
+        const fondo = (0.08 + 0.62 * intensita) * condivisione;
+        const colpo = 1.05 * respiro * (0.4 + 0.6 * intensita);
+        const forza = clamp(fondo + colpo, 0, 1);
+        // Piu' e' attiva, piu' nube illumina: il raggio cresce con
+        // l'attivita' e si allarga di un soffio sul colpo.
+        const raggio = raggioPixel(
+          STRIKE_ACTIVITY_RADIUS_KM
+            * (0.75 + 0.85 * intensita + 0.3 * respiro)
+        );
+        return { intensita: intensita, respiro: respiro, forza: forza, raggio: raggio };
+      }
+
       function disegnaAttivita(context, adessoEpoca, adessoFrame) {
         if (adessoFrame - celleCalcolateA > 700) {
           celleAggregate = aggregaAttivita(liveStrikes, adessoEpoca);
           celleCalcolateA = adessoFrame;
         }
-        context.save();
-        context.globalCompositeOperation = "screen";
+        if (!celleAggregate.length) return;
+
+        const larghezza = projectionWidth;
+        const altezza = projectionHeight;
+        const accese = [];
         for (let i = 0; i < celleAggregate.length; i += 1) {
           const cella = celleAggregate[i];
           const punto = projectParticle(cella.lon, cella.lat, 0);
           if (!punto) continue;
-          const raggio = raggioKmInPixel(
-            cella.lon, cella.lat, STRIKE_ACTIVITY_RADIUS_KM
+          const luce = cellaIlluminata(
+            cella, adessoEpoca,
+            function (km) { return raggioKmInPixel(cella.lon, cella.lat, km); }
           );
-          if (!Number.isFinite(raggio) || raggio < 2) continue;
-          const intensita = clamp(Math.log1p(cella.peso) / Math.log(28), 0, 1);
-          if (intensita < 0.025) continue;
-          const gradiente = context.createRadialGradient(
-            punto.x, punto.y, 0, punto.x, punto.y, raggio
+          if (luce.forza < 0.03) continue;
+          if (!Number.isFinite(luce.raggio) || luce.raggio < 2) continue;
+          // Fuori schermo non si disegna: a scala larga sul telefono meta'
+          // delle celle vive possono stare oltre il bordo, e un gradiente
+          // radiale costa anche quando finisce fuori dalla tela.
+          if (punto.x < -luce.raggio || punto.y < -luce.raggio
+              || punto.x > larghezza + luce.raggio
+              || punto.y > altezza + luce.raggio) continue;
+          accese.push({ x: punto.x, y: punto.y, raggio: luce.raggio,
+                        forza: luce.forza });
+        }
+        if (!accese.length) return;
+
+        const tondo = function (ctx, cella, fattore, stretta) {
+          const raggio = cella.raggio * stretta;
+          const g = ctx.createRadialGradient(
+            cella.x, cella.y, 0, cella.x, cella.y, raggio
           );
-          gradiente.addColorStop(
-            0, "rgba(255,238,187," + (0.08 + 0.22 * intensita).toFixed(3) + ")"
-          );
-          gradiente.addColorStop(
-            0.42, "rgba(255,145,62," + (0.05 + 0.16 * intensita).toFixed(3) + ")"
-          );
-          gradiente.addColorStop(1, "rgba(255,78,48,0)");
-          context.fillStyle = gradiente;
+          tinteCella(g, cella.forza * fattore);
+          ctx.fillStyle = g;
+          ctx.beginPath();
+          ctx.arc(cella.x, cella.y, raggio, 0, Math.PI * 2);
+          ctx.fill();
+        };
+
+        // Senza sagoma, o con la mappa inclinata -- dove il riquadro
+        // dell'immagine satellitare non e' piu' un rettangolo sullo schermo
+        // -- resta il chiarore tondo. Meno bello, ma mai sbagliato. Va pero'
+        // tenuto piu' stretto: un cerchio largo che non sa dove sia la nube
+        // e' la macchia che copre tutto.
+        const soloTondo = function () {
+          context.save();
+          context.globalCompositeOperation = "lighter";
+          for (let i = 0; i < accese.length; i += 1) {
+            tondo(context, accese[i], 1, 0.62);
+          }
+          context.restore();
+        };
+        const inclinata = map.getPitch && map.getPitch() > 4;
+        if (!mascheraNube || inclinata || !showSatelliteClouds) {
+          soloTondo();
+          return;
+        }
+
+        // La maschera e' in coordinate geografiche: si proietta il suo
+        // riquadro sullo schermo e la si usa come canale alfa.
+        const nw = projectParticle(mascheraNube.west, mascheraNube.north, 0);
+        const se = projectParticle(mascheraNube.east, mascheraNube.south, 0);
+        if (!nw || !se || !(se.x > nw.x) || !(se.y > nw.y)) {
+          soloTondo();
+          return;
+        }
+
+        // Il rettangolo che contiene i temporali. Tutto il resto dello
+        // schermo non va ne' disegnato ne' cancellato: un temporale occupa
+        // una frazione della vista, e la differenza si paga a ogni
+        // fotogramma.
+        let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+        for (let i = 0; i < accese.length; i += 1) {
+          const c = accese[i];
+          if (c.x - c.raggio < minX) minX = c.x - c.raggio;
+          if (c.y - c.raggio < minY) minY = c.y - c.raggio;
+          if (c.x + c.raggio > maxX) maxX = c.x + c.raggio;
+          if (c.y + c.raggio > maxY) maxY = c.y + c.raggio;
+        }
+        minX = Math.max(0, Math.floor(minX));
+        minY = Math.max(0, Math.floor(minY));
+        maxX = Math.min(larghezza, Math.ceil(maxX));
+        maxY = Math.min(altezza, Math.ceil(maxY));
+        if (!(maxX > minX) || !(maxY > minY)) return;
+
+        // Il ritaglio vero e proprio. Si ritaglia anche la SORGENTE, non
+        // solo la destinazione: la maschera copre tutto il dominio
+        // satellitare -- mezza Europa -- quindi da vicino il suo riquadro
+        // proiettato e' largo decine di migliaia di pixel, e chiedere al
+        // browser di scalarci dentro un'immagine intera costa come se quei
+        // pixel esistessero davvero. Prendendo solo il pezzo di maschera
+        // che cade sul rettangolo dei temporali si disegna la stessa cosa
+        // guardando mille pixel invece di trenta milioni. Fuori dal riquadro
+        // satellitare la sorgente non esiste e il browser la rende
+        // trasparente: e' la risposta giusta, perche' li' non sappiamo se
+        // ci sia nube.
+        const perPixelX = mascheraNube.tela.width / (se.x - nw.x);
+        const perPixelY = mascheraNube.tela.height / (se.y - nw.y);
+        const ritaglia = function (ctx, x0, y0, largo, alto) {
+          ctx.globalCompositeOperation = "destination-in";
+          ctx.drawImage(mascheraNube.tela,
+            (x0 - nw.x) * perPixelX, (y0 - nw.y) * perPixelY,
+            largo * perPixelX, alto * perPixelY,
+            x0, y0, largo, alto);
+          ctx.globalCompositeOperation = "source-over";
+        };
+
+        // DOVE RITAGLIARE. "destination-in" cancella quello che trova gia'
+        // sulla tela, quindi si puo' usare sul contesto principale solo se
+        // li' sopra non c'e' ancora nient'altro. In vista satellite e'
+        // proprio cosi': frecce, isobare, isoterme, isoipse, fronti e
+        // toponimi sono tutti spenti -- lo fa clearMeteorologicalLayers --
+        // e i punti delle scariche si disegnano dopo di noi. La guardia
+        // elenca esattamente i prodotti che disegnano su questa canvas
+        // prima dei fulmini, dentro drawVectors.
+        //
+        // Quando invece c'e' dell'inchiostro sotto, si passa da una tela di
+        // servizio. Costa molto di piu' -- misurato su rasterizzatore
+        // software, 25 ms contro 0,2, perche' una canvas ridisegnata a ogni
+        // fotogramma va ricaricata tutta a ogni composizione -- ma e'
+        // l'unico modo di non cancellare il lavoro degli altri.
+        const telaSgombra = weatherView === "satellite"
+          && !showVectors && !showIsobars && !showIsohypses
+          && !showIsotherms && !showFronts;
+        const largoRiquadro = maxX - minX;
+        const altoRiquadro = maxY - minY;
+
+        if (telaSgombra) {
+          context.save();
           context.beginPath();
-          context.arc(punto.x, punto.y, raggio, 0, Math.PI * 2);
-          context.fill();
+          context.rect(minX, minY, largoRiquadro, altoRiquadro);
+          // Il ritaglio resta dentro il riquadro: senza, "destination-in"
+          // azzererebbe tutta la canvas invece del solo temporale, e
+          // costerebbe come se lo schermo intero fosse illuminato.
+          context.clip();
+          context.globalCompositeOperation = "lighter";
+          for (let i = 0; i < accese.length; i += 1) {
+            tondo(context, accese[i], 1, 1);
+          }
+          ritaglia(context, minX, minY, largoRiquadro, altoRiquadro);
+          context.restore();
+        } else {
+          // La tela di servizio sta sotto la risoluzione dello schermo:
+          // qui non c'e' niente di sottile da mantenere nitido, sono
+          // bagliori gia' sfocati di loro.
+          const qualita = isMobile() ? 0.5 : 0.75;
+          if (!telaAttivita) telaAttivita = document.createElement("canvas");
+          // La misura si arrotonda a multipli di sessantaquattro e si
+          // restringe solo quando avanza parecchio: ridimensionare una
+          // canvas la riazzera e la ricompila, e muovendo la mappa il
+          // rettangolo cambia a ogni fotogramma.
+          const tw = Math.ceil(largoRiquadro * qualita / 64) * 64;
+          const th = Math.ceil(altoRiquadro * qualita / 64) * 64;
+          if (telaAttivita.width < tw || telaAttivita.height < th
+              || telaAttivita.width > tw + 192 || telaAttivita.height > th + 192) {
+            telaAttivita.width = tw;
+            telaAttivita.height = th;
+          }
+          const tc = telaAttivita.getContext("2d");
+          tc.setTransform(qualita, 0, 0, qualita, -minX * qualita, -minY * qualita);
+          const destLargo = telaAttivita.width / qualita;
+          const destAlto = telaAttivita.height / qualita;
+          tc.clearRect(minX, minY, destLargo, destAlto);
+          tc.globalCompositeOperation = "lighter";
+          for (let i = 0; i < accese.length; i += 1) {
+            tondo(tc, accese[i], 1, 1);
+          }
+          ritaglia(tc, minX, minY, destLargo, destAlto);
+          // Sovrapposizione semplice, non additiva: sotto c'e' solo la
+          // mappa, e sommare una tela ridisegnata a ogni fotogramma costa
+          // -- misurato, 2,3 ms contro 0,01.
+          context.drawImage(telaAttivita,
+            0, 0, telaAttivita.width, telaAttivita.height,
+            minX, minY, destLargo, destAlto);
+        }
+
+        // Il minimo garantito, tondo e tenue, senza ritaglio: si aggiunge
+        // DOPO, fuori dal ritaglio. Serve perche' la sagoma da sola e'
+        // troppo severa: la posizione di una scarica ha un chilometro buono
+        // di incertezza, e basta che cada in uno squarcio fra le nubi
+        // perche' il ritaglio le porti via tutta la luce. Copre anche i
+        // bordi del riquadro satellitare, dove la maschera semplicemente
+        // non arriva. Resta un quinto della luce piena: deve garantire, non
+        // competere.
+        context.save();
+        context.globalCompositeOperation = "lighter";
+        for (let i = 0; i < accese.length; i += 1) {
+          tondo(context, accese[i], 0.2, 0.68);
         }
         context.restore();
       }
@@ -7263,9 +7749,11 @@
         ].join("|");
       }
 
-      function rememberCloudFrame(key, url, box, size) {
+      function rememberCloudFrame(key, url, box, size, maschera) {
         if (cloudFrames.has(key)) return;
-        cloudFrames.set(key, { url: url, box: box, size: size });
+        cloudFrames.set(key, {
+          url: url, box: box, size: size, maschera: maschera || null
+        });
         while (cloudFrames.size > CLOUD_FRAME_LIMIT) {
           let vecchia = null;
           for (const candidata of cloudFrames.keys()) {
@@ -7369,17 +7857,24 @@
             canvas.width = image.naturalWidth || size.width;
             canvas.height = image.naturalHeight || size.height;
             canvas.getContext("2d").drawImage(image, 0, 0);
+            // Anche nel precarico: scorrendo fino a un istante gia' scaricato
+            // il campo di attivita' sa gia' come illuminarlo, invece di
+            // ripiegare sul disco tondo finche' non arriva una richiesta dal
+            // vivo.
+            const maschera = costruisciMascheraNube(canvas, box, product);
             if (typeof canvas.toBlob === "function"
                 && typeof URL.createObjectURL === "function") {
               canvas.toBlob(function (blob) {
                 if (!blob) { if (fatto) fatto(null); return; }
                 const url = URL.createObjectURL(blob);
-                rememberCloudFrame(key, url, box, size);
+                rememberCloudFrame(key, url, box, size, maschera);
                 if (fatto) fatto(cloudFrames.get(key));
               }, "image/png");
               return;
             }
-            rememberCloudFrame(key, canvas.toDataURL("image/png"), box, size);
+            rememberCloudFrame(
+              key, canvas.toDataURL("image/png"), box, size, maschera
+            );
           } catch (error) {
             if (fatto) fatto(null);
             return;
@@ -7484,6 +7979,7 @@
         }
         map.setPaintProperty("satellite-clouds-layer", "raster-opacity", 1);
         cloudPublishedKey = frameKey;
+        mascheraNube = frame.maschera || null;
         cloudLoadedBox = frame.box;
         cloudLoadedMetres = frame.size.metres;
         cloudLoadedSlot = slot.value;

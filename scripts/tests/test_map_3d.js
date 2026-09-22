@@ -1952,11 +1952,40 @@ assert.doesNotMatch(html, /const ratio = Math\.min\(window\.devicePixelRatio \|\
 assert.match(modernUi, /resizeCanvases\(\);\s*\n\s*document\.body\.classList\.toggle\('satellite-view'/,
   "cambiando vista le canvas non vengono rimisurate: la densita' resta quella di prima");
 
-// La rete a terra non misura radiance o footprint della nube: ricostruire
-// una maschera da un raster RGB e usarla per inventare il bagliore del lampo
-// era costoso e fisicamente ingannevole. Il renderer nuovo non la costruisce.
-assert.doesNotMatch(html, /MASCHERA_LATO|costruisciMascheraNube|mascheraNube/,
-  "il live torna a inventare un'illuminazione della nube dai pixel satellitari");
+// LA SAGOMA DELLE NUBI. La regola di prima vietava del tutto di ricavare
+// una maschera dal raster satellitare, per due ragioni: costava, ed era
+// fisicamente ingannevole. La prima e' stata misurata e non regge -- la
+// sagoma si costruisce una volta per fotogramma satellitare, cioe' ogni
+// cinque o dieci minuti (23 ms a caldo), e il disegno per fotogramma passa
+// da 0,10 a 0,36 ms. La seconda regge solo per una parte, e quella parte
+// resta vietata qui sotto.
+//
+// Quello che sarebbe ingannevole e' attribuire alla rete a terra una
+// grandezza che non possiede: energia ottica, radianza, footprint. Dire
+// invece DOVE C'E' NUBE non e' una ricostruzione: e' la lettura della
+// fotografia che l'utente sta gia' guardando sotto i fulmini. L'ampiezza
+// della luce viene dalla rete (posizione, tempo, scariche vive); la sua
+// FORMA viene dal satellite. Le due cose restano separate, e ognuna dice
+// solo quello che sa.
+// Il divieto e' sul CALCOLARLE, non sul nominarle: il renderer dichiara in
+// un commento proprio quello che la rete non fornisce, e quel commento deve
+// restare.
+assert.doesNotMatch(html,
+  /(?:const|let|var|function)\s+\w*(?:radianza|radiance|footprint)|\.\s*(?:radianza|radiance|footprint)\b/i,
+  "il live attribuisce alla rete a terra una grandezza ottica che non ha");
+assert.match(html, /Non fornisce geometria del canale, energia ottica,\s*\n\s*\/\/ footprint/,
+  "il renderer non dichiara piu cosa la rete a terra NON misura");
+// La sagoma si ricava solo dai canali dove chiaro vuol dire davvero denso.
+// Sui compositi diagnostici -- fase, tipo di nube, polvere, neve -- il
+// colore e' una diagnosi, e usarne la luminanza sarebbe fisica finta.
+assert.match(html, /\["scene", "grey"\]\.includes\(product\.mode\)/,
+  "la sagoma viene ricavata anche dai compositi diagnostici");
+// E si costruisce dove l'immagine passa gia' da una canvas nostra, cioe'
+// una volta per fotogramma satellitare, non a ogni lampo.
+assert.doesNotMatch(implementazione('disegnaAttivita'), /costruisciMascheraNube/,
+  "la sagoma viene ricostruita a ogni fotogramma di animazione");
+assert.match(implementazione('publishSatelliteClouds'), /costruisciMascheraNube\(canvas, box, product\)/,
+  "la sagoma non viene piu ricavata dove l'immagine e gia' in mano");
 
 // Il tetto sulla taglia dell'immagine satellitare resta sulla sola
 // larghezza. Provato a metterlo anche sull'altezza: sul telefono cambiava
