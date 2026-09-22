@@ -1,0 +1,1618 @@
+<!doctype html>
+<html lang="it">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+    <meta name="theme-color" content="#04101c" />
+    <meta name="color-scheme" content="dark" />
+    <title>Cima ottica · Sicilia Meteo</title>
+    <link rel="stylesheet" href="https://unpkg.com/maplibre-gl@5.24.0/dist/maplibre-gl.css" />
+    <script src="https://unpkg.com/maplibre-gl@5.24.0/dist/maplibre-gl.js"></script>
+    <style>
+      * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+      html, body { height: 100%; margin: 0; background: #04101c; }
+      body {
+        font-family: Inter, ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+        color: #eaf2fb;
+      }
+      #mappa { position: fixed; inset: 0; z-index: 0; }
+      .barra {
+        position: fixed; z-index: 10; top: 0; left: 0; right: 0;
+        display: flex; align-items: center; justify-content: space-between; gap: 12px;
+        padding: calc(10px + env(safe-area-inset-top, 0px)) 14px 10px;
+        background: rgba(4, 16, 28, 0.9); backdrop-filter: blur(14px);
+        border-bottom: 1px solid rgba(120, 180, 210, 0.18);
+      }
+      .marchio { display: flex; align-items: center; gap: 10px; min-width: 0; }
+      .marchio .segno {
+        display: grid; place-items: center; width: 34px; height: 34px; flex: 0 0 34px;
+        border-radius: 8px; background: linear-gradient(160deg, #2f7fc4, #163d63);
+      }
+      .occhiello {
+        font-size: 11px; letter-spacing: .09em; text-transform: uppercase;
+        color: rgba(198, 224, 244, .72);
+      }
+      .barra h1 { margin: 2px 0 0; font-size: 15px; font-weight: 650; line-height: 1.2; }
+      .indietro {
+        display: inline-flex; align-items: center; gap: 7px; flex: 0 0 auto;
+        padding: 8px 12px; border-radius: 999px; text-decoration: none;
+        color: #eaf2fb; font-size: 13px; font-weight: 600;
+        background: rgba(120, 180, 210, .14);
+        border: 1px solid rgba(120, 180, 210, .26);
+      }
+      .comandi {
+        position: fixed; z-index: 10; left: 14px;
+        top: calc(70px + env(safe-area-inset-top, 0px));
+        display: flex; flex-direction: column; gap: 8px; width: 216px; max-width: calc(100vw - 28px);
+      }
+      .scatola {
+        background: rgba(4, 16, 28, .82); backdrop-filter: blur(12px);
+        border: 1px solid rgba(120, 180, 210, .2); border-radius: 12px; padding: 10px 12px;
+      }
+      .scatola label { display: block; font-size: 11px; letter-spacing: .05em;
+        text-transform: uppercase; color: rgba(198, 224, 244, .72); margin-bottom: 6px; }
+      .scatola input[type="range"] { width: 100%; accent-color: #58b4f0; }
+      .interruttori { display: flex; flex-wrap: wrap; gap: 6px; }
+      .interruttore {
+        flex: 1 1 auto; padding: 7px 9px; border-radius: 9px; cursor: pointer;
+        font: inherit; font-size: 12px; font-weight: 600; color: #eaf2fb;
+        background: rgba(120, 180, 210, .12); border: 1px solid rgba(120, 180, 210, .24);
+      }
+      .interruttore[aria-pressed="true"] { background: rgba(88, 180, 240, .3);
+        border-color: rgba(88, 180, 240, .55); }
+      #hud {
+        position: fixed; z-index: 10; right: 14px;
+        top: calc(70px + env(safe-area-inset-top, 0px));
+        width: 306px; max-width: calc(100vw - 28px);
+        max-height: calc(100vh - 110px); overflow: auto;
+        background: rgba(4, 16, 28, .84); backdrop-filter: blur(12px);
+        border: 1px solid rgba(120, 180, 210, .2); border-radius: 12px;
+        padding: 12px 13px; font-size: 12px; line-height: 1.45;
+      }
+      #hud h2 { margin: 0 0 8px; font-size: 11px; letter-spacing: .09em;
+        text-transform: uppercase; color: rgba(198, 224, 244, .72); font-weight: 650; }
+      #hud dl { display: grid; grid-template-columns: auto 1fr; gap: 3px 10px; margin: 0 0 10px; }
+      #hud dt { color: rgba(198, 224, 244, .66); }
+      #hud dd { margin: 0; text-align: right; font-variant-numeric: tabular-nums; }
+      #hud dd.manca { color: #f2a97e; }
+      #hud .limiti { margin: 0; padding-top: 9px; font-size: 11px; line-height: 1.5;
+        color: rgba(198, 224, 244, .6); border-top: 1px solid rgba(120, 180, 210, .16); }
+      #hud .limiti b { color: rgba(226, 240, 252, .82); font-weight: 600; }
+      #stato {
+        position: fixed; z-index: 10; left: 50%; transform: translateX(-50%);
+        bottom: calc(16px + env(safe-area-inset-bottom, 0px));
+        padding: 8px 14px; border-radius: 999px; font-size: 12px;
+        background: rgba(4, 16, 28, .86); border: 1px solid rgba(120, 180, 210, .2);
+      }
+      @media (max-width: 860px) {
+        .comandi { width: calc(100vw - 28px); flex-direction: row; flex-wrap: wrap; }
+        .comandi .scatola { flex: 1 1 140px; }
+        #hud { right: 14px; left: 14px; width: auto;
+          top: auto; bottom: calc(56px + env(safe-area-inset-bottom, 0px));
+          max-height: 42vh; }
+      }
+    </style>
+  </head>
+  <body>
+    <div id="mappa"></div>
+
+    <header class="barra">
+      <div class="marchio">
+        <div class="segno" aria-hidden="true">
+          <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="#fff" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3 16c2-4 5-6 9-6s7 2 9 6"></path><path d="M13 3l-3 6h4l-3 6"></path></svg>
+        </div>
+        <div>
+          <div class="occhiello">Europa e Mediterraneo · nubi volumetriche dal satellite</div>
+          <h1>Cima ottica</h1>
+        </div>
+      </div>
+      <a class="indietro" href="radar.html">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M19 12H5"></path><path d="M11 18l-6-6 6-6"></path></svg>
+        <span>Radar</span>
+      </a>
+    </header>
+
+    <div class="comandi">
+      <div class="scatola">
+        <label for="esagerazione">Esagerazione verticale · <span id="esagerazione-valore">14×</span></label>
+        <input id="esagerazione" type="range" min="1" max="70" step="1" value="14" />
+      </div>
+      <div class="scatola">
+        <label for="qualita">Passi del raggio · <span id="qualita-valore">64</span></label>
+        <input id="qualita" type="range" min="24" max="128" step="8" value="64" />
+      </div>
+      <div class="scatola">
+        <div class="interruttori">
+          <button id="tasto-nubi" class="interruttore" type="button" aria-pressed="true">Nubi</button>
+          <button id="tasto-lampi" class="interruttore" type="button" aria-pressed="true">Lampi</button>
+          <button id="tasto-coste" class="interruttore" type="button" aria-pressed="true">Coste</button>
+        </div>
+        <div class="interruttori" style="margin-top:6px">
+          <button id="tasto-cella" class="interruttore" type="button">Vai dove c'e' tempo</button>
+        </div>
+      </div>
+    </div>
+
+    <aside id="hud" aria-live="polite">
+      <h2>Da dove viene quello che vedi</h2>
+      <dl id="hud-voci"></dl>
+      <p class="limiti" id="hud-limiti"></p>
+    </aside>
+
+    <div id="stato">Carico la scena…</div>
+
+    <script>
+      "use strict";
+
+      // CIMA OTTICA
+      //
+      // Il satellite vede le nubi di sopra e le restituisce piatte. Qui si
+      // prova a rimetterle in piedi: non spostando un terreno -- quello fa
+      // montagne di roccia, appuntite, che nuvole non sono -- ma ricostruendo
+      // un VOLUME e attraversandolo con i raggi, come si fa con le nubi nei
+      // motori grafici. La luce entra nel volume, ci si perde dentro, e quello
+      // che esce dall'altra parte e' una nube: bordi morbidi, cuore scuro,
+      // sommita' accesa dal sole.
+      //
+      // Quello che e' MISURATO:
+      //   - la QUOTA DELLA SOMMITA', dal grigio dell'infrarosso a 10,5 um
+      //     (piu' freddo = piu' alto), con lo zero preso dal cielo sereno
+      //     locale e non da una soglia unica;
+      //   - la COPERTURA, cioe' quanta nube c'e' in quella colonna;
+      //   - il COLORE della nube, che e' quello che il satellite fotografa;
+      //   - la POSIZIONE e l'AREA dei lampi (Lightning Imager, accumulo 5 min);
+      //   - la POSIZIONE DEL SOLE all'istante dell'immagine.
+      //
+      // Quello che e' DICHIARATO e non misurato:
+      //   - lo SPESSORE della nube: il satellite vede la cima, non la base.
+      //     Qui la base scende sotto la cima secondo una regola scritta, e
+      //     quella regola e' una convenzione;
+      //   - il RIBOLLIRE sotto la scala che il satellite risolve: tre ottave
+      //     di rumore, che danno alla nube la sua grana. Sopra i dieci
+      //     chilometri la forma e' dato, sotto e' tessitura;
+      //   - l'ESAGERAZIONE VERTICALE, il ritmo dei lampi, i coefficienti di
+      //     diffusione della luce.
+      //
+      // Se un campo manca, quella parte resta vuota e l'HUD lo dice.
+
+      // --- il dominio e le sorgenti ---------------------------------------
+      // Tutta l'Europa e il Mediterraneo. Il limite a nord non e' estetico:
+      // MTG sta sull'equatore a 0 gradi, e oltre i sessanta la guarda cosi'
+      // di sbieco che un pixel copre decine di chilometri.
+      var DOMINIO = { ovest: -14.0, sud: 29.0, est: 40.0, nord: 62.0 };
+      var WMS = "https://view.eumetsat.int/geoserver/wms";
+
+      // Gli stessi strati, gli stessi slot e le stesse latenze di radar.html:
+      // FCI ogni 10 minuti con circa 22 di ritardo, LI ogni 5 con circa 8.
+      var STRATI = {
+        forma:  { layer: "mtg_fd:ir105_hrfi",    slotMs: 10 * 60 * 1000, ritardoMin: 22 },
+        pelle:  { layer: "mtg_fd:rgb_geocolour", slotMs: 10 * 60 * 1000, ritardoMin: 22 },
+        lampi:  { layer: "mtg_fd:li_afa",        slotMs:  5 * 60 * 1000, ritardoMin:  8 }
+      };
+
+      var LARGHEZZA_FORMA = 1600;
+      var LARGHEZZA_PELLE = 2048;
+      var LARGHEZZA_LAMPI = 768;
+
+      // --- le costanti dichiarate -----------------------------------------
+      // Il fondo di cielo sereno. Su un dominio che va dal Sahara al Baltico
+      // una soglia sola non puo' funzionare: di notte la Scandinavia e' piu'
+      // fredda di un cumulo mediterraneo, e con un riferimento unico l'intero
+      // nord diventerebbe un altopiano. Si stima allora il fondo LOCALE -- il
+      // grigio della superficie dove la superficie si vede -- a blocchi, e lo
+      // si estende per erosione dove il cielo e' coperto.
+      var FONDO_BLOCCO_PX = 32;
+      var FONDO_PCT = 0.15;
+      var FONDO_EROSIONI = 8;
+      var FONDO_SFOCATURA_BLOCCHI = 2;
+      // QUANTO PUO' SCENDERE IL FONDO DA UN BLOCCO AL SUCCESSIVO. E' la
+      // distinzione fra le due cose che una sola immagine non separerebbe:
+      // una superficie che si raffredda andando a nord cambia di poco e
+      // gradualmente, una nube arriva di colpo. L'erosione secca -- prendi il
+      // vicino piu' caldo e basta -- non lo sa, e trascinava il fondo tiepido
+      // del Mediterraneo fin dentro il Baltico, facendo risultare alta nove
+      // chilometri una superficie che era solo fredda. Con questo tetto
+      // l'erosione scavalca i bordi delle nubi, che sono salti, e lascia
+      // stare i gradienti, che sono superficie.
+      var FONDO_PENDENZA_MAX = 0.03;
+      // SOTTO QUESTA DIFFERENZA DAL FONDO NON C'E' NUBE. Il fondo di cielo
+      // sereno e' il quindici per cento piu' caldo di un blocco: dentro quello
+      // stesso blocco il mare, la terra, una citta' e un rilievo differiscono
+      // gia' di qualche centesimo di grigio, e senza questa soglia ognuna di
+      // quelle differenze diventava un velo di nube steso sull'Europa limpida.
+      // Non e' una nube sottile: e' la superficie che non e' uniforme.
+      var NUBE_SOGLIA_GRIGIO = 0.06;
+      var QUOTA_CIMA_PCT = 0.980;
+
+      // La scala verticale del volume. Tutto quello che entra nella texture e'
+      // normalizzato su questa: e' il fondoscala, non una misura.
+      var QUOTA_SCALA_KM = 16;
+      var QUOTA_GINOCCHIO_KM = 12;
+      var QUOTA_OLTRE_KM = 3.4;
+
+      // Lo spessore: il satellite vede la cima, non la base. Una nube alta e'
+      // anche profonda -- un cumulonembo occupa quasi tutta la troposfera,
+      // un cirro e' una lama -- e questa e' la regola, dichiarata, con cui la
+      // base scende sotto la cima.
+      var SPESSORE_MINIMO_KM = 0.7;
+      var SPESSORE_FRAZIONE = 0.62;
+      var SPESSORE_MASSIMO_KM = 9.5;
+
+      var SFOCATURA_GRADINI_PX = 2;
+
+      // Ottica del volume. SIGMA e' il coefficiente di estinzione per
+      // chilometro di nube piena: con 1,4 una nube di tre chilometri e'
+      // gia' quasi opaca, come dev'essere.
+      var SIGMA_PER_KM = 1.4;
+      var FASE_G = 0.58;          // anisotropia di Henyey-Greenstein
+      var AMBIENTE_GIORNO = [0.42, 0.50, 0.62];
+      var AMBIENTE_NOTTE = [0.13, 0.16, 0.23];
+      var SOLE_COLORE = [1.0, 0.96, 0.90];
+      // Di notte il sole e' sotto l'orizzonte e un volume illuminato dal vero
+      // sarebbe nero: fisicamente giusto e del tutto inutile. Si accende
+      // allora una luce CONVENZIONALE da nord-ovest a 40 gradi -- la stessa
+      // convenzione delle carte in rilievo -- fredda, perche' non finga di
+      // essere il sole. L'HUD lo dichiara riga per riga.
+      var LUCE_CONVENZIONALE = { azimutGradi: -45, elevazioneGradi: 40, forza: 0.62 };
+      var LUCE_CONVENZIONALE_COLORE = [0.70, 0.80, 1.0];
+
+      // Il ribollire sotto la scala che il satellite risolve. Le due scale
+      // sono dichiarate: la prima e' la grana grossa del cumulo, la seconda il
+      // dettaglio che erode i bordi.
+      var RUMORE_LATO = 64;
+      var RUMORE_SCALA_KM = 34;
+      var RUMORE_FORZA = 0.44;
+
+      // Il lampo. Nasce sotto la sommita' e la sua luce esce dal ghiaccio
+      // dopo esserci rimbalzata dentro: nel volume e' una sorgente puntiforme,
+      // e il resto lo fa l'estinzione della nube.
+      var LAMPO_PROFONDITA_KM = 4.0;
+      var LAMPO_DIFFUSIONE_KM = 7.0;
+      var LAMPO_FORZA = 26.0;
+      // 777,4 nm e' la riga dell'ossigeno neutro che il Lightning Imager
+      // osserva davvero. E' rosso profondo. Qui e' un SEGNO: la cromia viene
+      // da quella riga, la luminosita' no.
+      var LAMPO_COLORE = [1.0, 0.42, 0.20];
+      var LAMPI_MAX = 12;
+      var LAMPO_RAGGIO_GRUPPO_KM = 130;
+      var LAMPO_SALITA_MS = 34;
+      var LAMPO_PICCO_MS = 46;
+      var LAMPO_CODA_MS = 150;
+      var LAMPO_CODA_PESO = 0.26;
+
+      // Il dominio e' largo cinquemila chilometri e una nube e' alta dodici:
+      // in scala vera sarebbe una pellicola. Questo numero e' l'unica cosa
+      // nella geometria che non viene dal satellite, sta scritto sotto il
+      // cursore che lo muove e nell'HUD.
+      var ESAGERAZIONE_INIZIALE = 14;
+      // L'esagerazione alla quale la grana resta quella nativa. Oltre, la
+      // nube si ingrossa in orizzontale nella stessa proporzione in cui viene
+      // stirata in verticale.
+      var ESAGERAZIONE_GRANA = 5;
+      var PASSI_INIZIALI = 64;
+
+      // Di notte il sole e' sotto l'orizzonte: il volume viene illuminato
+      // dall'ambiente notturno e dai lampi, e basta. Non si accende un sole
+      // che non c'e'.
+      var SOLE_MINIMO_GRADI = -6;
+
+      var RAGGIO_TERRA = 6378137;
+      var CIRCONFERENZA = 2 * Math.PI * RAGGIO_TERRA;
+
+      // --- attrezzi ---------------------------------------------------------
+      function limita(v, min, max) { return v < min ? min : (v > max ? max : v); }
+      function mercX(lon) { return RAGGIO_TERRA * lon * Math.PI / 180; }
+      function mercY(lat) {
+        var f = limita(lat, -85.0511, 85.0511) * Math.PI / 180;
+        return RAGGIO_TERRA * Math.log(Math.tan(Math.PI / 4 + f / 2));
+      }
+      function latDaMercY(y) {
+        return (2 * Math.atan(Math.exp(y / RAGGIO_TERRA)) - Math.PI / 2) * 180 / Math.PI;
+      }
+      // Le coordinate unitarie di MapLibre: x e y in [0,1], y verso sud.
+      function unitaX(lon) { return (lon + 180) / 360; }
+      function unitaY(lat) {
+        var f = limita(lat, -85.0511, 85.0511) * Math.PI / 180;
+        return 0.5 - Math.log(Math.tan(Math.PI / 4 + f / 2)) / (2 * Math.PI);
+      }
+
+      // Sfocatura separabile a finestra scorrevole: O(pixel) invece di
+      // O(pixel x raggio).
+      function sfoca(campo, larghezza, altezza, raggio) {
+        if (raggio < 1) return campo.slice();
+        var mezzo = new Float32Array(larghezza * altezza);
+        var fuori = new Float32Array(larghezza * altezza);
+        var finestra = 2 * raggio + 1;
+        var x, y, somma, i;
+        for (y = 0; y < altezza; y++) {
+          var riga = y * larghezza;
+          somma = 0;
+          for (i = -raggio; i <= raggio; i++) somma += campo[riga + limita(i, 0, larghezza - 1)];
+          for (x = 0; x < larghezza; x++) {
+            mezzo[riga + x] = somma / finestra;
+            somma -= campo[riga + limita(x - raggio, 0, larghezza - 1)];
+            somma += campo[riga + limita(x + raggio + 1, 0, larghezza - 1)];
+          }
+        }
+        for (x = 0; x < larghezza; x++) {
+          somma = 0;
+          for (i = -raggio; i <= raggio; i++) somma += mezzo[limita(i, 0, altezza - 1) * larghezza + x];
+          for (y = 0; y < altezza; y++) {
+            fuori[y * larghezza + x] = somma / finestra;
+            somma -= mezzo[limita(y - raggio, 0, altezza - 1) * larghezza + x];
+            somma += mezzo[limita(y + raggio + 1, 0, altezza - 1) * larghezza + x];
+          }
+        }
+        return fuori;
+      }
+
+      // Il fondo di cielo sereno, a blocchi. Dentro ogni blocco si prende il
+      // grigio del quindici per cento piu' caldo: se in quel blocco un pezzo
+      // di superficie si vede, quello e' il fondo. Poi si erode -- si prende
+      // il minimo fra i vicini -- per portare il fondo dei blocchi sereni
+      // dentro quelli coperti, e come rete di sicurezza si tiene anche il
+      // fondo dell'intera fascia di latitudine. E' la stima di fondo chiaro
+      // che si fa da sempre nel telerilevamento, ridotta all'osso perche' qui
+      // c'e' una sola immagine e non una composizione di giorni.
+      function fondoDiCieloSereno(grigio, larghezza, altezza) {
+        var nx = Math.max(1, Math.ceil(larghezza / FONDO_BLOCCO_PX));
+        var ny = Math.max(1, Math.ceil(altezza / FONDO_BLOCCO_PX));
+        var fondo = new Float32Array(nx * ny);
+        var istogramma = new Uint32Array(256);
+        var bx, by, x, y, b;
+        for (by = 0; by < ny; by++) {
+          var y0 = by * FONDO_BLOCCO_PX, y1 = Math.min(altezza, y0 + FONDO_BLOCCO_PX);
+          for (bx = 0; bx < nx; bx++) {
+            var x0 = bx * FONDO_BLOCCO_PX, x1 = Math.min(larghezza, x0 + FONDO_BLOCCO_PX);
+            istogramma.fill(0);
+            var quanti = 0;
+            for (y = y0; y < y1; y++) {
+              for (x = x0; x < x1; x++) {
+                istogramma[limita(Math.round(grigio[y * larghezza + x] * 255), 0, 255)]++;
+                quanti++;
+              }
+            }
+            var visti = 0, soglia = quanti * FONDO_PCT, valore = 0;
+            for (b = 0; b < 256; b++) {
+              visti += istogramma[b];
+              if (visti >= soglia) { valore = b / 255; break; }
+            }
+            fondo[by * nx + bx] = valore;
+          }
+        }
+        // Erosione vincolata: il chiaro di cielo si propaga nei blocchi
+        // coperti, ma solo scendendo al massimo di FONDO_PENDENZA_MAX per
+        // blocco. Un bordo di nube e' un salto molto piu' grande del tetto e
+        // viene scavalcato; un gradiente di superficie e' piu' dolce del tetto
+        // e resta dov'e'.
+        for (var giro = 0; giro < FONDO_EROSIONI; giro++) {
+          var eroso = fondo.slice();
+          for (by = 0; by < ny; by++) {
+            for (bx = 0; bx < nx; bx++) {
+              var qui = fondo[by * nx + bx];
+              var minimo = qui;
+              for (var dy = -1; dy <= 1; dy++) {
+                for (var dx = -1; dx <= 1; dx++) {
+                  if (!dx && !dy) continue;
+                  var v = fondo[limita(by + dy, 0, ny - 1) * nx + limita(bx + dx, 0, nx - 1)]
+                    + FONDO_PENDENZA_MAX;
+                  if (v < minimo) minimo = v;
+                }
+              }
+              eroso[by * nx + bx] = minimo;
+            }
+          }
+          fondo = eroso;
+        }
+        return { valori: sfoca(fondo, nx, ny, FONDO_SFOCATURA_BLOCCHI), nx: nx, ny: ny };
+      }
+
+      // Mediana 3x3: il PNG dell'infrarosso e' a otto bit e porta pixel
+      // isolati molto piu' freddi dei vicini. Sale e pepe, il difetto per cui
+      // la mediana e' stata inventata.
+      function mediana3(campo, larghezza, altezza) {
+        var fuori = new Float32Array(larghezza * altezza);
+        var finestra = new Float64Array(9);
+        for (var y = 0; y < altezza; y++) {
+          for (var x = 0; x < larghezza; x++) {
+            var n = 0;
+            for (var dy = -1; dy <= 1; dy++) {
+              var yy = limita(y + dy, 0, altezza - 1);
+              for (var dx = -1; dx <= 1; dx++) {
+                finestra[n++] = campo[yy * larghezza + limita(x + dx, 0, larghezza - 1)];
+              }
+            }
+            for (var i = 1; i < 9; i++) {
+              var v = finestra[i], j = i - 1;
+              while (j >= 0 && finestra[j] > v) { finestra[j + 1] = finestra[j]; j--; }
+              finestra[j + 1] = v;
+            }
+            fuori[y * larghezza + x] = finestra[4];
+          }
+        }
+        return fuori;
+      }
+
+      // Posizione del sole: serie brevi di Meeus, errore sotto il decimo di
+      // grado -- e l'illuminazione non distingue un decimo di grado.
+      function posizioneSole(quando, lat, lon) {
+        var giorni = (quando - Date.UTC(2000, 0, 1, 12)) / 86400000;
+        var L = (280.46 + 0.9856474 * giorni) * Math.PI / 180;
+        var g = (357.528 + 0.9856003 * giorni) * Math.PI / 180;
+        var lambda = L + (1.915 * Math.sin(g) + 0.020 * Math.sin(2 * g)) * Math.PI / 180;
+        var eps = (23.439 - 0.0000004 * giorni) * Math.PI / 180;
+        var decl = Math.asin(Math.sin(eps) * Math.sin(lambda));
+        var gmst = (18.697374558 + 24.06570982441908 * giorni) % 24;
+        var ar = Math.atan2(Math.cos(eps) * Math.sin(lambda), Math.cos(lambda));
+        var oraAngolo = (gmst * 15 + lon) * Math.PI / 180 - ar;
+        var la = lat * Math.PI / 180;
+        var elevazione = Math.asin(Math.sin(la) * Math.sin(decl)
+          + Math.cos(la) * Math.cos(decl) * Math.cos(oraAngolo));
+        var azimut = Math.atan2(-Math.sin(oraAngolo),
+          Math.tan(decl) * Math.cos(la) - Math.sin(la) * Math.cos(oraAngolo));
+        return { elevazione: elevazione, azimut: azimut };
+      }
+
+      function slotPiuRecente(strato, adesso) {
+        var istante = (adesso || Date.now()) - strato.ritardoMin * 60 * 1000;
+        var quando = Math.floor(istante / strato.slotMs) * strato.slotMs;
+        return { epoca: quando, iso: new Date(quando).toISOString().replace(/\.\d{3}Z$/, ".000Z") };
+      }
+
+      function riquadroMercatore() {
+        return {
+          ovest: mercX(DOMINIO.ovest), est: mercX(DOMINIO.est),
+          sud: mercY(DOMINIO.sud), nord: mercY(DOMINIO.nord)
+        };
+      }
+
+      function misuraRaster(larghezza) {
+        var r = riquadroMercatore();
+        var altezza = Math.max(64, Math.round(larghezza * (r.nord - r.sud) / (r.est - r.ovest)));
+        return { larghezza: larghezza, altezza: altezza };
+      }
+
+      function indirizzo(strato, misura, slot, senzaTempo) {
+        var r = riquadroMercatore();
+        return WMS
+          + "?service=WMS&version=1.1.1&request=GetMap&styles="
+          + "&layers=" + encodeURIComponent(strato.layer)
+          + "&srs=EPSG:3857&format=image/png&transparent=true"
+          + "&bbox=" + [r.ovest, r.sud, r.est, r.nord].map(function (v) { return v.toFixed(1); }).join(",")
+          + "&width=" + misura.larghezza + "&height=" + misura.altezza
+          + (senzaTempo ? "" : "&time=" + slot.iso);
+      }
+
+      // --- il campo: quota della sommita', copertura, spessore ---------------
+      // Da un'immagine in grigio escono i tre numeri che descrivono la colonna
+      // d'aria sopra ogni punto. Due sono misurati, il terzo e' una regola.
+      function campoDelleNubi(pixel, larghezza, altezza) {
+        var quanti = larghezza * altezza;
+        var grigio = new Float32Array(quanti);
+        var istogramma = new Uint32Array(256);
+        var k, i;
+        for (k = 0, i = 0; k < quanti; k++, i += 4) {
+          // Un pixel trasparente non e' cielo sereno: e' assenza di dato.
+          // Vale come il piu' caldo, cioe' quota zero, e non inventa nulla.
+          var alfa = pixel[i + 3] / 255;
+          var g = alfa * (pixel[i] * 0.2126 + pixel[i + 1] * 0.7152 + pixel[i + 2] * 0.0722) / 255;
+          grigio[k] = g;
+          istogramma[limita(Math.round(g * 255), 0, 255)]++;
+        }
+        var percentile = function (frazione) {
+          var visti = 0, soglia = quanti * frazione;
+          for (var b = 0; b < 256; b++) {
+            visti += istogramma[b];
+            if (visti >= soglia) return b / 255;
+          }
+          return 1;
+        };
+        // Lo ZERO della scala e' locale e si muove con la latitudine, con il
+        // mare e con la terra. L'AMPIEZZA invece e' una sola per tutta la
+        // scena, altrimenti la stessa quota vorrebbe dire cose diverse in due
+        // posti diversi.
+        var fondo = fondoDiCieloSereno(grigio, larghezza, altezza);
+        var ordinati = Array.prototype.slice.call(fondo.valori).sort(function (a, b) { return a - b; });
+        var fondoTipico = ordinati[Math.floor(ordinati.length / 2)] || 0;
+        var cima = percentile(QUOTA_CIMA_PCT);
+        var ampiezza = Math.max(0.06, cima - fondoTipico);
+        var fondoIn = function (x, y) {
+          var u = limita(Math.floor(x / FONDO_BLOCCO_PX), 0, fondo.nx - 1);
+          var v = limita(Math.floor(y / FONDO_BLOCCO_PX), 0, fondo.ny - 1);
+          return fondo.valori[v * fondo.nx + u];
+        };
+        var quota = new Float32Array(quanti);
+        var copertura = new Float32Array(quanti);
+        for (k = 0; k < quanti; k++) {
+          var px = k % larghezza, py = (k - px) / larghezza;
+          var t = Math.max(0, (grigio[k] - fondoIn(px, py) - NUBE_SOGLIA_GRIGIO) / ampiezza);
+          if (t <= 1) {
+            quota[k] = t * t * (3 - 2 * t) * QUOTA_GINOCCHIO_KM;
+          } else {
+            // Oltre il ginocchio la scala si comprime invece di tagliare: con
+            // un taglio secco tutte le sommita' piu' fredde finirebbero alla
+            // stessa quota e le celle diventerebbero altipiani.
+            quota[k] = QUOTA_GINOCCHIO_KM + QUOTA_OLTRE_KM * Math.tanh(t - 1);
+          }
+          // La copertura: quanto quella colonna e' piena. Sale in fretta -- una
+          // nube sottile copre gia' molto -- e satura.
+          var c = limita(t / 0.34, 0, 1);
+          copertura[k] = c * c * (3 - 2 * c);
+        }
+        return {
+          quota: sfoca(mediana3(quota, larghezza, altezza), larghezza, altezza, SFOCATURA_GRADINI_PX),
+          copertura: sfoca(copertura, larghezza, altezza, SFOCATURA_GRADINI_PX),
+          fondoTipico: fondoTipico, cima: cima, ampiezza: ampiezza,
+          larghezza: larghezza, altezza: altezza
+        };
+      }
+
+      // La texture del volume: R quota della cima, G copertura, B spessore.
+      // Tutto normalizzato su QUOTA_SCALA_KM.
+      function tessituraDelCampo(campo) {
+        var quanti = campo.larghezza * campo.altezza;
+        var dati = new Uint8Array(quanti * 4);
+        for (var k = 0; k < quanti; k++) {
+          var cima = campo.quota[k];
+          // Lo spessore NON e' misurato: e' la regola dichiarata con cui la
+          // base scende sotto la cima. Una nube alta e' anche profonda.
+          var spessore = limita(SPESSORE_MINIMO_KM + SPESSORE_FRAZIONE * cima,
+            SPESSORE_MINIMO_KM, SPESSORE_MASSIMO_KM);
+          // Sotto la cima, mai sottoterra: dove non c'e' sommita' non c'e'
+          // nemmeno nube, e lo spessore deve andare a zero con lei.
+          spessore = Math.max(0, Math.min(spessore, cima * 0.92));
+          dati[k * 4] = Math.round(limita(cima / QUOTA_SCALA_KM, 0, 1) * 255);
+          dati[k * 4 + 1] = Math.round(limita(campo.copertura[k], 0, 1) * 255);
+          dati[k * 4 + 2] = Math.round(limita(spessore / QUOTA_SCALA_KM, 0, 1) * 255);
+          dati[k * 4 + 3] = 255;
+        }
+        return dati;
+      }
+
+      // --- il rumore --------------------------------------------------------
+      // Il ribollire sotto la scala che il satellite risolve. Non e' un dato e
+      // non finge di esserlo: e' la tessitura che rende una nube una nube
+      // invece di una gelatina liscia. Valore-rumore su reticolo, tre ottave,
+      // periodico, cosi' si ripete senza giunture visibili.
+      function tessituraDiRumore(lato) {
+        var casuale = function (x, y, z, semenza) {
+          var n = x * 374761393 + y * 668265263 + z * 2147483647 + semenza * 1442695040;
+          n = (n ^ (n >> 13)) * 1274126177;
+          return ((n ^ (n >> 16)) >>> 0) / 4294967295;
+        };
+        var lisciata = function (t) { return t * t * (3 - 2 * t); };
+        var ottava = function (x, y, z, celle, semenza) {
+          var fx = x * celle, fy = y * celle, fz = z * celle;
+          var x0 = Math.floor(fx), y0 = Math.floor(fy), z0 = Math.floor(fz);
+          var tx = lisciata(fx - x0), ty = lisciata(fy - y0), tz = lisciata(fz - z0);
+          var m = function (dx, dy, dz) {
+            return casuale((x0 + dx + celle) % celle, (y0 + dy + celle) % celle,
+              (z0 + dz + celle) % celle, semenza);
+          };
+          var c00 = m(0,0,0) * (1-tx) + m(1,0,0) * tx;
+          var c10 = m(0,1,0) * (1-tx) + m(1,1,0) * tx;
+          var c01 = m(0,0,1) * (1-tx) + m(1,0,1) * tx;
+          var c11 = m(0,1,1) * (1-tx) + m(1,1,1) * tx;
+          var c0 = c00 * (1-ty) + c10 * ty, c1 = c01 * (1-ty) + c11 * ty;
+          return c0 * (1-tz) + c1 * tz;
+        };
+        var dati = new Uint8Array(lato * lato * lato);
+        for (var z = 0; z < lato; z++) {
+          for (var y = 0; y < lato; y++) {
+            for (var x = 0; x < lato; x++) {
+              var u = x / lato, v = y / lato, w = z / lato;
+              var valore = 0.55 * ottava(u, v, w, 4, 1)
+                + 0.30 * ottava(u, v, w, 8, 2)
+                + 0.15 * ottava(u, v, w, 16, 3);
+              dati[(z * lato + y) * lato + x] = Math.round(limita(valore, 0, 1) * 255);
+            }
+          }
+        }
+        return dati;
+      }
+
+      // --- il volume, attraversato dai raggi ---------------------------------
+      // Uno strato personalizzato di MapLibre: prende il contesto WebGL e la
+      // matrice della vista, ricostruisce il raggio che passa per ogni pixel e
+      // lo fa camminare dentro il volume delle nubi. Non c'e' nessuna
+      // superficie e nessun poligono: la nube e' densita' nello spazio, e
+      // quello che si vede e' la luce che ne esce.
+
+      var VERTICE = [
+        "#version 300 es",
+        "in vec2 aPos;",
+        "out vec2 vNdc;",
+        "void main() { vNdc = aPos; gl_Position = vec4(aPos, 0.0, 1.0); }"
+      ].join("\n");
+
+      var FRAMMENTO = [
+        "#version 300 es",
+        "precision highp float;",
+        "precision highp sampler3D;",
+        "in vec2 vNdc;",
+        "out vec4 colorePixel;",
+        "",
+        "uniform mat4 uInversa;",
+        "uniform vec4 uDominio;",        // x0, yNord, x1, ySud  (mercatore unitario)
+        "uniform sampler2D uCampo;",
+        "uniform sampler3D uRumore;",
+        "uniform float uScalaKm;",
+        "uniform float uCircKm;",
+        "uniform float uEsagerazione;",
+        "uniform float uSigma;",
+        "uniform float uFaseG;",
+        "uniform vec3 uSole;",           // direzione VERSO il sole, spazio vero (x est, y nord, z su)
+        "uniform vec3 uColoreSole;",
+        "uniform vec3 uAmbiente;",
+        "uniform float uForzaSole;",
+        "uniform float uZMax;",
+        "uniform int uPassi;",
+        "uniform float uSemenza;",
+        "uniform vec2 uRumorePasso;",    // x: per le unita' mercatore, y: per i km in verticale
+        "uniform float uRumoreForza;",
+        "uniform float uGrana;",
+        "uniform float uPassoMax;",
+        "uniform int uQuantiLampi;",
+        "uniform vec4 uLampi[12];",      // x, y mercatore unitario; z km veri; w intensita'
+        "uniform vec3 uLampoColore;",
+        "uniform float uLampoDiffusione;",
+        "uniform float uLampoForza;",
+        "",
+        "const float PIGRECO = 3.14159265359;",
+        "const vec3 ALBEDO = vec3(0.955, 0.968, 1.0);",
+        "",
+        // La goccia d'acqua diffonde in avanti molto piu' che all'indietro:
+        // e' il motivo per cui una nube guardata verso il sole ha il bordo
+        // acceso. Henyey-Greenstein, la forma con cui lo si scrive da
+        // settant'anni.
+        "float faseHG(float coseno, float g) {",
+        "  float g2 = g * g;",
+        "  return (1.0 - g2) / (4.0 * PIGRECO * pow(1.0 + g2 - 2.0 * g * coseno, 1.5));",
+        "}",
+        "",
+        // Un lobo solo non basta. Guardando una nube dall'alto con il sole
+        // alle spalle si e' in pieno retro-scattering, dove Henyey-Greenstein
+        // in avanti vale quasi zero: la nube veniva fuori grigia e spenta.
+        // Le gocce pero' retrodiffondono eccome -- e' la gloria che si vede
+        // dall'aereo -- e allora i lobi sono due, uno avanti e uno indietro.
+        "float faseDoppia(float coseno, float g) {",
+        "  return mix(faseHG(coseno, g), faseHG(coseno, -0.25 * g - 0.08), 0.48)",
+        "    * 4.0 * PIGRECO;",
+        "}",
+        "",
+        "float cosLatDa(float y) { return 1.0 / cosh(PIGRECO * (1.0 - 2.0 * y)); }",
+        "",
+        // La colonna: cima, copertura, spessore. Le prime due dal satellite,
+        // la terza dalla regola dichiarata in tessituraDelCampo.
+        "vec3 colonna(vec2 p) {",
+        "  vec2 uv = vec2((p.x - uDominio.x) / (uDominio.z - uDominio.x),",
+        "                 (p.y - uDominio.y) / (uDominio.w - uDominio.y));",
+        "  if (uv.x < 0.0 || uv.y < 0.0 || uv.x > 1.0 || uv.y > 1.0) return vec3(0.0);",
+        // L'esagerazione verticale non viene da sola. Stirare in altezza un
+        // campo fitto trasforma ogni colonna stretta in un ago: a ventisei
+        // volte la scena diventava una selva di aghi bianchi. Si ingrossa
+        // allora anche in orizzontale, della stessa misura, prendendo un
+        // livello piu' grosso della piramide della texture. La nube resta una
+        // nube: quello che cambia e' la SCALA a cui la si guarda, in tutte e
+        // tre le direzioni insieme.
+        "  vec4 c = textureLod(uCampo, uv, uGrana);",
+        "  return vec3(c.r * uScalaKm, c.g, c.b * uScalaKm);",
+        "}",
+        "",
+        "float densita(vec3 p, out float altKm, out float cimaKm, out float copertura) {",
+        "  vec3 col = colonna(p.xy);",
+        "  cimaKm = col.x; copertura = col.y;",
+        "  float spessKm = col.z;",
+        "  altKm = 0.0;",
+        "  if (copertura < 0.03 || cimaKm < 0.35) return 0.0;",
+        "  float cosLat = cosLatDa(p.y);",
+        "  altKm = p.z * uCircKm * cosLat / uEsagerazione;",
+        "  float baseKm = max(0.2, cimaKm - spessKm);",
+        // Al bordo di una nube la copertura cala, e con lei deve calare anche
+        // la CIMA: se no un pixel coperto al dieci per cento continua a
+        // svettare quanto il cuore della cella, e il bordo diventa un muro
+        // verticale alto dieci chilometri -- moltiplicato per l'esagerazione,
+        // una crosta di ghiaccio attorno a ogni nube. Cosi' invece la nube si
+        // assottiglia verso l'esterno, che e' anche quello che fa davvero.
+        "  float scemare = smoothstep(0.0, 0.55, copertura);",
+        "  cimaKm = baseKm + (cimaKm - baseKm) * scemare;",
+        "  if (altKm < baseKm || altKm > cimaKm) return 0.0;",
+        "  float h = (altKm - baseKm) / max(0.15, cimaKm - baseKm);",
+        // Il profilo verticale: la nube non e' un mattone. Si apre dal basso,
+        // e' piena nel mezzo e sfuma verso la sommita', dove il ghiaccio si
+        // sfilaccia.
+        "  float profilo = smoothstep(0.0, 0.20, h) * (1.0 - smoothstep(0.58, 1.0, h));",
+        "  float d = copertura * profilo;",
+        // Il ribollire: due ottave di rumore erodono la densita' dal basso.
+        // Sopra la scala che il satellite risolve la forma e' dato; sotto, e'
+        // tessitura dichiarata.
+        "  vec3 q = vec3(p.xy * uRumorePasso.x, altKm * uRumorePasso.y);",
+        "  float grossa = texture(uRumore, q + vec3(uSemenza * 0.013)).r;",
+        "  float fine = texture(uRumore, q * 3.7 + vec3(4.3, 1.7, 2.9)).r;",
+        "  float erosione = mix(grossa, fine, 0.34);",
+        "  float soglia = uRumoreForza * (1.0 - erosione);",
+        "  d = (d - soglia) / max(0.08, 1.0 - soglia);",
+        "  return clamp(d, 0.0, 1.0);",
+        "}",
+        "",
+        "void main() {",
+        "  vec4 a = uInversa * vec4(vNdc, -1.0, 1.0);",
+        "  vec4 b = uInversa * vec4(vNdc, 1.0, 1.0);",
+        "  vec3 origine = a.xyz / a.w;",
+        "  vec3 direzione = normalize(b.xyz / b.w - origine);",
+        // Il riquadro che contiene tutto il volume: fuori di li' non c'e'
+        // niente da cercare, e limitarlo e' quasi tutto il risparmio.
+        "  vec3 minimo = vec3(min(uDominio.x, uDominio.z), min(uDominio.y, uDominio.w), 0.0);",
+        "  vec3 massimo = vec3(max(uDominio.x, uDominio.z), max(uDominio.y, uDominio.w), uZMax);",
+        "  vec3 sicura = direzione;",
+        "  if (abs(sicura.x) < 1e-9) sicura.x = 1e-9;",
+        "  if (abs(sicura.y) < 1e-9) sicura.y = 1e-9;",
+        "  if (abs(sicura.z) < 1e-9) sicura.z = 1e-9;",
+        "  vec3 inversoDir = 1.0 / sicura;",
+        "  vec3 t1 = (minimo - origine) * inversoDir;",
+        "  vec3 t2 = (massimo - origine) * inversoDir;",
+        "  vec3 tMin = min(t1, t2), tMax = max(t1, t2);",
+        "  float tVicino = max(max(tMin.x, tMin.y), max(tMin.z, 0.0));",
+        "  float tLontano = min(min(tMax.x, tMax.y), tMax.z);",
+        "  if (tLontano <= tVicino) { colorePixel = vec4(0.0); return; }",
+        "",
+        // QUANTO DEV'ESSERE FITTO IL PASSO. Dividere la traversata per il
+        // numero di passi sembra ovvio ed e' sbagliato: di sbieco, su un
+        // dominio largo cinquemila chilometri, il raggio ne percorre migliaia
+        // e con sessantaquattro passi attraversa la nube due volte in tutto.
+        // Quello che si vedeva -- creste sottili, croste, aghi -- non era la
+        // nube: era il sottocampionamento. Il passo si prende allora dalla
+        // FETTA, non dalla traversata, e per non pagarlo si salta a passo
+        // lungo dove non c'e' niente.
+        "  float attraversata = uZMax / max(abs(direzione.z), 0.06);",
+        // Due vincoli insieme. Il primo: quaranta campionamenti nello spessore
+        // della fetta, che e' quello che serve per vedere una nube invece di
+        // sfiorarla. Il secondo: mai un passo piu' lungo di mezzo mammellone,
+        // perche' di sbieco la fetta si attraversa in migliaia di chilometri e
+        // il primo vincolo da solo lascerebbe passi da centocinquanta -- ed e'
+        // li' che restavano i punti neri. Sotto, il tetto di trecento passi.
+        "  float passi = float(uPassi);",
+        "  float passoFine = min(attraversata / passi, uPassoMax);",
+        "  passoFine = max(passoFine, (tLontano - tVicino) / (passi * 7.0));",
+        "  float passoGrosso = passoFine * 3.0;",
+        "  float passo = passoGrosso;",
+        // Un pizzico di disturbo sul punto di partenza: senza, i passi si
+        // allineano e si vedono come fasce concentriche.
+        "  float disturbo = fract(sin(dot(gl_FragCoord.xy, vec2(12.9898, 78.233)) + uSemenza) * 43758.5453);",
+        "  float t = tVicino + passoFine * disturbo;",
+        "",
+        "  vec3 direzioneVera = normalize(vec3(direzione.xy, direzione.z / uEsagerazione));",
+        "  float coseno = dot(direzioneVera, uSole);",
+        "  float suSole = max(0.12, uSole.z);",
+        // Le tre ottave della diffusione multipla: un fotone che ha gia'
+        // rimbalzato una volta vede una nube piu' trasparente e una fase piu'
+        // isotropa di quello appena entrato. Sommare tre ottave con sigma e
+        // anisotropia che decadono e' il modo economico di tenerne conto --
+        // ed e' quello che rende BIANCA una nube invece che grigia.
+        "  float fase0 = faseDoppia(coseno, uFaseG);",
+        "  float fase1 = faseDoppia(coseno, uFaseG * 0.5);",
+        "  float fase2 = faseDoppia(coseno, uFaseG * 0.25);",
+        "",
+        "  vec3 accumulo = vec3(0.0);",
+        "  float trasmissione = 1.0;",
+        "  int vuoti = 0;",
+        "  for (int i = 0; i < 512; i++) {",
+        "    if (t > tLontano || trasmissione < 0.012) break;",
+        "    vec3 p = origine + direzione * t;",
+        "    float altKm, cimaKm, copertura;",
+        "    float d = densita(p, altKm, cimaKm, copertura);",
+        "    if (d <= 0.001) {",
+        "      vuoti++;",
+        // Attenzione a non tornare troppo presto al passo lungo. Appena si
+        // esce da una nube si e' appena fatto un passo indietro, e i prossimi
+        // campionamenti sono per forza vuoti: rimettendosi subito a saltare si
+        // ricade dentro la nube senza vederla, e il raggio esce trasparente.
+        // Erano i punti neri sparsi sulle nubi -- sale e pepe, ma fatto di
+        // raggi che avevano scavalcato quello che dovevano attraversare.
+        "      if (vuoti > 8) passo = passoGrosso;",
+        "      t += passo;",
+        "      continue;",
+        "    }",
+        // Appena si incontra qualcosa si torna indietro di un passo lungo e si
+        // riprende fitti: cosi' il bordo della nube non viene tagliato dove
+        // capita il passo.
+        "    if (passo > passoFine) { t -= passo; passo = passoFine; vuoti = 0; continue; }",
+        "    vuoti = 0;",
+        "    t += passo;",
+        "    float cosLat = cosLatDa(p.y);",
+        // La lunghezza VERA del passo: il volume e' disegnato allungato in
+        // verticale, ma la luce lo attraversa come se non lo fosse.
+        "    vec3 vero = vec3(direzione.xy, direzione.z / uEsagerazione) * passo;",
+        "    float passoKm = length(vero) * uCircKm * cosLat;",
+        "    float estinzione = uSigma * d * passoKm;",
+        "    float trasmPasso = exp(-estinzione);",
+        "",
+        // Quanta nube c'e' fra questo punto e il sole. Il volume e' uno
+        // strato -- una cima e una base per ogni colonna -- e allora il
+        // cammino verso il sole e' quanto manca alla sommita' diviso il seno
+        // dell'elevazione. E' la prima approssimazione giusta per uno strato,
+        // e costa una riga invece di quattro campionamenti per passo.
+        "    float camminoSole = max(0.0, cimaKm - altKm) / suSole;",
+        "    float spessoreSole = uSigma * copertura * camminoSole;",
+        "    float luceSole = exp(-spessoreSole) * fase0",
+        "      + 0.52 * exp(-spessoreSole * 0.42) * fase1",
+        "      + 0.26 * exp(-spessoreSole * 0.18) * fase2;",
+        // Il termine 'polvere': il bordo di una nube, guardato con il sole
+        // dietro, e' piu' scuro del centro perche' li' la luce non ha avuto
+        // spazio per rimbalzare. Senza, la nube sembra di gesso.
+        "    float polvere = 1.0 - exp(-estinzione * 2.4);",
+        "",
+        "    vec3 lampi = vec3(0.0);",
+        "    for (int j = 0; j < 12; j++) {",
+        "      if (j >= uQuantiLampi) break;",
+        "      vec4 L = uLampi[j];",
+        "      float dxKm = (p.x - L.x) * uCircKm * cosLat;",
+        "      float dyKm = (p.y - L.y) * uCircKm * cosLat;",
+        "      float dzKm = altKm - L.z;",
+        "      float distanza = sqrt(dxKm * dxKm + dyKm * dyKm + dzKm * dzKm);",
+        // La luce del lampo nasce dentro il ghiaccio e si spegne nel ghiaccio:
+        // l'esponenziale e' l'estinzione lungo il cammino, e il denominatore
+        // e' la sorgente che si allarga. Il nucleo resta scuro da solo,
+        // perche' sopra la sorgente c'e' piu' nube che ai lati.
+        "      lampi += uLampoColore * L.w * uLampoForza",
+        "        * exp(-distanza / uLampoDiffusione) / (1.0 + 0.42 * distanza);",
+        "    }",
+        "",
+        "    float h = clamp((altKm - (cimaKm - max(0.15, cimaKm))) / max(0.5, cimaKm), 0.0, 1.0);",
+        "    vec3 luce = ALBEDO * (",
+        "        uForzaSole * uColoreSole * luceSole * mix(0.45, 1.0, polvere)",
+        "      + uAmbiente * mix(0.45, 1.0, altKm / max(1.0, cimaKm))",
+        "    ) + lampi * ALBEDO;",
+        "    accumulo += trasmissione * (1.0 - trasmPasso) * luce;",
+        "    trasmissione *= trasmPasso;",
+        "    if (h < -1.0) break;",
+        "  }",
+        "  colorePixel = vec4(accumulo, 1.0 - trasmissione);",
+        "}"
+      ].join("\n");
+
+      // Inversa di una matrice 4x4. Serve per rifare il cammino all'indietro:
+      // da un pixel dello schermo al raggio che lo attraversa.
+      function inverti4(m) {
+        var f = new Float64Array(16);
+        f[0] = m[5]*m[10]*m[15] - m[5]*m[11]*m[14] - m[9]*m[6]*m[15] + m[9]*m[7]*m[14] + m[13]*m[6]*m[11] - m[13]*m[7]*m[10];
+        f[4] = -m[4]*m[10]*m[15] + m[4]*m[11]*m[14] + m[8]*m[6]*m[15] - m[8]*m[7]*m[14] - m[12]*m[6]*m[11] + m[12]*m[7]*m[10];
+        f[8] = m[4]*m[9]*m[15] - m[4]*m[11]*m[13] - m[8]*m[5]*m[15] + m[8]*m[7]*m[13] + m[12]*m[5]*m[11] - m[12]*m[7]*m[9];
+        f[12] = -m[4]*m[9]*m[14] + m[4]*m[10]*m[13] + m[8]*m[5]*m[14] - m[8]*m[6]*m[13] - m[12]*m[5]*m[10] + m[12]*m[6]*m[9];
+        f[1] = -m[1]*m[10]*m[15] + m[1]*m[11]*m[14] + m[9]*m[2]*m[15] - m[9]*m[3]*m[14] - m[13]*m[2]*m[11] + m[13]*m[3]*m[10];
+        f[5] = m[0]*m[10]*m[15] - m[0]*m[11]*m[14] - m[8]*m[2]*m[15] + m[8]*m[3]*m[14] + m[12]*m[2]*m[11] - m[12]*m[3]*m[10];
+        f[9] = -m[0]*m[9]*m[15] + m[0]*m[11]*m[13] + m[8]*m[1]*m[15] - m[8]*m[3]*m[13] - m[12]*m[1]*m[11] + m[12]*m[3]*m[9];
+        f[13] = m[0]*m[9]*m[14] - m[0]*m[10]*m[13] - m[8]*m[1]*m[14] + m[8]*m[2]*m[13] + m[12]*m[1]*m[10] - m[12]*m[2]*m[9];
+        f[2] = m[1]*m[6]*m[15] - m[1]*m[7]*m[14] - m[5]*m[2]*m[15] + m[5]*m[3]*m[14] + m[13]*m[2]*m[7] - m[13]*m[3]*m[6];
+        f[6] = -m[0]*m[6]*m[15] + m[0]*m[7]*m[14] + m[4]*m[2]*m[15] - m[4]*m[3]*m[14] - m[12]*m[2]*m[7] + m[12]*m[3]*m[6];
+        f[10] = m[0]*m[5]*m[15] - m[0]*m[7]*m[13] - m[4]*m[1]*m[15] + m[4]*m[3]*m[13] + m[12]*m[1]*m[7] - m[12]*m[3]*m[5];
+        f[14] = -m[0]*m[5]*m[14] + m[0]*m[6]*m[13] + m[4]*m[1]*m[14] - m[4]*m[2]*m[13] - m[12]*m[1]*m[6] + m[12]*m[2]*m[5];
+        f[3] = -m[1]*m[6]*m[11] + m[1]*m[7]*m[10] + m[5]*m[2]*m[11] - m[5]*m[3]*m[10] - m[9]*m[2]*m[7] + m[9]*m[3]*m[6];
+        f[7] = m[0]*m[6]*m[11] - m[0]*m[7]*m[10] - m[4]*m[2]*m[11] + m[4]*m[3]*m[10] + m[8]*m[2]*m[7] - m[8]*m[3]*m[6];
+        f[11] = -m[0]*m[5]*m[11] + m[0]*m[7]*m[9] + m[4]*m[1]*m[11] - m[4]*m[3]*m[9] - m[8]*m[1]*m[7] + m[8]*m[3]*m[5];
+        f[15] = m[0]*m[5]*m[10] - m[0]*m[6]*m[9] - m[4]*m[1]*m[10] + m[4]*m[2]*m[9] + m[8]*m[1]*m[6] - m[8]*m[2]*m[5];
+        var det = m[0]*f[0] + m[1]*f[4] + m[2]*f[8] + m[3]*f[12];
+        if (!det) return null;
+        var fuori = new Float32Array(16);
+        for (var i = 0; i < 16; i++) fuori[i] = f[i] / det;
+        return fuori;
+      }
+
+      function compila(gl, tipo, sorgente) {
+        var s = gl.createShader(tipo);
+        gl.shaderSource(s, sorgente);
+        gl.compileShader(s);
+        if (!gl.getShaderParameter(s, gl.COMPILE_STATUS)) {
+          throw new Error("shader: " + gl.getShaderInfoLog(s));
+        }
+        return s;
+      }
+
+      function StratoVolume() {
+        this.id = "nubi-volumetriche";
+        this.type = "custom";
+        this.renderingMode = "3d";
+        this.pronto = false;
+        this.campo = null;
+        this.lampi = [];
+        this.sole = { elevazione: 0, azimut: 0 };
+        this.esagerazione = ESAGERAZIONE_INIZIALE;
+        this.passi = PASSI_INIZIALI;
+        this.acceso = true;
+      }
+
+      StratoVolume.prototype.onAdd = function (mappa, gl) {
+        this.gl = gl;
+        this.mappa = mappa;
+        var v = compila(gl, gl.VERTEX_SHADER, VERTICE);
+        var f = compila(gl, gl.FRAGMENT_SHADER, FRAMMENTO);
+        var programma = gl.createProgram();
+        gl.attachShader(programma, v);
+        gl.attachShader(programma, f);
+        gl.bindAttribLocation(programma, 0, "aPos");
+        gl.linkProgram(programma);
+        if (!gl.getProgramParameter(programma, gl.LINK_STATUS)) {
+          throw new Error("programma: " + gl.getProgramInfoLog(programma));
+        }
+        this.programma = programma;
+        this.buffer = gl.createBuffer();
+        gl.bindBuffer(gl.ARRAY_BUFFER, this.buffer);
+        // Un triangolo solo, piu' grande dello schermo: costa meno di due.
+        gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([-1, -1, 3, -1, -1, 3]), gl.STATIC_DRAW);
+
+        this.texRumore = gl.createTexture();
+        gl.bindTexture(gl.TEXTURE_3D, this.texRumore);
+        var rumore = tessituraDiRumore(RUMORE_LATO);
+        gl.pixelStorei(gl.UNPACK_ALIGNMENT, 1);
+        gl.texImage3D(gl.TEXTURE_3D, 0, gl.R8, RUMORE_LATO, RUMORE_LATO, RUMORE_LATO,
+          0, gl.RED, gl.UNSIGNED_BYTE, rumore);
+        gl.texParameteri(gl.TEXTURE_3D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
+        gl.texParameteri(gl.TEXTURE_3D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
+        gl.texParameteri(gl.TEXTURE_3D, gl.TEXTURE_WRAP_S, gl.REPEAT);
+        gl.texParameteri(gl.TEXTURE_3D, gl.TEXTURE_WRAP_T, gl.REPEAT);
+        gl.texParameteri(gl.TEXTURE_3D, gl.TEXTURE_WRAP_R, gl.REPEAT);
+
+        this.texCampo = gl.createTexture();
+        gl.bindTexture(gl.TEXTURE_2D, this.texCampo);
+        gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR_MIPMAP_LINEAR);
+        gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
+        gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+        gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+      };
+
+      StratoVolume.prototype.pubblicaCampo = function (campo) {
+        var gl = this.gl;
+        if (!gl) return;
+        gl.bindTexture(gl.TEXTURE_2D, this.texCampo);
+        gl.pixelStorei(gl.UNPACK_ALIGNMENT, 1);
+        gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, campo.larghezza, campo.altezza, 0,
+          gl.RGBA, gl.UNSIGNED_BYTE, tessituraDelCampo(campo));
+        // La piramide serve per l'ingrossamento orizzontale: senza, non c'e'
+        // niente di piu' grosso da prendere.
+        gl.generateMipmap(gl.TEXTURE_2D);
+        this.campo = campo;
+        this.pronto = true;
+      };
+
+      StratoVolume.prototype.matriceDi = function (argomenti) {
+        if (!argomenti) return null;
+        if (argomenti.length === 16) return argomenti;
+        if (argomenti.defaultProjectionData && argomenti.defaultProjectionData.mainMatrix) {
+          return argomenti.defaultProjectionData.mainMatrix;
+        }
+        return null;
+      };
+
+      StratoVolume.prototype.render = function (gl, argomenti) {
+        if (!this.pronto || !this.acceso) return;
+        var matrice = this.matriceDi(argomenti);
+        if (!matrice) return;
+        var inversa = inverti4(matrice);
+        if (!inversa) return;
+
+        var p = this.programma;
+        gl.useProgram(p);
+        gl.bindBuffer(gl.ARRAY_BUFFER, this.buffer);
+        gl.enableVertexAttribArray(0);
+        gl.vertexAttribPointer(0, 2, gl.FLOAT, false, 0, 0);
+
+        var dom = this.dominioUnitario();
+        var latCentro = (DOMINIO.sud + DOMINIO.nord) / 2;
+        var cosLatEstremo = Math.cos(Math.max(Math.abs(DOMINIO.sud), Math.abs(DOMINIO.nord))
+          * Math.PI / 180);
+        var circKm = CIRCONFERENZA / 1000;
+        // Il tetto del volume, in unita' di MapLibre. Si prende alla latitudine
+        // piu' estrema, dove quelle unita' valgono meno chilometri: cosi' il
+        // riquadro contiene tutto e non taglia niente.
+        var zMax = QUOTA_SCALA_KM * this.esagerazione / (circKm * cosLatEstremo);
+
+        var luce = this.luceDiScena();
+        var forzaSole = luce.forza;
+        var sole = [
+          Math.cos(luce.elevazione) * Math.sin(luce.azimut),
+          Math.cos(luce.elevazione) * Math.cos(luce.azimut),
+          Math.sin(luce.elevazione)
+        ];
+        // Nel Mercatore la y cresce verso sud: il nord del mondo e' -y.
+        var soleGL = [sole[0], -sole[1], Math.max(0.02, sole[2])];
+        var lungo = Math.hypot(soleGL[0], soleGL[1], soleGL[2]) || 1;
+        soleGL = [soleGL[0] / lungo, soleGL[1] / lungo, soleGL[2] / lungo];
+
+        var giorno = luce.vera ? forzaSole : 0;
+        var ambiente = AMBIENTE_NOTTE.map(function (v, i) {
+          return v + (AMBIENTE_GIORNO[i] - v) * giorno;
+        });
+        var coloreLuce = luce.vera ? SOLE_COLORE : LUCE_CONVENZIONALE_COLORE;
+
+        var unitaPerKm = 1 / (circKm * Math.cos(latCentro * Math.PI / 180));
+        var u = function (nome) { return gl.getUniformLocation(p, nome); };
+        gl.uniformMatrix4fv(u("uInversa"), false, inversa);
+        gl.uniform4f(u("uDominio"), dom.x0, dom.yNord, dom.x1, dom.ySud);
+        gl.uniform1f(u("uScalaKm"), QUOTA_SCALA_KM);
+        gl.uniform1f(u("uCircKm"), circKm);
+        gl.uniform1f(u("uEsagerazione"), this.esagerazione);
+        gl.uniform1f(u("uSigma"), SIGMA_PER_KM);
+        gl.uniform1f(u("uFaseG"), FASE_G);
+        gl.uniform3fv(u("uSole"), new Float32Array(soleGL));
+        gl.uniform3fv(u("uColoreSole"), new Float32Array(coloreLuce));
+        gl.uniform3fv(u("uAmbiente"), new Float32Array(ambiente));
+        gl.uniform1f(u("uForzaSole"), forzaSole);
+        gl.uniform1f(u("uZMax"), zMax);
+        gl.uniform1i(u("uPassi"), this.passi);
+        gl.uniform1f(u("uSemenza"), (performance.now() % 100000) / 1000);
+        // Una cella di rumore vale RUMORE_SCALA_KM sul piano; il passo e'
+        // quante celle stanno in un'unita' di Mercatore.
+        var ingrosso = Math.max(1, this.esagerazione / ESAGERAZIONE_GRANA);
+        // La cella di rumore dev'essere CUBICA IN QUELLO CHE SI VEDE, non in
+        // chilometri veri. Lo spazio e' stirato in verticale dell'esagerazione:
+        // una cella alta sette chilometri veri, moltiplicata per ventidue,
+        // diventa una colonna alta centocinquanta e larga trenta, e il rumore
+        // invece di scolpire mammelloni scavava scanalature verticali. Era la
+        // selva di aghi. Dividendo per l'esagerazione la cella torna cubica
+        // sullo schermo e il ribollire torna a essere ribollire.
+        var orizzontaleKm = RUMORE_SCALA_KM * ingrosso;
+        var verticaleKm = Math.max(0.6, orizzontaleKm / this.esagerazione);
+        gl.uniform2f(u("uRumorePasso"),
+          1 / (orizzontaleKm * unitaPerKm), 1 / verticaleKm);
+        gl.uniform1f(u("uRumoreForza"), RUMORE_FORZA);
+        gl.uniform1f(u("uGrana"), Math.max(0, Math.log2(this.esagerazione / ESAGERAZIONE_GRANA)));
+        gl.uniform1f(u("uPassoMax"), RUMORE_SCALA_KM
+          * Math.max(1, this.esagerazione / ESAGERAZIONE_GRANA) * 0.34 * unitaPerKm);
+
+        var lampi = new Float32Array(LAMPI_MAX * 4);
+        var quanti = 0;
+        for (var i = 0; i < this.lampi.length && quanti < LAMPI_MAX; i++) {
+          var l = this.lampi[i];
+          if (!(l.intensita > 0.004)) continue;
+          lampi[quanti * 4] = l.ux;
+          lampi[quanti * 4 + 1] = l.uy;
+          lampi[quanti * 4 + 2] = l.quotaKm;
+          lampi[quanti * 4 + 3] = l.intensita;
+          quanti++;
+        }
+        gl.uniform4fv(u("uLampi"), lampi);
+        gl.uniform1i(u("uQuantiLampi"), quanti);
+        gl.uniform3fv(u("uLampoColore"), new Float32Array(LAMPO_COLORE));
+        gl.uniform1f(u("uLampoDiffusione"), LAMPO_DIFFUSIONE_KM);
+        gl.uniform1f(u("uLampoForza"), LAMPO_FORZA);
+
+        gl.activeTexture(gl.TEXTURE0);
+        gl.bindTexture(gl.TEXTURE_2D, this.texCampo);
+        gl.uniform1i(u("uCampo"), 0);
+        gl.activeTexture(gl.TEXTURE1);
+        gl.bindTexture(gl.TEXTURE_3D, this.texRumore);
+        gl.uniform1i(u("uRumore"), 1);
+
+        gl.disable(gl.DEPTH_TEST);
+        gl.depthMask(false);
+        gl.enable(gl.BLEND);
+        // Il colore esce gia' moltiplicato per la trasmissione: si compone
+        // come premoltiplicato, altrimenti i bordi sottili si scuriscono.
+        gl.blendFunc(gl.ONE, gl.ONE_MINUS_SRC_ALPHA);
+        gl.drawArrays(gl.TRIANGLES, 0, 3);
+      };
+
+      // Quale luce illumina il volume: il sole, quando c'e'; altrimenti la
+      // convenzione. Restituisce anche COME si chiama, perche' l'HUD lo dica.
+      StratoVolume.prototype.luceDiScena = function () {
+        var gradi = this.sole.elevazione * 180 / Math.PI;
+        var forza = limita((gradi - SOLE_MINIMO_GRADI) / 8, 0, 1);
+        if (forza > 0.05) {
+          return { azimut: this.sole.azimut, elevazione: this.sole.elevazione,
+                   forza: forza, vera: true };
+        }
+        return {
+          azimut: LUCE_CONVENZIONALE.azimutGradi * Math.PI / 180,
+          elevazione: LUCE_CONVENZIONALE.elevazioneGradi * Math.PI / 180,
+          forza: LUCE_CONVENZIONALE.forza, vera: false
+        };
+      };
+
+      StratoVolume.prototype.dominioUnitario = function () {
+        return {
+          x0: unitaX(DOMINIO.ovest), x1: unitaX(DOMINIO.est),
+          yNord: unitaY(DOMINIO.nord), ySud: unitaY(DOMINIO.sud)
+        };
+      };
+
+      // --- i lampi ----------------------------------------------------------
+      // L'accumulo a cinque minuti del Lightning Imager e' un'immagine: dove
+      // c'e' colore, li' ci sono stati lampi. Non porta ne' i tempi dei
+      // singoli lampi ne' la loro energia, e questa funzione non finge il
+      // contrario: ne ricava posizione e area, che e' quello che c'e'.
+      function lampiDaAccumulo(pixel, larghezza, altezza) {
+        var visti = new Uint8Array(larghezza * altezza);
+        var acceso = function (k) { return pixel[k * 4 + 3] > 40; };
+        var trovati = [];
+        var pila = [];
+        for (var k0 = 0; k0 < larghezza * altezza; k0++) {
+          if (visti[k0] || !acceso(k0)) continue;
+          var sommaX = 0, sommaY = 0, area = 0;
+          pila.length = 0;
+          pila.push(k0);
+          visti[k0] = 1;
+          while (pila.length) {
+            var k = pila.pop();
+            var x = k % larghezza, y = (k - x) / larghezza;
+            sommaX += x; sommaY += y; area++;
+            for (var dy = -1; dy <= 1; dy++) {
+              for (var dx = -1; dx <= 1; dx++) {
+                if (!dx && !dy) continue;
+                var nx = x + dx, ny = y + dy;
+                if (nx < 0 || ny < 0 || nx >= larghezza || ny >= altezza) continue;
+                var nk = ny * larghezza + nx;
+                if (visti[nk] || !acceso(nk)) continue;
+                visti[nk] = 1;
+                pila.push(nk);
+              }
+            }
+          }
+          // Un pixel isolato e' rumore di ricampionamento del WMS, non un
+          // lampo: due contigui sono il minimo per crederci.
+          if (area < 2) continue;
+          var cx = sommaX / area, cy = sommaY / area;
+          trovati.push({
+            area: area,
+            lon: DOMINIO.ovest + 0,   // riempito sotto, serve il Mercatore
+            mx: 0, my: 0, x: cx, y: cy, larghezza: larghezza, altezza: altezza
+          });
+        }
+        var r = riquadroMercatore();
+        trovati.forEach(function (l) {
+          l.mx = r.ovest + (l.x + 0.5) / larghezza * (r.est - r.ovest);
+          l.my = r.nord - (l.y + 0.5) / altezza * (r.nord - r.sud);
+          l.lon = l.mx / RAGGIO_TERRA * 180 / Math.PI;
+          l.lat = latDaMercY(l.my);
+          l.ux = unitaX(l.lon);
+          l.uy = unitaY(l.lat);
+        });
+        return trovati;
+      }
+
+      // Riunisce per vicinanza: le aree accese entro un raggio appartengono
+      // di fatto allo stesso sistema, e far lampeggiare insieme una cella
+      // intera e' piu' vicino al vero che accendere punti a sorte.
+      function riunisciPerVicinanza(elenco, raggioKm) {
+        var gruppi = [];
+        var vicino = function (a, b) {
+          var lat = (a.lat + b.lat) / 2 * Math.PI / 180;
+          var dx = (a.mx - b.mx) * Math.cos(lat) / 1000;
+          var dy = (a.my - b.my) * Math.cos(lat) / 1000;
+          return Math.sqrt(dx * dx + dy * dy) <= raggioKm;
+        };
+        elenco.forEach(function (lampo) {
+          for (var i = 0; i < gruppi.length; i++) {
+            for (var j = 0; j < gruppi[i].length; j++) {
+              if (vicino(lampo, gruppi[i][j])) { gruppi[i].push(lampo); return; }
+            }
+          }
+          gruppi.push([lampo]);
+        });
+        return gruppi;
+      }
+
+      // L'inviluppo di un lampo nel tempo: una salita ripida, un picco breve e
+      // una coda -- la corrente continua che segue il colpo di ritorno, che e'
+      // quella che davvero illumina la nube a lungo. Due scale temporali,
+      // perche' con una sola tre colpi vicini si fondono in un'unica onda.
+      function luceDelLampo(eta) {
+        var durata = LAMPO_PICCO_MS * 6;
+        if (eta < 0 || eta > durata) return 0;
+        var salita = Math.min(1, eta / LAMPO_SALITA_MS);
+        var t = Math.max(0, eta - LAMPO_SALITA_MS);
+        var picco = Math.exp(-t / LAMPO_PICCO_MS);
+        var coda = LAMPO_CODA_PESO * Math.exp(-t / LAMPO_CODA_MS);
+        return salita * (picco + coda) * (1 - t / durata) / (1 + LAMPO_CODA_PESO);
+      }
+
+      // --- HUD ---------------------------------------------------------------
+      var voci = [];
+      function diciHud(etichetta, valore, manca) {
+        voci.push({ etichetta: etichetta, valore: valore, manca: !!manca });
+      }
+      function mostraHud(limiti) {
+        var dl = document.getElementById("hud-voci");
+        dl.innerHTML = "";
+        voci.forEach(function (v) {
+          var dt = document.createElement("dt");
+          dt.textContent = v.etichetta;
+          var dd = document.createElement("dd");
+          dd.textContent = v.valore;
+          if (v.manca) dd.className = "manca";
+          dl.appendChild(dt); dl.appendChild(dd);
+        });
+        document.getElementById("hud-limiti").innerHTML = limiti;
+      }
+      function stato(testo) { document.getElementById("stato").textContent = testo; }
+      function oraBreve(epoca) {
+        var d = new Date(epoca);
+        var due = function (n) { return (n < 10 ? "0" : "") + n; };
+        return due(d.getUTCHours()) + ":" + due(d.getUTCMinutes()) + " UTC";
+      }
+      function virgola(n, cifre) { return n.toFixed(cifre).replace(".", ","); }
+
+      // --- caricamento -------------------------------------------------------
+      function scarica(strato, misura, adesso) {
+        var slot = slotPiuRecente(strato, adesso);
+        return new Promise(function (risolvi) {
+          var senzaTempo = false;
+          var immagine = new Image();
+          immagine.crossOrigin = "anonymous";
+          immagine.onload = function () {
+            risolvi({ immagine: immagine, slot: slot, ultimo: senzaTempo });
+          };
+          immagine.onerror = function () {
+            if (!senzaTempo) {
+              // Se lo slot chiesto non c'e' ancora, EUMETView risponde
+              // all'ultima immagine disponibile quando il tempo non viene
+              // specificato: e' la stessa rete di sicurezza di radar.html.
+              senzaTempo = true;
+              immagine.src = indirizzo(strato, misura, slot, true);
+              return;
+            }
+            risolvi(null);
+          };
+          immagine.src = indirizzo(strato, misura, slot, false);
+        });
+      }
+
+      function leggiPixel(immagine, misura) {
+        var tela = document.createElement("canvas");
+        tela.width = misura.larghezza; tela.height = misura.altezza;
+        var contesto = tela.getContext("2d", { willReadFrequently: true });
+        contesto.imageSmoothingEnabled = true;
+        contesto.imageSmoothingQuality = "high";
+        contesto.drawImage(immagine, 0, 0, misura.larghezza, misura.altezza);
+        return contesto.getImageData(0, 0, misura.larghezza, misura.altezza);
+      }
+
+      // --- la mappa ----------------------------------------------------------
+      var mappa = null;
+      var volume = new StratoVolume();
+      var coordinateDominio = [
+        [DOMINIO.ovest, DOMINIO.nord], [DOMINIO.est, DOMINIO.nord],
+        [DOMINIO.est, DOMINIO.sud], [DOMINIO.ovest, DOMINIO.sud]
+      ];
+      var mostraNubi = true, mostraLampi = true, mostraCoste = true;
+      var gruppiLampo = [];
+
+      function avviaMappa() {
+        mappa = new maplibregl.Map({
+          container: "mappa",
+          style: {
+            version: 8,
+            sources: {
+              "base-mare": { type: "geojson", data: "data_base/sea.json" },
+              "base-terra": { type: "geojson", data: "data_base/land.json" },
+              "base-costa": { type: "geojson", data: "data_base/coast.json" },
+              "base-confini": { type: "geojson", data: "data_base/borders.json" }
+            },
+            layers: [
+              { id: "fondo", type: "background", paint: { "background-color": "#030a14" } },
+              { id: "mare", type: "fill", source: "base-mare",
+                paint: { "fill-color": "#071a2c" } },
+              { id: "terra", type: "fill", source: "base-terra",
+                paint: { "fill-color": "#0d1b22" } },
+              { id: "costa", type: "line", source: "base-costa",
+                paint: { "line-color": "#4d7fa6", "line-width": 0.8, "line-opacity": 0.8 } },
+              { id: "confini", type: "line", source: "base-confini",
+                paint: { "line-color": "#3a5f80", "line-width": 0.7, "line-opacity": 0.5,
+                         "line-dasharray": [2, 2] } }
+            ]
+          },
+          center: [11.0, 45.0], zoom: 3.6, pitch: 58, bearing: -12,
+          maxPitch: 82, minZoom: 2.4, maxZoom: 9, attributionControl: false
+        });
+        mappa.addControl(new maplibregl.NavigationControl({ visualizePitch: true }), "bottom-right");
+        mappa.addControl(new maplibregl.AttributionControl({
+          customAttribution: "EUMETSAT · Meteosat Third Generation · Lightning Imager"
+        }), "bottom-left");
+        mappa.on("load", function () {
+          mappa.addLayer(volume);
+          costruisciScena();
+        });
+      }
+
+      function collegaComandi() {
+        var cursore = document.getElementById("esagerazione");
+        var etichetta = document.getElementById("esagerazione-valore");
+        cursore.value = String(ESAGERAZIONE_INIZIALE);
+        etichetta.textContent = ESAGERAZIONE_INIZIALE + "×";
+        cursore.addEventListener("input", function () {
+          volume.esagerazione = Number(cursore.value);
+          etichetta.textContent = volume.esagerazione + "×";
+          aggiornaQuoteLampi();
+          if (mappa) mappa.triggerRepaint();
+        });
+        var qualita = document.getElementById("qualita");
+        var qualitaValore = document.getElementById("qualita-valore");
+        qualita.value = String(PASSI_INIZIALI);
+        qualitaValore.textContent = String(PASSI_INIZIALI);
+        qualita.addEventListener("input", function () {
+          volume.passi = Number(qualita.value);
+          qualitaValore.textContent = qualita.value;
+          if (mappa) mappa.triggerRepaint();
+        });
+        var interruttore = function (id, leggi, scrivi) {
+          var tasto = document.getElementById(id);
+          tasto.addEventListener("click", function () {
+            var acceso = !leggi();
+            scrivi(acceso);
+            tasto.setAttribute("aria-pressed", acceso ? "true" : "false");
+            if (mappa) mappa.triggerRepaint();
+          });
+        };
+        interruttore("tasto-nubi", function () { return mostraNubi; }, function (v) {
+          mostraNubi = v;
+          volume.acceso = v;
+        });
+        interruttore("tasto-lampi", function () { return mostraLampi; }, function (v) {
+          mostraLampi = v;
+        });
+        document.getElementById("tasto-cella").addEventListener("click", function () {
+          if (!mappa || !cellaViva) return;
+          mappa.flyTo({ center: [cellaViva.lon, cellaViva.lat], zoom: 5.4,
+            pitch: 70, bearing: 24, duration: 2600 });
+        });
+        interruttore("tasto-coste", function () { return mostraCoste; }, function (v) {
+          mostraCoste = v;
+          ["costa", "confini"].forEach(function (nome) {
+            if (mappa && mappa.getLayer(nome)) {
+              mappa.setLayoutProperty(nome, "visibility", v ? "visible" : "none");
+            }
+          });
+        });
+      }
+
+      // Dove guardare. Non lo decide un gusto: si cerca il riquadro con le
+      // sommita' piu' alte, e se in quel raggio ci sono lampi vince lui. E'
+      // la stessa domanda che si fa chi apre un satellite -- dov'e' il tempo?
+      function cellaPiuViva(campo, lampi) {
+        if (!campo) return null;
+        var lato = 48, meglio = -1, bx = 0, by = 0;
+        for (var y = lato; y < campo.altezza - lato; y += lato) {
+          for (var x = lato; x < campo.larghezza - lato; x += lato) {
+            var somma = 0;
+            for (var j = -lato; j <= lato; j += 8) {
+              for (var i = -lato; i <= lato; i += 8) {
+                var q = campo.quota[(y + j) * campo.larghezza + (x + i)];
+                somma += q * q;
+              }
+            }
+            if (somma > meglio) { meglio = somma; bx = x; by = y; }
+          }
+        }
+        var r = riquadroMercatore();
+        var punto = {
+          lon: (r.ovest + (bx + 0.5) / campo.larghezza * (r.est - r.ovest))
+            / RAGGIO_TERRA * 180 / Math.PI,
+          lat: latDaMercY(r.nord - (by + 0.5) / campo.altezza * (r.nord - r.sud))
+        };
+        // Se c'e' un lampo, il tempo vero e' li', e fra i lampi vince quello
+        // con l'area accumulata piu' grande: e' l'unica misura di attivita'
+        // che l'accumulo a cinque minuti porta con se'.
+        if (lampi && lampi.length) {
+          var grosso = lampi[0];
+          lampi.forEach(function (l) { if (l.area > grosso.area) grosso = l; });
+          return { lon: grosso.lon, lat: grosso.lat };
+        }
+        return punto;
+      }
+
+      var cellaViva = null;
+
+      function costruisciScena() {
+        var adesso = Date.now();
+        var misuraForma = misuraRaster(LARGHEZZA_FORMA);
+        var misuraPelle = misuraRaster(LARGHEZZA_PELLE);
+        var misuraLampi = misuraRaster(LARGHEZZA_LAMPI);
+        stato("Chiedo l'infrarosso, la pelle e i lampi a EUMETView…");
+        Promise.all([
+          scarica(STRATI.forma, misuraForma, adesso),
+          scarica(STRATI.pelle, misuraPelle, adesso),
+          scarica(STRATI.lampi, misuraLampi, adesso)
+        ]).then(function (esiti) {
+          componi(esiti[0], esiti[1], esiti[2], misuraForma, misuraPelle, misuraLampi);
+        }).catch(function (errore) {
+          stato("La scena non si e' potuta costruire: " + errore.message);
+        });
+      }
+
+      // La superficie che si vede sotto le nubi. Dove il cielo e' sereno e'
+      // l'immagine vera -- terra, mare, luci delle citta'. Dove e' coperto il
+      // satellite la superficie non la vede, e allora non la si disegna: sotto
+      // resta il fondo cartografico. Non si inventa una costa dove c'e' una
+      // nube davanti.
+      function superficieSenzaNubi(pixelPelle, misuraPelle, campo) {
+        for (var y = 0; y < misuraPelle.altezza; y++) {
+          var sy = limita(Math.round(y * campo.altezza / misuraPelle.altezza), 0, campo.altezza - 1);
+          for (var x = 0; x < misuraPelle.larghezza; x++) {
+            var sx = limita(Math.round(x * campo.larghezza / misuraPelle.larghezza),
+              0, campo.larghezza - 1);
+            var copertura = campo.copertura[sy * campo.larghezza + sx];
+            var k = (y * misuraPelle.larghezza + x) * 4 + 3;
+            pixelPelle.data[k] = Math.round(pixelPelle.data[k] * limita(1 - copertura * 1.25, 0, 1));
+          }
+        }
+        return pixelPelle;
+      }
+
+      function componi(forma, pelle, lampi, misuraForma, misuraPelle, misuraLampi) {
+        voci = [];
+        var limiti = [];
+
+        if (!forma) {
+          // Senza l'infrarosso non c'e' ne' quota ne' volume: e' la misura da
+          // cui dipende tutto il resto. Non si inventa.
+          diciHud("Forma della sommita'", "non disponibile", true);
+          mostraHud("<b>Manca l'infrarosso a 10,5 µm.</b> Senza quel canale non c'e' "
+            + "nessun campo di quota, e senza quello non c'e' volume da attraversare: "
+            + "la pagina non disegna nubi che non ha misurato. Riprova fra qualche minuto.");
+          stato("Infrarosso non disponibile per questo slot.");
+          return;
+        }
+
+        var pixelForma = leggiPixel(forma.immagine, misuraForma);
+        var campo = campoDelleNubi(pixelForma.data, misuraForma.larghezza, misuraForma.altezza);
+        volume.pubblicaCampo(campo);
+        diciHud("Forma della sommita'", "IR 10,5 µm · " + oraBreve(forma.slot.epoca));
+        diciHud("Fondo di cielo sereno", "locale · tipico " + virgola(campo.fondoTipico, 3)
+          + " · cima " + virgola(campo.cima, 3));
+        diciHud("Fondoscala del volume", QUOTA_SCALA_KM + " km (convenzione)");
+        diciHud("Spessore", virgola(SPESSORE_MINIMO_KM, 1) + " km + "
+          + virgola(SPESSORE_FRAZIONE, 2) + "× la cima (regola)", true);
+
+        if (pelle) {
+          var pixelPelle = leggiPixel(pelle.immagine, misuraPelle);
+          superficieSenzaNubi(pixelPelle, misuraPelle, campo);
+          var tela = document.createElement("canvas");
+          tela.width = misuraPelle.larghezza; tela.height = misuraPelle.altezza;
+          tela.getContext("2d").putImageData(pixelPelle, 0, 0);
+          if (mappa.getSource("superficie")) {
+            mappa.getSource("superficie").updateImage({ url: tela.toDataURL("image/png"),
+              coordinates: coordinateDominio });
+          } else {
+            mappa.addSource("superficie", { type: "image",
+              url: tela.toDataURL("image/png"), coordinates: coordinateDominio });
+            mappa.addLayer({ id: "superficie-strato", type: "raster", source: "superficie",
+              paint: { "raster-opacity": 1, "raster-fade-duration": 0 } }, "costa");
+          }
+          diciHud("Superficie", "GeoColour · " + oraBreve(pelle.slot.epoca));
+        } else {
+          diciHud("Superficie", "GeoColour assente", true);
+          limiti.push("La <b>GeoColour non e' arrivata</b>: sotto le nubi vedi solo il "
+            + "fondo cartografico, non l'immagine vera della superficie.");
+        }
+
+        var centroLat = (DOMINIO.sud + DOMINIO.nord) / 2;
+        var centroLon = (DOMINIO.ovest + DOMINIO.est) / 2;
+        var sole = posizioneSole(forma.slot.epoca, centroLat, centroLon);
+        volume.sole = sole;
+        diciHud("Sole (centro scena)", "alt " + virgola(sole.elevazione * 180 / Math.PI, 1)
+          + "° · az " + virgola(sole.azimut * 180 / Math.PI, 1) + "°");
+        var luceScena = volume.luceDiScena();
+        diciHud("Luce del volume", luceScena.vera
+          ? "il sole dell'immagine"
+          : "convenzionale, NO 40°", !luceScena.vera);
+        if (!luceScena.vera) {
+          limiti.push("Il <b>sole e' sotto l'orizzonte</b> in questa immagine. Un volume "
+            + "illuminato dal vero sarebbe nero, e allora si accende la luce "
+            + "convenzionale da nord-ovest che si usa nelle carte in rilievo, fredda "
+            + "perche' non si confonda col sole: la <b>forma e' misurata, "
+            + "l'illuminazione no</b>.");
+        }
+
+        var elenco = [];
+        if (lampi) {
+          var pixelLampi = leggiPixel(lampi.immagine, misuraLampi);
+          elenco = lampiDaAccumulo(pixelLampi.data, misuraLampi.larghezza, misuraLampi.altezza);
+          diciHud("Lampi LI (5 min)", elenco.length
+            ? elenco.length + " aree · " + oraBreve(lampi.slot.epoca)
+            : "nessuna area accesa · " + oraBreve(lampi.slot.epoca), !elenco.length);
+        } else {
+          diciHud("Lampi LI (5 min)", "non disponibile", true);
+          limiti.push("L'<b>accumulo del Lightning Imager non e' arrivato</b>: nel volume "
+            + "non c'e' nessuna sorgente accesa, e non ne e' stata inventata una.");
+        }
+        preparaLampi(elenco, campo);
+        cellaViva = cellaPiuViva(campo, elenco);
+        diciHud("Esagerazione verticale", volume.esagerazione + "× (scelta)");
+
+        limiti.unshift("<b>Misurati</b>: la quota della sommita' (IR 10,5 µm), la copertura, "
+          + "la posizione e l'area dei lampi (LI), la posizione del sole. "
+          + "<b>Dichiarati</b>: il fondoscala in chilometri, lo spessore della nube -- il "
+          + "satellite vede la cima, non la base --, il ribollire sotto la decina di "
+          + "chilometri che il satellite risolve, l'esagerazione verticale e il ritmo con "
+          + "cui i lampi si accendono. EUMETView serve <b>immagini gia' colorate</b>, non "
+          + "temperature di brillanza calibrate: la quota che ne esce e' <b>relativa</b>, "
+          + "non un CTTH. Le cime dei monti, quando sono fredde, entrano nel volume come "
+          + "le nubi. E il satellite guarda l'Europa <b>di sbieco</b>: piu' ci si allontana "
+          + "dal punto sotto MTG -- l'equatore a 0° -- piu' la sommita' appare spostata "
+          + "rispetto alla sua verticale, tanto piu' quanto e' alta.");
+        mostraHud(limiti.join(" "));
+        stato(elenco.length
+          ? "Scena pronta · " + elenco.length + " aree di lampo nel volume"
+          : "Scena pronta · nessun lampo nello slot");
+        mappa.triggerRepaint();
+      }
+
+      // Ogni lampo diventa una sorgente dentro il volume, alla quota della
+      // sommita' misurata sopra di lui meno la profondita' dichiarata.
+      function preparaLampi(elenco, campo) {
+        volume.lampi = [];
+        gruppiLampo = [];
+        if (!elenco.length) return;
+        var quotaIn = function (lampo) {
+          var r = riquadroMercatore();
+          var x = limita(Math.round((lampo.mx - r.ovest) / (r.est - r.ovest) * campo.larghezza),
+            0, campo.larghezza - 1);
+          var y = limita(Math.round((r.nord - lampo.my) / (r.nord - r.sud) * campo.altezza),
+            0, campo.altezza - 1);
+          return campo.quota[y * campo.larghezza + x];
+        };
+        var insiemi = riunisciPerVicinanza(elenco, LAMPO_RAGGIO_GRUPPO_KM);
+        insiemi.forEach(function (insieme, indice) {
+          var area = 0;
+          insieme.forEach(function (lampo) {
+            var cima = quotaIn(lampo);
+            volume.lampi.push({
+              ux: lampo.ux, uy: lampo.uy, gruppo: indice, area: lampo.area,
+              cimaKm: cima, quotaKm: Math.max(0.6, cima - LAMPO_PROFONDITA_KM),
+              intensita: 0
+            });
+            area += lampo.area;
+          });
+          // La cadenza: piu' area accumulata, piu' spesso. E' l'unico legame
+          // fra il dato e il ritmo, ed e' dichiarato per quello che vale.
+          gruppiLampo.push({
+            intervallo: limita(9000 / (1 + Math.log2(1 + area / insieme.length)), 900, 4800),
+            prossimo: performance.now() + Math.random() * 1800,
+            acceso: -1e9
+          });
+        });
+      }
+
+      function aggiornaQuoteLampi() {
+        volume.lampi.forEach(function (l) {
+          l.quotaKm = Math.max(0.6, l.cimaKm - LAMPO_PROFONDITA_KM);
+        });
+      }
+
+      function battito() {
+        requestAnimationFrame(battito);
+        if (!gruppiLampo.length || !mappa) return;
+        var ora = performance.now();
+        var acceso = false;
+        gruppiLampo.forEach(function (gruppo) {
+          if (ora >= gruppo.prossimo) {
+            gruppo.acceso = ora;
+            gruppo.prossimo = ora + gruppo.intervallo * (0.6 + Math.random() * 0.9);
+          }
+          gruppo.luce = mostraLampi ? luceDelLampo(ora - gruppo.acceso) : 0;
+          if (gruppo.luce > 0.004) acceso = true;
+        });
+        volume.lampi.forEach(function (l) {
+          l.intensita = gruppiLampo[l.gruppo] ? gruppiLampo[l.gruppo].luce : 0;
+        });
+        // Solo i piu' luminosi entrano nei dodici posti dello shader.
+        volume.lampi.sort(function (a, b) { return b.intensita - a.intensita; });
+        if (acceso || volume.eraAcceso) mappa.triggerRepaint();
+        volume.eraAcceso = acceso;
+      }
+
+      // --- avvio -------------------------------------------------------------
+      // In una pagina di prova non c'e' ne' DOM ne' MapLibre: le funzioni qui
+      // sopra devono restare chiamabili da sole, ed e' per questo che l'avvio
+      // e' l'ultima riga e si tira indietro se manca la mappa.
+      if (typeof document !== "undefined" && document.getElementById("mappa")) {
+        collegaComandi();
+        if (typeof maplibregl !== "undefined") {
+          avviaMappa();
+          requestAnimationFrame(battito);
+        } else {
+          stato("MapLibre non si e' caricata: il volume non puo' partire.");
+        }
+      }
+    </script>
+  </body>
+</html>
