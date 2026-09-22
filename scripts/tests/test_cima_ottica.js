@@ -33,8 +33,10 @@ const esporta = [
   'DOMINIO', 'STRATI', 'QUOTA_SCALA_KM', 'QUOTA_GINOCCHIO_KM', 'QUOTA_OLTRE_KM',
   'SPESSORE_MINIMO_KM', 'SPESSORE_FRAZIONE', 'SPESSORE_MASSIMO_KM',
   'FONDO_BLOCCO_PX', 'FONDO_PENDENZA_MAX', 'FONDO_EROSIONI', 'NUBE_SOGLIA_GRIGIO',
-  'LAMPO_PROFONDITA_KM', 'LAMPO_DIFFUSIONE_KM',
-  'LAMPO_RAGGIO_GRUPPO_KM', 'LAMPI_MAX', 'ESAGERAZIONE_INIZIALE', 'ESAGERAZIONE_GRANA',
+  'LAMPO_QUOTA_CARICA_KM', 'LAMPO_SOTTO_LA_CIMA_MIN_KM', 'LAMPO_DIFFUSIONE_KM',
+  'LAMPO_COLPI_MIN', 'LAMPO_COLPI_MAX', 'LAMPO_VELOCITA_KM_S', 'LAMPO_PESO_COPERTURA',
+  'quotaDiCarica', 'sequenzaDiColpi', 'luceDellaSequenza',
+  'LAMPO_RAGGIO_GRUPPO_KM', 'LAMPI_MAX', 'LAMPO_FRA_COLPI_MS', 'ESAGERAZIONE_INIZIALE', 'ESAGERAZIONE_GRANA',
   'RUMORE_LATO', 'SIGMA_PER_KM', 'SOLE_MINIMO_GRADI', 'LUCE_CONVENZIONALE',
   'limita', 'mercX', 'mercY', 'latDaMercY', 'unitaX', 'unitaY', 'sfoca',
   'fondoDiCieloSereno', 'mediana3', 'posizioneSole', 'slotPiuRecente',
@@ -476,13 +478,93 @@ prova('i posti dei lampi nello shader sono quelli dichiarati', () => {
     'il giro sui lampi non copre tutti i posti');
 });
 
-prova('il lampo nasce dentro il ghiaccio, non sopra', () => {
-  assert.ok(modulo.LAMPO_PROFONDITA_KM > 0,
-    'la sorgente del lampo sta sulla sommita\' invece che dentro la nube');
-  assert.ok(/cimaKm - LAMPO_PROFONDITA_KM/.test(corpo[1]),
-    'la quota della sorgente non scende piu\' sotto la cima');
-  assert.ok(/exp\(-distanza \/ uLampoDiffusione\)/.test(modulo.FRAMMENTO),
+prova('il lampo nasce nella regione di carica, a quota quasi fissa', () => {
+  // E' la modifica che fa comparire da sola la faccia giusta del lampo.
+  // Con una profondita' FISSA sotto la cima, sotto una torre alta quattordici
+  // chilometri e sotto un'incudine alta nove c'e' lo stesso ghiaccio sopra la
+  // sorgente, e la luce esce uguale dappertutto: niente nucleo scuro, niente
+  // bordo acceso. Ancorata a una quota assoluta -- la regione fra -10 e -25
+  // gradi -- la differenza c'e' e viene dalla fisica.
+  const torre = modulo.quotaDiCarica(14);
+  const incudine = modulo.quotaDiCarica(9);
+  assert.ok(Math.abs(torre - incudine) < 1e-9,
+    'la sorgente segue ancora la cima invece di stare alla sua quota');
+  assert.ok(14 - torre > (9 - incudine) + 4,
+    'sotto la torre non c\'e\' piu\' ghiaccio che sotto l\'incudine: '
+    + 'il nucleo scuro non puo\' formarsi');
+  assert.ok(modulo.LAMPO_QUOTA_CARICA_KM >= 4 && modulo.LAMPO_QUOTA_CARICA_KM <= 8,
+    'la regione di carica e\' fuori dall\'intervallo osservato');
+  // Sotto una nube bassa il fulmine nasce piu' in basso, non fuori dalla nube.
+  const bassa = modulo.quotaDiCarica(3);
+  assert.ok(bassa > 0 && bassa <= 3 - modulo.LAMPO_SOTTO_LA_CIMA_MIN_KM + 1e-9,
+    'sotto una nube bassa la sorgente esce dalla nube: ' + bassa.toFixed(2));
+  assert.ok(/exp\(-ottico \/ uLampoDiffusione\)/.test(modulo.FRAMMENTO),
     'la luce del lampo non si spegne piu\' nel ghiaccio');
+});
+
+prova('il cammino della luce e\' pesato dalla nube misurata', () => {
+  // Dentro il cuore fitto la luce si ferma, dentro l'incudine sottile corre:
+  // e' l'unico modo in cui il dato entra nella FORMA del bagliore, e senza
+  // questo il bordo dell'incudine non si accende.
+  assert.ok(modulo.LAMPO_PESO_COPERTURA > 0 && modulo.LAMPO_PESO_COPERTURA < 1,
+    'il cammino ottico non dipende piu\' dalla copertura');
+  assert.ok(/distanza \* \(1\.0 - uLampoPesoCopertura/.test(modulo.FRAMMENTO),
+    'lo shader non pesa piu\' il cammino con la copertura');
+});
+
+prova('un flash e\' una sequenza di colpi, non un rigonfiamento solo', () => {
+  for (let giro = 0; giro < 40; giro++) {
+    const colpi = modulo.sequenzaDiColpi();
+    assert.ok(colpi.length >= modulo.LAMPO_COLPI_MIN
+      && colpi.length <= modulo.LAMPO_COLPI_MAX,
+      'colpi fuori dall\'intervallo dichiarato: ' + colpi.length);
+    assert.equal(colpi[0], 0, 'il primo colpo non e\' all\'istante zero');
+    for (let i = 1; i < colpi.length; i++) {
+      const salto = colpi[i] - colpi[i - 1];
+      assert.ok(salto >= modulo.LAMPO_FRA_COLPI_MS[0] - 1e-9
+        && salto <= modulo.LAMPO_FRA_COLPI_MS[1] + 1e-9,
+        'intervallo fra colpi fuori dal dichiarato: ' + salto.toFixed(0));
+    }
+  }
+  // La somma si satura: due colpi sovrapposti non fanno il doppio di luce.
+  const doppio = modulo.luceDellaSequenza([0, 0], 36);
+  assert.ok(doppio <= 1 + 1e-9, 'la luce dei colpi sovrapposti sfonda l\'uno');
+  assert.ok(doppio > modulo.luceDellaSequenza([0], 36),
+    'due colpi non danno piu\' luce di uno');
+  // E lo sfarfallio c'e' davvero: fra un colpo e il successivo la luce cala.
+  const sequenza = [0, 90];
+  const fra = modulo.luceDellaSequenza(sequenza, 70);
+  assert.ok(fra < modulo.luceDellaSequenza(sequenza, 36),
+    'fra un colpo e l\'altro la luce non cala: non sfarfalla');
+  assert.ok(modulo.luceDellaSequenza(sequenza, 126) > fra,
+    'il secondo colpo non riaccende');
+});
+
+prova('il bagliore resta una palla, non diventa una colonna', () => {
+  // Il bagliore e' una palla nello spazio vero. Disegnato in uno spazio
+  // stirato quattordici volte in verticale diventava una colonna di luce che
+  // sbucava dalla nube come un faro -- si vedeva nei fotogrammi. La verticale
+  // viene schiacciata della stessa proporzione con cui viene stirata, come
+  // gia' si fa per la grana del rumore.
+  assert.ok(/uLampoSchiaccia/.test(modulo.FRAMMENTO),
+    'il bagliore non viene piu\' schiacciato: torna a essere una colonna');
+  assert.ok(/\(altKm - L\.z\) \* uLampoSchiaccia/.test(modulo.FRAMMENTO),
+    'lo schiacciamento non si applica alla distanza verticale');
+  assert.ok(/uniform1f\(u\("uLampoSchiaccia"\), ingrosso\)/.test(corpo[1]),
+    'lo schiacciamento non segue piu\' l\'esagerazione');
+  // E il bagliore non si allunga all\'infinito: oltre tre lunghezze di
+  // diffusione non resta niente da sommare.
+  assert.ok(/distanza > 3\.0 \* uLampoDiffusione/.test(modulo.FRAMMENTO),
+    'il contributo del lampo non viene piu\' tagliato a distanza');
+});
+
+prova('il flash attraversa la cella invece di accendersi tutto insieme', () => {
+  assert.ok(modulo.LAMPO_VELOCITA_KM_S > 20 && modulo.LAMPO_VELOCITA_KM_S < 3e5,
+    'la velocita\' del leader non e\' un ordine di grandezza plausibile');
+  assert.ok(/ritardoMs: Math\.sqrt/.test(corpo[1]),
+    'le sorgenti di uno stesso gruppo non hanno piu\' un ritardo di propagazione');
+  assert.ok(/ora - gruppo\.acceso - \(l\.ritardoMs \|\| 0\)/.test(corpo[1]),
+    'il ritardo di propagazione non viene piu\' usato');
 });
 
 prova('la matrice si inverte davvero', () => {

@@ -263,17 +263,52 @@
       var RUMORE_SCALA_KM = 34;
       var RUMORE_FORZA = 0.44;
 
-      // Il lampo. Nasce sotto la sommita' e la sua luce esce dal ghiaccio
-      // dopo esserci rimbalzata dentro: nel volume e' una sorgente puntiforme,
-      // e il resto lo fa l'estinzione della nube.
-      var LAMPO_PROFONDITA_KM = 4.0;
+      // IL LAMPO. Dove nasce non e' una scelta grafica. Il fulmine si accende
+      // nella regione di carica principale della cella, quella fra i -10 e i
+      // -25 gradi, che alle nostre latitudini sta intorno ai sei chilometri:
+      // e' fisica di nube temporalesca, misurata da sessant'anni di sondaggi
+      // e di campagne al suolo, non una profondita' inventata.
+      //
+      // E' anche la ragione per cui la scena funziona. Prima mettevo la
+      // sorgente a profondita' FISSA sotto la sommita': sotto una torre alta
+      // quattordici chilometri e sotto un'incudine alta nove c'era allora lo
+      // stesso ghiaccio sopra, e la luce usciva uguale dappertutto. Ancorata
+      // a una quota assoluta, invece, sotto la torre la luce ha otto
+      // chilometri di ghiaccio da attraversare e sotto l'incudine tre: il
+      // nucleo resta scuro e il bordo dell'incudine si accende DA SOLO,
+      // perche' e' quello che succede.
+      var LAMPO_QUOTA_CARICA_KM = 6.0;
+      var LAMPO_SOTTO_LA_CIMA_MIN_KM = 1.2;
       var LAMPO_DIFFUSIONE_KM = 7.0;
-      var LAMPO_FORZA = 26.0;
+      var LAMPO_FORZA = 17.0;
+      // Il ghiaccio fitto ferma la luce, l'incudine sottile la lascia correre.
+      // La copertura misurata pesa il cammino ottico: e' l'unico modo in cui
+      // il dato entra nella forma del bagliore.
+      var LAMPO_PESO_COPERTURA = 0.72;
+
+      // La MOLTEPLICITA'. Un fulmine non e' un lampo solo: e' una sequenza di
+      // colpi di ritorno lungo lo stesso canale, in media tre o quattro,
+      // separati da qualche decina di millisecondi, ed e' quello che si vede
+      // come sfarfallio. L'accumulo a cinque minuti del Lightning Imager non
+      // porta ne' i tempi ne' la molteplicita': questi numeri sono
+      // DICHIARATI, e l'HUD lo scrive.
+      var LAMPO_COLPI_MIN = 2;
+      var LAMPO_COLPI_MAX = 5;
+      var LAMPO_FRA_COLPI_MS = [38, 95];
+      // Il leader corre dentro l'incudine a un centinaio di chilometri al
+      // secondo: un flash largo trenta chilometri non si accende tutto
+      // insieme, si accende attraversando la cella. Anche questo e' un ordine
+      // di grandezza dichiarato.
+      var LAMPO_VELOCITA_KM_S = 140;
       // 777,4 nm e' la riga dell'ossigeno neutro che il Lightning Imager
       // osserva davvero. E' rosso profondo. Qui e' un SEGNO: la cromia viene
       // da quella riga, la luminosita' no.
       var LAMPO_COLORE = [1.0, 0.42, 0.20];
-      var LAMPI_MAX = 12;
+      // Dove la sorgente satura, il colore sbianca: nessuna riga spettrale
+      // regge da sola una luminosita' che sfonda: e' quello che fa ogni
+      // sorgente intensa, e quello che fa un lampo visto da vicino.
+      var LAMPO_NUCLEO = [1.0, 0.88, 0.78];
+      var LAMPI_MAX = 16;
       var LAMPO_RAGGIO_GRUPPO_KM = 130;
       var LAMPO_SALITA_MS = 34;
       var LAMPO_PICCO_MS = 46;
@@ -653,10 +688,13 @@
         "uniform float uGrana;",
         "uniform float uPassoMax;",
         "uniform int uQuantiLampi;",
-        "uniform vec4 uLampi[12];",      // x, y mercatore unitario; z km veri; w intensita'
+        "uniform vec4 uLampi[16];",      // x, y mercatore unitario; z km veri; w intensita'
         "uniform vec3 uLampoColore;",
+        "uniform vec3 uLampoNucleo;",
         "uniform float uLampoDiffusione;",
         "uniform float uLampoForza;",
+        "uniform float uLampoPesoCopertura;",
+        "uniform float uLampoSchiaccia;",
         "",
         "const float PIGRECO = 3.14159265359;",
         "const vec3 ALBEDO = vec3(0.955, 0.968, 1.0);",
@@ -843,19 +881,35 @@
         "    float polvere = 1.0 - exp(-estinzione * 2.4);",
         "",
         "    vec3 lampi = vec3(0.0);",
-        "    for (int j = 0; j < 12; j++) {",
+        "    for (int j = 0; j < 16; j++) {",
         "      if (j >= uQuantiLampi) break;",
         "      vec4 L = uLampi[j];",
         "      float dxKm = (p.x - L.x) * uCircKm * cosLat;",
         "      float dyKm = (p.y - L.y) * uCircKm * cosLat;",
-        "      float dzKm = altKm - L.z;",
+        // Il bagliore e' una palla nello spazio vero. Lo spazio pero' e'
+        // disegnato stirato in verticale, e una palla stirata quattordici
+        // volte diventa una colonna di luce che sbuca dalla nube come un
+        // faro: si vedeva, e non e' un lampo. Come per la grana del rumore,
+        // la verticale viene schiacciata della stessa proporzione, cosi' il
+        // bagliore resta una palla IN QUELLO CHE SI VEDE. E' una scelta di
+        // disegno, dichiarata: l'attenuazione verso l'alto -- quella che fa
+        // il nucleo scuro -- resta in chilometri veri.
+        "      float dzKm = (altKm - L.z) * uLampoSchiaccia;",
         "      float distanza = sqrt(dxKm * dxKm + dyKm * dyKm + dzKm * dzKm);",
-        // La luce del lampo nasce dentro il ghiaccio e si spegne nel ghiaccio:
-        // l'esponenziale e' l'estinzione lungo il cammino, e il denominatore
-        // e' la sorgente che si allarga. Il nucleo resta scuro da solo,
-        // perche' sopra la sorgente c'e' piu' nube che ai lati.
-        "      lampi += uLampoColore * L.w * uLampoForza",
-        "        * exp(-distanza / uLampoDiffusione) / (1.0 + 0.42 * distanza);",
+        "      if (distanza > 3.0 * uLampoDiffusione) continue;",
+        // La luce nasce dentro il ghiaccio e nel ghiaccio si spegne. Il
+        // cammino che conta non e' la distanza ma il CAMMINO OTTICO: dentro
+        // il cuore fitto della cella la luce si ferma in pochi chilometri,
+        // dentro l'incudine sottile corre lontano. La copertura misurata pesa
+        // quel cammino, ed e' cosi' che il bordo dell'incudine si accende.
+        "      float ottico = distanza * (1.0 - uLampoPesoCopertura",
+        "        + uLampoPesoCopertura * copertura);",
+        "      float fuga = exp(-ottico / uLampoDiffusione) / (1.0 + 0.42 * distanza);",
+        "      float acceso = L.w * uLampoForza * fuga;",
+        // Verso la sorgente la luce satura e il colore sbianca: nessuna riga
+        // spettrale regge da sola una luminosita' che sfonda.
+        "      vec3 tinta = mix(uLampoColore, uLampoNucleo, clamp(acceso * 0.55, 0.0, 1.0));",
+        "      lampi += tinta * acceso;",
         "    }",
         "",
         "    float h = clamp((altKm - (cimaKm - max(0.15, cimaKm))) / max(0.5, cimaKm), 0.0, 1.0);",
@@ -1025,6 +1079,7 @@
         var coloreLuce = luce.vera ? SOLE_COLORE : LUCE_CONVENZIONALE_COLORE;
 
         var unitaPerKm = 1 / (circKm * Math.cos(latCentro * Math.PI / 180));
+        var ingrosso = Math.max(1, this.esagerazione / ESAGERAZIONE_GRANA);
         var u = function (nome) { return gl.getUniformLocation(p, nome); };
         gl.uniformMatrix4fv(u("uInversa"), false, inversa);
         gl.uniform4f(u("uDominio"), dom.x0, dom.yNord, dom.x1, dom.ySud);
@@ -1042,7 +1097,6 @@
         gl.uniform1f(u("uSemenza"), (performance.now() % 100000) / 1000);
         // Una cella di rumore vale RUMORE_SCALA_KM sul piano; il passo e'
         // quante celle stanno in un'unita' di Mercatore.
-        var ingrosso = Math.max(1, this.esagerazione / ESAGERAZIONE_GRANA);
         // La cella di rumore dev'essere CUBICA IN QUELLO CHE SI VEDE, non in
         // chilometri veri. Lo spazio e' stirato in verticale dell'esagerazione:
         // una cella alta sette chilometri veri, moltiplicata per ventidue,
@@ -1056,8 +1110,7 @@
           1 / (orizzontaleKm * unitaPerKm), 1 / verticaleKm);
         gl.uniform1f(u("uRumoreForza"), RUMORE_FORZA);
         gl.uniform1f(u("uGrana"), Math.max(0, Math.log2(this.esagerazione / ESAGERAZIONE_GRANA)));
-        gl.uniform1f(u("uPassoMax"), RUMORE_SCALA_KM
-          * Math.max(1, this.esagerazione / ESAGERAZIONE_GRANA) * 0.34 * unitaPerKm);
+        gl.uniform1f(u("uPassoMax"), RUMORE_SCALA_KM * ingrosso * 0.34 * unitaPerKm);
 
         var lampi = new Float32Array(LAMPI_MAX * 4);
         var quanti = 0;
@@ -1073,8 +1126,11 @@
         gl.uniform4fv(u("uLampi"), lampi);
         gl.uniform1i(u("uQuantiLampi"), quanti);
         gl.uniform3fv(u("uLampoColore"), new Float32Array(LAMPO_COLORE));
+        gl.uniform3fv(u("uLampoNucleo"), new Float32Array(LAMPO_NUCLEO));
         gl.uniform1f(u("uLampoDiffusione"), LAMPO_DIFFUSIONE_KM);
         gl.uniform1f(u("uLampoForza"), LAMPO_FORZA);
+        gl.uniform1f(u("uLampoPesoCopertura"), LAMPO_PESO_COPERTURA);
+        gl.uniform1f(u("uLampoSchiaccia"), ingrosso);
 
         gl.activeTexture(gl.TEXTURE0);
         gl.bindTexture(gl.TEXTURE_2D, this.texCampo);
@@ -1195,6 +1251,34 @@
       // una coda -- la corrente continua che segue il colpo di ritorno, che e'
       // quella che davvero illumina la nube a lungo. Due scale temporali,
       // perche' con una sola tre colpi vicini si fondono in un'unica onda.
+      // La sequenza dei colpi di ritorno di un flash. Quanti siano e quanto
+      // distino NON viene dal dato: l'accumulo a cinque minuti non porta i
+      // tempi. Sono ordini di grandezza dichiarati, presi dalla molteplicita'
+      // media misurata al suolo -- tre o quattro colpi, qualche decina di
+      // millisecondi l'uno dall'altro -- ed e' quello che si vede come
+      // sfarfallio invece che come un unico gonfiarsi di luce.
+      function sequenzaDiColpi() {
+        var quanti = LAMPO_COLPI_MIN
+          + Math.floor(Math.random() * (LAMPO_COLPI_MAX - LAMPO_COLPI_MIN + 1));
+        var colpi = [0];
+        var t = 0;
+        for (var i = 1; i < quanti; i++) {
+          t += LAMPO_FRA_COLPI_MS[0]
+            + Math.random() * (LAMPO_FRA_COLPI_MS[1] - LAMPO_FRA_COLPI_MS[0]);
+          colpi.push(t);
+        }
+        return colpi;
+      }
+
+      // La luce di una sorgente, sommando i colpi ancora accesi. La somma si
+      // satura: due colpi sovrapposti non fanno il doppio della luce.
+      function luceDellaSequenza(colpi, eta) {
+        if (!colpi) return 0;
+        var somma = 0;
+        for (var i = 0; i < colpi.length; i++) somma += luceDelLampo(eta - colpi[i]);
+        return somma > 0 ? 1 - Math.exp(-somma) : 0;
+      }
+
       function luceDelLampo(eta) {
         var durata = LAMPO_PICCO_MS * 6;
         if (eta < 0 || eta > durata) return 0;
@@ -1516,14 +1600,22 @@
         }
         preparaLampi(elenco, campo);
         cellaViva = cellaPiuViva(campo, elenco);
+        diciHud("Sorgente del lampo", "regione di carica ~"
+          + virgola(LAMPO_QUOTA_CARICA_KM, 0) + " km");
+        diciHud("Colpi per lampo", LAMPO_COLPI_MIN + "–" + LAMPO_COLPI_MAX + " (dichiarati)", true);
         diciHud("Esagerazione verticale", volume.esagerazione + "× (scelta)");
 
         limiti.unshift("<b>Misurati</b>: la quota della sommita' (IR 10,5 µm), la copertura, "
           + "la posizione e l'area dei lampi (LI), la posizione del sole. "
           + "<b>Dichiarati</b>: il fondoscala in chilometri, lo spessore della nube -- il "
           + "satellite vede la cima, non la base --, il ribollire sotto la decina di "
-          + "chilometri che il satellite risolve, l'esagerazione verticale e il ritmo con "
-          + "cui i lampi si accendono. EUMETView serve <b>immagini gia' colorate</b>, non "
+          + "chilometri che il satellite risolve, l'esagerazione verticale, il ritmo con "
+          + "cui i lampi si accendono e quanti colpi di ritorno ha ognuno -- l'accumulo a "
+          + "cinque minuti non porta ne' i tempi ne' la molteplicita'. La <b>quota da cui "
+          + "parte la luce</b> invece non e' arbitraria: e' la regione di carica "
+          + "principale di una cella temporalesca, fra i -10 e i -25 gradi. E' da li' che "
+          + "vengono, da soli, il nucleo scuro sotto la torre e il bordo dell'incudine "
+          + "acceso: sotto la torre la luce ha molto piu' ghiaccio da attraversare. EUMETView serve <b>immagini gia' colorate</b>, non "
           + "temperature di brillanza calibrate: la quota che ne esce e' <b>relativa</b>, "
           + "non un CTTH. Le cime dei monti, quando sono fredde, entrano nel volume come "
           + "le nubi. E il satellite guarda l'Europa <b>di sbieco</b>: piu' ci si allontana "
@@ -1553,11 +1645,19 @@
         var insiemi = riunisciPerVicinanza(elenco, LAMPO_RAGGIO_GRUPPO_KM);
         insiemi.forEach(function (insieme, indice) {
           var area = 0;
+          // Il capofila: l'area accumulata piu' grande del gruppo. Il flash
+          // parte di li' e attraversa la cella, non si accende tutto insieme.
+          var capo = insieme[0];
+          insieme.forEach(function (l) { if (l.area > capo.area) capo = l; });
           insieme.forEach(function (lampo) {
             var cima = quotaIn(lampo);
+            var lat = (lampo.lat + capo.lat) / 2 * Math.PI / 180;
+            var dx = (lampo.mx - capo.mx) * Math.cos(lat) / 1000;
+            var dy = (lampo.my - capo.my) * Math.cos(lat) / 1000;
             volume.lampi.push({
               ux: lampo.ux, uy: lampo.uy, gruppo: indice, area: lampo.area,
-              cimaKm: cima, quotaKm: Math.max(0.6, cima - LAMPO_PROFONDITA_KM),
+              cimaKm: cima, quotaKm: quotaDiCarica(cima),
+              ritardoMs: Math.sqrt(dx * dx + dy * dy) / LAMPO_VELOCITA_KM_S * 1000,
               intensita: 0
             });
             area += lampo.area;
@@ -1567,15 +1667,21 @@
           gruppiLampo.push({
             intervallo: limita(9000 / (1 + Math.log2(1 + area / insieme.length)), 900, 4800),
             prossimo: performance.now() + Math.random() * 1800,
-            acceso: -1e9
+            acceso: -1e9, colpi: null
           });
         });
       }
 
+      // La quota da cui parte la luce: la regione di carica principale, a meno
+      // che la nube non arrivi cosi' in alto -- sotto una nube bassa il
+      // fulmine nasce piu' in basso, non fuori dalla nube.
+      function quotaDiCarica(cimaKm) {
+        return Math.max(0.5, Math.min(LAMPO_QUOTA_CARICA_KM,
+          cimaKm - LAMPO_SOTTO_LA_CIMA_MIN_KM));
+      }
+
       function aggiornaQuoteLampi() {
-        volume.lampi.forEach(function (l) {
-          l.quotaKm = Math.max(0.6, l.cimaKm - LAMPO_PROFONDITA_KM);
-        });
+        volume.lampi.forEach(function (l) { l.quotaKm = quotaDiCarica(l.cimaKm); });
       }
 
       function battito() {
@@ -1586,13 +1692,18 @@
         gruppiLampo.forEach(function (gruppo) {
           if (ora >= gruppo.prossimo) {
             gruppo.acceso = ora;
+            gruppo.colpi = sequenzaDiColpi();
             gruppo.prossimo = ora + gruppo.intervallo * (0.6 + Math.random() * 0.9);
           }
-          gruppo.luce = mostraLampi ? luceDelLampo(ora - gruppo.acceso) : 0;
-          if (gruppo.luce > 0.004) acceso = true;
         });
         volume.lampi.forEach(function (l) {
-          l.intensita = gruppiLampo[l.gruppo] ? gruppiLampo[l.gruppo].luce : 0;
+          var gruppo = gruppiLampo[l.gruppo];
+          // Ogni sorgente vede la stessa sequenza di colpi, ma in ritardo di
+          // quanto il leader ci ha messo ad arrivare fin li'.
+          l.intensita = (mostraLampi && gruppo)
+            ? luceDellaSequenza(gruppo.colpi, ora - gruppo.acceso - (l.ritardoMs || 0))
+            : 0;
+          if (l.intensita > 0.004) acceso = true;
         });
         // Solo i piu' luminosi entrano nei dodici posti dello shader.
         volume.lampi.sort(function (a, b) { return b.intensita - a.intensita; });
