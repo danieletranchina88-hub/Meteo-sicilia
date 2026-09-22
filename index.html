@@ -6670,7 +6670,7 @@
       const STRIKE_ACTIVITY_MAX = 60;
 
       let celleAggregate = [];
-      let celleCalcolateA = 0;
+      let celleCalcolateA = -Infinity;
 
       function tempoScaricaMillis(valore) {
         const numero = Number(valore);
@@ -6726,7 +6726,7 @@
           if (!cella) {
             cella = {
               peso: 0, lat: 0, lon: 0, quante: 0, stazioni: 0,
-              ultima: 0, arrivi: []
+              ultima: 0, arrivi: [], impulsi: []
             };
             caselle.set(chiave, cella);
           }
@@ -6740,7 +6740,15 @@
           // E l'istante in cui ogni rilevazione e' ARRIVATA: e' quello che
           // fa lampeggiare. Non e' una grandezza nuova -- e' lo stesso
           // tempo che l'anello di arrivo usa gia'.
-          if (Number.isFinite(s.ricevuta)) cella.arrivi.push(s.ricevuta);
+          if (Number.isFinite(s.ricevuta)) {
+            cella.arrivi.push(s.ricevuta);
+            // Il lampo deve nascere dove la rete ha localizzato l'evento,
+            // non sul baricentro della cella di densita'. Le coordinate
+            // restano quelle osservate: nessun footprint viene dedotto.
+            cella.impulsi.push({
+              ricevuta: s.ricevuta, lat: s.lat, lon: s.lon
+            });
+          }
         }
         const nuclei = [];
         caselle.forEach(function (cella) {
@@ -6751,7 +6759,8 @@
             quante: cella.quante,
             stazioni: cella.stazioni,
             ultima: cella.ultima,
-            arrivi: cella.arrivi
+            arrivi: cella.arrivi,
+            impulsi: cella.impulsi
           });
         });
         caselle.forEach(function (cella) {
@@ -6762,6 +6771,12 @@
           if (cella.arrivi.length > ATTIVITA_COLPI_MAX) {
             cella.arrivi.sort(function (a, b) { return b - a; });
             cella.arrivi.length = ATTIVITA_COLPI_MAX;
+          }
+          if (cella.impulsi.length > ATTIVITA_COLPI_MAX) {
+            cella.impulsi.sort(function (a, b) {
+              return b.ricevuta - a.ricevuta;
+            });
+            cella.impulsi.length = ATTIVITA_COLPI_MAX;
           }
         });
         nuclei.sort(function (a, b) { return b.peso - a.peso; });
@@ -7066,19 +7081,18 @@
       // foto invece di scegliere i colori a mano.
       // ---- IL LAMPO ----------------------------------------------------
       //
-      // Un fulmine non e' un'accensione morbida: e' una sequenza di COLPI DI
-      // RITORNO. Un lampo naturale ne ha in media tre o quattro, separati da
-      // qualche decina di millisecondi, e visto dall'alto attraverso la nube
-      // ognuno dura un battito -- la luce diretta si spegne in un
-      // millisecondo, ma la corrente di coda e la diffusione nel ghiaccio la
-      // allungano a un paio di decimi di secondo. E' per questo che un
-      // temporale visto da un aereo non pulsa: sfarfalla.
+      // Un fulmine non e' un'accensione morbida: e' una sequenza di impulsi.
+      // Un lampo naturale puo' averne diversi, separati da qualche decina di
+      // millisecondi, e visto dall'alto attraverso la nube ognuno dura un
+      // battito -- il canale si spegne rapidamente, mentre corrente di coda
+      // e diffusione nel ghiaccio prolungano la luce percepita. E' per questo
+      // che un temporale visto da un aereo non pulsa: sfarfalla.
       //
-      // Lo sfarfallio non viene inventato qui. La rete a terra rileva le
-      // SINGOLE scariche, e i colpi di uno stesso lampo arrivano come
-      // rilevazioni distinte a pochi millisecondi l'una dall'altra: basta
-      // sommare la curva di spegnimento di ognuna, una per rilevazione, e il
-      // ritmo che si vede e' quello del temporale.
+      // Lo sfarfallio non viene inventato qui: ogni rilevazione ricevuta
+      // avvia una sola curva. La rete non classifica in modo affidabile
+      // nube-terra, intranube o colpo di ritorno, quindi il disegno non usa
+      // quei nomi come se fossero misure. Somma soltanto gli impulsi che il
+      // flusso ha davvero consegnato.
       //
       // Il tempo usato e' quello di ARRIVO, non quello osservato. La rete
       // pubblica una scarica con qualche secondo di ritardo, e un lampo
@@ -7087,9 +7101,9 @@
       // L'istante osservato resta quello che decide eta', colore e densita'.
       const ATTIVITA_LAMPO_MS = 260;
       const ATTIVITA_SALITA_MS = 14;
-      // I due tempi di spegnimento di un colpo: il colpo di ritorno vero e
-      // proprio, che se ne va in qualche decina di millisecondi, e la
-      // corrente di coda, molto piu' debole e molto piu' lunga.
+      // I due tempi della risposta visiva normalizzata: un picco breve e
+      // una coda debole che rappresenta la luce diffusa dalla nube. Non sono
+      // una misura di corrente o radianza del singolo evento.
       const ATTIVITA_PICCO_MS = 26;
       const ATTIVITA_CODA_MS = 110;
       const ATTIVITA_CODA_PESO = 0.22;
@@ -7115,6 +7129,24 @@
         // che si ferma a un filo lascerebbe la cella accesa per sempre.
         return salita * (picco + coda) * (1 - t / durata)
           / (1 + ATTIVITA_CODA_PESO);
+      }
+
+      // Centro ottico dei soli impulsi ancora visibili. Le coordinate sono
+      // quelle rilevate; il peso e' la stessa curva temporale usata per il
+      // flash. Cosi' due eventi vicini illuminano fra i loro punti reali,
+      // mentre il campo persistente resta sul baricentro della densita'.
+      function centroDelLampo(cella, adessoFrame) {
+        if (prefersReducedMotion || !cella.impulsi) return null;
+        let peso = 0, lat = 0, lon = 0;
+        for (let i = 0; i < cella.impulsi.length; i += 1) {
+          const impulso = cella.impulsi[i];
+          const luce = luceDelColpo(adessoFrame - impulso.ricevuta);
+          if (!(luce > 0)) continue;
+          peso += luce;
+          lat += impulso.lat * luce;
+          lon += impulso.lon * luce;
+        }
+        return peso > 0 ? { lat: lat / peso, lon: lon / peso } : null;
       }
 
       // ---- DUE TAVOLOZZE, UNA TINTA ------------------------------------
@@ -7281,11 +7313,12 @@
         // tutto pero' era troppo -- toglieva proprio la nube illuminata che
         // questo disegno deve mostrare.
         const fondo = (0.10 + 0.38 * intensita) * (1 - 0.35 * giorno);
-        const colpo = 0.30 * lampo * (0.45 + 0.55 * intensita);
-        // I due pezzi sono tarati perche' la loro somma NON arrivi al tetto
-        // in una cella normale: se ci arrivasse, tutti i lampi uscirebbero
-        // uguali e l'attivita' smetterebbe di dirsi.
-        const voluta = clamp(fondo + colpo, 0, 0.94);
+        // La rete non misura energia ottica. Il singolo impulso resta quindi
+        // normalizzato: densita', numero di stazioni e attivita' pregressa
+        // non possono trasformarsi in una luminosita' che il dato non ha.
+        // Piu' rilevazioni sovrapposte fanno invece piu' luce perche' sono
+        // eventi realmente arrivati, gia' sommati dentro `lampo`.
+        const colpo = clamp(0.46 * lampo, 0, 0.86);
 
         // E QUANTA NE DEVE DISEGNARE, che non e' la stessa cosa. Le caselle
         // sono da cinque chilometri e l'alone ha raggio quindici: dentro un
@@ -7311,13 +7344,19 @@
         // numero: dieci volte le caselle fanno poco piu' del doppio della
         // luce, non dieci volte, e la scala non si schiaccia sul bianco.
         const vicine = Math.max(1, cella.vicine || 1);
-        const unione = clamp(
-          voluta * (1 + 0.22 * Math.log2(vicine)), 0, 0.94
-        );
-        // E da li' si torna indietro alla forza della SINGOLA cella, con la
+        const guadagnoAmmasso = 1 + 0.22 * Math.log2(vicine);
+        const unioneFondo = clamp(fondo * guadagnoAmmasso, 0, 0.94);
+        // Da li' si torna indietro alla forza della SINGOLA cella, con la
         // legge esatta dell'unione di N veli: 1 - (1-u)^(1/N). Disegnandone
         // N cosi', quello che si vede vale esattamente u.
-        const forza = 1 - Math.pow(1 - unione, 1 / vicine);
+        const forzaFondo = 1 - Math.pow(1 - unioneFondo, 1 / vicine);
+        // Il flash si disegna UNA volta sul centro degli impulsi reali. Non
+        // si divide per i vicini e non cresce con essi: quella dipendenza
+        // fingerebbe un'energia ottica che la rete non misura. Si compone
+        // semplicemente sopra il campo di fondo gia' corretto.
+        const forzaColpo = colpo;
+        const unione = 1 - (1 - unioneFondo) * (1 - forzaColpo);
+        const forza = unione;
         // Piu' e' attiva, piu' nube illumina. E SUL LAMPO SI ALLARGA
         // parecchio, non di un soffio: e' li' che si vede la differenza fra
         // il chiarore e il lampo. L'opacita' da sola non basterebbe --
@@ -7325,12 +7364,27 @@
         // diciotto per cento, perche' oltre una certa opacita' il lilla ha
         // gia' sostituito la nube e aggiungerne non si vede piu'. Quello
         // che si vede e' che si accende PIU' NUBE.
-        const raggio = raggioPixel(
-          STRIKE_ACTIVITY_RADIUS_KM
-            * (0.75 + 0.85 * intensita + 0.8 * Math.min(1, lampo))
-        );
-        return { intensita: intensita, lampo: lampo, voluta: voluta,
-                 unione: unione, forza: forza, raggio: raggio };
+        const raggioFondoKm = STRIKE_ACTIVITY_RADIUS_KM
+          * (0.75 + 0.85 * intensita);
+        // Anche l'area del singolo evento resta indipendente dalla densita':
+        // e' una risposta cartografica normalizzata, non un footprint
+        // radiometrico dedotto. Il lampo si allarga soltanto con la propria
+        // curva per dare l'accensione netta richiesta dall'interfaccia.
+        const raggioColpoKm = STRIKE_ACTIVITY_RADIUS_KM
+          * (1.65 + 0.65 * Math.min(1, lampo));
+        const raggioFondo = raggioPixel(raggioFondoKm);
+        const raggioColpo = raggioPixel(raggioColpoKm);
+        const raggio = lampo > 0
+          ? Math.max(raggioFondo, raggioColpo)
+          : raggioFondo;
+        return {
+          intensita: intensita, lampo: lampo,
+          fondo: fondo, colpo: colpo,
+          unioneFondo: unioneFondo, unione: unione,
+          forza: forza, raggio: raggio,
+          forzaFondo: forzaFondo, forzaColpo: forzaColpo,
+          raggioFondo: raggioFondo, raggioColpo: raggioColpo
+        };
       }
 
       function disegnaAttivita(context, adessoEpoca, adessoFrame) {
@@ -7343,26 +7397,41 @@
         const larghezza = projectionWidth;
         const altezza = projectionHeight;
         const accese = [];
+        const aggiungiAccesa = function (punto, raggio, forza, sfondo) {
+          if (!punto || forza < 0.03) return;
+          if (!Number.isFinite(raggio) || raggio < 2) return;
+          if (punto.x < -raggio || punto.y < -raggio
+              || punto.x > larghezza + raggio
+              || punto.y > altezza + raggio) return;
+          accese.push({ x: punto.x, y: punto.y, raggio: raggio,
+                        forza: forza, sfondo: sfondo });
+        };
         for (let i = 0; i < celleAggregate.length; i += 1) {
           const cella = celleAggregate[i];
-          const punto = projectParticle(cella.lon, cella.lat, 0);
-          if (!punto) continue;
           const sfondo = sfondoSottoCella(cella.lon, cella.lat);
           const luce = cellaIlluminata(
             cella, adessoFrame,
             function (km) { return raggioKmInPixel(cella.lon, cella.lat, km); },
             sfondo
           );
-          if (luce.forza < 0.03) continue;
-          if (!Number.isFinite(luce.raggio) || luce.raggio < 2) continue;
-          // Fuori schermo non si disegna: a scala larga sul telefono meta'
-          // delle celle vive possono stare oltre il bordo, e un gradiente
-          // radiale costa anche quando finisce fuori dalla tela.
-          if (punto.x < -luce.raggio || punto.y < -luce.raggio
-              || punto.x > larghezza + luce.raggio
-              || punto.y > altezza + luce.raggio) continue;
-          accese.push({ x: punto.x, y: punto.y, raggio: luce.raggio,
-                        forza: luce.forza, sfondo: sfondo });
+          // Il campo di attivita' resta sul baricentro della cella.
+          aggiungiAccesa(
+            projectParticle(cella.lon, cella.lat, 0),
+            luce.raggioFondo, luce.forzaFondo, sfondo
+          );
+
+          // Il flash nasce invece sulle coordinate rilevate. Con piu'
+          // impulsi ancora accesi, il centro e' la loro media pesata dalla
+          // stessa curva temporale: nessuna posizione sintetica e nessuno
+          // scivolamento verso scariche vecchie della cella.
+          const centro = centroDelLampo(cella, adessoFrame);
+          if (centro && luce.forzaColpo >= 0.03) {
+            aggiungiAccesa(
+              projectParticle(centro.lon, centro.lat, 0),
+              luce.raggioColpo, luce.forzaColpo,
+              sfondoSottoCella(centro.lon, centro.lat)
+            );
+          }
         }
         if (!accese.length) return;
 
@@ -7568,7 +7637,7 @@
       //     attivita' -- restano in chilometri e sono dichiarate tali.
       //
       // Quando si accende invece e' un dato: i filamenti seguono la stessa
-      // curva dei colpi di ritorno che illumina la nube, cioe' gli arrivi
+      // curva degli impulsi ricevuti che illumina la nube, cioe' gli arrivi
       // veri della rete. La forma e' nostra, il ritmo e' suo.
       const RAGNO_RAGGIO_PX = 70;
       const RAGNO_LIVELLI = 4;
@@ -8041,7 +8110,9 @@
         if (liveStrikes.length > STRIKE_MAX) {
           liveStrikes.splice(0, liveStrikes.length - STRIKE_MAX);
         }
-        celleCalcolateA = 0;
+        // Anche nei primi 700 ms di vita della pagina il nuovo dato deve
+        // entrare nel fotogramma immediatamente.
+        celleCalcolateA = -Infinity;
         updateLiveLightningNote();
         startStrikeAnimation();
         suonaTick(lon, lat, 0.94 + supportoRete(stazioni) * 0.12);
@@ -8070,7 +8141,7 @@
         }
 
         // I RAGNI. Si accendono con la stessa curva che illumina la nube:
-        // e' lo stesso colpo di ritorno, visto da vicino invece che diffuso
+        // e' lo stesso impulso ricevuto, visto da vicino invece che diffuso
         // nel ghiaccio. La forma e' un segno nostro, il ritmo e' della rete.
         //
         // Se ne disegnano pochi e distinti, scorrendo dal fondo perche'
@@ -8196,11 +8267,11 @@
         if (!key) return;
         key.hidden = !(showLiveLightning || showLightning);
         if (showLiveLightning && showLightning) {
-          key.textContent = "● punto/età dalla rete · alone = densità 15 km / 90 s · AFA MTG invariata";
+          key.textContent = "● punto/età · flash nube stimato · attività 15 km / 90 s · AFA MTG";
         } else if (showLiveLightning) {
           key.textContent = "⚡ scarica rilevata · colore = età · anello = stazioni "
-            + "· alone = densità 15 km / 90 s · lampo e filamenti = segni grafici, "
-            + "non geometria misurata";
+            + "· flash nube stimato · attività 15 km / 90 s · lampo e filamenti "
+            + "= segni grafici, non geometria misurata";
         } else {
           key.textContent = "MTG LI · AFA osservata e pubblicata senza ricolorazione";
         }
@@ -8226,8 +8297,10 @@
             + Math.round(STRIKE_LIFE_MS / 1000) + " s"
           : "collegato · nessuna scarica nel dominio";
         label.title = "Posizione e tempo dalla rete a terra. Colore = età del dato; "
-          + "alone = densità con kernel 15 km e memoria 90 s. "
-          + "L'anello iniziale segnala l'arrivo del dato e non rappresenta il canale.";
+          + "chiarore = attività con kernel 15 km e memoria 90 s. Il flash "
+          + "parte sulle coordinate rilevate con risposta normalizzata: è una "
+          + "stima visiva, non energia misurata. L'anello non rappresenta il canale; "
+          + "i filamenti sono un segno grafico, non geometria misurata.";
         updateLightningPhysicsKey();
       }
 
@@ -9681,9 +9754,8 @@
             // suonerebbe mai.
             if (strikeSoundOn) ensureStrikeAudio();
             toast(
-              "Fulmini live · punti e tempi rilevati; alone = attività 15 km / 90 s. "
-              + "I filamenti e l'anello sono segni grafici: la rete non misura "
-              + "la forma del canale."
+              "Fulmini live · il flash accende le nubi sulle coordinate rilevate. "
+              + "Luce normalizzata: stima visiva, non energia misurata."
             );
           } else {
             blitzDisconnect();

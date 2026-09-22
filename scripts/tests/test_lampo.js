@@ -48,7 +48,7 @@ const codice = [
   + [
     'tempoScaricaMillis', 'supportoRete', 'stileEtaScarica',
     'aggregaAttivita', 'limiteSegni', 'luceDelColpo', 'tinteCella',
-    'cellaIlluminata'
+    'centroDelLampo', 'cellaIlluminata'
   ].map(implementazione).join('\n');
 
 // cellaIlluminata legge prefersReducedMotion: si costruisce il modulo due
@@ -57,7 +57,7 @@ function costruisci(motoRidotto) {
   return new Function('prefersReducedMotion', codice
     + '\nreturn {tempoScaricaMillis,supportoRete,stileEtaScarica,'
     + 'aggregaAttivita,limiteSegni,luceDelColpo,tinteCella,'
-    + 'cellaIlluminata};')(motoRidotto);
+    + 'centroDelLampo,cellaIlluminata};')(motoRidotto);
 }
 const modulo = costruisci(false);
 const moduloRidotto = costruisci(true);
@@ -89,13 +89,13 @@ function tappe(forza, sfondo, modulo_) {
 function cella(extra) {
   return Object.assign(
     { lat: 38, lon: 14, peso: 6, quante: 6, stazioni: 40,
-      ultima: 0, arrivi: [], vicine: 1 },
+      ultima: 0, arrivi: [], impulsi: [], vicine: 1 },
     extra || {}
   );
 }
 // `daArrivo` e' quanto tempo fa e' ARRIVATA l'ultima rilevazione: e' il
-// tempo su cui lampeggia il disegno. Si puo' passare un elenco, per i lampi
-// a piu' colpi di ritorno.
+// tempo su cui lampeggia il disegno. Si puo' passare un elenco, per una
+// sequenza di piu' rilevazioni.
 function luce(c, daArrivo, modulo_) {
   const frame = 1000000;
   const scarti = Array.isArray(daArrivo) ? daArrivo : [daArrivo];
@@ -146,12 +146,15 @@ prova('la geometria del canale e dichiarata un segno, non un dato', () => {
     assert.doesNotMatch(html, new RegExp('function ' + nome + '\\('),
       nome + ' ricostruisce ancora una grandezza non osservata');
   }
-  // E restano vietati i colpi di ritorno INVENTATI: quelli veri arrivano
-  // dalla rete, uno per rilevazione.
+  // E restano vietati impulsi inventati: la rete non classifica ogni
+  // rilevazione come colpo di ritorno e il renderer non deve farlo al suo
+  // posto.
   assert.doesNotMatch(html, /\.colpi\b/,
     'una scarica conserva ancora colpi sintetici');
   assert.doesNotMatch(implementazione('cellaIlluminata'), /Math\.random|semeCasuale/,
     'il ritmo del lampo viene sorteggiato invece che osservato');
+  assert.match(html, /non classifica in modo affidabile[\s\S]*colpo di ritorno/,
+    'il codice presenta ogni rilevazione come un colpo di ritorno certificato');
 });
 
 prova('la stessa scarica disegna sempre lo stesso ragno', () => {
@@ -190,7 +193,7 @@ prova('il ragno vive quanto il lampo e non un millisecondo di piu', () => {
   // Si accende con la stessa curva che illumina la nube: stesso dato,
   // stesso ritmo.
   assert.match(disegno, /luceDelColpo\(eta\)/,
-    'il ragno non segue la curva del colpo di ritorno');
+    'il ragno non segue la curva dellimpulso rilevato');
   assert.match(disegno, /prefersReducedMotion/,
     'il ragno lampeggia anche con il moto ridotto');
   // E il giro di disegno non lo chiama nemmeno, fuori dalla finestra.
@@ -276,7 +279,7 @@ prova('la taglia del ragno e in pixel, quella della densita in chilometri', () =
     'il ragno ha una taglia geografica: si leggerebbe come footprint');
   assert.match(implementazione('cellaIlluminata'), /STRIKE_ACTIVITY_RADIUS_KM/,
     'lalone di attivita ha perso la sua taglia geografica');
-  assert.match(html, /lampo e filamenti = segni grafici, /,
+  assert.match(html, /lampo e filamenti "\s*\n\s*\+ "= segni grafici/,
     'la legenda non dichiara che lampo e filamenti sono segni');
   assert.match(html, /non geometria misurata/,
     'la legenda non dice che la geometria non e misurata');
@@ -435,6 +438,10 @@ prova('linterfaccia distingue rete a terra e osservazione ottica', () => {
   assert.match(html, /Attività ottica · MTG LI/, 'manca il nome del dato satellitare');
   assert.match(html, /scarica rilevata · colore = età · anello = stazioni/,
     'manca la legenda compatta del live');
+  assert.match(html, /flash nube stimato/,
+    'la legenda compatta non dichiara che il flash e una stima');
+  assert.match(html, /stima visiva, non energia misurata/,
+    'linterfaccia presenta il flash stimato come una misura ottica');
 });
 
 // ---- LA CELLA CHE RESPIRA ------------------------------------------
@@ -463,7 +470,40 @@ prova('la cella conosce la scarica piu fresca e i vicini che le stanno addosso',
   assert.equal(lontana.vicine, 1, 'una cella isolata risulta affollata');
 });
 
-prova('il colpo di ritorno sale subito e si spegne entro la sua durata', () => {
+prova('il centro del flash usa le coordinate delle rilevazioni accese', () => {
+  const frame = 10_000;
+  const impulsi = [
+    { ricevuta: frame - 14, lat: 38.01, lon: 14.02 },
+    { ricevuta: frame - 70, lat: 38.07, lon: 14.08 },
+    // Spento: non deve trascinare il centro verso una scarica vecchia.
+    { ricevuta: frame - LAMPO - 1, lat: 40, lon: 16 }
+  ];
+  const centro = modulo.centroDelLampo(cella({ impulsi: impulsi }), frame);
+  const a = modulo.luceDelColpo(14);
+  const b = modulo.luceDelColpo(70);
+  assert.ok(centro, 'gli impulsi attivi non producono un centro');
+  assert.ok(Math.abs(centro.lat - (38.01 * a + 38.07 * b) / (a + b)) < 1e-12,
+    'la latitudine non e pesata dalla curva osservata');
+  assert.ok(Math.abs(centro.lon - (14.02 * a + 14.08 * b) / (a + b)) < 1e-12,
+    'la longitudine non e pesata dalla curva osservata');
+  assert.equal(modulo.centroDelLampo(
+    cella({ impulsi: [{ ricevuta: frame - LAMPO, lat: 38, lon: 14 }] }), frame
+  ), null, 'un impulso spento conserva un centro fantasma');
+  assert.equal(moduloRidotto.centroDelLampo(cella({ impulsi: impulsi }), frame), null,
+    'con moto ridotto resta un centro per un flash che non va disegnato');
+});
+
+prova('il renderer separa densita e flash localizzato', () => {
+  const disegno = implementazione('disegnaAttivita');
+  assert.match(disegno,
+    /projectParticle\(cella\.lon, cella\.lat, 0\)[\s\S]*?luce\.raggioFondo, luce\.forzaFondo/,
+    'il chiarore persistente non resta sul baricentro della cella');
+  assert.match(disegno,
+    /centroDelLampo\(cella, adessoFrame\)[\s\S]*?projectParticle\(centro\.lon, centro\.lat, 0\)[\s\S]*?luce\.raggioColpo, luce\.forzaColpo/,
+    'il flash resta sul centro medio invece che sulle coordinate rilevate');
+});
+
+prova('la risposta dellimpulso sale subito e si spegne entro la sua durata', () => {
   const salita = Number(costante('ATTIVITA_SALITA_MS').match(/= (.+);/)[1]);
   assert.equal(modulo.luceDelColpo(-1), 0, 'un colpo non ancora arrivato illumina');
   assert.equal(modulo.luceDelColpo(LAMPO), 0, 'il colpo non si spegne mai');
@@ -513,7 +553,7 @@ prova('il lampo si somma sui colpi e si spegne da solo', () => {
   const finito = luce(c, LAMPO + 1);
   assert.ok(uno.lampo > 0.4, 'un colpo solo non accende la cella');
   assert.ok(tre.lampo > uno.lampo,
-    'tre colpi di ritorno non fanno piu luce di uno');
+    'tre rilevazioni non fanno piu luce di una');
   assert.equal(finito.lampo, 0, 'il lampo non si spegne entro la sua durata');
   // Il lampo si distingue in DUE modi, e servono tutti e due: e' piu'
   // luminoso, e accende piu' nube. Il solo aumento di opacita' non
@@ -523,6 +563,27 @@ prova('il lampo si somma sui colpi e si spegne da solo', () => {
     'il lampo non si distingue dal chiarore di fondo');
   assert.ok(uno.raggio > finito.raggio * 1.25,
     'il lampo non accende piu nube del chiarore di fondo');
+});
+
+prova('il singolo flash non deduce energia dalla densita', () => {
+  const debole = luce(cella({ peso: 1, stazioni: 2 }), 14);
+  const forte = luce(cella({ peso: 20, stazioni: 40 }), 14);
+  assert.equal(debole.colpo, forte.colpo,
+    'la densita viene trasformata in falsa luminosita ottica');
+  assert.equal(debole.forzaColpo, forte.forzaColpo,
+    'il flash visualizzato cambia forza con la densita');
+  assert.equal(debole.raggioColpo, forte.raggioColpo,
+    'la densita viene trasformata in un falso footprint ottico');
+  assert.equal(
+    luce(cella({ peso: 1, vicine: 1 }), 14).forzaColpo,
+    luce(cella({ peso: 1, vicine: 30 }), 14).forzaColpo,
+    'il numero di celle vicine viene trasformato in falsa energia ottica'
+  );
+  const impl = implementazione('cellaIlluminata');
+  const colpo = impl.match(/const colpo = [^;]+;/);
+  assert.ok(colpo, 'manca la componente impulsiva');
+  assert.doesNotMatch(colpo[0], /intensita|stazioni|peso/,
+    'il flash usa una misura che non rappresenta energia ottica');
 });
 
 prova('il lampo batte sullARRIVO, non sullistante osservato', () => {
@@ -553,13 +614,15 @@ prova('i colpi tenuti sono pochi e sono i piu recenti', () => {
   assert.equal(celle.length, 1, 'le scariche non sono finite nella stessa cella');
   assert.equal(celle[0].arrivi.length, COLPI_MAX,
     'la lista dei colpi non ha un tetto');
+  assert.equal(celle[0].impulsi.length, COLPI_MAX,
+    'le coordinate degli impulsi non hanno lo stesso tetto dei tempi');
   assert.equal(Math.max.apply(null, celle[0].arrivi), 50_000,
     'il tetto ha buttato via il colpo piu recente');
   assert.ok(Math.min.apply(null, celle[0].arrivi) >= 50_000 - (COLPI_MAX - 1) * 10,
     'sono stati tenuti colpi vecchi al posto dei recenti');
 });
 
-prova('lunione delle celle vale quello che una cella sola voleva', () => {
+prova('lunione del campo di fondo vale quello che una cella sola voleva', () => {
   // E' la legge che regge tutto il campo. Le caselle sono da cinque
   // chilometri e l'alone da quindici: dentro un temporale ogni casella ne
   // ha nove o dieci addosso. Se ognuna disegnasse la forza che vuole,
@@ -572,20 +635,23 @@ prova('lunione delle celle vale quello che una cella sola voleva', () => {
   for (const vicine of [1, 2, 5, 10, 30]) {
     for (const peso of [1, 6, 20]) {
       const c = luce(cella({ peso: peso, vicine: vicine }), LAMPO + 1);
-      assert.ok(Math.abs(sovrapposte(c.forza, vicine) - c.unione) < 1e-9,
+      assert.ok(Math.abs(
+        sovrapposte(c.forzaFondo, vicine) - c.unioneFondo
+      ) < 1e-9,
         'quello che si vede con ' + vicine + ' celle non e quello dichiarato: '
-          + sovrapposte(c.forza, vicine).toFixed(4) + ' contro ' + c.unione.toFixed(4));
+          + sovrapposte(c.forzaFondo, vicine).toFixed(4)
+          + ' contro ' + c.unioneFondo.toFixed(4));
     }
   }
   // Un ammasso si vede PIU' di una cella sola, ma col logaritmo: dieci
   // caselle accese non fanno dieci volte la luce.
-  const sola = luce(cella({ vicine: 1 }), LAMPO + 1).unione;
-  const dieci = luce(cella({ vicine: 10 }), LAMPO + 1).unione;
+  const sola = luce(cella({ vicine: 1 }), LAMPO + 1).unioneFondo;
+  const dieci = luce(cella({ vicine: 10 }), LAMPO + 1).unioneFondo;
   assert.ok(dieci > sola * 1.5, 'un ammasso non si vede piu di una cella sola');
   assert.ok(dieci < sola * 3, 'la luce cresce quasi col numero delle caselle');
   // ...e la singola cella dentro l'ammasso disegna molto meno, o la somma
   // scapperebbe.
-  assert.ok(luce(cella({ vicine: 10 }), LAMPO + 1).forza < sola * 0.5,
+  assert.ok(luce(cella({ vicine: 10 }), LAMPO + 1).forzaFondo < sola * 0.5,
     'la cella dentro un ammasso non si fa da parte');
   // Il lampo resta ben distinguibile dal chiarore anche nel fitto: era il
   // difetto della taratura precedente, che divideva solo il chiarore.
