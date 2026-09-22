@@ -119,107 +119,49 @@ function prova(nome, fn) {
   }
 }
 
-prova('la geometria del canale e dichiarata un segno, non un dato', () => {
-  // La regola di prima vietava del tutto di disegnare la forma di un
-  // fulmine. Adesso la forma c'e', e la regola e' piu' stretta, non piu'
-  // larga: puo' esserci PURCHE' NON CODIFICHI NIENTE. Quello che resta
-  // vietato e' far dipendere la geometria da una grandezza misurata, che
-  // significherebbe affermare una relazione che nessuno ha misurato.
-  const generatore = implementazione('generaRagno')
-    + implementazione('generaCanale') + implementazione('semeDaScarica');
-  for (const grandezza of ['stazioni', 'supportoRete', 'peso', 'quante',
-                           'intensita', 'energia', 'corrente']) {
-    assert.doesNotMatch(generatore, new RegExp('\\b' + grandezza + '\\b'),
-      'la forma del canale dipende da ' + grandezza
-        + ': starebbe affermando una relazione non misurata');
+prova('il renderer non disegna nessuna geometria di canale', () => {
+  // I filamenti sono stati tolti per scelta del proprietario, non perche'
+  // fossero disonesti: erano un segno grafico dichiarato, con forma nostra
+  // e ritmo della rete. Qui si sorveglia che non tornino per sbaglio --
+  // mezzi rimasti in giro, o un generatore riacceso senza le sue regole.
+  // Se un giorno devono tornare, tornano con il loro commento e con le
+  // prove che li accompagnavano: questa riga si cancella apposta.
+  for (const nome of ['generaRagno', 'generaCanale', 'ragnoDellaScarica',
+                      'puntiFilamento', 'strokeSfumato', 'semeDaScarica']) {
+    assert.doesNotMatch(html, new RegExp('function ' + nome + '\\('),
+      nome + ' e rimasto in giro senza nessuna prova che lo sorvegli');
   }
-  // E niente casualita' vera: la forma viene dall'identita' della scarica.
-  assert.doesNotMatch(generatore, /Math\.random/,
-    'la forma del canale e casuale: cambierebbe a ogni fotogramma');
-  assert.match(implementazione('semeDaScarica'), /s\.lat|s\.lon|s\.at/,
-    'il seme non viene dalla scarica stessa');
-  assert.match(implementazione('ragnoDellaScarica'), /semeDaScarica/,
-    'il ragno non nasce dal seme della scarica');
+  assert.doesNotMatch(html, /\.ragno\b/,
+    'una scarica conserva ancora una geometria di canale');
 
   // Restano vietate le grandezze ottiche, che la rete a terra non ha.
   for (const nome of ['luceScarica', 'luceNube', 'luceBrace']) {
     assert.doesNotMatch(html, new RegExp('function ' + nome + '\\('),
       nome + ' ricostruisce ancora una grandezza non osservata');
   }
-  // E restano vietati impulsi inventati: la rete non classifica ogni
-  // rilevazione come colpo di ritorno e il renderer non deve farlo al suo
-  // posto.
+  // E restano vietati i colpi di ritorno INVENTATI: quelli veri arrivano
+  // dalla rete, uno per rilevazione.
   assert.doesNotMatch(html, /\.colpi\b/,
     'una scarica conserva ancora colpi sintetici');
-  assert.doesNotMatch(implementazione('cellaIlluminata'), /Math\.random|semeCasuale/,
+  assert.doesNotMatch(implementazione('cellaIlluminata'), /Math\.random/,
     'il ritmo del lampo viene sorteggiato invece che osservato');
-  assert.match(html, /non classifica in modo affidabile[\s\S]*colpo di ritorno/,
-    'il codice presenta ogni rilevazione come un colpo di ritorno certificato');
 });
 
-prova('la stessa scarica disegna sempre lo stesso ragno', () => {
-  // Non e' un dettaglio estetico: una forma che cambia a ogni fotogramma
-  // sfarfalla, e soprattutto suggerisce che stia raccontando qualcosa che
-  // varia. Non varia niente: e' un segno, e un segno sta fermo.
-  const fatto = new Function('s', implementazione('semeCasuale')
-    + implementazione('semeDaScarica') + implementazione('generaCanale')
-    + implementazione('generaRagno') + implementazione('ragnoDellaScarica')
-    + costante('RAGNO_LIVELLI')
-    + '\nreturn ragnoDellaScarica(s);');
-  const base = { lat: 38.12, lon: 14.37, at: 1700000000123, stazioni: 7 };
-  const uno = fatto(Object.assign({}, base));
-  const due = fatto(Object.assign({}, base));
-  assert.deepEqual(due, uno, 'la stessa scarica cambia forma');
-
-  // ...e una scarica diversa un ragno diverso, o sarebbero tutti uguali.
-  const altra = fatto(Object.assign({}, base, { lat: 38.44 }));
-  assert.notDeepEqual(altra, uno, 'scariche diverse disegnano lo stesso ragno');
-
-  // Il numero di stazioni non tocca la forma: e' la regola sopra, verificata
-  // eseguendo invece che leggendo.
-  const conPiuStazioni = fatto(Object.assign({}, base, { stazioni: 31 }));
-  assert.deepEqual(conPiuStazioni, uno,
-    'il numero di stazioni cambia la forma del canale');
-
-  // La cache sta sulla scarica: si genera una volta sola.
-  const s = Object.assign({}, base);
-  const primo = fatto(s);
-  assert.ok(s.ragno, 'il ragno non viene conservato sulla scarica');
-  assert.equal(fatto(s), primo, 'il ragno viene rigenerato a ogni chiamata');
-});
-
-prova('il ragno vive quanto il lampo e non un millisecondo di piu', () => {
-  const disegno = implementazione('disegnaRagno');
-  // Si accende con la stessa curva che illumina la nube: stesso dato,
-  // stesso ritmo.
-  assert.match(disegno, /luceDelColpo\(eta\)/,
-    'il ragno non segue la curva dellimpulso rilevato');
-  assert.match(disegno, /prefersReducedMotion/,
-    'il ragno lampeggia anche con il moto ridotto');
-  // E il giro di disegno non lo chiama nemmeno, fuori dalla finestra.
+prova('i lampi disegnati sono pochi e distinti', () => {
   const giro = implementazione('drawLiveStrikes');
-  assert.match(giro, /daArrivo >= ATTIVITA_LAMPO_MS\) continue;/,
-    'il giro di disegno prova a disegnare ragni gia spenti');
-  assert.match(giro, /adessoFrame - s\.ricevuta/,
-    'il ragno non e ancorato al tempo di arrivo');
-});
-
-prova('i ragni disegnati sono pochi e distinti', () => {
-  const giro = implementazione('drawLiveStrikes');
-  assert.match(giro, /ragniFatti\.length >= RAGNO_MAX/,
-    'non c e un tetto al numero di ragni per fotogramma');
-  assert.match(giro, /< separazioneRagni\)/,
-    'due ragni possono cadere uno sopra l altro');
-  assert.match(giro, /separazioneRagni = RAGNO_SEPARAZIONE_PX \* scala/,
-    'la distanza fra i ragni non scala con lo zoom');
-  const max = Number(costante('RAGNO_MAX').match(/= (.+);/)[1]);
-  assert.ok(max >= 3 && max <= 12,
-    'il tetto dei ragni e fuori scala: ' + max);
+  assert.match(giro, /lampiFatti\.length >= LAMPI_MAX/,
+    'non c e un tetto al numero di bagliori per fotogramma');
+  assert.match(giro, /< separazioneLampi\)/,
+    'due bagliori possono cadere uno sopra l altro');
+  assert.match(giro, /separazioneLampi = LAMPI_SEPARAZIONE_PX \* scala/,
+    'la distanza fra i bagliori non scala con lo zoom');
+  const max = Number(costante('LAMPI_MAX').match(/= (.+);/)[1]);
+  assert.ok(max >= 3 && max <= 12, 'il tetto dei bagliori e fuori scala: ' + max);
   // Il diradamento scorre dal fondo, dove stanno gli arrivi piu' recenti:
   // tenere i piu' vecchi mostrerebbe lampi gia' spenti al posto di quelli
   // che stanno accadendo.
-  assert.match(giro, /for \(let i = liveStrikes\.length - 1; i >= 0; i -= 1\) \{\n\s*if \(ragniFatti/,
-    'il diradamento dei ragni non parte dagli arrivi piu recenti');
+  assert.match(giro, /for \(let i = liveStrikes\.length - 1; i >= 0; i -= 1\) \{\n\s*if \(lampiFatti/,
+    'il diradamento dei bagliori non parte dagli arrivi piu recenti');
 });
 
 prova('il bagliore del lampo e luce, non una misura', () => {
@@ -255,34 +197,26 @@ prova('il glifo del fulmine resta unetichetta leggibile ovunque', () => {
   // il segno porta oltre a posizione ed eta'.
   assert.match(segno, /supportoRete\(scarica\.stazioni\)/,
     'il segno ha perso il supporto di rete');
-  // E deve avere il suo contorno scuro: sopra una sommita' bianca di
-  // giorno un simbolo chiaro sparirebbe.
-  assert.match(segno, /rgba\(3,11,17,/,
-    'il glifo non ha contorno: su fondo chiaro sparisce');
-  assert.match(segno, /drawBoltGlyph\([^)]*true\)[\s\S]*drawBoltGlyph\([^)]*false\)/,
-    'il contorno non viene disegnato prima del pieno');
+  // Il contrasto se lo porta dietro il segno: pastiglia piena del colore
+  // dell'eta', fulmine di inchiostro scuro dentro. Cosi' si legge sia sopra
+  // una sommita' bianca di giorno sia sopra il mare di notte, senza dipendere
+  // da quello che ha sotto.
+  assert.match(segno, /context\.arc\(punto\.x, punto\.y, raggioPastiglia[\s\S]*?drawBoltGlyph/,
+    'la pastiglia non viene disegnata prima del fulmine');
+  assert.match(segno, /fillStyle = "rgba\(" \+ rgb \+ ","[\s\S]*?arc\(punto\.x, punto\.y, raggioPastiglia/,
+    'la pastiglia non porta il colore delleta');
+  assert.match(segno, /fillStyle = "rgba\(9,16,26,[\s\S]*?drawBoltGlyph/,
+    'il fulmine non e di inchiostro scuro: su pastiglia chiara sparisce');
+  // E il simbolo deve essere grande abbastanza da vedersi senza cercarlo.
+  const taglia = segno.match(/clamp\(([0-9.]+) \+ \(map\.getZoom\(\) - 5\)/);
+  assert.ok(taglia && Number(taglia[1]) >= 9,
+    'il simbolo e troppo piccolo per leggersi a colpo docchio');
   // Il diradamento deve seguire la taglia del simbolo, o i glifi si
-  // incastrano: sono piu' alti del punto tondo che sostituiscono.
+  // incastrano.
   const giro = implementazione('drawLiveStrikes');
   const sep = giro.match(/const separazione = ([0-9.]+) \* scala;/);
-  assert.ok(sep && Number(sep[1]) >= 14,
+  assert.ok(sep && Number(sep[1]) >= 2 * Number(taglia[1]),
     'i segni possono incastrarsi uno nellaltro');
-});
-
-prova('la taglia del ragno e in pixel, quella della densita in chilometri', () => {
-  // E' la riga di confine fra il segno e il dato. Un ragno grande sullo
-  // schermo non vuol dire un fulmine grande sul territorio; l'alone di
-  // attivita' invece e' una grandezza geografica e resta in chilometri.
-  assert.match(implementazione('disegnaRagno'), /RAGNO_RAGGIO_PX/,
-    'il ragno non usa una taglia in pixel');
-  assert.doesNotMatch(implementazione('disegnaRagno'), /raggioKmInPixel|_KM\b/,
-    'il ragno ha una taglia geografica: si leggerebbe come footprint');
-  assert.match(implementazione('cellaIlluminata'), /STRIKE_ACTIVITY_RADIUS_KM/,
-    'lalone di attivita ha perso la sua taglia geografica');
-  assert.match(html, /lampo e filamenti "\s*\n\s*\+ "= segni grafici/,
-    'la legenda non dichiara che lampo e filamenti sono segni');
-  assert.match(html, /non geometria misurata/,
-    'la legenda non dice che la geometria non e misurata');
 });
 
 prova('il live conserva solo le misure disponibili e il tempo di arrivo UI', () => {
@@ -372,7 +306,10 @@ prova('lanello iniziale e dichiarato feedback di arrivo, non footprint', () => {
     'lanello non segue il momento di ricezione del dato');
   assert.doesNotMatch(ping, /footprint|energia|radiance/,
     'il feedback UI pretende di rappresentare una misura fisica');
-  assert.match(html, /non rappresenta il canale/,
+  // Singolare o plurale: da quando il bagliore ha raggiunto l'anello la
+  // frase li nomina tutti e due, ma quello che deve restare scritto e' che
+  // nessuno dei due rappresenta il canale.
+  assert.match(html, /non rappresentano? il canale/,
     'linterfaccia non dichiara il limite del feedback');
 });
 
@@ -440,6 +377,8 @@ prova('linterfaccia distingue rete a terra e osservazione ottica', () => {
     'manca la legenda compatta del live');
   assert.match(html, /flash nube stimato/,
     'la legenda compatta non dichiara che il flash e una stima');
+  assert.match(html, /il bagliore è un "\s*\n\s*\+ "segno grafico, non una misura ottica/,
+    'la legenda non dichiara che il bagliore e un segno');
   assert.match(html, /stima visiva, non energia misurata/,
     'linterfaccia presenta il flash stimato come una misura ottica');
 });
