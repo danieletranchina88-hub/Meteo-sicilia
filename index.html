@@ -6725,7 +6725,8 @@
           let cella = caselle.get(chiave);
           if (!cella) {
             cella = {
-              peso: 0, lat: 0, lon: 0, quante: 0, stazioni: 0, ultima: 0
+              peso: 0, lat: 0, lon: 0, quante: 0, stazioni: 0,
+              ultima: 0, arrivi: []
             };
             caselle.set(chiave, cella);
           }
@@ -6734,10 +6735,12 @@
           cella.lon += s.lon * peso;
           cella.quante += 1;
           cella.stazioni += s.stazioni || 0;
-          // L'istante della scarica piu' fresca della cella: e' quello che
-          // fa battere il respiro. Non e' una grandezza nuova, e' il dato
-          // che la rete manda gia' con ogni rilevazione.
+          // L'istante della scarica piu' fresca della cella, osservato.
           if (s.at > cella.ultima) cella.ultima = s.at;
+          // E l'istante in cui ogni rilevazione e' ARRIVATA: e' quello che
+          // fa lampeggiare. Non e' una grandezza nuova -- e' lo stesso
+          // tempo che l'anello di arrivo usa gia'.
+          if (Number.isFinite(s.ricevuta)) cella.arrivi.push(s.ricevuta);
         }
         const nuclei = [];
         caselle.forEach(function (cella) {
@@ -6747,8 +6750,19 @@
             peso: cella.peso,
             quante: cella.quante,
             stazioni: cella.stazioni,
-            ultima: cella.ultima
+            ultima: cella.ultima,
+            arrivi: cella.arrivi
           });
+        });
+        caselle.forEach(function (cella) {
+          // Solo gli arrivi piu' recenti: un lampo dura un quarto di
+          // secondo, e tenere una lista lunga quanto la vita di una scarica
+          // vorrebbe dire scorrere centocinquanta secondi di storia a ogni
+          // fotogramma per niente.
+          if (cella.arrivi.length > ATTIVITA_COLPI_MAX) {
+            cella.arrivi.sort(function (a, b) { return b - a; });
+            cella.arrivi.length = ATTIVITA_COLPI_MAX;
+          }
         });
         nuclei.sort(function (a, b) { return b.peso - a.peso; });
         const scelte = nuclei.slice(0, STRIKE_ACTIVITY_MAX);
@@ -6812,6 +6826,9 @@
       // Costa una volta per fotogramma satellitare, cioe' ogni cinque o
       // dieci minuti, non a ogni lampo.
       const MASCHERA_LATO = 512;
+      // La griglia grossolana della luminanza: solo per scegliere fra la
+      // tavolozza del giorno e quella della notte.
+      const CHIARORE_LATO = 64;
       let mascheraNube = null;
 
       function costruisciMascheraNube(sorgente, box, product) {
@@ -6963,8 +6980,37 @@
             px[i + 3] = Math.round(255 * nuvolosita);
           }
           pc.putImageData(dati, 0, 0);
+          // La luminanza si tiene da parte: serve al lampo per sapere se
+          // sotto quella cella e' giorno o notte, ed e' gia' calcolata --
+          // e' lo stesso numero con cui si e' deciso dov'e' nube.
+          //
+          // Ma GROSSOLANA. Serve a scegliere fra due tavolozze, non a
+          // disegnare: una griglia da una sessantina di caselle per lato
+          // basta e avanza, ed e' gia' la media su un'area grande come una
+          // cella temporalesca. Alla risoluzione della maschera sarebbero
+          // stati duecento kilobyte per fotogramma, e i fotogrammi in cache
+          // sono settantadue: qui sono tre.
+          const passo = Math.max(1, Math.ceil(Math.max(mw, mh) / CHIARORE_LATO));
+          const cw = Math.ceil(mw / passo), ch = Math.ceil(mh / passo);
+          const chiarore = new Uint8Array(cw * ch);
+          for (let cy = 0; cy < ch; cy += 1) {
+            for (let cx = 0; cx < cw; cx += 1) {
+              let somma = 0, contati = 0;
+              const y1 = Math.min(mh, (cy + 1) * passo);
+              const x1 = Math.min(mw, (cx + 1) * passo);
+              for (let y = cy * passo; y < y1; y += 1) {
+                for (let x = cx * passo; x < x1; x += 1) {
+                  somma += luminanze[y * mw + x];
+                  contati += 1;
+                }
+              }
+              chiarore[cy * cw + cx] = contati
+                ? Math.round(clamp(somma / contati, 0, 1) * 255) : 0;
+            }
+          }
           return { tela: piccola, west: box.west, east: box.east,
-                   south: box.south, north: box.north, layer: product.layer };
+                   south: box.south, north: box.north, layer: product.layer,
+                   chiarore: chiarore, larghezza: cw, altezza: ch };
         } catch (error) {
           // Canvas "sporca" o memoria insufficiente: si ripiega sul disco
           // morbido, che e' meno bello ma non e' un guasto.
@@ -7009,46 +7055,194 @@
       // nella fascia intermedia. E' il contrario di quello che verrebbe da
       // disegnare, ed e' l'unica ragione per cui vale la pena misurare una
       // foto invece di scegliere i colori a mano.
-      const ATTIVITA_RESPIRO_MS = 620;
+      // ---- IL LAMPO ----------------------------------------------------
+      //
+      // Un fulmine non e' un'accensione morbida: e' una sequenza di COLPI DI
+      // RITORNO. Un lampo naturale ne ha in media tre o quattro, separati da
+      // qualche decina di millisecondi, e visto dall'alto attraverso la nube
+      // ognuno dura un battito -- la luce diretta si spegne in un
+      // millisecondo, ma la corrente di coda e la diffusione nel ghiaccio la
+      // allungano a un paio di decimi di secondo. E' per questo che un
+      // temporale visto da un aereo non pulsa: sfarfalla.
+      //
+      // Lo sfarfallio non viene inventato qui. La rete a terra rileva le
+      // SINGOLE scariche, e i colpi di uno stesso lampo arrivano come
+      // rilevazioni distinte a pochi millisecondi l'una dall'altra: basta
+      // sommare la curva di spegnimento di ognuna, una per rilevazione, e il
+      // ritmo che si vede e' quello del temporale.
+      //
+      // Il tempo usato e' quello di ARRIVO, non quello osservato. La rete
+      // pubblica una scarica con qualche secondo di ritardo, e un lampo
+      // disegnato nel passato e' un lampo che nessuno vede; e' la stessa
+      // scelta, per la stessa ragione, gia' fatta per l'anello di arrivo.
+      // L'istante osservato resta quello che decide eta', colore e densita'.
+      const ATTIVITA_LAMPO_MS = 260;
+      const ATTIVITA_SALITA_MS = 14;
+      // I due tempi di spegnimento di un colpo: il colpo di ritorno vero e
+      // proprio, che se ne va in qualche decina di millisecondi, e la
+      // corrente di coda, molto piu' debole e molto piu' lunga.
+      const ATTIVITA_PICCO_MS = 26;
+      const ATTIVITA_CODA_MS = 110;
+      const ATTIVITA_CODA_PESO = 0.22;
+      const ATTIVITA_COLPI_MAX = 6;
       let telaAttivita = null;
 
-      function tinteCella(g, forza) {
-        const a = forza;
-        g.addColorStop(0, "rgba(253,250,255," + (0.98 * a).toFixed(3) + ")");
-        g.addColorStop(0.16, "rgba(250,236,255," + (0.72 * a).toFixed(3) + ")");
-        g.addColorStop(0.36, "rgba(238,214,248," + (0.42 * a).toFixed(3) + ")");
-        g.addColorStop(0.58, "rgba(208,182,208," + (0.2 * a).toFixed(3) + ")");
-        g.addColorStop(0.8, "rgba(178,154,174," + (0.07 * a).toFixed(3) + ")");
-        g.addColorStop(1, "rgba(162,140,156,0)");
+      function luceDelColpo(eta) {
+        if (!(eta >= 0) || eta >= ATTIVITA_LAMPO_MS) return 0;
+        // La salita e' quasi istantanea davvero: quattordici millisecondi
+        // sono meno di un fotogramma, e servono solo a non far comparire il
+        // lampo di scatto su schermi piu' veloci.
+        const salita = Math.min(1, eta / ATTIVITA_SALITA_MS);
+        const t = Math.max(0, eta - ATTIVITA_SALITA_MS);
+        const durata = ATTIVITA_LAMPO_MS - ATTIVITA_SALITA_MS;
+        // DUE tempi, ed e' questo che fa sfarfallare invece che gonfiare.
+        // Con un solo spegnimento lungo, tre colpi a quaranta millisecondi
+        // l'uno dall'altro si sommavano in un'unica onda morbida -- visto e
+        // misurato. Con il picco corto, fra un colpo e l'altro la luce
+        // scende davvero, e si vede il battito.
+        const picco = Math.exp(-t / ATTIVITA_PICCO_MS);
+        const coda = ATTIVITA_CODA_PESO * Math.exp(-t / ATTIVITA_CODA_MS);
+        // L'ultimo fattore porta la curva a zero esatto alla fine: una coda
+        // che si ferma a un filo lascerebbe la cella accesa per sempre.
+        return salita * (picco + coda) * (1 - t / durata)
+          / (1 + ATTIVITA_CODA_PESO);
+      }
+
+      // ---- DUE TAVOLOZZE, UNA TINTA ------------------------------------
+      //
+      // Di notte la nube e' scura e un lampo si legge come luce: quasi
+      // bianca nel cuore, lavanda nelle code. Di giorno no. La sommita' e'
+      // gia' chiara di sole, e schiarirla ancora un po' non si vede: e' il
+      // motivo per cui i sensori ottici di fulmini lavorano in banda
+      // stretta, non un difetto del disegno.
+      //
+      // Quello che una sommita' illuminata lascia ancora vedere e' la
+      // TINTA. Quindi di giorno lo stesso colore si prende piu' profondo e
+      // piu' saturo: non piu' luce che si somma, ma velo che tinge. Stessa
+      // famiglia di tinta -- il viola-lavanda misurato dalla fotografia --
+      // portato dove il chiaro del sole lo lascia leggere.
+      //
+      // Quanto serva e' misurato, sulla stessa scena e sullo stesso
+      // fotogramma, cambiando SOLO quale tavolozza si usa:
+      //
+      //                          scena diurna      scena notturna
+      //   due tavolozze          dE 25,1           dE 18,1
+      //   solo quella notturna   dE  7,6           dE 18,4
+      //
+      // dE e' la differenza in CIELAB, dove una unita' e' grossomodo una
+      // differenza appena percepibile: di giorno la cella passa da "si
+      // intuisce" a "si vede", di notte non cambia niente perche' li' la
+      // tavolozza notturna resta quella che si usa.
+      //
+      // La distanza in RGB, che e' quella che verrebbe da misurare, qui
+      // avrebbe detto il contrario (26,7 contro 32,3, quasi pari): su uno
+      // sfondo chiaro una luce quasi bianca si muove tutta lungo un asse
+      // che l'occhio ha gia' saturato, e la distanza euclidea in RGB la
+      // conta per intero lo stesso.
+      //
+      // Quale delle due si usa non e' una scelta globale: si guarda quanto
+      // e' chiara la fotografia SOTTO QUELLA CELLA. Sul terminatore, con
+      // meta' schermo di giorno e meta' di notte, ogni temporale prende la
+      // tavolozza del posto in cui sta.
+      const TINTE_NOTTE = [
+        [0,    253, 250, 255, 0.98],
+        [0.16, 250, 236, 255, 0.72],
+        [0.36, 238, 214, 248, 0.42],
+        [0.58, 208, 182, 208, 0.20],
+        [0.8,  178, 154, 174, 0.07],
+        [1,    162, 140, 156, 0]
+      ];
+      // I valori del giorno sono tarati misurando, non a occhio: su una
+      // sommita' bianca la differenza che si vede vale alfa per la distanza
+      // fra il colore e il bianco. Con un cuore appena tinto -- 232,208,255
+      // -- usciva una differenza RGB di 48 contro i 199 della notte, cioe'
+      // un lampo che di giorno non c'era. Portando il cuore a 214,170,255 e
+      // le code a corrispondere, la differenza sale a 88 nel cuore e 91
+      // nella fascia media.
+      // La coda si spegne anche piu' in fretta della notte. Di notte un
+      // alone largo e tenue e' luce diffusa nella nube e ci sta; di giorno
+      // e' un velo viola steso su mezzo mare -- a opacita' 0,12 su una
+      // sommita' bianca sono ancora 29 di differenza RGB, sparsi su un'area
+      // enorme. Il lampo di giorno deve essere concentrato.
+      const TINTE_GIORNO = [
+        [0,    214, 170, 255, 0.94],
+        [0.16, 198, 146, 250, 0.78],
+        [0.36, 176, 120, 238, 0.50],
+        [0.58, 146,  94, 200, 0.22],
+        [0.8,  120,  80, 158, 0.05],
+        [1,    106,  72, 138, 0]
+      ];
+      // Sotto questa luminanza di sfondo si e' di notte, sopra di giorno. I
+      // due numeri vengono dalle scene vere: una notte di GeoColour misura
+      // 0,39 sotto la luce, un giorno 0,74.
+      const SFONDO_NOTTE = 0.38;
+      const SFONDO_GIORNO = 0.72;
+
+      function tinteCella(g, forza, sfondo) {
+        const giorno = clamp(
+          ((sfondo || 0) - SFONDO_NOTTE) / (SFONDO_GIORNO - SFONDO_NOTTE), 0, 1
+        );
+        for (let i = 0; i < TINTE_NOTTE.length; i += 1) {
+          const n = TINTE_NOTTE[i], d = TINTE_GIORNO[i];
+          const r = Math.round(n[1] + (d[1] - n[1]) * giorno);
+          const v = Math.round(n[2] + (d[2] - n[2]) * giorno);
+          const b = Math.round(n[3] + (d[3] - n[3]) * giorno);
+          const a = (n[4] + (d[4] - n[4]) * giorno) * forza;
+          g.addColorStop(n[0], "rgba(" + r + "," + v + "," + b + ","
+            + a.toFixed(3) + ")");
+        }
+      }
+
+      // Quanto e' chiara la fotografia sotto una cella. Si legge dalla
+      // griglia grossolana che la maschera si e' gia' tenuta da parte: una
+      // casella e' gia' la media su un'area grande come un temporale,
+      // quindi basta leggerne una. Fuori dal riquadro satellitare vale
+      // zero, cioe' notte: li' sotto non c'e' fotografia, c'e' la mappa
+      // scura di base, ed e' proprio un fondo scuro.
+      function sfondoSottoCella(lon, lat) {
+        const m = mascheraNube;
+        if (!m || !m.chiarore) return 0;
+        const fx = (lon - m.west) / (m.east - m.west);
+        const fy = (m.north - lat) / (m.north - m.south);
+        if (!(fx >= 0 && fx <= 1) || !(fy >= 0 && fy <= 1)) return 0;
+        const cx = Math.min(m.larghezza - 1, Math.floor(fx * m.larghezza));
+        const cy = Math.min(m.altezza - 1, Math.floor(fy * m.altezza));
+        return m.chiarore[cy * m.larghezza + cx] / 255;
       }
 
       // Da cella a disegno: intensita' dal peso, respiro dall'ultima
       // scarica, raggio dai chilometri del kernel. Separata dal disegno
       // perche' e' l'unica parte con dentro delle scelte, e va poter essere
       // verificata senza una mappa e senza una canvas.
-      function cellaIlluminata(cella, adessoEpoca, raggioPixel) {
+      function cellaIlluminata(cella, adessoFrame, raggioPixel) {
         const intensita = clamp(Math.log1p(cella.peso) / Math.log(28), 0, 1);
-        const dallUltima = adessoEpoca - (cella.ultima || 0);
-        // Il colpo: ogni scarica nuova accende la cella e si spegne in meno
-        // di un secondo. L'esponente maggiore di uno fa salire subito e
-        // scendere piano, che e' come si comporta la luce diffusa da una
-        // nube, non il canale.
-        const respiro = !prefersReducedMotion
-          && dallUltima >= 0 && dallUltima < ATTIVITA_RESPIRO_MS
-          ? Math.pow(1 - dallUltima / ATTIVITA_RESPIRO_MS, 2.6)
-          : 0;
-        // Fra un colpo e l'altro la cella NON oscilla. C'era un respiro
-        // lento, sinusoidale, e va detto perche' e' stato tolto: primo,
-        // era l'unico movimento non osservato del disegno -- il resto viene
-        // tutto dalla rete; secondo, non si sarebbe nemmeno visto come un
-        // respiro. Fra un arrivo e l'altro il renderer ridisegna una volta
-        // al secondo per non consumare batteria (animateStrikes), e una
-        // sinusoide da nove secondi campionata nove volte non respira:
-        // scatta.
+        // Il lampo: una curva di spegnimento per ogni rilevazione arrivata
+        // di recente, sommate. Due colpi a cinquanta millisecondi l'uno
+        // dall'altro danno due battiti, non un'accensione lunga il doppio:
+        // e' lo sfarfallio, ed e' tutto dato osservato.
         //
-        // Il respiro vero ce l'ha gia' il temporale: e' la sequenza delle
-        // sue scariche. Una cella attiva ne riceve una ogni pochi secondi e
-        // pulsa a ognuna; una cella che si spegne resta ferma, che e'
+        // Il tetto e' sopra l'unita' apposta: un lampo con tre colpi
+        // sovrapposti deve poter essere piu' forte di uno con un colpo
+        // solo. Lo limita poi la forza complessiva.
+        let lampo = 0;
+        const arrivi = cella.arrivi;
+        if (!prefersReducedMotion && arrivi) {
+          for (let i = 0; i < arrivi.length; i += 1) {
+            lampo += luceDelColpo(adessoFrame - arrivi[i]);
+          }
+          lampo = clamp(lampo, 0, 1.6);
+        }
+        // Fra un lampo e l'altro la cella NON oscilla. C'era un respiro
+        // lento, sinusoidale, e va detto perche' e' stato tolto: primo, era
+        // l'unico movimento non osservato del disegno -- il resto viene
+        // tutto dalla rete; secondo, non si sarebbe nemmeno visto. Fra un
+        // arrivo e l'altro il renderer ridisegna una volta al secondo per
+        // non consumare batteria (animateStrikes), e una sinusoide da nove
+        // secondi campionata nove volte non respira: scatta.
+        //
+        // Il ritmo vero ce l'ha gia' il temporale: e' la sequenza delle sue
+        // scariche. Una cella attiva ne riceve una ogni pochi secondi e
+        // lampeggia a ognuna; una cella che si spegne resta ferma, che e'
         // esattamente quello che sta facendo.
 
         // La luce di fondo si divide fra le celle che condividono l'alone,
@@ -7064,15 +7258,15 @@
         // piu' attivi, cioe' dove serve -- misurato, un terzo della luce.
         const condivisione = 1 / Math.sqrt(Math.max(1, cella.vicine || 1));
         const fondo = (0.08 + 0.62 * intensita) * condivisione;
-        const colpo = 1.05 * respiro * (0.4 + 0.6 * intensita);
+        const colpo = 0.9 * lampo * (0.45 + 0.55 * intensita);
         const forza = clamp(fondo + colpo, 0, 1);
         // Piu' e' attiva, piu' nube illumina: il raggio cresce con
-        // l'attivita' e si allarga di un soffio sul colpo.
+        // l'attivita' e si allarga di un soffio sul lampo.
         const raggio = raggioPixel(
           STRIKE_ACTIVITY_RADIUS_KM
-            * (0.75 + 0.85 * intensita + 0.3 * respiro)
+            * (0.75 + 0.85 * intensita + 0.3 * Math.min(1, lampo))
         );
-        return { intensita: intensita, respiro: respiro, forza: forza, raggio: raggio };
+        return { intensita: intensita, lampo: lampo, forza: forza, raggio: raggio };
       }
 
       function disegnaAttivita(context, adessoEpoca, adessoFrame) {
@@ -7090,7 +7284,7 @@
           const punto = projectParticle(cella.lon, cella.lat, 0);
           if (!punto) continue;
           const luce = cellaIlluminata(
-            cella, adessoEpoca,
+            cella, adessoFrame,
             function (km) { return raggioKmInPixel(cella.lon, cella.lat, km); }
           );
           if (luce.forza < 0.03) continue;
@@ -7102,7 +7296,8 @@
               || punto.x > larghezza + luce.raggio
               || punto.y > altezza + luce.raggio) continue;
           accese.push({ x: punto.x, y: punto.y, raggio: luce.raggio,
-                        forza: luce.forza });
+                        forza: luce.forza,
+                        sfondo: sfondoSottoCella(cella.lon, cella.lat) });
         }
         if (!accese.length) return;
 
@@ -7111,7 +7306,7 @@
           const g = ctx.createRadialGradient(
             cella.x, cella.y, 0, cella.x, cella.y, raggio
           );
-          tinteCella(g, cella.forza * fattore);
+          tinteCella(g, cella.forza * fattore, cella.sfondo);
           ctx.fillStyle = g;
           ctx.beginPath();
           ctx.arc(cella.x, cella.y, raggio, 0, Math.PI * 2);
@@ -7123,13 +7318,17 @@
         // -- resta il chiarore tondo. Meno bello, ma mai sbagliato. Va pero'
         // tenuto piu' stretto: un cerchio largo che non sa dove sia la nube
         // e' la macchia che copre tutto.
+        // Le celle si sovrappongono, non si sommano. Sommarle andava bene
+        // finche' la tavolozza era quasi bianca e lo sfondo nero: due
+        // bagliori addosso facevano piu' luce, come nella realta'. Con la
+        // tavolozza diurna no -- due veli viola sommati diventano bianchi,
+        // cioe' proprio il colore su cui non si vedono. Sovrapponendo,
+        // invece, la tinta resta quella anche dove le celle si accavallano,
+        // e la densita' la racconta gia' il chiarore di fondo.
         const soloTondo = function () {
-          context.save();
-          context.globalCompositeOperation = "lighter";
           for (let i = 0; i < accese.length; i += 1) {
             tondo(context, accese[i], 1, 0.62);
           }
-          context.restore();
         };
         const inclinata = map.getPitch && map.getPitch() > 4;
         if (!mascheraNube || inclinata || !showSatelliteClouds) {
@@ -7214,7 +7413,6 @@
           // azzererebbe tutta la canvas invece del solo temporale, e
           // costerebbe come se lo schermo intero fosse illuminato.
           context.clip();
-          context.globalCompositeOperation = "lighter";
           for (let i = 0; i < accese.length; i += 1) {
             tondo(context, accese[i], 1, 1);
           }
@@ -7242,14 +7440,13 @@
           const destLargo = telaAttivita.width / qualita;
           const destAlto = telaAttivita.height / qualita;
           tc.clearRect(minX, minY, destLargo, destAlto);
-          tc.globalCompositeOperation = "lighter";
           for (let i = 0; i < accese.length; i += 1) {
             tondo(tc, accese[i], 1, 1);
           }
           ritaglia(tc, minX, minY, destLargo, destAlto);
-          // Sovrapposizione semplice, non additiva: sotto c'e' solo la
-          // mappa, e sommare una tela ridisegnata a ogni fotogramma costa
-          // -- misurato, 2,3 ms contro 0,01.
+          // Sovrapposizione semplice anche qui, e non solo per coerenza:
+          // sommare una tela ridisegnata a ogni fotogramma costa --
+          // misurato, 2,3 ms contro 0,01.
           context.drawImage(telaAttivita,
             0, 0, telaAttivita.width, telaAttivita.height,
             minX, minY, destLargo, destAlto);
@@ -7263,6 +7460,10 @@
         // bordi del riquadro satellitare, dove la maschera semplicemente
         // non arriva. Resta un quinto della luce piena: deve garantire, non
         // competere.
+        //
+        // Questa passata SI somma, ed e' l'unica: deve aggiungersi a quello
+        // che il ritaglio ha gia' lasciato, non sostituirlo con un disco
+        // liscio -- sarebbe cancellare proprio la forma della nube.
         context.save();
         context.globalCompositeOperation = "lighter";
         for (let i = 0; i < accese.length; i += 1) {

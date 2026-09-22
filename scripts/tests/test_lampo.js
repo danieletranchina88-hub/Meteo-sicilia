@@ -27,16 +27,28 @@ function costante(nome) {
   return 'const ' + nome + ' = ' + trovata[1].trim() + ';';
 }
 
+function tabella(nome) {
+  const trovata = html.match(
+    new RegExp('const ' + nome + ' = \\[[\\s\\S]*?\\n      \\];')
+  );
+  assert.ok(trovata, 'manca la tabella ' + nome);
+  return trovata[0];
+}
+
 const codice = [
   'STRIKE_LIFE_MS', 'STRIKE_MAX', 'STRIKE_PING_MS',
   'STRIKE_ACTIVITY_TAU_MS', 'STRIKE_ACTIVITY_RADIUS_KM',
   'STRIKE_CELL_LAT', 'STRIKE_CELL_LON', 'STRIKE_ACTIVITY_MAX',
-  'ATTIVITA_RESPIRO_MS'
+  'ATTIVITA_LAMPO_MS', 'ATTIVITA_SALITA_MS', 'ATTIVITA_PICCO_MS',
+  'ATTIVITA_CODA_MS', 'ATTIVITA_CODA_PESO', 'ATTIVITA_COLPI_MAX',
+  'SFONDO_NOTTE', 'SFONDO_GIORNO', 'CHIARORE_LATO'
 ].map(costante).join('\n')
+  + '\n' + tabella('TINTE_NOTTE') + '\n' + tabella('TINTE_GIORNO')
   + '\nconst clamp = (v, a, b) => Math.max(a, Math.min(b, v));\n'
   + [
     'tempoScaricaMillis', 'supportoRete', 'stileEtaScarica',
-    'aggregaAttivita', 'limiteSegni', 'tinteCella', 'cellaIlluminata'
+    'aggregaAttivita', 'limiteSegni', 'luceDelColpo', 'tinteCella',
+    'cellaIlluminata'
   ].map(implementazione).join('\n');
 
 // cellaIlluminata legge prefersReducedMotion: si costruisce il modulo due
@@ -44,19 +56,21 @@ const codice = [
 function costruisci(motoRidotto) {
   return new Function('prefersReducedMotion', codice
     + '\nreturn {tempoScaricaMillis,supportoRete,stileEtaScarica,'
-    + 'aggregaAttivita,limiteSegni,tinteCella,cellaIlluminata};')(motoRidotto);
+    + 'aggregaAttivita,limiteSegni,luceDelColpo,tinteCella,'
+    + 'cellaIlluminata};')(motoRidotto);
 }
 const modulo = costruisci(false);
 const moduloRidotto = costruisci(true);
 
-const RESPIRO = Number(costante('ATTIVITA_RESPIRO_MS').match(/= (.+);/)[1]);
+const LAMPO = Number(costante('ATTIVITA_LAMPO_MS').match(/= (.+);/)[1]);
+const COLPI_MAX = Number(costante('ATTIVITA_COLPI_MAX').match(/= (.+);/)[1]);
 const RAGGIO_KM = Number(
   costante('STRIKE_ACTIVITY_RADIUS_KM').match(/= (.+);/)[1]
 );
 
 // Un raccoglitore di tappe: tinteCella parla a un oggetto gradiente, non a
 // un numero, quindi per guardarci dentro basta fingere l'oggetto.
-function tappe(forza, modulo_) {
+function tappe(forza, sfondo, modulo_) {
   const lette = [];
   (modulo_ || modulo).tinteCella({
     addColorStop: function (posizione, colore) {
@@ -67,22 +81,27 @@ function tappe(forza, modulo_) {
       lette.push({ posizione: posizione, r: +m[1], g: +m[2], b: +m[3],
                    alfa: +m[4] });
     }
-  }, forza);
+  }, forza, sfondo || 0);
   return lette;
 }
 
 // Una cella pronta da dare a cellaIlluminata, con i valori di comodo.
 function cella(extra) {
   return Object.assign(
-    { lat: 38, lon: 14, peso: 6, quante: 6, stazioni: 40, ultima: 0, vicine: 1 },
+    { lat: 38, lon: 14, peso: 6, quante: 6, stazioni: 40,
+      ultima: 0, arrivi: [], vicine: 1 },
     extra || {}
   );
 }
-function luce(c, dallUltima, modulo_) {
-  const adesso = 1000000;
+// `daArrivo` e' quanto tempo fa e' ARRIVATA l'ultima rilevazione: e' il
+// tempo su cui lampeggia il disegno. Si puo' passare un elenco, per i lampi
+// a piu' colpi di ritorno.
+function luce(c, daArrivo, modulo_) {
+  const frame = 1000000;
+  const scarti = Array.isArray(daArrivo) ? daArrivo : [daArrivo];
   return (modulo_ || modulo).cellaIlluminata(
-    Object.assign({}, c, { ultima: adesso - dallUltima }),
-    adesso,
+    Object.assign({}, c, { arrivi: scarti.map(function (d) { return frame - d; }) }),
+    frame,
     function (km) { return km; }
   );
 }
@@ -177,8 +196,8 @@ prova('la densita usa tempo osservato, decadimento esponenziale e kernel fisso',
   // scarica piu' fresca che la rete ha mandato. Quello che resta vietato e'
   // inventare luce con un ritmo proprio, quindi l'unica oscillazione non
   // osservata deve essere una modulazione limitata, non un lampo.
-  assert.match(implementazione('cellaIlluminata'), /cella\.ultima/,
-    'il battito non viene dallistante della scarica osservata');
+  assert.match(implementazione('cellaIlluminata'), /cella\.arrivi/,
+    'il battito non viene dalle rilevazioni della rete');
 });
 
 prova('la densita ha un limite di memoria e di costo', () => {
@@ -286,25 +305,102 @@ prova('la cella conosce la scarica piu fresca e i vicini che le stanno addosso',
   assert.ok(prima, 'la cella piu attiva non e stata aggregata');
   assert.equal(prima.ultima, adesso - 400,
     'la cella non registra listante della scarica piu fresca');
+  assert.deepEqual(prima.arrivi.slice().sort(), [],
+    'una scarica senza tempo di arrivo entra comunque fra i colpi');
   assert.equal(prima.vicine, 2,
     'il conteggio dei vicini non usa il raggio del kernel');
   const lontana = celle.find((c) => c.lat < 37);
   assert.equal(lontana.vicine, 1, 'una cella isolata risulta affollata');
 });
 
-prova('il respiro batte sulla scarica e si spegne da solo', () => {
+prova('il colpo di ritorno sale subito e si spegne entro la sua durata', () => {
+  const salita = Number(costante('ATTIVITA_SALITA_MS').match(/= (.+);/)[1]);
+  assert.equal(modulo.luceDelColpo(-1), 0, 'un colpo non ancora arrivato illumina');
+  assert.equal(modulo.luceDelColpo(LAMPO), 0, 'il colpo non si spegne mai');
+  assert.equal(modulo.luceDelColpo(LAMPO + 500), 0, 'il colpo rinasce dopo la fine');
+  assert.ok(modulo.luceDelColpo(salita) > 0.97, 'il colpo non arriva a piena luce');
+  assert.ok(modulo.luceDelColpo(salita / 2) < 0.6, 'il colpo non ha salita');
+  // Decrescente da quando ha toccato il massimo.
+  let precedente = Infinity;
+  for (let t = salita; t <= LAMPO; t += 4) {
+    const v = modulo.luceDelColpo(t);
+    assert.ok(v <= precedente + 1e-12, 'il colpo risale dopo il massimo, a ' + t);
+    precedente = v;
+  }
+});
+
+prova('un colpo ha due tempi: e quello che lo fa sfarfallare', () => {
+  // Un solo tempo di spegnimento non basta. Con una curva sola, tre colpi di
+  // ritorno a quaranta millisecondi l'uno dall'altro -- la spaziatura vera
+  // di un lampo -- si sommano in un'unica onda che si gonfia e cala: visto
+  // e misurato. Con il picco corto piu' la corrente di coda, fra un colpo e
+  // l'altro la luce scende davvero e si vede il battito.
+  const picco = Number(costante('ATTIVITA_PICCO_MS').match(/= (.+);/)[1]);
+  const coda = Number(costante('ATTIVITA_CODA_MS').match(/= (.+);/)[1]);
+  assert.ok(coda > picco * 3, 'i due tempi di spegnimento non sono distinti');
+  // Il picco e' gia' sceso sotto la meta' quando arriva il colpo dopo...
+  assert.ok(modulo.luceDelColpo(40) < 0.45,
+    'il colpo e ancora alto quando ne arriva un altro: si sommano in unonda');
+  // ...ma a tempi lunghi resta molto piu' luce di quanta ne lascerebbe il
+  // solo picco: quella e' la corrente di coda, ed e' il secondo tempo.
+  assert.ok(modulo.luceDelColpo(150) > 5 * Math.exp(-150 / picco),
+    'a tempi lunghi non resta coda: il tempo di spegnimento e uno solo');
+
+  // La prova vera: la somma di tre colpi deve avere DUE minimi interni.
+  const somma = (t) => modulo.luceDelColpo(t) + modulo.luceDelColpo(t - 40)
+    + modulo.luceDelColpo(t - 90);
+  let minimi = 0;
+  for (let t = 6; t < 130; t += 2) {
+    if (somma(t) < somma(t - 2) && somma(t) <= somma(t + 2)) minimi += 1;
+  }
+  assert.equal(minimi, 2, 'i tre colpi non sfarfallano: sono ' + minimi + ' cali');
+});
+
+prova('il lampo si somma sui colpi e si spegne da solo', () => {
   const c = cella();
-  const colpo = luce(c, 0);
-  const meta = luce(c, RESPIRO / 2);
-  const dopo = luce(c, RESPIRO + 1);
-  const molto = luce(c, 60_000);
-  assert.ok(colpo.respiro > 0.98, 'il colpo non parte pieno');
-  assert.ok(meta.respiro > 0 && meta.respiro < colpo.respiro,
-    'il colpo non decade');
-  assert.equal(dopo.respiro, 0, 'il colpo non si spegne entro la sua durata');
-  assert.equal(molto.respiro, 0, 'una scarica vecchia respira ancora');
-  assert.ok(colpo.forza > dopo.forza * 2,
-    'il colpo non si distingue dal chiarore di fondo');
+  const uno = luce(c, 14);
+  const tre = luce(c, [14, 54, 104]);
+  const finito = luce(c, LAMPO + 1);
+  assert.ok(uno.lampo > 0.4, 'un colpo solo non accende la cella');
+  assert.ok(tre.lampo > uno.lampo,
+    'tre colpi di ritorno non fanno piu luce di uno');
+  assert.equal(finito.lampo, 0, 'il lampo non si spegne entro la sua durata');
+  assert.ok(uno.forza > finito.forza * 2,
+    'il lampo non si distingue dal chiarore di fondo');
+});
+
+prova('il lampo batte sullARRIVO, non sullistante osservato', () => {
+  // La rete pubblica una scarica con qualche secondo di ritardo. Un lampo
+  // disegnato nell'istante osservato sarebbe un lampo gia' finito quando
+  // arriva, cioe' un lampo che nessuno vede mai.
+  const impl = implementazione('cellaIlluminata');
+  assert.doesNotMatch(impl, /adessoEpoca|cella\.ultima -|- cella\.ultima/,
+    'il lampo usa listante osservato invece del tempo di arrivo');
+  const aggrega = implementazione('aggregaAttivita');
+  assert.match(aggrega, /cella\.arrivi\.push\(s\.ricevuta\)/,
+    'la cella non raccoglie i tempi di arrivo');
+  // Una scarica osservata cinque secondi fa ma arrivata adesso deve
+  // lampeggiare: e' il caso normale, non l'eccezione.
+  const vecchia = cella({ ultima: 1000000 - 5000 });
+  assert.ok(luce(vecchia, 8).lampo > 0.4,
+    'una scarica arrivata in ritardo non lampeggia mai');
+});
+
+prova('i colpi tenuti sono pochi e sono i piu recenti', () => {
+  const adesso = 3_000_000;
+  const scariche = [];
+  for (let i = 0; i < COLPI_MAX + 6; i += 1) {
+    scariche.push({ lat: 38, lon: 14, at: adesso - i * 10,
+                    ricevuta: 50_000 - i * 10, stazioni: 5 });
+  }
+  const celle = modulo.aggregaAttivita(scariche, adesso);
+  assert.equal(celle.length, 1, 'le scariche non sono finite nella stessa cella');
+  assert.equal(celle[0].arrivi.length, COLPI_MAX,
+    'la lista dei colpi non ha un tetto');
+  assert.equal(Math.max.apply(null, celle[0].arrivi), 50_000,
+    'il tetto ha buttato via il colpo piu recente');
+  assert.ok(Math.min.apply(null, celle[0].arrivi) >= 50_000 - (COLPI_MAX - 1) * 10,
+    'sono stati tenuti colpi vecchi al posto dei recenti');
 });
 
 prova('il colpo non si divide fra i vicini, il chiarore di fondo si', () => {
@@ -316,33 +412,42 @@ prova('il colpo non si divide fra i vicini, il chiarore di fondo si', () => {
   // tetto di opacita' e il confronto misurerebbe il tetto, non la regola.
   const sola = cella({ peso: 2, vicine: 1 });
   const fitta = cella({ peso: 2, vicine: 9 });
-  const fondoSola = luce(sola, 60_000).forza;
-  const fondoFitta = luce(fitta, 60_000).forza;
+  const fondoSola = luce(sola, LAMPO + 1).forza;
+  const fondoFitta = luce(fitta, LAMPO + 1).forza;
   assert.ok(fondoFitta < fondoSola * 0.5,
     'il chiarore di fondo non si divide fra le celle che lo condividono');
-  const colpoSola = luce(sola, 0).forza - fondoSola;
-  const colpoFitta = luce(fitta, 0).forza - fondoFitta;
-  assert.ok(colpoSola < 1 && luce(sola, 0).forza < 1,
+  // Al MASSIMO del colpo, non a zero: a zero la salita non e' ancora
+  // partita e il confronto misurerebbe due volte il solo chiarore.
+  const colpoSola = luce(sola, 14).forza - fondoSola;
+  const colpoFitta = luce(fitta, 14).forza - fondoFitta;
+  assert.ok(colpoSola > 0.1, 'il colpo al suo massimo non illumina niente');
+  assert.ok(colpoSola < 1 && luce(sola, 14).forza < 1,
     'il confronto sta misurando il tetto di opacita, non la regola');
   assert.ok(Math.abs(colpoSola - colpoFitta) < 1e-9,
     'il colpo viene diviso fra i vicini e sparisce dentro i temporali fitti');
 });
 
-prova('fra un colpo e laltro la cella non inventa movimento', () => {
-  // Il respiro e' la sequenza delle scariche, non un'oscillazione nostra.
+prova('fra un lampo e laltro la cella non inventa movimento', () => {
+  // Il ritmo e' la sequenza delle scariche, non un'oscillazione nostra.
   // Una sinusoide qui dentro sarebbe movimento non osservato, e per giunta
   // invisibile: fra un arrivo e l'altro si ridisegna una volta al secondo.
-  const impl = implementazione('cellaIlluminata');
-  assert.doesNotMatch(impl, /Math\.sin|Math\.cos/,
+  assert.doesNotMatch(implementazione('cellaIlluminata'), /Math\.sin|Math\.cos/,
     'la cella oscilla con un movimento non osservato');
-  assert.doesNotMatch(impl, /adessoFrame|performance\.now/,
-    'la luce della cella dipende dallorologio del disegno');
-  // E si verifica anche eseguendo: l'unico tempo che conta e' quello
-  // osservato, cioe' listante della scarica.
+  // E si verifica eseguendo: passati i colpi, la cella resta ferma
+  // qualunque cosa faccia l'orologio del disegno.
   const c = cella({ peso: 6, vicine: 1 });
-  const a = luce(c, 60_000).forza;
-  const b = luce(c, 61_000).forza;
-  assert.equal(a, b, 'la luce cambia senza che sia cambiato nessun dato');
+  const ferma = function (frame) {
+    return modulo.cellaIlluminata(
+      Object.assign({}, c, { arrivi: [] }), frame,
+      function (km) { return km; }
+    ).forza;
+  };
+  for (const frame of [1, 777, 12_345, 987_654]) {
+    assert.equal(ferma(frame), ferma(0),
+      'la luce cambia senza che sia cambiato nessun dato');
+  }
+  assert.equal(luce(c, LAMPO + 1).forza, ferma(0),
+    'un colpo gia spento lascia comunque un segno');
 });
 
 prova('due celle identiche rendono luce identica, ovunque siano', () => {
@@ -352,19 +457,19 @@ prova('due celle identiche rendono luce identica, ovunque siano', () => {
   // non dicono.
   // Il confronto si fa sia a riposo sia sul colpo: con il solo riposo, una
   // dipendenza dalla posizione nascosta dentro il colpo passava inosservata.
-  for (const dallUltima of [0, 200, 60_000]) {
-    const a = luce(cella({ lat: 38.0, lon: 14.0 }), dallUltima).forza;
-    const b = luce(cella({ lat: 45.9, lon: 9.7 }), dallUltima).forza;
+  for (const dallArrivo of [14, 60, LAMPO + 1]) {
+    const a = luce(cella({ lat: 38.0, lon: 14.0 }), dallArrivo).forza;
+    const b = luce(cella({ lat: 45.9, lon: 9.7 }), dallArrivo).forza;
     assert.equal(a, b, 'la posizione cambia la luce senza ragione fisica');
   }
   // ...mentre la storia deve cambiarla.
-  assert.notEqual(luce(cella(), 0).forza, luce(cella(), 60_000).forza,
+  assert.notEqual(luce(cella(), 14).forza, luce(cella(), LAMPO + 1).forza,
     'una scarica appena arrivata non cambia niente');
 });
 
 prova('piu attivita vuol dire piu luce e piu nube illuminata', () => {
-  const debole = luce(cella({ peso: 1 }), 60_000);
-  const forte = luce(cella({ peso: 20 }), 60_000);
+  const debole = luce(cella({ peso: 1 }), LAMPO + 1);
+  const forte = luce(cella({ peso: 20 }), LAMPO + 1);
   assert.ok(forte.intensita > debole.intensita, 'lintensita non segue il peso');
   assert.ok(forte.forza > debole.forza, 'la luce non segue lintensita');
   assert.ok(forte.raggio > debole.raggio,
@@ -374,12 +479,12 @@ prova('piu attivita vuol dire piu luce e piu nube illuminata', () => {
   // logaritmo e' che RADDOPPIARE il peso aggiunge sempre lo stesso tanto,
   // qualunque sia il livello di partenza; con una scala lineare il secondo
   // raddoppio aggiungerebbe il doppio del primo.
-  const gradino = (a, b) => luce(cella({ peso: b }), 60_000).intensita
-    - luce(cella({ peso: a }), 60_000).intensita;
+  const gradino = (a, b) => luce(cella({ peso: b }), LAMPO + 1).intensita
+    - luce(cella({ peso: a }), LAMPO + 1).intensita;
   // Due firme della compressione, prese ai due capi della scala.
   // In basso: tre scariche vive devono gia' valere buona parte della
   // luce, mentre una scala lineare le lascerebbe quasi al buio.
-  const tre = luce(cella({ peso: 3 }), 60_000).intensita;
+  const tre = luce(cella({ peso: 3 }), LAMPO + 1).intensita;
   assert.ok(tre > 0.3, 'la luce cresce linearmente con la densita');
   // In alto: ogni raddoppio del peso puo' aggiungere al massimo il
   // logaritmo di due, qualunque sia il livello di partenza. Una scala
@@ -392,7 +497,7 @@ prova('piu attivita vuol dire piu luce e piu nube illuminata', () => {
     assert.ok(passo <= TETTO + 1e-9,
       'la luce cresce linearmente con la densita');
   }
-  const enorme = luce(cella({ peso: 400 }), 60_000);
+  const enorme = luce(cella({ peso: 400 }), LAMPO + 1);
   assert.ok(enorme.intensita <= 1, 'lintensita non ha un tetto');
   assert.ok(enorme.raggio < RAGGIO_KM * 3,
     'il raggio illuminato cresce senza limite');
@@ -400,19 +505,18 @@ prova('piu attivita vuol dire piu luce e piu nube illuminata', () => {
 
 prova('a moto ridotto la cella non lampeggia', () => {
   const c = cella();
-  assert.equal(luce(c, 0, moduloRidotto).respiro, 0,
-    'il colpo lampeggia anche con il moto ridotto');
+  assert.equal(luce(c, [8, 48], moduloRidotto).lampo, 0,
+    'il lampo batte anche con il moto ridotto');
   // La cella resta pero' VISIBILE: il moto ridotto toglie il lampeggio, non
   // il dato. Spegnerla sarebbe togliere informazione a chi ha gia' chiesto
   // meno movimento.
-  assert.ok(luce(c, 0, moduloRidotto).forza > 0.05,
+  assert.ok(luce(c, [8, 48], moduloRidotto).forza > 0.05,
     'con il moto ridotto la cella sparisce invece di smettere di lampeggiare');
-  assert.ok(luce(c, 0).respiro > 0.98,
-    'senza moto ridotto il colpo non parte');
+  assert.ok(luce(c, 8).lampo > 0.4, 'senza moto ridotto il lampo non parte');
 });
 
-prova('la tavolozza e lavanda misurata, non bianco ne azzurro', () => {
-  const stop = tappe(1);
+prova('la tavolozza notturna e lavanda misurata, non bianco ne azzurro', () => {
+  const stop = tappe(1, 0);
   assert.ok(stop.length >= 5, 'la tavolozza ha troppe poche tappe');
   for (const t of stop) {
     // Il verde e' sempre il canale piu' basso: e' la cosa che la fotografia
@@ -446,14 +550,144 @@ prova('la tavolozza e lavanda misurata, non bianco ne azzurro', () => {
 });
 
 prova('la forza scala lopacita e lultima tappa sparisce', () => {
-  const piena = tappe(1);
-  const meta = tappe(0.5);
+  const piena = tappe(1, 0);
+  const meta = tappe(0.5, 0);
   for (let i = 0; i < piena.length - 1; i += 1) {
     assert.ok(Math.abs(meta[i].alfa - piena[i].alfa / 2) < 0.002,
       'lopacita non e proporzionale alla forza');
   }
   assert.equal(piena[piena.length - 1].alfa, 0,
     'il bagliore finisce di netto invece di svanire');
+});
+
+prova('di giorno la stessa tinta si prende piu profonda', () => {
+  // Di giorno la sommita' e' gia' bianca di sole: sommarci luce non cambia
+  // niente, e la cella sparisce. L'unica cosa che una nube illuminata
+  // lascia ancora vedere e' la tinta, quindi lo stesso viola si prende piu'
+  // profondo -- non piu' luce che si somma, ma velo che tinge.
+  const notte = tappe(1, 0);
+  const giorno = tappe(1, 1);
+  assert.equal(notte.length, giorno.length,
+    'le due tavolozze non hanno le stesse tappe');
+
+  // Su una sommita' gia' chiara quello che si vede e' la TINTA, non la
+  // luminosita': schiarire un bianco non si nota, colorarlo si'. La prova
+  // misura quindi la croma, non la distanza dal bianco -- misurare la
+  // seconda diceva il contrario di quello che si vede, ed e' l'errore che
+  // ha fatto perdere un giro a questa taratura.
+  const croma = (t) => t.alfa * (Math.max(t.r, t.g, t.b) - Math.min(t.r, t.g, t.b));
+  const cromaNotte = Math.max.apply(null, notte.map(croma));
+  const cromaGiorno = Math.max.apply(null, giorno.map(croma));
+  assert.ok(cromaGiorno > cromaNotte * 1.8,
+    'di giorno la cella non tinge piu di quanto tingesse di notte');
+  assert.ok(cromaGiorno > 60,
+    'nemmeno la tappa migliore tinge abbastanza una sommita al sole');
+
+  // Resta la stessa famiglia di tinta: verde sempre il canale piu' basso.
+  for (const t of giorno) {
+    assert.ok(t.g < t.r && t.g < t.b,
+      'la tavolozza diurna ha cambiato tinta: ' + [t.r, t.g, t.b].join(','));
+  }
+  // E di notte NON si usa quella diurna: una nube scura illuminata da un
+  // viola profondo sembrerebbe colorata, non illuminata.
+  const scure = notte.filter((t) => t.posizione < 0.4);
+  for (const t of scure) {
+    assert.ok(t.r > 200 && t.b > 200,
+      'di notte il cuore del lampo non e luce: ' + [t.r, t.g, t.b].join(','));
+  }
+  // Il passaggio e' continuo e sta dove dicono le misure delle scene vere.
+  const notteSoglia = Number(costante('SFONDO_NOTTE').match(/= (.+);/)[1]);
+  const giornoSoglia = Number(costante('SFONDO_GIORNO').match(/= (.+);/)[1]);
+  assert.ok(notteSoglia < giornoSoglia, 'le due soglie sono invertite');
+  const mezzo = tappe(1, (notteSoglia + giornoSoglia) / 2);
+  for (let i = 0; i < mezzo.length; i += 1) {
+    const fra = (mezzo[i].r - notte[i].r) / ((giorno[i].r - notte[i].r) || 1);
+    assert.ok(fra > 0.3 && fra < 0.7,
+      'a meta strada la tavolozza salta invece di passare');
+  }
+  assert.deepEqual(tappe(1, notteSoglia - 0.2), notte,
+    'sotto la soglia notturna non si usa la tavolozza notturna');
+  assert.deepEqual(tappe(1, giornoSoglia + 0.2), giorno,
+    'sopra la soglia diurna non si usa la tavolozza diurna');
+});
+
+prova('quale tavolozza si usa lo decide la fotografia sotto la cella', () => {
+  // Non una scelta globale: sul terminatore meta' schermo e' di giorno e
+  // meta' di notte, e ogni temporale deve prendere la tavolozza del posto
+  // in cui sta.
+  const impl = implementazione('sfondoSottoCella');
+  assert.match(impl, /m\.chiarore/,
+    'lo sfondo non viene dalla luminanza tenuta dalla maschera');
+  assert.match(impl, /lon|lat/,
+    'lo sfondo non viene letto nella posizione della cella');
+  assert.match(implementazione('disegnaAttivita'), /sfondoSottoCella\(cella\.lon, cella\.lat\)/,
+    'il disegno non chiede lo sfondo per ogni cella');
+  assert.doesNotMatch(impl, /getImageData/,
+    'lo sfondo rilegge i pixel a ogni fotogramma invece di usare il gia calcolato');
+  // E la griglia deve restare grossolana: a piena risoluzione sarebbero
+  // duecento kilobyte per fotogramma, moltiplicati per i fotogrammi in
+  // cache. Serve a scegliere fra due tavolozze, non a disegnare.
+  const lato = Number(costante('CHIARORE_LATO').match(/= (.+);/)[1]);
+  const maschera = Number(costante('MASCHERA_LATO').match(/= (.+);/)[1]);
+  assert.ok(lato <= maschera / 4,
+    'la griglia della luminanza e grande quanto la maschera');
+  assert.match(implementazione('costruisciMascheraNube'), /CHIARORE_LATO/,
+    'la griglia della luminanza non viene ridotta');
+  // La maschera deve davvero conservarla.
+  assert.match(implementazione('costruisciMascheraNube'), /chiarore: chiarore/,
+    'la maschera non conserva la luminanza della scena');
+
+  // E si esegue: una maschera finta, meta' buia e meta' chiara.
+  const leggi = new Function('mascheraNube',
+    implementazione('sfondoSottoCella') + '\nreturn sfondoSottoCella;');
+  const larghezza = 20, altezza = 10;
+  const chiarore = new Uint8Array(larghezza * altezza);
+  for (let y = 0; y < altezza; y += 1) {
+    for (let x = 0; x < larghezza; x += 1) {
+      chiarore[y * larghezza + x] = x < larghezza / 2 ? 20 : 230;
+    }
+  }
+  const finta = leggi({ west: 10, east: 20, south: 30, north: 40,
+                        chiarore: chiarore, larghezza: larghezza, altezza: altezza });
+  assert.ok(finta(11, 35) < 0.15, 'la meta buia non risulta buia');
+  assert.ok(finta(19, 35) > 0.85, 'la meta chiara non risulta chiara');
+  assert.equal(finta(99, 35), 0, 'fuori dalla maschera lo sfondo non e neutro');
+  assert.equal(leggi(null)(11, 35), 0, 'senza maschera lo sfondo non e neutro');
+});
+
+prova('il ridisegno veloce dura piu del lampo, o lo sfarfallio non si vede', () => {
+  // Fra un arrivo e l'altro il renderer ridisegna una volta al secondo per
+  // non consumare batteria; sale a sessanta fotogrammi solo per il tempo
+  // dichiarato da STRIKE_PING_MS. Se il lampo durasse piu' di quella
+  // finestra, la sua coda verrebbe campionata una volta al secondo, cioe'
+  // il battito diventerebbe uno scatto.
+  const ping = Number(costante('STRIKE_PING_MS').match(/= (.+);/)[1]);
+  assert.ok(LAMPO < ping,
+    'il lampo dura piu della finestra di ridisegno veloce: ' + LAMPO + ' contro ' + ping);
+  const animazione = implementazione('animateStrikes');
+  assert.match(animazione, /timestamp - s\.ricevuta < STRIKE_PING_MS/,
+    'la finestra veloce non e piu ancorata al tempo di arrivo');
+  // E il picco di un colpo deve essere risolvibile a sessanta fotogrammi:
+  // piu' corto di un paio di fotogrammi e lo sfarfallio diventa rumore.
+  const picco = Number(costante('ATTIVITA_PICCO_MS').match(/= (.+);/)[1]);
+  assert.ok(picco > 16, 'il picco di un colpo e piu corto di un fotogramma');
+});
+
+prova('le celle si sovrappongono, solo il minimo garantito si somma', () => {
+  // Sommare andava bene con la tavolozza quasi bianca su fondo nero. Con
+  // quella diurna no: due veli viola sommati diventano bianchi, cioe'
+  // proprio il colore su cui non si vedono.
+  const disegno = implementazione('disegnaAttivita');
+  const somme = disegno.match(/globalCompositeOperation = "lighter"/g) || [];
+  assert.equal(somme.length, 1,
+    'le celle si sommano ancora fra loro: sono ' + somme.length + ' passate additive');
+  // L'unica additiva e' il minimo garantito, e deve venire DOPO il
+  // ritaglio: sovrapporlo cancellerebbe la forma della nube con un disco.
+  const coda = disegno.slice(disegno.lastIndexOf('globalCompositeOperation = "lighter"'));
+  assert.match(coda, /tondo\(context, accese\[i\], 0\.2, 0\.68\)/,
+    'la passata additiva non e il minimo garantito');
+  assert.ok(disegno.indexOf('ritaglia(context') < disegno.lastIndexOf('lighter'),
+    'il minimo garantito viene prima del ritaglio e ne cancella la forma');
 });
 
 prova('il ritaglio sul contesto principale e protetto da chi disegna prima', () => {
