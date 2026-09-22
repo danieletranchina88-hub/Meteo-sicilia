@@ -126,23 +126,36 @@ prova('il renderer non disegna nessuna geometria di canale', () => {
   // mezzi rimasti in giro, o un generatore riacceso senza le sue regole.
   // Se un giorno devono tornare, tornano con il loro commento e con le
   // prove che li accompagnavano: questa riga si cancella apposta.
+  //
+  // Il controllo resta scoperto alla RETE A TERRA (Blitzortung), non a
+  // tutto il file: da quando esiste anche "Nubi in volume" -- un renderer
+  // satellitare separato, sul Lightning Imager, con la sua propria
+  // molteplicita' dei colpi DICHIARATA come tale (l'accumulo a cinque
+  // minuti non porta ne' tempi ne' conteggio, ed e' scritto in chiaro
+  // accanto a quel codice) -- cercare '.colpi' su tutto il file prenderebbe
+  // anche quella, che non e' il problema che questa prova sorveglia.
+  const areaReteATerra = [
+    'aggregaAttivita', 'centroDelLampo', 'cellaIlluminata', 'disegnaAttivita',
+    'disegnaBagliore', 'drawLiveStrikes', 'addLiveStrike',
+    'disegnaPuntoScarica', 'disegnaNuovoRilevamento', 'drawBoltGlyph'
+  ].map(implementazione).join('\n');
   for (const nome of ['generaRagno', 'generaCanale', 'ragnoDellaScarica',
                       'puntiFilamento', 'strokeSfumato', 'semeDaScarica']) {
     assert.doesNotMatch(html, new RegExp('function ' + nome + '\\('),
       nome + ' e rimasto in giro senza nessuna prova che lo sorvegli');
   }
-  assert.doesNotMatch(html, /\.ragno\b/,
-    'una scarica conserva ancora una geometria di canale');
+  assert.doesNotMatch(areaReteATerra, /\.ragno\b/,
+    'una scarica dalla rete a terra conserva ancora una geometria di canale');
 
   // Restano vietate le grandezze ottiche, che la rete a terra non ha.
   for (const nome of ['luceScarica', 'luceNube', 'luceBrace']) {
     assert.doesNotMatch(html, new RegExp('function ' + nome + '\\('),
       nome + ' ricostruisce ancora una grandezza non osservata');
   }
-  // E restano vietati i colpi di ritorno INVENTATI: quelli veri arrivano
-  // dalla rete, uno per rilevazione.
-  assert.doesNotMatch(html, /\.colpi\b/,
-    'una scarica conserva ancora colpi sintetici');
+  // E restano vietati i colpi di ritorno INVENTATI per la rete a terra:
+  // quelli veri arrivano dalla rete, uno per rilevazione.
+  assert.doesNotMatch(areaReteATerra, /\.colpi\b/,
+    'una scarica dalla rete a terra conserva ancora colpi sintetici');
   assert.doesNotMatch(implementazione('cellaIlluminata'), /Math\.random/,
     'il ritmo del lampo viene sorteggiato invece che osservato');
 });
@@ -688,20 +701,28 @@ prova('a moto ridotto la cella non lampeggia', () => {
   assert.ok(luce(c, 8).lampo > 0.4, 'senza moto ridotto il lampo non parte');
 });
 
-prova('la tavolozza notturna e lavanda misurata, non bianco ne azzurro', () => {
+prova('la tavolozza notturna e il colore reale del lampo, non lilla', () => {
+  // Cambiato su richiesta esplicita: non piu' la lavanda misurata su una
+  // fotografia, ma il bianco-azzurro di un fulmine vero. La prova verifica
+  // il contrario esatto di quella vecchia -- niente piu' verde incassato fra
+  // rosso e blu (la firma della lavanda), sempre rosso il canale piu' basso
+  // (la firma del bianco che raffredda verso il blu).
   const stop = tappe(1, 0);
   assert.ok(stop.length >= 5, 'la tavolozza ha troppe poche tappe');
   for (const t of stop) {
-    // Il verde e' sempre il canale piu' basso: e' la cosa che la fotografia
-    // dice, ed e' quello che distingue la lavanda dal grigio.
-    assert.ok(t.g < t.r && t.g < t.b,
-      'una tappa non e lavanda: ' + [t.r, t.g, t.b].join(','));
+    assert.ok(t.r <= t.g && t.g <= t.b,
+      'una tappa non e bianco-azzurra (rosso <= verde <= blu): '
+        + [t.r, t.g, t.b].join(','));
+    // Non deve mai virare al caldo: se il rosso supera il blu e' un lampo
+    // arancio o lilla, non bianco-azzurro reale.
+    assert.ok(t.r <= t.b, 'una tappa vira al caldo: ' + [t.r, t.g, t.b].join(','));
   }
-  // Un bianco appena sporco soddisfa gia' "verde piu' basso": serve anche
-  // che la tinta sia davvero satura, o il ritaglio illuminerebbe di bianco.
-  // Il controllo va fatto su TUTTE le tappe intermedie, non su una sola:
-  // con una sola, sbiancarne un'altra passava inosservato. Il cuore e'
-  // escluso apposta -- il centro di un lampo e' bianco anche nella foto.
+  // Un bianco appena sporco soddisferebbe gia' "rosso <= verde <= blu":
+  // serve anche che la tinta sia davvero percepibile, o il ritaglio
+  // illuminerebbe di bianco puro invece che di bianco-azzurro. Il controllo
+  // va fatto su TUTTE le tappe intermedie, non su una sola: con una sola,
+  // sbiancarne un'altra passava inosservato. Il cuore e' escluso apposta --
+  // il centro di un lampo e' bianco anche a occhio nudo.
   const intermedie = stop.filter(
     (t) => t.posizione > 0.2 && t.posizione < 0.95
   );
@@ -713,13 +734,17 @@ prova('la tavolozza notturna e lavanda misurata, non bianco ne azzurro', () => {
       'una fascia intermedia e praticamente bianca: '
         + [t.r, t.g, t.b].join(','));
   }
-  // E si scalda mentre si spegne: nel cuore il blu supera il rosso, nella
-  // fascia intermedia no. E' il contrario di quello che verrebbe da
-  // disegnare, ed e' il motivo per cui la foto e stata misurata.
-  assert.ok(stop[0].b > stop[0].r, 'il cuore non e violetto');
+  // Il cuore e' bianco puro, non tinto: e' il centro accecante del lampo,
+  // che sbianca qualunque tinta come fa ogni sorgente che satura.
+  assert.equal(stop[0].r, stop[0].b, 'il cuore non e neutro: ' + stop[0].r + ' vs ' + stop[0].b);
+  // E si RAFFREDDA mentre si spegne, mai il contrario: a bassa luminosita'
+  // l'occhio (effetto Purkinje) sposta la propria sensibilita' verso il blu,
+  // quindi una luce che si affievolisce di notte si percepisce piu' fredda,
+  // non piu' calda. E' il contrario esatto di quello che diceva la vecchia
+  // tavolozza lilla, ed e' la ragione per cui quella scelta e' stata tolta.
   const tiepida = stop.find((t) => t.posizione >= 0.5 && t.posizione < 0.75);
-  assert.ok(tiepida && tiepida.b <= tiepida.r,
-    'la coda non si scalda spegnendosi');
+  assert.ok(tiepida && tiepida.b >= tiepida.r,
+    'la coda vira al caldo invece di raffreddarsi: ' + JSON.stringify(tiepida));
 });
 
 prova('la forza scala lopacita e lultima tappa sparisce', () => {
@@ -736,8 +761,8 @@ prova('la forza scala lopacita e lultima tappa sparisce', () => {
 prova('di giorno la stessa tinta si prende piu profonda', () => {
   // Di giorno la sommita' e' gia' bianca di sole: sommarci luce non cambia
   // niente, e la cella sparisce. L'unica cosa che una nube illuminata
-  // lascia ancora vedere e' la tinta, quindi lo stesso viola si prende piu'
-  // profondo -- non piu' luce che si somma, ma velo che tinge.
+  // lascia ancora vedere e' la tinta, quindi lo stesso bianco-azzurro si
+  // prende piu' profondo -- non piu' luce che si somma, ma velo che tinge.
   const notte = tappe(1, 0);
   const giorno = tappe(1, 1);
   assert.equal(notte.length, giorno.length,
@@ -754,11 +779,13 @@ prova('di giorno la stessa tinta si prende piu profonda', () => {
   assert.ok(cromaGiorno > cromaNotte * 1.8,
     'di giorno la cella non tinge piu di quanto tingesse di notte');
   // La soglia assoluta e' bassa apposta. Una tavolozza diurna piu' carica
-  // si vedeva di piu' a numeri (differenza in CIELAB 25 invece di 14), ma a
-  // zoom stretto, dove un alone da quindici chilometri riempie lo schermo,
-  // dipingeva una macchia viola compatta invece di illuminare: guardata, e
-  // rifatta. Quattordici unita' di CIELAB restano il doppio delle sette che
-  // darebbe la sola tavolozza notturna, e sono piu' che percepibili.
+  // si vede di piu' a numeri, ma a zoom stretto, dove un alone da quindici
+  // chilometri riempie lo schermo, dipinge una macchia di colore compatta
+  // invece di illuminare -- gia' successo con la vecchia tavolozza lilla, e
+  // corretto allora riducendo la profondita' della tinta invece che la sua
+  // opacita'. Il rapporto di croma richiesto qui sopra (oltre 1,8 volte
+  // quella notturna) resta la stessa misura di allora, applicata al nuovo
+  // colore.
   assert.ok(cromaGiorno > 35,
     'nemmeno la tappa migliore tinge abbastanza una sommita al sole');
   // E non solo la tappa migliore: il controllo su un massimo solo lasciava
@@ -770,13 +797,14 @@ prova('di giorno la stessa tinta si prende piu profonda', () => {
         + ', croma ' + croma(t).toFixed(1));
   }
 
-  // Resta la stessa famiglia di tinta: verde sempre il canale piu' basso.
+  // Resta la stessa famiglia di tinta: rosso sempre il canale piu' basso,
+  // mai il verde -- sarebbe la firma della lavanda, non del bianco-azzurro.
   for (const t of giorno) {
-    assert.ok(t.g < t.r && t.g < t.b,
+    assert.ok(t.r <= t.g && t.g <= t.b,
       'la tavolozza diurna ha cambiato tinta: ' + [t.r, t.g, t.b].join(','));
   }
   // E di notte NON si usa quella diurna: una nube scura illuminata da un
-  // viola profondo sembrerebbe colorata, non illuminata.
+  // azzurro cosi' profondo sembrerebbe colorata, non illuminata.
   const scure = notte.filter((t) => t.posizione < 0.4);
   for (const t of scure) {
     assert.ok(t.r > 200 && t.b > 200,

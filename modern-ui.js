@@ -59,6 +59,16 @@ function setWeatherView(view) {
     weatherView = 'satellite'; clearMeteorologicalLayers();
     show3D = false; showSatellite = false; showSatelliteClouds = true;
     updateTerrain3D(); updateSatelliteBase(); updateSatelliteClouds();
+    // I fulmini in diretta sono un livello osservato come il satellite:
+    // devono accendersi da soli entrando in questa vista, non aspettare che
+    // qualcuno trovi l'interruttore nel pannello. blitzConnect e
+    // startStrikeAnimation sono gia' idempotenti (non riaprono un socket o
+    // un timer gia' attivi), quindi rientrare in satellite piu' volte non
+    // duplica niente.
+    showLiveLightning = true;
+    blitzRetryDelay = 2000;
+    blitzConnect();
+    startStrikeAnimation();
   } else {
     // Tornando alla previsione l'osservato torna in diretta: lasciare l'ora
     // scelta avrebbe fatto ricomparire, al rientro, un'immagine vecchia senza
@@ -73,6 +83,9 @@ function setWeatherView(view) {
     showRadar = false;
     if (map.getLayer('radar-layer')) map.setLayoutProperty('radar-layer','visibility','none');
     if (showLiveLightning) { showLiveLightning = false; blitzDisconnect(); stopStrikeAnimation(); liveStrikes = []; }
+    // Il ray marcher e' pesante: non ha senso lasciarlo acceso su una vista
+    // che non lo mostra piu'.
+    if (showVolumeClouds) { showVolumeClouds = false; NubiVolumetriche.disattiva(); }
     const saved = forecastRestore;
     if(saved) {
       activeLayer=saved.layer; showParticles=saved.particles; showVectors=saved.vectors;

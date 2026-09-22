@@ -177,7 +177,10 @@ async function test(name,fn) {await fn();console.log('PASS '+name);}
     map:{setLayoutProperty:(id,k,value)=>{visibilita[id]=value;},getLayer:()=>({})},
     showParticles:false,showVectors:true,showIsobars:true,showIsotherms:false,showIsohypses:false,
     showFronts:true,showFusion:false,showStations:false,showTerrain:false,showSatellite:false,show3D:false,showGraticule:false,
-    showLightning:true,showRadar:true,showLiveLightning:true,liveStrikes:[{},{}],cloudTimeSelected:123456};
+    showLightning:true,showRadar:true,showLiveLightning:true,liveStrikes:[{},{}],cloudTimeSelected:123456,
+    showVolumeClouds:true};
+  let disattivazioniVolume=0;
+  ctx.NubiVolumetriche={attiva:()=>{},disattiva:()=>{disattivazioniVolume++;}};
   for(const name of ['setPlaying','updateTerrain3D','updateSatelliteBase','updateSatelliteClouds','updateLightningLayer','updateSatelliteControlsVisibility','updateLayerUi','updateLegend','setDrawer','updateMapPresentation','updateIsobars','updateStationMarkers','renderWeather','requestVectorRender','updateTimeUi','updateBufferUi','scheduleFrameWarmup','stopStrikeAnimation'])ctx[name]=()=>{};
   // Entrando nella vista satellite il dominio percorribile deve allargarsi,
   // e va aggiornato QUANDO I FLAG SONO GIA' FERMI: showSatelliteClouds viene
@@ -195,6 +198,11 @@ async function test(name,fn) {await fn();console.log('PASS '+name);}
   const rimisurate=[];
   ctx.resizeCanvases=()=>{rimisurate.push(ctx.weatherView);};
   let chiusure=0;ctx.blitzDisconnect=()=>chiusure++;
+  // I fulmini in diretta si accendono da soli entrando in satellite: il
+  // comando parte da qui, non da un clic separato sul pannello.
+  let connessioni=0,animazioni=0;
+  ctx.blitzConnect=()=>connessioni++;ctx.startStrikeAnimation=()=>animazioni++;
+  ctx.showLiveLightning=false;ctx.blitzRetryDelay=9999;
   ctx.clearMeteorologicalLayers=()=>{ctx.showVectors=false;ctx.showFronts=false;ctx.showIsobars=false;};
   vm.createContext(ctx);
   const source=fs.readFileSync(path.join(__dirname,'../../modern-ui.js'),'utf8');
@@ -206,6 +214,11 @@ async function test(name,fn) {await fn();console.log('PASS '+name);}
   assert.deepEqual(rimisurate,['satellite'],
     'entrando nel satellite le canvas non vengono rimisurate: la densita\' ridotta non entra in vigore');
   assert.equal(ctx.showVectors,false);assert.equal(ctx.showFronts,false);assert.equal(ctx.showSatelliteClouds,true);
+  assert.equal(ctx.showLiveLightning,true,
+    'entrando nel satellite i fulmini in diretta non si accendono da soli');
+  assert.equal(connessioni,1,'entrando nel satellite non si avvia la connessione a Blitzortung');
+  assert.equal(animazioni,1,'entrando nel satellite non si avvia lanimazione delle scariche');
+  assert.equal(ctx.blitzRetryDelay,2000,'il ritardo di riconnessione non riparte da capo');
   ctx.setWeatherView('forecast');
   assert.equal(dominioVisto.length,2,'uscendo dal satellite il dominio percorribile non torna quello del modello');
   assert.deepEqual(dominioVisto[1],{vista:'forecast',nubi:false},
@@ -227,6 +240,11 @@ async function test(name,fn) {await fn();console.log('PASS '+name);}
   assert.equal(visibilita['radar-layer'],'none','il livello radar resta visibile in previsione');
   assert.equal(ctx.showLiveLightning,false,'la diretta resta accesa in previsione');
   assert.equal(ctx.liveStrikes.length,0,'le scariche restano in memoria');
+  // Il ray marcher e' pesante: tornando alla previsione deve spegnersi
+  // come gli altri livelli osservati, non restare acceso su una vista che
+  // non lo mostra piu'.
+  assert.equal(ctx.showVolumeClouds,false,'le nubi in volume restano accese in previsione');
+  assert.equal(disattivazioniVolume,1,'NubiVolumetriche.disattiva non viene chiamata uscendo dal satellite');
   assert.equal(chiusure,1,'la connessione al flusso resta aperta senza nessuno che guardi');
  });
 
