@@ -7843,6 +7843,112 @@
         context.restore();
       }
 
+      // ---- IL BAGLIORE DEL LAMPO ---------------------------------------
+      //
+      // Una sorgente molto piu' luminosa di tutto il resto non si vede come
+      // un disco: si vede come un nucleo bruciato con dei raggi che gli
+      // escono. Non e' un effetto inventato per far scena, e' quello che
+      // fanno gli strumenti -- l'occhio, un obiettivo, un sensore -- quando
+      // ricevono piu' luce di quanta ne possano rappresentare. E' il modo
+      // in cui si disegna "qui c'e' una luce fortissima" da sempre.
+      //
+      // Come tutto il resto del lampo, e' un SEGNO: la sua taglia e' in
+      // pixel e non codifica niente. Quello che dice e' l'unica cosa che la
+      // rete sa davvero -- qui, adesso, una scarica -- e quando lo dice
+      // segue la curva dei colpi di ritorno, cioe' il dato.
+      const BAGLIORE_NUCLEO_PX = 26;
+      const BAGLIORE_RAGGI_PX = 88;
+      // Quattro raggi lunghi in croce e quattro corti in diagonale: e' la
+      // figura che fa un diaframma, ed e' quella che l'occhio legge come
+      // "troppa luce" invece che come una stella disegnata.
+      const BAGLIORE_RAGGI = [
+        [0, 1], [Math.PI / 2, 1], [Math.PI, 1], [-Math.PI / 2, 1],
+        [Math.PI / 4, 0.42], [3 * Math.PI / 4, 0.42],
+        [-Math.PI / 4, 0.42], [-3 * Math.PI / 4, 0.42]
+      ];
+
+      function disegnaBagliore(context, punto, luce, scala, sfondo) {
+        if (luce <= 0.02) return;
+        const giorno = clamp(
+          ((sfondo || 0) - SFONDO_NOTTE) / (SFONDO_GIORNO - SFONDO_NOTTE), 0, 1
+        );
+        // Di giorno il nucleo non puo' essere bianco: sopra una sommita' al
+        // sole il bianco non si stacca. Vira al lilla carico, che e' la
+        // stessa scelta gia' fatta per la nube illuminata e per il canale.
+        const cuore = [
+          Math.round(255 - 41 * giorno),
+          Math.round(255 - 115 * giorno),
+          255
+        ].join(",");
+        const bordo = [
+          Math.round(226 - 116 * giorno),
+          Math.round(196 - 148 * giorno),
+          Math.round(255 - 45 * giorno)
+        ].join(",");
+        // Di giorno i raggi vanno tenuti piu' carichi: sopra una sommita'
+        // chiara un raggio tenue non esiste, e la figura tornerebbe un
+        // disco -- provato e guardato. E' lo stesso motivo per cui la
+        // tavolozza della nube cambia, applicato a una riga sottile.
+        const forzaRaggi = 0.55 + 0.32 * giorno;
+        const codaRaggi = 0.20 + 0.28 * giorno;
+
+        context.save();
+        context.globalCompositeOperation = giorno < 0.5 ? "lighter" : "source-over";
+
+        // I raggi per primi, sotto il nucleo: sono lunghi e sottilissimi, e
+        // si spengono verso la punta.
+        const lungo = BAGLIORE_RAGGI_PX * scala * (0.45 + 0.55 * luce);
+        for (let i = 0; i < BAGLIORE_RAGGI.length; i += 1) {
+          const angolo = BAGLIORE_RAGGI[i][0];
+          const quanto = BAGLIORE_RAGGI[i][1] * lungo;
+          const cos = Math.cos(angolo), sin = Math.sin(angolo);
+          const sfuma = context.createLinearGradient(
+            punto.x, punto.y, punto.x + cos * quanto, punto.y + sin * quanto
+          );
+          sfuma.addColorStop(0, "rgba(" + cuore + "," + (forzaRaggi * luce).toFixed(3) + ")");
+          sfuma.addColorStop(0.35, "rgba(" + bordo + "," + (codaRaggi * luce).toFixed(3) + ")");
+          sfuma.addColorStop(1, "rgba(" + bordo + ",0)");
+          context.strokeStyle = sfuma;
+          context.lineWidth = Math.max(0.8, (2.4 + 1.1 * giorno) * scala * luce);
+          context.beginPath();
+          context.moveTo(punto.x, punto.y);
+          context.lineTo(punto.x + cos * quanto, punto.y + sin * quanto);
+          context.stroke();
+        }
+
+        // Il nucleo: piccolo, pieno, con l'alone che lo scioglie nel resto.
+        const raggio = BAGLIORE_NUCLEO_PX * scala * (0.5 + 0.5 * luce);
+        const g = context.createRadialGradient(
+          punto.x, punto.y, 0, punto.x, punto.y, raggio
+        );
+        g.addColorStop(0, "rgba(" + cuore + "," + (1 * luce).toFixed(3) + ")");
+        g.addColorStop(0.3, "rgba(" + cuore + "," + (0.94 * luce).toFixed(3) + ")");
+        g.addColorStop(0.55, "rgba(" + bordo + "," + (0.5 * luce).toFixed(3) + ")");
+        g.addColorStop(1, "rgba(" + bordo + ",0)");
+        context.fillStyle = g;
+        context.beginPath();
+        context.arc(punto.x, punto.y, raggio, 0, Math.PI * 2);
+        context.fill();
+        context.restore();
+      }
+
+      // Il glifo del fulmine: il simbolo, un lampo spezzato pieno. E' il
+      // segno che RESTA quando la luce e' finita, e dice dove ha scaricato
+      // la rete -- non riproduce il lampo, lo nomina. Colore e opacita'
+      // restano quelli dell'eta' del dato.
+      function drawBoltGlyph(context, x, y, scala, contorno) {
+        context.beginPath();
+        context.moveTo(x + 0.15 * scala, y - 1.0 * scala);
+        context.lineTo(x - 0.45 * scala, y + 0.08 * scala);
+        context.lineTo(x - 0.05 * scala, y + 0.08 * scala);
+        context.lineTo(x - 0.22 * scala, y + 1.0 * scala);
+        context.lineTo(x + 0.46 * scala, y - 0.18 * scala);
+        context.lineTo(x + 0.04 * scala, y - 0.18 * scala);
+        context.closePath();
+        if (contorno) context.stroke();
+        else context.fill();
+      }
+
       function disegnaNuovoRilevamento(context, punto, scarica, etaArrivo, scala) {
         if (prefersReducedMotion || etaArrivo < 0 || etaArrivo > STRIKE_PING_MS) return;
         const t = etaArrivo / STRIKE_PING_MS;
@@ -7879,26 +7985,32 @@
 
       function disegnaPuntoScarica(context, punto, scarica, eta, scala) {
         const stile = stileEtaScarica(eta);
-        const raggio = clamp(2.4 + (map.getZoom() - 5) * 0.18, 2.4, 4.2) * scala;
+        const alto = clamp(5.2 + (map.getZoom() - 5) * 0.34, 5.2, 8.4) * scala;
         const supporto = supportoRete(scarica.stazioni);
         const rgb = stile.colore.join(",");
 
-        context.fillStyle = "rgba(3,11,17," + (0.76 * stile.alfa).toFixed(3) + ")";
-        context.beginPath();
-        context.arc(punto.x, punto.y, raggio + 2.2, 0, Math.PI * 2);
-        context.fill();
+        // Il glifo si legge su qualunque fondo perche' ha il suo contorno
+        // scuro: sopra una sommita' bianca di giorno un simbolo chiaro
+        // sparirebbe, e sopra il mare di notte uno scuro pure.
+        context.save();
+        context.lineJoin = "round";
+        context.strokeStyle = "rgba(3,11,17," + (0.78 * stile.alfa).toFixed(3) + ")";
+        context.lineWidth = Math.max(1.1, 1.9 * scala);
+        drawBoltGlyph(context, punto.x, punto.y, alto, true);
 
         context.fillStyle = "rgba(" + rgb + "," + stile.alfa.toFixed(3) + ")";
-        context.beginPath();
-        context.arc(punto.x, punto.y, raggio, 0, Math.PI * 2);
-        context.fill();
+        drawBoltGlyph(context, punto.x, punto.y, alto, false);
 
+        // L'anello del supporto di rete resta: dice quante stazioni hanno
+        // contribuito, ed e' l'unica grandezza osservata che il segno porta
+        // oltre alla posizione e all'eta'.
         context.strokeStyle = "rgba(" + rgb + ","
-          + (0.34 + 0.42 * supporto).toFixed(3) + ")";
+          + (0.26 + 0.34 * supporto).toFixed(3) + ")";
         context.lineWidth = Math.max(0.7, 0.9 * scala);
         context.beginPath();
-        context.arc(punto.x, punto.y, raggio + 3.6, 0, Math.PI * 2);
+        context.arc(punto.x, punto.y, alto * 1.15, 0, Math.PI * 2);
         context.stroke();
+        context.restore();
       }
 
       function addLiveStrike(payload) {
@@ -7979,8 +8091,13 @@
           }
           if (vicino) continue;
           ragniFatti.push(punto);
-          disegnaRagno(context, punto, s, daArrivo, scala,
-            sfondoSottoCella(s.lon, s.lat));
+          const sfondoQui = sfondoSottoCella(s.lon, s.lat);
+          disegnaRagno(context, punto, s, daArrivo, scala, sfondoQui);
+          // Il bagliore va SOPRA il canale: e' la luce che il canale
+          // emette, non un fondale.
+          disegnaBagliore(
+            context, punto, luceDelColpo(daArrivo), scala, sfondoQui
+          );
         }
 
         for (let i = 0; i < liveStrikes.length; i += 1) {
@@ -7996,7 +8113,11 @@
         // scariche: si evita una macchia di simboli senza perdere il segnale.
         context.globalCompositeOperation = "source-over";
         const limite = limiteSegni(map.getZoom());
-        const separazione = 9 * scala;
+        // La distanza minima fra due segni deve seguire la taglia del
+        // segno: con il glifo del fulmine al posto del punto tondo il
+        // simbolo e' piu' alto che largo, e a nove pixel si incastravano
+        // l'uno nell'altro.
+        const separazione = 17 * scala;
         const occupate = new Map();
         let disegnati = 0;
         for (let i = liveStrikes.length - 1; i >= 0; i -= 1) {
@@ -8077,8 +8198,9 @@
         if (showLiveLightning && showLightning) {
           key.textContent = "● punto/età dalla rete · alone = densità 15 km / 90 s · AFA MTG invariata";
         } else if (showLiveLightning) {
-          key.textContent = "● punto rilevato · colore = età · alone = densità "
-            + "15 km / 90 s · filamenti = segno grafico, non geometria misurata";
+          key.textContent = "⚡ scarica rilevata · colore = età · anello = stazioni "
+            + "· alone = densità 15 km / 90 s · lampo e filamenti = segni grafici, "
+            + "non geometria misurata";
         } else {
           key.textContent = "MTG LI · AFA osservata e pubblicata senza ricolorazione";
         }

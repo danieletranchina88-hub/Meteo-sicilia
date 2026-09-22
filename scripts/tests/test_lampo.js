@@ -219,6 +219,53 @@ prova('i ragni disegnati sono pochi e distinti', () => {
     'il diradamento dei ragni non parte dagli arrivi piu recenti');
 });
 
+prova('il bagliore del lampo e luce, non una misura', () => {
+  const bagliore = implementazione('disegnaBagliore');
+  // Segue il dato: si accende e si spegne con la curva dei colpi di
+  // ritorno, che sono gli arrivi veri della rete.
+  const giro = implementazione('drawLiveStrikes');
+  assert.match(giro, /disegnaBagliore\(\s*\n?\s*context, punto, luceDelColpo\(daArrivo\)/,
+    'il bagliore non segue la curva del colpo di ritorno');
+  // E non codifica niente: taglia in pixel, nessuna grandezza misurata.
+  assert.match(bagliore, /BAGLIORE_NUCLEO_PX|BAGLIORE_RAGGI_PX/,
+    'il bagliore non usa una taglia in pixel');
+  for (const grandezza of ['stazioni', 'supportoRete', 'peso', 'quante',
+                           'raggioKmInPixel']) {
+    assert.doesNotMatch(bagliore, new RegExp('\\b' + grandezza + '\\b'),
+      'il bagliore dipende da ' + grandezza + ': si leggerebbe come una misura');
+  }
+  // Di giorno cambia tinta come tutto il resto, o su una sommita' al sole
+  // un nucleo bianco non si staccherebbe.
+  assert.match(bagliore, /SFONDO_NOTTE|SFONDO_GIORNO/,
+    'il bagliore non guarda quanto e chiara la fotografia sotto');
+  assert.match(bagliore, /prefersReducedMotion|luce <= 0\.02/,
+    'il bagliore non ha una soglia sotto cui non si disegna');
+});
+
+prova('il glifo del fulmine resta unetichetta leggibile ovunque', () => {
+  const segno = implementazione('disegnaPuntoScarica');
+  assert.match(segno, /drawBoltGlyph/, 'il segno non e il simbolo del fulmine');
+  // Colore e opacita' restano l'eta' del dato, come prima del simbolo.
+  assert.match(segno, /stileEtaScarica\(eta\)/,
+    'il segno non racconta piu leta del dato');
+  // L'anello resta il supporto di rete: e' l'unica grandezza osservata che
+  // il segno porta oltre a posizione ed eta'.
+  assert.match(segno, /supportoRete\(scarica\.stazioni\)/,
+    'il segno ha perso il supporto di rete');
+  // E deve avere il suo contorno scuro: sopra una sommita' bianca di
+  // giorno un simbolo chiaro sparirebbe.
+  assert.match(segno, /rgba\(3,11,17,/,
+    'il glifo non ha contorno: su fondo chiaro sparisce');
+  assert.match(segno, /drawBoltGlyph\([^)]*true\)[\s\S]*drawBoltGlyph\([^)]*false\)/,
+    'il contorno non viene disegnato prima del pieno');
+  // Il diradamento deve seguire la taglia del simbolo, o i glifi si
+  // incastrano: sono piu' alti del punto tondo che sostituiscono.
+  const giro = implementazione('drawLiveStrikes');
+  const sep = giro.match(/const separazione = ([0-9.]+) \* scala;/);
+  assert.ok(sep && Number(sep[1]) >= 14,
+    'i segni possono incastrarsi uno nellaltro');
+});
+
 prova('la taglia del ragno e in pixel, quella della densita in chilometri', () => {
   // E' la riga di confine fra il segno e il dato. Un ragno grande sullo
   // schermo non vuol dire un fulmine grande sul territorio; l'alone di
@@ -229,8 +276,10 @@ prova('la taglia del ragno e in pixel, quella della densita in chilometri', () =
     'il ragno ha una taglia geografica: si leggerebbe come footprint');
   assert.match(implementazione('cellaIlluminata'), /STRIKE_ACTIVITY_RADIUS_KM/,
     'lalone di attivita ha perso la sua taglia geografica');
-  assert.match(html, /filamenti = segno grafico, non geometria misurata/,
-    'la legenda non dichiara che i filamenti sono un segno');
+  assert.match(html, /lampo e filamenti = segni grafici, /,
+    'la legenda non dichiara che lampo e filamenti sono segni');
+  assert.match(html, /non geometria misurata/,
+    'la legenda non dice che la geometria non e misurata');
 });
 
 prova('il live conserva solo le misure disponibili e il tempo di arrivo UI', () => {
@@ -384,7 +433,7 @@ prova('gli avvisi sono secondari e spenti per impostazione iniziale', () => {
 prova('linterfaccia distingue rete a terra e osservazione ottica', () => {
   assert.match(html, /Scariche a terra · Live/, 'manca il nome della rete a terra');
   assert.match(html, /Attività ottica · MTG LI/, 'manca il nome del dato satellitare');
-  assert.match(html, /punto rilevato · colore = età/,
+  assert.match(html, /scarica rilevata · colore = età · anello = stazioni/,
     'manca la legenda compatta del live');
 });
 
