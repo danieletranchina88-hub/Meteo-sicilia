@@ -466,8 +466,14 @@ prova('il lampo si somma sui colpi e si spegne da solo', () => {
   assert.ok(tre.lampo > uno.lampo,
     'tre colpi di ritorno non fanno piu luce di uno');
   assert.equal(finito.lampo, 0, 'il lampo non si spegne entro la sua durata');
-  assert.ok(uno.forza > finito.forza * 2,
+  // Il lampo si distingue in DUE modi, e servono tutti e due: e' piu'
+  // luminoso, e accende piu' nube. Il solo aumento di opacita' non
+  // basterebbe -- oltre una certa opacita' il lilla ha gia' sostituito la
+  // nube, e aggiungerne non si vede.
+  assert.ok(uno.unione > finito.unione * 1.4,
     'il lampo non si distingue dal chiarore di fondo');
+  assert.ok(uno.raggio > finito.raggio * 1.25,
+    'il lampo non accende piu nube del chiarore di fondo');
 });
 
 prova('il lampo batte sullARRIVO, non sullistante osservato', () => {
@@ -504,28 +510,40 @@ prova('i colpi tenuti sono pochi e sono i piu recenti', () => {
     'sono stati tenuti colpi vecchi al posto dei recenti');
 });
 
-prova('il colpo non si divide fra i vicini, il chiarore di fondo si', () => {
-  // E' la correzione misurata: dividendo anche il colpo, dentro un temporale
-  // fitto (nove celle addosso) restava un terzo della luce, cioe' proprio
-  // dove il lampo serve non si vedeva.
+prova('lunione delle celle vale quello che una cella sola voleva', () => {
+  // E' la legge che regge tutto il campo. Le caselle sono da cinque
+  // chilometri e l'alone da quindici: dentro un temporale ogni casella ne
+  // ha nove o dieci addosso. Se ognuna disegnasse la forza che vuole,
+  // quello che si vede sarebbe la loro UNIONE -- dieci veli da 0,13 fanno
+  // 0,75 -- cioe' una patina che non racconta niente se non la fittezza.
   //
-  // Il peso e' basso apposta: con una cella molto attiva la somma arriva al
-  // tetto di opacita' e il confronto misurerebbe il tetto, non la regola.
-  const sola = cella({ peso: 2, vicine: 1 });
-  const fitta = cella({ peso: 2, vicine: 9 });
-  const fondoSola = luce(sola, LAMPO + 1).forza;
-  const fondoFitta = luce(fitta, LAMPO + 1).forza;
-  assert.ok(fondoFitta < fondoSola * 0.5,
-    'il chiarore di fondo non si divide fra le celle che lo condividono');
-  // Al MASSIMO del colpo, non a zero: a zero la salita non e' ancora
-  // partita e il confronto misurerebbe due volte il solo chiarore.
-  const colpoSola = luce(sola, 14).forza - fondoSola;
-  const colpoFitta = luce(fitta, 14).forza - fondoFitta;
-  assert.ok(colpoSola > 0.1, 'il colpo al suo massimo non illumina niente');
-  assert.ok(colpoSola < 1 && luce(sola, 14).forza < 1,
-    'il confronto sta misurando il tetto di opacita, non la regola');
-  assert.ok(Math.abs(colpoSola - colpoFitta) < 1e-9,
-    'il colpo viene diviso fra i vicini e sparisce dentro i temporali fitti');
+  // La regola: l'unione di N celle sovrapposte deve valere quello che una
+  // cella sola voleva. Si verifica facendo davvero il conto dell'unione.
+  const sovrapposte = (alfa, n) => 1 - Math.pow(1 - alfa, n);
+  for (const vicine of [1, 2, 5, 10, 30]) {
+    for (const peso of [1, 6, 20]) {
+      const c = luce(cella({ peso: peso, vicine: vicine }), LAMPO + 1);
+      assert.ok(Math.abs(sovrapposte(c.forza, vicine) - c.unione) < 1e-9,
+        'quello che si vede con ' + vicine + ' celle non e quello dichiarato: '
+          + sovrapposte(c.forza, vicine).toFixed(4) + ' contro ' + c.unione.toFixed(4));
+    }
+  }
+  // Un ammasso si vede PIU' di una cella sola, ma col logaritmo: dieci
+  // caselle accese non fanno dieci volte la luce.
+  const sola = luce(cella({ vicine: 1 }), LAMPO + 1).unione;
+  const dieci = luce(cella({ vicine: 10 }), LAMPO + 1).unione;
+  assert.ok(dieci > sola * 1.5, 'un ammasso non si vede piu di una cella sola');
+  assert.ok(dieci < sola * 3, 'la luce cresce quasi col numero delle caselle');
+  // ...e la singola cella dentro l'ammasso disegna molto meno, o la somma
+  // scapperebbe.
+  assert.ok(luce(cella({ vicine: 10 }), LAMPO + 1).forza < sola * 0.5,
+    'la cella dentro un ammasso non si fa da parte');
+  // Il lampo resta ben distinguibile dal chiarore anche nel fitto: era il
+  // difetto della taratura precedente, che divideva solo il chiarore.
+  const spenta = luce(cella({ vicine: 10 }), LAMPO + 1).unione;
+  const accesa = luce(cella({ vicine: 10 }), 14).unione;
+  assert.ok(accesa > spenta * 1.15,
+    'dentro un temporale fitto il lampo non si distingue dal chiarore');
 });
 
 prova('fra un lampo e laltro la cella non inventa movimento', () => {
@@ -859,6 +877,25 @@ prova('la sagoma delle nubi scarta le luci di citta per forma, non per colore', 
   assert.match(maschera, /percentile\(0\.9\)/, 'manca il percentile della nube piena');
   assert.match(maschera, /\["scene", "grey"\]\.includes\(product\.mode\)/,
     'la sagoma viene ricavata anche dai compositi diagnostici');
+});
+
+prova('la sagoma e una forma, non un filtro sulla luce', () => {
+  // La sagoma dice DOVE c'e' nube. Ma il bagliore viene moltiplicato per
+  // lei, quindi senza guadagno finiva per dire anche QUANTA luce lasciar
+  // passare: sulla nube media valeva un terzo, e due terzi della luce
+  // sparivano senza che nessuno l'avesse deciso.
+  const maschera = implementazione('costruisciMascheraNube');
+  assert.match(maschera, /MASCHERA_GUADAGNO/,
+    'la sagoma non ha guadagno: smorza la luce invece di darle forma');
+  const guadagno = Number(costante('MASCHERA_GUADAGNO').match(/= (.+);/)[1]);
+  assert.ok(guadagno > 1.5 && guadagno <= 4,
+    'il guadagno della sagoma e fuori scala: ' + guadagno);
+  // Deve restare una sagoma, non diventare una macchia piena: il cielo
+  // sereno resta trasparente e il tetto resta uno.
+  assert.match(maschera, /Math\.min\(1, MASCHERA_GUADAGNO/,
+    'il guadagno puo portare la sagoma oltre lopacita piena');
+  assert.match(maschera, /grezza \* grezza \* \(3 - 2 \* grezza\)/,
+    'la sagoma ha perso la rampa morbida: il bordo della nube diventa netto');
 });
 
 prova('la maschera pubblicata e sempre quella dellimmagine in mostra', () => {

@@ -6829,6 +6829,7 @@
       // La griglia grossolana della luminanza: solo per scegliere fra la
       // tavolozza del giorno e quella della notte.
       const CHIARORE_LATO = 64;
+      const MASCHERA_GUADAGNO = 2.2;
       let mascheraNube = null;
 
       function costruisciMascheraNube(sorgente, box, product) {
@@ -6972,8 +6973,16 @@
             const liscio = 1 - clamp(
               (ruvidezza[k] - ruvidoBasso) / (ruvidoAlto - ruvidoBasso), 0, 1
             );
-            const nuvolosita = grezza * grezza * (3 - 2 * grezza)
-              * neutro * liscio * alfaSorgente;
+            // IL GUADAGNO. La sagoma serve a dire DOVE c'e' nube, non
+            // quanta luce lasciarne passare, ma finiva per fare la seconda
+            // cosa: il bagliore viene moltiplicato per questo numero, e
+            // sulla nube media valeva un terzo -- cioe' due terzi della
+            // luce sparivano senza che nessuno l'avesse deciso. Con il
+            // guadagno la nube vera arriva a uno e il cielo sereno resta a
+            // zero: la sagoma torna a essere una sagoma.
+            const nuvolosita = Math.min(1, MASCHERA_GUADAGNO
+              * grezza * grezza * (3 - 2 * grezza)
+              * neutro * liscio * alfaSorgente);
             // Il colore non serve: resta solo il canale alfa, che e' la
             // sagoma. Bianco pieno cosi' il ritaglio non tinge il bagliore.
             px[i] = 255; px[i + 1] = 255; px[i + 2] = 255;
@@ -7144,12 +7153,20 @@
       // e' chiara la fotografia SOTTO QUELLA CELLA. Sul terminatore, con
       // meta' schermo di giorno e meta' di notte, ogni temporale prende la
       // tavolozza del posto in cui sta.
+      // Il profilo di opacita' e' PIATTO, non a punta. Con la caduta
+      // rapida di prima -- 0,98 al centro e gia' 0,42 a un terzo del raggio
+      // -- quello che si vedeva era un punto luminoso con attorno una coda
+      // sempre piu' tenue: misurata sull'immagine composta, differenza
+      // media in CIELAB 10,7 su tutta l'area accesa contro 17,4 nel solo
+      // centro. Ma una nube illuminata da dentro non e' un punto: e' una
+      // sommita' che si accende tutta. Tenendo l'opacita' alta fin quasi
+      // al bordo, la luce riempie la cella invece di segnarne il centro.
       const TINTE_NOTTE = [
         [0,    253, 250, 255, 0.98],
-        [0.16, 250, 236, 255, 0.72],
-        [0.36, 238, 214, 248, 0.42],
-        [0.58, 208, 182, 208, 0.20],
-        [0.8,  178, 154, 174, 0.07],
+        [0.16, 250, 236, 255, 0.90],
+        [0.36, 238, 214, 248, 0.72],
+        [0.58, 208, 182, 208, 0.44],
+        [0.8,  178, 154, 174, 0.15],
         [1,    162, 140, 156, 0]
       ];
       // I valori del giorno sono tarati misurando, non a occhio: su una
@@ -7164,18 +7181,18 @@
       // e' un velo viola steso su mezzo mare -- a opacita' 0,12 su una
       // sommita' bianca sono ancora 29 di differenza RGB, sparsi su un'area
       // enorme. Il lampo di giorno deve essere concentrato.
-      // E molto piu' trasparente della notturna. Un lampo di giorno
-      // SCHIARISCE una sommita', non la dipinge: a opacita' quasi piena il
-      // viola usciva come una macchia compatta grande quanto la cella --
-      // guardato a zoom stretto, dove un alone da quindici chilometri
-      // riempie lo schermo. Dimezzando le opacita' resta una fioritura, che
-      // e' quello che si vede davvero.
+      // Le opacita' diurne erano state dimezzate per curare una macchia
+      // viola compatta. Era la cura sbagliata: la macchia veniva
+      // dall'unione di dieci celle sovrapposte, non dalla forza di una, e
+      // dimezzando si otteneva solo un lampo diurno che non si vedeva.
+      // Sistemata l'unione (vedi cellaIlluminata), qui si torna alla
+      // tavolozza piena.
       const TINTE_GIORNO = [
-        [0,    214, 170, 255, 0.52],
-        [0.16, 198, 146, 250, 0.42],
-        [0.36, 176, 120, 238, 0.28],
-        [0.58, 146,  94, 200, 0.12],
-        [0.8,  120,  80, 158, 0.03],
+        [0,    214, 170, 255, 0.94],
+        [0.16, 198, 146, 250, 0.86],
+        [0.36, 176, 120, 238, 0.66],
+        [0.58, 146,  94, 200, 0.38],
+        [0.8,  120,  80, 158, 0.12],
         [1,    106,  72, 138, 0]
       ];
       // Sotto questa luminanza di sfondo si e' di notte, sopra di giorno. I
@@ -7251,40 +7268,69 @@
         // lampeggia a ognuna; una cella che si spegne resta ferma, che e'
         // esattamente quello che sta facendo.
 
-        // La luce di fondo si divide fra le celle che condividono l'alone,
-        // con la radice invece che con il numero pieno: un ammasso di dieci
-        // celle resta piu' luminoso di una cella sola -- di circa tre volte,
-        // non di dieci -- e la scala di grigi non si schiaccia sul bianco.
-        //
-        // Il COLPO no. Il chiarore di fondo e' un campo di densita', e
-        // sommare dieci volte lo stesso kernel sarebbe contarlo dieci
-        // volte; il colpo invece e' un evento singolo, una scarica sola in
-        // una cella sola, e non ha nessun vicino con cui dividersi. Dividere
-        // anche quello lo rendeva invisibile proprio dentro i temporali
-        // piu' attivi, cioe' dove serve -- misurato, un terzo della luce.
-        const condivisione = 1 / Math.sqrt(Math.max(1, cella.vicine || 1));
-        // E DI GIORNO IL CHIARORE DI FONDO SI RITIRA. Di notte una foschia
-        // lilla ferma sopra il temporale si legge come nube illuminata; di
-        // giorno lo stesso velo viola, steso su una sommita' gia' chiara e
-        // unito fra dieci celle che si sovrappongono, diventa una macchia
-        // che copre mezzo mare -- guardato, e non era una luce, era una
-        // patina. Sotto il sole quello che si vede di un fulmine e' il
-        // LAMPO, non il chiarore fra un lampo e l'altro: e' la stessa
-        // ragione per cui la tavolozza cambia.
+        // QUANTA LUCE VORREBBE QUESTA CELLA, da sola. Il chiarore di fondo
+        // segue l'attivita'; il colpo si aggiunge quando la rete manda una
+        // scarica.
         const giorno = clamp(
           ((sfondo || 0) - SFONDO_NOTTE) / (SFONDO_GIORNO - SFONDO_NOTTE), 0, 1
         );
-        const fondo = (0.08 + 0.62 * intensita) * condivisione
-          * (1 - 0.75 * giorno);
-        const colpo = 0.9 * lampo * (0.45 + 0.55 * intensita);
-        const forza = clamp(fondo + colpo, 0, 1);
-        // Piu' e' attiva, piu' nube illumina: il raggio cresce con
-        // l'attivita' e si allarga di un soffio sul lampo.
+        // Il chiarore di fondo si ritira un po' di giorno, ma solo un po'.
+        // Di notte una foschia lilla ferma sopra il temporale si legge come
+        // nube illuminata; di giorno una sommita' al sole non mostra il
+        // chiarore fra un lampo e l'altro, mostra il lampo. Ritirarlo del
+        // tutto pero' era troppo -- toglieva proprio la nube illuminata che
+        // questo disegno deve mostrare.
+        const fondo = (0.10 + 0.38 * intensita) * (1 - 0.35 * giorno);
+        const colpo = 0.30 * lampo * (0.45 + 0.55 * intensita);
+        // I due pezzi sono tarati perche' la loro somma NON arrivi al tetto
+        // in una cella normale: se ci arrivasse, tutti i lampi uscirebbero
+        // uguali e l'attivita' smetterebbe di dirsi.
+        const voluta = clamp(fondo + colpo, 0, 0.94);
+
+        // E QUANTA NE DEVE DISEGNARE, che non e' la stessa cosa. Le caselle
+        // sono da cinque chilometri e l'alone ha raggio quindici: dentro un
+        // temporale ogni casella ne ha nove o dieci addosso, e i loro aloni
+        // si sovrappongono. Disegnandole tutte alla forza che vorrebbero,
+        // quello che si vede non e' quella forza: e' la loro UNIONE, che
+        // con dieci veli da 0,13 arriva a 0,75 -- misurato, ed era la
+        // patina viola che copriva mezzo mare.
+        //
+        // La correzione e' esatta, non una pezza: se si vuole che l'unione
+        // di N veli valga v, ognuno deve valere 1 - (1-v)^(1/N). Cosi' un
+        // temporale fitto si accende quanto una cella sola molto attiva --
+        // che e' giusto, perche' il "quanto" lo dice gia' l'attivita' --
+        // invece di saturare per il solo fatto di essere fitto.
+        //
+        // Un tentativo precedente divideva per la radice dei vicini e poi
+        // spegneva il chiarore di giorno. Sbagliato due volte: la radice
+        // non e' la legge dell'unione, e spegnere il chiarore toglieva
+        // proprio la nube illuminata che questo disegno deve mostrare.
+        // Quello che si deve VEDERE dove l'ammasso e' fitto e' pero' piu'
+        // della singola cella: dieci caselle accese sono davvero piu'
+        // temporale di una. Cresce col logaritmo del numero, non col
+        // numero: dieci volte le caselle fanno poco piu' del doppio della
+        // luce, non dieci volte, e la scala non si schiaccia sul bianco.
+        const vicine = Math.max(1, cella.vicine || 1);
+        const unione = clamp(
+          voluta * (1 + 0.22 * Math.log2(vicine)), 0, 0.94
+        );
+        // E da li' si torna indietro alla forza della SINGOLA cella, con la
+        // legge esatta dell'unione di N veli: 1 - (1-u)^(1/N). Disegnandone
+        // N cosi', quello che si vede vale esattamente u.
+        const forza = 1 - Math.pow(1 - unione, 1 / vicine);
+        // Piu' e' attiva, piu' nube illumina. E SUL LAMPO SI ALLARGA
+        // parecchio, non di un soffio: e' li' che si vede la differenza fra
+        // il chiarore e il lampo. L'opacita' da sola non basterebbe --
+        // misurata sull'immagine composta, fra riposo e lampo cambiava del
+        // diciotto per cento, perche' oltre una certa opacita' il lilla ha
+        // gia' sostituito la nube e aggiungerne non si vede piu'. Quello
+        // che si vede e' che si accende PIU' NUBE.
         const raggio = raggioPixel(
           STRIKE_ACTIVITY_RADIUS_KM
-            * (0.75 + 0.85 * intensita + 0.3 * Math.min(1, lampo))
+            * (0.75 + 0.85 * intensita + 0.8 * Math.min(1, lampo))
         );
-        return { intensita: intensita, lampo: lampo, forza: forza, raggio: raggio };
+        return { intensita: intensita, lampo: lampo, voluta: voluta,
+                 unione: unione, forza: forza, raggio: raggio };
       }
 
       function disegnaAttivita(context, adessoEpoca, adessoFrame) {
