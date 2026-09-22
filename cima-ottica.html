@@ -41,6 +41,7 @@
       .probe dl { display: grid; grid-template-columns: 1fr 1fr; gap: 4px 12px; margin: 0; font-size: 12px; color: #c5d0da; }
       .probe dt { color: #8aa0b3; font-size: 10px; }
       .probe dd { margin: 0; }
+      .stamp { margin: 6px 0 0; font-size: 11px; color: #8aa0b3; }
       @media (max-width: 700px) {
         .brand h1 { font-size: 14px; }
         .nav a { min-height: 36px; padding: 0 9px; font-size: 11px; }
@@ -51,7 +52,7 @@
     <div id="view" aria-label="Nubi 2.5D da satellite, radar e fulmini"></div>
     <header class="bar">
       <div class="brand">
-        <div class="eyebrow">Osservato · no ICON</div>
+        <div class="eyebrow">Osservato · MTG FCI + LI + radar · no ICON</div>
         <h1>Cima ottica</h1>
       </div>
       <nav class="nav">
@@ -69,6 +70,7 @@
         <div><dt>Spessore</dt><dd id="pth">—</dd></div>
         <div><dt>Radar Z</dt><dd id="pz">—</dd></div>
       </dl>
+      <p class="stamp" id="stamp">Scarico MTG FCI, IR 10.5 µm, LI e radar…</p>
     </aside>
     <div class="hud">
       <div class="row">
@@ -77,11 +79,11 @@
         <button type="button" id="btn-glow" aria-pressed="true">Glow LI</button>
         <button type="button" id="btn-core" aria-pressed="true">Corpo radar</button>
       </div>
-      <label>Ora <span id="hour-lab">16.2</span>
+      <label>Illuminazione <span id="hour-lab">16.2</span>
         <input id="hour" type="range" min="5" max="21" step="0.1" value="16.2" />
       </label>
-      <label>Puff nubi (spessore, non quota) <span id="exag-lab">0.55</span>
-        <input id="exag" type="range" min="0.12" max="1.1" step="0.01" value="0.55" />
+      <label>Rilievo spessore (non quota CTTH) <span id="exag-lab">0.22</span>
+        <input id="exag" type="range" min="0.06" max="0.45" step="0.01" value="0.22" />
       </label>
     </div>
     <script type="importmap">
@@ -95,26 +97,9 @@
       const SIZE = 192;
       const PLANE = { w: 19, d: 16 };
       const TYPES = ["Sereno","Nebbia / strato","Stratocumulo","Cumulo","Altostrato","Nimbostrato","Cirro","Cumulonembo"];
-
-      const hash2 = (ix, iy) => {
-        let n = Math.imul(ix | 0, 374761393) + Math.imul(iy | 0, 668265263);
-        n = Math.imul(n ^ (n >>> 13), 1274126177);
-        return ((n ^ (n >>> 16)) >>> 0) / 4294967296;
-      };
-      const fade = (t) => t * t * (3 - 2 * t);
-      function valueNoise(x, y) {
-        const x0 = Math.floor(x), y0 = Math.floor(y), tx = fade(x - x0), ty = fade(y - y0);
-        const a = hash2(x0, y0), b = hash2(x0 + 1, y0), c = hash2(x0, y0 + 1), d = hash2(x0 + 1, y0 + 1);
-        return a + (b - a) * tx + (c - a) * ty + (a - b - c + d) * tx * ty;
-      }
-      function fbm(x, y, oct = 4) {
-        let s = 0, a = 0.5, f = 1, n = 0;
-        for (let i = 0; i < oct; i++) { s += a * valueNoise(x * f, y * f); n += a; a *= 0.5; f *= 2.03; }
-        return s / n;
-      }
+      const WMS = "https://view.eumetsat.int/geoserver/wms";
       const clamp01 = (v) => v < 0 ? 0 : v > 1 ? 1 : v;
-      const smoothstep = (e0, e1, x) => { const t = clamp01((x - e0) / (e1 - e0)); return t * t * (3 - 2 * t); };
-      const gauss = (dx, dy, sx, sy = sx) => Math.exp(-(dx * dx) / (sx * sx) - (dy * dy) / (sy * sy));
+      const lum = (d, i) => d[i] * 0.3 + d[i + 1] * 0.59 + d[i + 2] * 0.11;
 
       const BOOT = [[7.55,43.78],[8.2,44.05],[8.85,44.42],[9.55,44.25],[10.15,44.05],[10.35,43.55],[10.25,42.95],[11.15,42.45],[12.15,41.75],[12.55,41.25],[13.05,41.22],[13.85,40.75],[14.75,40.55],[15.25,40.05],[15.65,39.55],[16.05,38.85],[15.75,38.15],[16.15,37.92],[17.15,38.85],[17.35,40.15],[18.35,40.25],[18.25,40.85],[17.25,40.85],[16.15,41.75],[15.55,41.95],[14.15,42.55],[13.85,43.15],[13.35,43.65],[12.55,44.15],[12.35,45.15],[12.75,45.55],[13.55,45.65],[12.75,45.85],[12.15,45.45],[11.15,45.55],[10.2,45.55],[9.25,45.7],[8.55,45.45],[8.05,44.75],[7.7,44.15],[7.55,43.78]];
       function insidePoly(lon, lat, ring) {
@@ -125,9 +110,8 @@
         }
         return c;
       }
-      function ellipse(lon, lat, cx, cy, rx, ry) {
-        return 1 - Math.hypot((lon - cx) / rx, (lat - cy) / ry);
-      }
+      function ellipse(lon, lat, cx, cy, rx, ry) { return 1 - Math.hypot((lon - cx) / rx, (lat - cy) / ry); }
+      function smoothstep(e0, e1, x) { const t = clamp01((x - e0) / (e1 - e0)); return t * t * (3 - 2 * t); }
       function landMask(lon, lat) {
         const boot = insidePoly(lon, lat, BOOT) ? 1 : 0;
         const sicily = smoothstep(0, 0.18, ellipse(lon, lat, 14.15, 37.48, 1.58, 0.78));
@@ -138,62 +122,184 @@
         return Math.min(1, boot + sicily + sard + cors + balkans + africa * 0.9);
       }
 
-      const CELLS = [
-        { lon: 17.12, lat: 37.48, rx: 0.36, ry: 0.3, alon: 17.62, alat: 37.72, arx: 1.22, ary: 0.66, top: 13.6, n: 11 },
-        { lon: 14.02, lat: 41.08, rx: 0.26, ry: 0.22, alon: 14.38, alat: 41.24, arx: 0.74, ary: 0.4, top: 11.8, n: 6 },
-        { lon: 16.55, lat: 43.15, rx: 0.22, ry: 0.18, alon: 17.05, alat: 43.32, arx: 0.85, ary: 0.42, top: 12.4, n: 7 },
-      ];
-
-      function buildFields() {
-        const pack = new Float32Array(SIZE * SIZE * 4);
-        const land = new Float32Array(SIZE * SIZE * 4);
-        const flashes = [];
-        for (const cell of CELLS) {
-          for (let i = 0; i < cell.n; i++) {
-            const turret = i % 3 === 0;
-            const lon = turret ? cell.lon + (valueNoise(i * 1.7, 2) - 0.5) * cell.rx : cell.alon + (valueNoise(i * 2.2, 4) - 0.5) * cell.arx;
-            const lat = turret ? cell.lat + (valueNoise(i * 3.1, 1) - 0.5) * cell.ry : cell.alat + (valueNoise(i * 4.1, 0.7) - 0.5) * cell.ary;
-            flashes.push({
-              u: (lon - DOMAIN.lon0) / 19, v: (lat - DOMAIN.lat0) / 16,
-              eu: (cell.alon - cell.lon) / 19 * 0.45, ev: (cell.alat - cell.lat) / 16 * 0.45,
-              period: 0.8 + valueNoise(i, cell.lon) * 1.8, phase: valueNoise(i * 5, cell.lat) * 6.28,
-              energy: turret ? 0.9 : 0.5, width: turret ? 0.016 : 0.03,
-            });
+      function slotIso(ms, latency) {
+        const t = Math.floor((Date.now() - latency) / ms) * ms;
+        return new Date(t).toISOString().replace(/\.\d{3}Z$/, ".000Z");
+      }
+      function wmsUrl(layer, time) {
+        const bbox = DOMAIN.lon0 + "," + DOMAIN.lat0 + "," + DOMAIN.lon1 + "," + DOMAIN.lat1;
+        let u = WMS + "?service=WMS&version=1.1.1&request=GetMap&styles=&layers=" + encodeURIComponent(layer)
+          + "&srs=EPSG:4326&bbox=" + bbox + "&width=" + SIZE + "&height=" + SIZE + "&format=image/png&transparent=true";
+        if (time) u += "&time=" + time;
+        return u;
+      }
+      function loadImage(url) {
+        return new Promise((resolve, reject) => {
+          const img = new Image();
+          img.crossOrigin = "anonymous";
+          img.onload = () => resolve(img);
+          img.onerror = () => reject(new Error("layer"));
+          img.src = url;
+        });
+      }
+      async function loadLayer(layer, time) {
+        try { return await loadImage(wmsUrl(layer, time)); }
+        catch { return await loadImage(wmsUrl(layer)); }
+      }
+      function rasterize(img) {
+        const c = document.createElement("canvas");
+        c.width = SIZE; c.height = SIZE;
+        const ctx = c.getContext("2d", { willReadFrequently: true });
+        ctx.drawImage(img, 0, 0, SIZE, SIZE);
+        return ctx.getImageData(0, 0, SIZE, SIZE).data;
+      }
+      function lon2tile(lon, z) { return (lon + 180) / 360 * (1 << z); }
+      function lat2tile(lat, z) {
+        const r = lat * Math.PI / 180;
+        return (1 - Math.log(Math.tan(r) + 1 / Math.cos(r)) / Math.PI) / 2 * (1 << z);
+      }
+      async function fetchRadar() {
+        try {
+          const meta = await fetch("https://api.rainviewer.com/public/weather-maps.json").then((r) => r.json());
+          const past = meta.radar && meta.radar.past;
+          if (!past || !past.length) return null;
+          const last = past[past.length - 1];
+          const z = 5;
+          const x0 = Math.floor(lon2tile(DOMAIN.lon0, z)), x1 = Math.floor(lon2tile(DOMAIN.lon1, z));
+          const y0 = Math.floor(lat2tile(DOMAIN.lat1, z)), y1 = Math.floor(lat2tile(DOMAIN.lat0, z));
+          const canvas = document.createElement("canvas");
+          canvas.width = (x1 - x0 + 1) * 256; canvas.height = (y1 - y0 + 1) * 256;
+          const ctx = canvas.getContext("2d", { willReadFrequently: true });
+          const jobs = [];
+          for (let ty = y0; ty <= y1; ty++) for (let tx = x0; tx <= x1; tx++) {
+            const url = meta.host + last.path + "/256/" + z + "/" + tx + "/" + ty + "/4/1_1.png";
+            jobs.push(loadImage(url).then((img) => ctx.drawImage(img, (tx - x0) * 256, (ty - y0) * 256)).catch(() => {}));
           }
-        }
+          await Promise.all(jobs);
+          const pix = ctx.getImageData(0, 0, canvas.width, canvas.height).data;
+          const out = new Float32Array(SIZE * SIZE);
+          for (let y = 0; y < SIZE; y++) for (let x = 0; x < SIZE; x++) {
+            const lon = DOMAIN.lon0 + x / (SIZE - 1) * 19, lat = DOMAIN.lat0 + y / (SIZE - 1) * 16;
+            const ix = Math.max(0, Math.min(canvas.width - 1, Math.round((lon2tile(lon, z) - x0) * 256)));
+            const iy = Math.max(0, Math.min(canvas.height - 1, Math.round((lat2tile(lat, z) - y0) * 256)));
+            const i = (iy * canvas.width + ix) * 4;
+            const a = pix[i + 3] / 255;
+            if (a < 0.04) continue;
+            out[y * SIZE + x] = Math.min(1, a * (0.25 + 0.75 * lum(pix, i) / 255));
+          }
+          return out;
+        } catch { return null; }
+      }
+      function percentile(arr, p) {
+        const c = Array.from(arr); c.sort((a, b) => a - b);
+        return c[Math.max(0, Math.min(c.length - 1, Math.floor(p * (c.length - 1))))];
+      }
+      function srcIndex(x, y) { return ((SIZE - 1 - y) * SIZE + x) * 4; }
+      function blur(src, radius) {
+        const out = new Float32Array(src.length);
         for (let y = 0; y < SIZE; y++) for (let x = 0; x < SIZE; x++) {
-          const u = x / (SIZE - 1), v = y / (SIZE - 1);
-          const lon = DOMAIN.lon0 + u * 19, lat = DOMAIN.lat0 + v * 16;
-          const L = landMask(lon, lat);
-          const n1 = fbm(lon * 0.55 + 20, lat * 0.55, 5);
-          const n2 = fbm(lon * 1.4 - 8, lat * 1.4 + 3, 4);
-          const popcorn = fbm(lon * 2.8, lat * 2.8, 3);
-          let topH = 0, type = 0, cover = 0, thick = 0, core = 0;
-          const add = (ty, amt, h, th, z) => {
-            if (amt < 0.05) return;
-            thick = Math.max(thick, th);
-            core = Math.max(core, z);
-            if (h >= topH - 0.2) { topH = Math.max(topH, h); type = ty; cover = Math.max(cover, amt); }
-          };
-          add(6, fbm(lon * 0.42 + lat * 0.28, lat * 0.35, 4) * smoothstep(0.5, 0.7, n1) * 0.7, 10.4 + n2 * 1.6, 0.06 + n1 * 0.1, 0);
-          const po = smoothstep(44.15, 44.75, lat) * smoothstep(46.4, 45.65, lat) * smoothstep(7.35, 8.25, lon) * smoothstep(12.85, 11.55, lon);
-          add(1, po * smoothstep(0.26, 0.52, n1), 0.35 + n2 * 0.4, 0.18 + po * 0.22, 0);
-          add(2, (1 - L * 0.6) * popcorn * smoothstep(0.36, 0.6, popcorn) * (lat > 37.4 && lat < 43.4 && lon < 12.4 ? 1 : 0.3), 1.0 + popcorn * 0.45, 0.22 + popcorn * 0.25, 0.06);
-          add(3, popcorn * popcorn * smoothstep(0.5, 0.74, popcorn) * (lon > 8 && lon < 16.4 && lat > 35.8 && lat < 42.4 ? 1.1 : 0.45) * (1 - po), 1.6 + popcorn * 1.8, 0.28 + popcorn * 0.35, popcorn * 0.1);
-          add(4, smoothstep(0.45, 0.63, n1) * smoothstep(12.5, 14.35, lon) * smoothstep(18.9, 16.7, lon) * smoothstep(41.1, 42.35, lat) * smoothstep(46.15, 44.7, lat), 5.4 + n2, 0.3, 0.08);
-          add(5, smoothstep(0.48, 0.68, n1) * smoothstep(16.7, 18.15, lon) * smoothstep(41.9, 43.15, lat) * smoothstep(46.4, 44.85, lat), 6.1 + n2, 0.55, 0.4);
-          for (const cell of CELLS) {
-            const turret = gauss(lon - cell.lon, lat - cell.lat, cell.rx, cell.ry);
-            const anvil = gauss(lon - cell.alon, lat - cell.alat, cell.arx, cell.ary);
-            const cb = Math.max(turret, anvil * 0.94);
-            if (cb > 0.05) add(7, cb, 8.1 * anvil + cell.top * turret, 0.28 * anvil + 0.82 * turret, turret * 0.95);
+          let acc = 0, wsum = 0;
+          for (let dy = -radius; dy <= radius; dy++) for (let dx = -radius; dx <= radius; dx++) {
+            const xx = Math.max(0, Math.min(SIZE - 1, x + dx));
+            const yy = Math.max(0, Math.min(SIZE - 1, y + dy));
+            const w = 1 / (1 + dx * dx + dy * dy);
+            acc += src[yy * SIZE + xx] * w; wsum += w;
           }
-          if (cover < 0.05) { type = 0; topH = 0; thick = 0; core = 0; }
-          const i = (y * SIZE + x) * 4;
-          pack[i] = topH / 16; pack[i + 1] = clamp01(thick); pack[i + 2] = clamp01(core); pack[i + 3] = type / 7;
-          land[i] = L; land[i + 1] = L * n2; land[i + 2] = n2; land[i + 3] = 1;
+          out[y * SIZE + x] = acc / wsum;
         }
-        return { pack, land, flashes };
+        return out;
+      }
+      function classify(cold, vis, radar, lightning) {
+        const heightKm = cold * 14.5;
+        const cover = Math.max(vis, cold);
+        if (cover < 0.12) return { type: 0, thickKm: 0, heightKm: 0 };
+        const convective = radar > 0.18 || (lightning > 0.2 && cold > 0.45);
+        if (convective && (cold > 0.42 || heightKm > 7)) {
+          const turret = Math.max(radar, lightning, vis * cold);
+          return { type: 7, thickKm: Math.min(13, Math.max(2.4, heightKm * (0.55 + 0.4 * turret))), heightKm: Math.max(heightKm, 8) };
+        }
+        if (cold > 0.62 && vis < 0.38) return { type: 6, thickKm: 0.22 + vis * 0.5, heightKm: Math.max(8.5, heightKm) };
+        if (cold > 0.55) return { type: 6, thickKm: 0.45 + vis * 0.5, heightKm: Math.max(7.5, heightKm) };
+        if (cold > 0.32 && vis > 0.55) return { type: 5, thickKm: 2.0 + vis * 1.6, heightKm: Math.max(4.5, heightKm) };
+        if (cold > 0.28) return { type: 4, thickKm: 0.6 + vis * 0.9, heightKm: Math.max(3.8, heightKm) };
+        if (vis > 0.55 && heightKm < 3.2) return { type: 3, thickKm: 0.7 + vis * 1.4, heightKm: Math.max(1.6, heightKm) };
+        if (heightKm < 1.15 && vis > 0.22) return { type: 1, thickKm: 0.22 + vis * 0.35, heightKm: Math.max(0.35, heightKm) };
+        return { type: 2, thickKm: 0.35 + vis * 0.5, heightKm: Math.max(1.0, heightKm) };
+      }
+
+      function buildLand() {
+        const land = new Float32Array(SIZE * SIZE * 4);
+        for (let y = 0; y < SIZE; y++) for (let x = 0; x < SIZE; x++) {
+          const lon = DOMAIN.lon0 + x / (SIZE - 1) * 19, lat = DOMAIN.lat0 + y / (SIZE - 1) * 16;
+          const L = landMask(lon, lat);
+          const i = (y * SIZE + x) * 4;
+          land[i] = L; land[i + 1] = L * 0.4; land[i + 2] = 0.5; land[i + 3] = 1;
+        }
+        return land;
+      }
+
+      async function ingest() {
+        const cloudTime = slotIso(10 * 60 * 1000, 22 * 60 * 1000);
+        const liTime = slotIso(5 * 60 * 1000, 8 * 60 * 1000);
+        const [geoImg, irImg, liImg, radar] = await Promise.all([
+          loadLayer("mtg_fd:rgb_geocolour", cloudTime),
+          loadLayer("mtg_fd:ir105_hrfi", cloudTime),
+          loadLayer("mtg_fd:li_afa", liTime),
+          fetchRadar()
+        ]);
+        const geo = rasterize(geoImg), ir = rasterize(irImg), li = rasterize(liImg);
+        const n = SIZE * SIZE;
+        const irGray = new Float32Array(n), vis = new Float32Array(n), liAmt = new Float32Array(n);
+        const radarG = radar || new Float32Array(n);
+        for (let y = 0; y < SIZE; y++) for (let x = 0; x < SIZE; x++) {
+          const i = srcIndex(x, y), p = y * SIZE + x;
+          irGray[p] = lum(ir, i); vis[p] = lum(geo, i) / 255; liAmt[p] = li[i + 3] / 255;
+        }
+        const irLo = percentile(irGray, 0.02), irClear = percentile(irGray, 0.72);
+        const cold = new Float32Array(n), visN = new Float32Array(n);
+        const height = new Float32Array(n), thick = new Float32Array(n), typeF = new Float32Array(n);
+        for (let p = 0; p < n; p++) {
+          cold[p] = clamp01((irClear - irGray[p]) / Math.max(10, irClear - irLo));
+          visN[p] = clamp01((vis[p] - 0.5) / 0.22);
+          const cls = classify(cold[p], visN[p], radarG[p], liAmt[p]);
+          height[p] = cls.heightKm; thick[p] = cls.thickKm; typeF[p] = cls.type;
+        }
+        const heightB = blur(height, 2), thickB = blur(thick, 2);
+        const pack = new Float32Array(n * 4);
+        const skin = new Uint8Array(n * 4);
+        for (let y = 0; y < SIZE; y++) for (let x = 0; x < SIZE; x++) {
+          const p = y * SIZE + x, i = p * 4, s = srcIndex(x, y);
+          const cover = Math.max(visN[p], cold[p]);
+          const edge = clamp01((cover - 0.12) / 0.22);
+          pack[i] = heightB[p] * edge / 16;
+          pack[i + 1] = clamp01(thickB[p] * edge / 14);
+          pack[i + 2] = clamp01(radarG[p]);
+          pack[i + 3] = cover < 0.12 ? 0 : typeF[p] / 7;
+          skin[i] = geo[s]; skin[i + 1] = geo[s + 1]; skin[i + 2] = geo[s + 2]; skin[i + 3] = 255;
+        }
+        const flashes = [];
+        const taken = new Uint8Array(n);
+        for (let y = 1; y < SIZE - 1; y++) for (let x = 1; x < SIZE - 1; x++) {
+          const i = srcIndex(x, y), a = li[i + 3];
+          if (a < 40) continue;
+          let maxA = a;
+          for (let dy = -1; dy <= 1; dy++) for (let dx = -1; dx <= 1; dx++) maxA = Math.max(maxA, li[srcIndex(x + dx, y + dy) + 3]);
+          if (a < maxA || taken[y * SIZE + x]) continue;
+          for (let dy = -2; dy <= 2; dy++) for (let dx = -2; dx <= 2; dx++) {
+            const xx = x + dx, yy = y + dy;
+            if (xx >= 0 && yy >= 0 && xx < SIZE && yy < SIZE) taken[yy * SIZE + xx] = 1;
+          }
+          const gx = cold[y * SIZE + Math.min(SIZE - 1, x + 2)] - cold[y * SIZE + Math.max(0, x - 2)];
+          const gy = cold[Math.min(SIZE - 1, y + 2) * SIZE + x] - cold[Math.max(0, y - 2) * SIZE + x];
+          const glen = Math.hypot(gx, gy) + 1e-5;
+          flashes.push({
+            u: x / (SIZE - 1), v: y / (SIZE - 1),
+            eu: (-gx / glen) * 0.028, ev: (-gy / glen) * 0.028,
+            period: 1.15 + a / 255 * 1.4, phase: ((x * 13 + y * 29) % 100) / 100 * 6.2832,
+            energy: 0.4 + a / 255 * 0.6, width: a > 160 ? 0.018 : 0.028
+          });
+        }
+        return { pack, skin, flashes, stamp: cloudTime, hasRadar: !!radar, hasLightning: flashes.length > 0 };
       }
 
       function writeGlow(out, flashes, time, pack) {
@@ -208,7 +314,7 @@
             const g = Math.exp(-(du * du + dv * dv) * inv * 0.5);
             const i = (y * SIZE + x) * 4;
             const ice = pack[i + 3] > 0.55 ? 1 : 0.3;
-            out[i] = Math.min(1, out[i] + amp * g * mix(1, 0.42, pack[i + 2]) * ice);
+            out[i] = Math.min(1, out[i] + amp * g * (1 - 0.58 * pack[i + 2]) * ice);
           }
         };
         for (const f of flashes) {
@@ -220,7 +326,6 @@
           splat(f.u + f.eu, f.v + f.ev, train * f.energy * 0.7, f.width * 1.3);
         }
       }
-      const mix = (a, b, t) => a + (b - a) * t;
 
       const GROUND_VERT = `precision highp float; uniform mat4 modelViewMatrix,projectionMatrix,modelMatrix; attribute vec3 position; attribute vec2 uv; varying vec2 vUv; varying vec3 vWorldPos;
       void main(){ vUv=uv; vec3 pos=position; pos.y-=0.012*(pos.x*pos.x+pos.z*pos.z); vWorldPos=(modelMatrix*vec4(pos,1.0)).xyz; gl_Position=projectionMatrix*modelViewMatrix*vec4(pos,1.0); }`;
@@ -239,30 +344,48 @@
         float fog=sat((length(vWorldPos.xz)-7.0)/16.0);
         base=mix(base,mix(vec3(0.62,0.68,0.74),vec3(0.06,0.08,0.11),uNight),fog*0.45);
         gl_FragColor=vec4(base,1.0); }`;
-      const CLOUD_VERT = `precision highp float; uniform mat4 modelViewMatrix,projectionMatrix,modelMatrix; uniform sampler2D tPack; uniform float uExag; uniform vec2 uWorld; attribute vec3 position; attribute vec2 uv; varying vec2 vUv; varying vec3 vWorldPos; varying vec3 vNormalW;
-      float puffOf(vec4 p){ float thick=p.g, core=p.b, t=p.a; float cirrus=step(0.78,t)*(1.0-step(0.93,t)); float sheet=step(0.08,t)*(1.0-step(0.50,t))+step(0.50,t)*(1.0-step(0.78,t));
-        float puff=thick*mix(1.0,0.12,cirrus); puff*=mix(1.0,0.38,sheet); puff*=mix(0.45,1.25,core); return p.r*0.22+puff*uExag; }
-      void main(){ vUv=uv; vec4 p=texture2D(tPack,uv); float disp=puffOf(p); float texel=1.0/192.0;
-        vec3 n=normalize(vec3((puffOf(texture2D(tPack,uv-vec2(texel,0.0)))-puffOf(texture2D(tPack,uv+vec2(texel,0.0)))), 2.0*texel*uWorld.x, (puffOf(texture2D(tPack,uv-vec2(0.0,texel)))-puffOf(texture2D(tPack,uv+vec2(0.0,texel))))));
-        vNormalW=normalize(mat3(modelMatrix)*n); vec3 pos=position; pos.y+=disp; pos.y-=0.012*(pos.x*pos.x+pos.z*pos.z); vWorldPos=(modelMatrix*vec4(pos,1.0)).xyz; gl_Position=projectionMatrix*modelViewMatrix*vec4(pos,1.0); }`;
-      const CLOUD_FRAG = `precision highp float; varying vec2 vUv; varying vec3 vWorldPos; varying vec3 vNormalW; uniform sampler2D tPack,tLand,tGlow; uniform vec3 uSun; uniform float uShowGlow,uShowCore,uNight;
+      const CLOUD_VERT = `precision highp float; uniform mat4 modelViewMatrix,projectionMatrix,modelMatrix; uniform sampler2D tPack; uniform float uExag,uTexel; uniform vec2 uWorld; attribute vec3 position; attribute vec2 uv; varying vec2 vUv; varying vec3 vWorldPos; varying vec3 vNormalW;
+      float thickAt(vec2 p){ return texture2D(tPack, clamp(p,0.0,1.0)).g; }
+      void main(){
+        vUv=uv;
+        float thick=thickAt(uv);
+        thick+=thickAt(uv+vec2(uTexel,0.0))+thickAt(uv-vec2(uTexel,0.0))+thickAt(uv+vec2(0.0,uTexel))+thickAt(uv-vec2(0.0,uTexel));
+        thick+=thickAt(uv+vec2(uTexel,uTexel))+thickAt(uv+vec2(-uTexel,uTexel))+thickAt(uv+vec2(uTexel,-uTexel))+thickAt(uv+vec2(-uTexel,-uTexel));
+        thick*=0.111111;
+        vec4 p=texture2D(tPack,uv);
+        float cirrus=step(0.78,p.a)*(1.0-step(0.93,p.a));
+        float thickKm=thick*14.0;
+        float baseKm=max(0.0,p.r*16.0-thickKm);
+        float disp=baseKm*0.012 + thickKm*0.075*uExag*mix(1.0,0.4,cirrus);
+        vec3 n=normalize(vec3(
+          (thickAt(uv-vec2(uTexel,0.0))-thickAt(uv+vec2(uTexel,0.0)))*uExag,
+          2.0*uTexel*uWorld.x,
+          (thickAt(uv-vec2(0.0,uTexel))-thickAt(uv+vec2(0.0,uTexel)))*uExag
+        ));
+        vNormalW=normalize(mat3(modelMatrix)*n);
+        vec3 pos=position; pos.y+=disp; pos.y-=0.012*(pos.x*pos.x+pos.z*pos.z);
+        vWorldPos=(modelMatrix*vec4(pos,1.0)).xyz;
+        gl_Position=projectionMatrix*modelViewMatrix*vec4(pos,1.0);
+      }`;
+      const CLOUD_FRAG = `precision highp float; varying vec2 vUv; varying vec3 vWorldPos; varying vec3 vNormalW; uniform sampler2D tPack,tLand,tGlow,tSkin; uniform vec3 uSun; uniform float uShowGlow,uShowCore,uNight;
       float sat(float x){return clamp(x,0.0,1.0);}
-      vec3 albedo(float t,float thick){ if(t<0.08) return vec3(0.0); if(t<0.22) return mix(vec3(0.76,0.78,0.80),vec3(0.9),thick); if(t<0.36) return vec3(0.86,0.88,0.90); if(t<0.50) return vec3(0.93); if(t<0.64) return vec3(0.74,0.76,0.78); if(t<0.78) return vec3(0.56,0.58,0.61); if(t<0.92) return vec3(0.92,0.94,0.97); return vec3(0.88,0.91,0.95); }
-      void main(){ vec4 p=texture2D(tPack,vUv); float height=p.r*16.0, thick=p.g, core=p.b, t=p.a;
-        float cover=smoothstep(0.03,0.2,thick+height*0.01); if(cover<0.04) discard;
-        float cirrus=step(0.78,t)*(1.0-step(0.93,t)); cover*=mix(1.0,mix(0.2,0.62,thick*4.0),cirrus);
+      void main(){
+        vec4 p=texture2D(tPack,vUv); float thick=p.g, core=p.b, t=p.a;
+        float cover=smoothstep(0.02,0.14,thick); if(cover<0.03) discard;
+        float cirrus=step(0.78,t)*(1.0-step(0.93,t)); cover*=mix(1.0,mix(0.22,0.7,thick*4.0),cirrus);
         vec3 n=normalize(vNormalW); vec3 sun=normalize(uSun);
         float shade=mix(sat(dot(n,sun)*0.5+0.5), sat(dot(n,sun)*0.7+0.3), 0.5);
-        vec3 col=albedo(t,thick)*mix(0.58,1.0,shade)*mix(1.0,0.58,core*uShowCore);
+        vec3 col=texture2D(tSkin,vUv).rgb*mix(0.62,1.0,shade)*mix(1.0,0.58,core*uShowCore);
         col*=mix(vec3(0.42,0.48,0.6),vec3(1.0),1.0-uNight*0.65);
         float glow=texture2D(tGlow,vUv).r*uShowGlow; float ice=step(0.55,t);
         col+=vec3(1.0,0.83,0.7)*glow*mix(1.0,0.5,core)*ice*mix(0.28,1.0,uNight);
         float fog=sat((length(vWorldPos.xz)-6.5)/17.0);
         col=mix(col,mix(vec3(0.6,0.66,0.72),vec3(0.06,0.08,0.11),uNight),fog*0.4);
-        gl_FragColor=vec4(col, mix(mix(0.55,1.0,cover), mix(0.22,0.7,cover), cirrus)); }`;
+        gl_FragColor=vec4(col, mix(mix(0.55,1.0,cover), mix(0.18,0.68,cover), cirrus));
+      }`;
 
       const host = document.getElementById("view");
-      const fields = buildFields();
+      const land = buildLand();
       const renderer = new THREE.WebGLRenderer({ antialias: true, powerPreference: "high-performance" });
       renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
       renderer.setSize(innerWidth, innerHeight);
@@ -277,14 +400,19 @@
       controls.minDistance = 4; controls.maxDistance = 28;
       controls.maxPolarAngle = Math.PI * 0.48; controls.minPolarAngle = 0.02;
 
-      const tex = (data) => {
+      const pack = new Float32Array(SIZE * SIZE * 4);
+      const skin = new Uint8Array(SIZE * SIZE * 4);
+      const texF = (data) => {
         const t = new THREE.DataTexture(data, SIZE, SIZE, THREE.RGBAFormat, THREE.FloatType);
         t.minFilter = t.magFilter = THREE.LinearFilter; t.wrapS = t.wrapT = THREE.ClampToEdgeWrapping; t.flipY = false; t.needsUpdate = true;
         return t;
       };
-      const packTex = tex(fields.pack), landTex = tex(fields.land);
+      const packTex = texF(pack), landTex = texF(land);
       const glowData = new Float32Array(SIZE * SIZE * 4);
-      const glowTex = tex(glowData);
+      const glowTex = texF(glowData);
+      const skinTex = new THREE.DataTexture(skin, SIZE, SIZE, THREE.RGBAFormat, THREE.UnsignedByteType);
+      skinTex.minFilter = skinTex.magFilter = THREE.LinearFilter;
+      skinTex.wrapS = skinTex.wrapT = THREE.ClampToEdgeWrapping; skinTex.flipY = false; skinTex.needsUpdate = true;
 
       function sunFromHour(hour) {
         const t = (hour - 5.5) / 13.5;
@@ -295,11 +423,12 @@
       const shared = { tPack: { value: packTex }, tLand: { value: landTex }, uSun: { value: sunFromHour(16.2) }, uCam: { value: camera.position.clone() }, uNight: { value: 0.2 } };
       const ground = new THREE.Mesh(new THREE.PlaneGeometry(PLANE.w, PLANE.d, 48, 40).rotateX(-Math.PI / 2), new THREE.RawShaderMaterial({ vertexShader: GROUND_VERT, fragmentShader: GROUND_FRAG, uniforms: shared }));
       scene.add(ground);
-      const cloudUni = { tPack: shared.tPack, tLand: shared.tLand, tGlow: { value: glowTex }, uExag: { value: 0.55 }, uWorld: { value: new THREE.Vector2(PLANE.w, PLANE.d) }, uSun: shared.uSun, uShowGlow: { value: 1 }, uShowCore: { value: 1 }, uNight: shared.uNight };
+      const cloudUni = { tPack: shared.tPack, tLand: shared.tLand, tGlow: { value: glowTex }, tSkin: { value: skinTex }, uExag: { value: 0.22 }, uTexel: { value: 1 / SIZE }, uWorld: { value: new THREE.Vector2(PLANE.w, PLANE.d) }, uSun: shared.uSun, uShowGlow: { value: 1 }, uShowCore: { value: 1 }, uNight: shared.uNight };
       const clouds = new THREE.Mesh(new THREE.PlaneGeometry(PLANE.w, PLANE.d, SIZE - 1, SIZE - 1).rotateX(-Math.PI / 2), new THREE.RawShaderMaterial({ vertexShader: CLOUD_VERT, fragmentShader: CLOUD_FRAG, uniforms: cloudUni, transparent: true, depthWrite: false }));
       clouds.renderOrder = 1; scene.add(clouds);
 
-      let view = "iss", glowOn = true, coreOn = true, hour = 16.2, exag = 0.55, clock = 0, last = performance.now();
+      let fields = { pack, flashes: [] };
+      let view = "iss", glowOn = true, coreOn = true, hour = 16.2, exag = 0.22, clock = 0, last = performance.now();
       const nadir = new THREE.Vector3(0.12, 20.8, 0.18), iss = new THREE.Vector3(6.4, 9.2, 11.4);
       let blend = 0, lastView = "iss";
       const raycaster = new THREE.Raycaster(), pointer = new THREE.Vector2();
@@ -316,7 +445,7 @@
         document.getElementById("plon").textContent = (DOMAIN.lon0 + hit.uv.x * 19).toFixed(2);
         document.getElementById("plat").textContent = (DOMAIN.lat0 + hit.uv.y * 16).toFixed(2);
         document.getElementById("pht").textContent = (fields.pack[i] * 16).toFixed(1) + " km";
-        document.getElementById("pth").textContent = fields.pack[i + 1].toFixed(2);
+        document.getElementById("pth").textContent = (fields.pack[i + 1] * 14).toFixed(1) + " km";
         document.getElementById("pz").textContent = fields.pack[i + 2].toFixed(2);
       });
 
@@ -326,8 +455,18 @@
       document.getElementById("btn-core").onclick = () => { coreOn = !coreOn; document.getElementById("btn-core").setAttribute("aria-pressed", coreOn); };
       document.getElementById("hour").oninput = (e) => { hour = +e.target.value; document.getElementById("hour-lab").textContent = hour.toFixed(1); };
       document.getElementById("exag").oninput = (e) => { exag = +e.target.value; document.getElementById("exag-lab").textContent = exag.toFixed(2); };
-
       addEventListener("resize", () => { renderer.setSize(innerWidth, innerHeight); camera.aspect = innerWidth / innerHeight; camera.updateProjectionMatrix(); });
+
+      function apply(next) {
+        pack.set(next.pack); skin.set(next.skin);
+        packTex.needsUpdate = true; skinTex.needsUpdate = true;
+        fields = next;
+        const when = new Date(next.stamp);
+        const lab = Number.isNaN(when.getTime()) ? next.stamp : when.toLocaleString("it-IT", { day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit" });
+        document.getElementById("stamp").textContent = "MTG " + lab + " · " + (next.hasRadar ? "radar RainViewer" : "senza radar") + " · " + (next.hasLightning ? "LI attivo" : "nessun lampo LI");
+      }
+      ingest().then(apply).catch(() => { document.getElementById("stamp").textContent = "Satellite non raggiungibile"; });
+      setInterval(() => { ingest().then(apply).catch(() => {}); }, 5 * 60 * 1000);
 
       function tick(now) {
         const dt = Math.min(0.1, (now - last) / 1000); last = now; clock += dt;
@@ -342,7 +481,7 @@
         shared.uNight.value = 1 - Math.max(0, Math.min(1, day * 1.05));
         const fogCol = new THREE.Color().lerpColors(new THREE.Color(0xc2ccd6), new THREE.Color(0x0b121c), shared.uNight.value);
         scene.fog = new THREE.Fog(fogCol, 22, 48); renderer.setClearColor(fogCol, 1);
-        if (glowOn) { writeGlow(glowData, fields.flashes, clock, fields.pack); glowTex.needsUpdate = true; }
+        if (glowOn && fields.flashes && fields.flashes.length) { writeGlow(glowData, fields.flashes, clock, fields.pack); glowTex.needsUpdate = true; }
         controls.update(); renderer.render(scene, camera); requestAnimationFrame(tick);
       }
       requestAnimationFrame(tick);
