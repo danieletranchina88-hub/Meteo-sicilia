@@ -7126,7 +7126,7 @@
       // fotogramma, cambiando SOLO quale tavolozza si usa:
       //
       //                          scena diurna      scena notturna
-      //   due tavolozze          dE 25,1           dE 18,1
+      //   due tavolozze          dE 14,5           dE 17,7
       //   solo quella notturna   dE  7,6           dE 18,4
       //
       // dE e' la differenza in CIELAB, dove una unita' e' grossomodo una
@@ -7164,12 +7164,18 @@
       // e' un velo viola steso su mezzo mare -- a opacita' 0,12 su una
       // sommita' bianca sono ancora 29 di differenza RGB, sparsi su un'area
       // enorme. Il lampo di giorno deve essere concentrato.
+      // E molto piu' trasparente della notturna. Un lampo di giorno
+      // SCHIARISCE una sommita', non la dipinge: a opacita' quasi piena il
+      // viola usciva come una macchia compatta grande quanto la cella --
+      // guardato a zoom stretto, dove un alone da quindici chilometri
+      // riempie lo schermo. Dimezzando le opacita' resta una fioritura, che
+      // e' quello che si vede davvero.
       const TINTE_GIORNO = [
-        [0,    214, 170, 255, 0.94],
-        [0.16, 198, 146, 250, 0.78],
-        [0.36, 176, 120, 238, 0.50],
-        [0.58, 146,  94, 200, 0.22],
-        [0.8,  120,  80, 158, 0.05],
+        [0,    214, 170, 255, 0.52],
+        [0.16, 198, 146, 250, 0.42],
+        [0.36, 176, 120, 238, 0.28],
+        [0.58, 146,  94, 200, 0.12],
+        [0.8,  120,  80, 158, 0.03],
         [1,    106,  72, 138, 0]
       ];
       // Sotto questa luminanza di sfondo si e' di notte, sopra di giorno. I
@@ -7214,7 +7220,7 @@
       // scarica, raggio dai chilometri del kernel. Separata dal disegno
       // perche' e' l'unica parte con dentro delle scelte, e va poter essere
       // verificata senza una mappa e senza una canvas.
-      function cellaIlluminata(cella, adessoFrame, raggioPixel) {
+      function cellaIlluminata(cella, adessoFrame, raggioPixel, sfondo) {
         const intensita = clamp(Math.log1p(cella.peso) / Math.log(28), 0, 1);
         // Il lampo: una curva di spegnimento per ogni rilevazione arrivata
         // di recente, sommate. Due colpi a cinquanta millisecondi l'uno
@@ -7257,7 +7263,19 @@
         // anche quello lo rendeva invisibile proprio dentro i temporali
         // piu' attivi, cioe' dove serve -- misurato, un terzo della luce.
         const condivisione = 1 / Math.sqrt(Math.max(1, cella.vicine || 1));
-        const fondo = (0.08 + 0.62 * intensita) * condivisione;
+        // E DI GIORNO IL CHIARORE DI FONDO SI RITIRA. Di notte una foschia
+        // lilla ferma sopra il temporale si legge come nube illuminata; di
+        // giorno lo stesso velo viola, steso su una sommita' gia' chiara e
+        // unito fra dieci celle che si sovrappongono, diventa una macchia
+        // che copre mezzo mare -- guardato, e non era una luce, era una
+        // patina. Sotto il sole quello che si vede di un fulmine e' il
+        // LAMPO, non il chiarore fra un lampo e l'altro: e' la stessa
+        // ragione per cui la tavolozza cambia.
+        const giorno = clamp(
+          ((sfondo || 0) - SFONDO_NOTTE) / (SFONDO_GIORNO - SFONDO_NOTTE), 0, 1
+        );
+        const fondo = (0.08 + 0.62 * intensita) * condivisione
+          * (1 - 0.75 * giorno);
         const colpo = 0.9 * lampo * (0.45 + 0.55 * intensita);
         const forza = clamp(fondo + colpo, 0, 1);
         // Piu' e' attiva, piu' nube illumina: il raggio cresce con
@@ -7283,9 +7301,11 @@
           const cella = celleAggregate[i];
           const punto = projectParticle(cella.lon, cella.lat, 0);
           if (!punto) continue;
+          const sfondo = sfondoSottoCella(cella.lon, cella.lat);
           const luce = cellaIlluminata(
             cella, adessoFrame,
-            function (km) { return raggioKmInPixel(cella.lon, cella.lat, km); }
+            function (km) { return raggioKmInPixel(cella.lon, cella.lat, km); },
+            sfondo
           );
           if (luce.forza < 0.03) continue;
           if (!Number.isFinite(luce.raggio) || luce.raggio < 2) continue;
@@ -7296,8 +7316,7 @@
               || punto.x > larghezza + luce.raggio
               || punto.y > altezza + luce.raggio) continue;
           accese.push({ x: punto.x, y: punto.y, raggio: luce.raggio,
-                        forza: luce.forza,
-                        sfondo: sfondoSottoCella(cella.lon, cella.lat) });
+                        forza: luce.forza, sfondo: sfondo });
         }
         if (!accese.length) return;
 
@@ -7472,6 +7491,312 @@
         context.restore();
       }
 
+      // ---- IL RAGNO: UN SEGNO, NON UNA MISURA -------------------------
+      //
+      // Qui sotto si disegna la forma di un fulmine: filamenti frattali che
+      // strisciano sulla sommita' a partire dal punto rilevato. Va detto
+      // subito e senza giri di parole cosa sono e cosa non sono.
+      //
+      // NON SONO UN DATO. La rete a terra fornisce posizione, tempo e
+      // stazioni che hanno contribuito; non fornisce la geometria del
+      // canale, ne' la sua lunghezza, ne' il numero di diramazioni, ne'
+      // l'orientamento. Questi filamenti sono un SEGNO GRAFICO -- come
+      // l'anello di arrivo, come il punto -- che dice "qui c'e' stata una
+      // scarica", disegnato nella forma che una scarica ha davvero invece
+      // che con un simbolo astratto.
+      //
+      // Perche' allora si possono disegnare senza barare? Perche' non
+      // codificano niente. Tre regole, e sono verificate dalle prove:
+      //
+      //  1. la forma viene SOLO dall'identita' della scarica (posizione e
+      //     tempo osservati). Stessa scarica, stesso ragno, per tutta la
+      //     sua vita e a qualunque zoom: non c'e' casualita' che sfarfalli;
+      //  2. nessuna grandezza misurata la tocca. Il numero di stazioni, il
+      //     peso della cella, l'eta': niente di tutto questo cambia la
+      //     geometria. Se lo facesse, il disegno starebbe affermando una
+      //     relazione che nessuno ha misurato;
+      //  3. la sua estensione e' in PIXEL e non in chilometri. Un ragno
+      //     grande sullo schermo non vuol dire un fulmine grande sul
+      //     territorio, e tenerlo in pixel impedisce di leggerlo come un
+      //     footprint. Le grandezze geografiche del disegno -- l'alone di
+      //     attivita' -- restano in chilometri e sono dichiarate tali.
+      //
+      // Quando si accende invece e' un dato: i filamenti seguono la stessa
+      // curva dei colpi di ritorno che illumina la nube, cioe' gli arrivi
+      // veri della rete. La forma e' nostra, il ritmo e' suo.
+      const RAGNO_RAGGIO_PX = 70;
+      const RAGNO_LIVELLI = 4;
+      // Quanti ragni per fotogramma, e quanto vicini possono stare. Dentro
+      // una cella attiva arrivano decine di rilevazioni nello stesso quarto
+      // di secondo e nello stesso pugno di pixel, e quaranta ragni
+      // sovrapposti non sono quaranta fulmini: sono una macchia. Si tengono
+      // i piu' recenti e distinti; quante scariche ci siano davvero lo
+      // raccontano il pannello e l'alone di attivita', che e' il loro
+      // mestiere.
+      //
+      // Costa anche meno, ma meno di quanto sembrasse: sei ragni diradati
+      // stanno in 0,50 ms a fotogramma, tutti e quaranta in 3,1. Il primo
+      // numero che avevo misurato diceva 66 ms, ed era sbagliato -- vedi la
+      // nota sul riscaldamento del rasterizzatore, sotto.
+      const RAGNO_MAX = 6;
+      const RAGNO_SEPARAZIONE_PX = 26;
+      //
+      // NOTA SU COME SI MISURA QUESTA ROBA. Le prime misure del costo del
+      // ragno erano sbagliate di venti volte, e vale la pena dire perche'.
+      // Cronometrando le varianti UNA DOPO L'ALTRA, la prima che disegna
+      // molte linee paga il riscaldamento del rasterizzatore e si prende
+      // addosso un costo che non e' suo: uscivano 12 ms per dieci ragni e
+      // 66 per quaranta. Alternando le varianti molte volte e prendendo le
+      // mediane, gli stessi quaranta ragni stanno in 3,1 ms e sei in 0,50.
+      // Qualunque misura di disegno qui dentro va fatta cosi'.
+
+      // Generatore deterministico: da un numero a una sequenza sempre
+      // uguale. Serve perche' la forma di una scarica non deve cambiare fra
+      // un fotogramma e l'altro.
+      function semeCasuale(seme) {
+        let stato = Math.floor(seme * 2147483647) || 1;
+        return function () {
+          stato = (stato * 1103515245 + 12345) & 0x7fffffff;
+          return stato / 0x7fffffff;
+        };
+      }
+
+      // Il seme di una scarica viene dalla scarica stessa -- dalle sue
+      // coordinate e dal suo istante osservato -- non da Math.random. Due
+      // conseguenze, entrambe volute: la stessa rilevazione disegna sempre
+      // lo stesso ragno, e ricaricando la pagina si rivede lo stesso.
+      function semeDaScarica(s) {
+        const grezzo = Math.abs(
+          Math.sin(s.lat * 127.1 + s.lon * 311.7 + (s.at % 100000) * 0.013)
+        ) * 43758.5453;
+        return grezzo - Math.floor(grezzo);
+      }
+
+      // La geometria di un filamento, in coordinate sue: y da 0 (il punto
+      // della scarica) a 1 (la punta), x lo scostamento laterale. E' uno
+      // spostamento del punto medio, ma quella che in un fulmine visto di
+      // lato sarebbe QUOTA qui e' distanza orizzontale: dall'alto il canale
+      // non scende, striscia.
+      //
+      // Lo spostamento e' proporzionale alla lunghezza del tratto, cosi' il
+      // dettaglio c'e' a ogni scala; e il primo gomito non puo' uscire
+      // piccolo, perche' con uno spostamento uniforme ogni tanto cadeva
+      // vicino allo zero e quel filamento usciva come un raggio dritto.
+      function generaCanale(rng, livelli, ampiezza) {
+        let punti = [{ x: 0, y: 0 }, { x: (rng() - 0.5) * 0.9, y: 1 }];
+        let ampiezzaCorrente = ampiezza;
+        for (let livello = 0; livello < livelli; livello += 1) {
+          const raffinato = [punti[0]];
+          for (let i = 1; i < punti.length; i += 1) {
+            const a = punti[i - 1], b = punti[i];
+            const passo = b.y - a.y;
+            const deriva = livello === 0
+              ? (rng() < 0.5 ? -1 : 1) * (0.5 + 0.5 * rng())
+              : (rng() - 0.5) * 2;
+            raffinato.push({
+              x: (a.x + b.x) / 2 + deriva * ampiezzaCorrente * passo,
+              y: (a.y + b.y) / 2
+            });
+            raffinato.push(b);
+          }
+          punti = raffinato;
+          ampiezzaCorrente *= 0.55;
+        }
+        return punti;
+      }
+
+      // Il ragno intero: quattro-otto filamenti che partono dal punto e se
+      // ne vanno in direzioni diverse, ognuno con la sua lunghezza e le sue
+      // biforcazioni. Le direzioni sono sparse attorno al giro con un po' di
+      // disordine, non sorteggiate libere: sei direzioni a caso finiscono
+      // spesso tutte dalla stessa parte, e il risultato sembra un pennello.
+      function generaRagno(rng) {
+        // Da tre a sei filamenti. Erano fino a otto: otto bracci attorno
+        // allo stesso punto si chiudono in una stella, e una stella si
+        // legge come un simbolo disegnato invece che come una scarica.
+        const quanti = 3 + Math.floor(rng() * 4);
+        const partenza = rng() * Math.PI * 2;
+        const filamenti = [];
+        for (let i = 0; i < quanti; i += 1) {
+          const direzione = partenza + (i / quanti) * Math.PI * 2
+            + (rng() - 0.5) * (Math.PI / quanti);
+          const forma = generaCanale(rng, RAGNO_LIVELLI, 1.0);
+          // Lunghezze molto diverse fra loro: un ragno con tutti i bracci
+          // uguali sembra una stella disegnata. La radice quadrata rende
+          // rari i filamenti lunghi e comuni i mozziconi, che e' come si
+          // vede una scarica dall'alto: un canale principale e molte
+          // diramazioni brevi attorno.
+          const lunghezza = 0.28 + Math.sqrt(rng()) * 1.05;
+          const rami = [];
+          const quantiRami = Math.floor(rng() * 3);
+          for (let r = 0; r < quantiRami; r += 1) {
+            rami.push({
+              nodo: 0.25 + rng() * 0.5,
+              direzione: direzione + (rng() < 0.5 ? -1 : 1) * (0.35 + rng() * 0.5),
+              lunghezza: lunghezza * (0.25 + rng() * 0.3),
+              forma: generaCanale(rng, RAGNO_LIVELLI - 1, 0.7)
+            });
+          }
+          filamenti.push({ direzione: direzione, lunghezza: lunghezza,
+                           forma: forma, rami: rami });
+        }
+        return filamenti;
+      }
+
+      // Si genera una volta sola per scarica, alla prima volta che serve:
+      // finche' una scarica non lampeggia sullo schermo non c'e' ragione di
+      // costruirle una forma.
+      function ragnoDellaScarica(s) {
+        if (!s.ragno) s.ragno = generaRagno(semeCasuale(semeDaScarica(s)));
+        return s.ragno;
+      }
+
+      // I punti di un filamento, in pixel. In coordinate del filamento y e'
+      // la distanza percorsa e x lo scostamento laterale: qui diventano una
+      // rotazione, perche' su una mappa vista dall'alto il canale striscia
+      // sul piano invece di scendere.
+      function puntiFilamento(punti, x, y, lunghezza, direzione, fino) {
+        const cos = Math.cos(direzione), sin = Math.sin(direzione);
+        // Lo scostamento laterale si misura in frazione della lunghezza: un
+        // filamento lungo ha gomiti larghi, uno corto li ha stretti.
+        const lato = lunghezza * 0.42;
+        const ultimo = fino === undefined ? 1 : fino;
+        const fuori = [];
+        for (let i = 0; i < punti.length; i += 1) {
+          const p = punti[i];
+          if (p.y > ultimo) break;
+          const avanti = p.y * lunghezza;
+          const fianco = p.x * lato;
+          fuori.push({
+            x: x + avanti * cos - fianco * sin,
+            y: y + avanti * sin + fianco * cos,
+            t: p.y
+          });
+        }
+        return fuori;
+      }
+
+      // Dove si trova un nodo del filamento, per farci partire un ramo.
+      function puntoDelFilamento(punti, frazione, x, y, lunghezza, direzione) {
+        const cos = Math.cos(direzione), sin = Math.sin(direzione);
+        const lato = lunghezza * 0.42;
+        let scelto = punti[punti.length - 1];
+        for (let i = 0; i < punti.length; i += 1) {
+          if (punti[i].y >= frazione) { scelto = punti[i]; break; }
+        }
+        const avanti = scelto.y * lunghezza;
+        const fianco = scelto.x * lato;
+        return { x: x + avanti * cos - fianco * sin,
+                 y: y + avanti * sin + fianco * cos };
+      }
+
+      // Un canale non ha spessore costante: e' grosso vicino all'origine e
+      // si assottiglia fino a spegnersi alla punta. Disegnato a spessore
+      // unico sembra uno stecco, ed e' quello che faceva sembrare il ragno
+      // una figura disegnata invece di una scarica.
+      //
+      // La sfumatura si fa a pezzi e non punto per punto: cinque tratti per
+      // filamento bastano perche' l'occhio la legga come continua, e costano
+      // cinque stroke invece di trenta.
+      const FILAMENTO_PEZZI = 4;
+      function strokeSfumato(context, pixel, larghezza, tinta, alfa) {
+        if (pixel.length < 2) return;
+        const perPezzo = Math.max(1, Math.ceil((pixel.length - 1) / FILAMENTO_PEZZI));
+        for (let da = 0; da < pixel.length - 1; da += perPezzo) {
+          const a = Math.min(pixel.length - 1, da + perPezzo);
+          // La coda del tratto decide spessore e luce: si prende il punto
+          // piu' lontano, cosi' ogni tratto e' gia' piu' sottile del
+          // precedente e la punta svanisce davvero.
+          const t = pixel[a].t;
+          const calo = (1 - t) * (1 - t * 0.45);
+          if (calo <= 0.02) break;
+          context.lineWidth = Math.max(0.35, larghezza * calo);
+          context.strokeStyle = "rgba(" + tinta + "," + (alfa * calo).toFixed(3) + ")";
+          context.beginPath();
+          context.moveTo(pixel[da].x, pixel[da].y);
+          for (let i = da + 1; i <= a; i += 1) context.lineTo(pixel[i].x, pixel[i].y);
+          context.stroke();
+        }
+      }
+
+      // Le tre passate del canale, sempre piu' strette e piu' chiare: la
+      // somma da' il nucleo incandescente senza che nessuna sia bianca
+      // piena. Di notte si sommano alla mappa scura, di giorno si
+      // sovrappongono a una sommita' chiara, ed e' lo stesso problema --
+      // e la stessa risposta -- del bagliore della cella.
+      // Il cuore del canale puo' bruciare a bianco, ed e' giusto che lo
+      // faccia: un canale di ritorno e' bianco incandescente, e il lilla
+      // non sta li' dentro -- sta nell'alone, che e' la luce diffusa dal
+      // ghiaccio attorno. Quindi la passata sottile va forte e le due
+      // larghe restano trasparenti e molto lavanda: si legge un filo caldo
+      // dentro un alone lilla, che e' come si vede davvero.
+      //
+      // Una taratura precedente teneva basse tutte e tre per non far
+      // saturare il cuore. Sbagliata per due motivi: il canale usciva
+      // slavato, e soprattutto si vedeva poco -- di uno stesso lampo se ne
+      // disegna UN ragno solo (il diradamento qui sotto scarta i colpi
+      // seguenti, che cadono negli stessi pixel), mentre prima se ne
+      // sommavano tre.
+      const RAGNO_NOTTE = [
+        [16,  198, 142, 250, 0.30],
+        [5,   226, 180, 252, 0.44],
+        [1.6, 250, 234, 255, 0.92]
+      ];
+      const RAGNO_GIORNO = [
+        [16,  158, 104, 220, 0.34],
+        [5,   132,  76, 200, 0.58],
+        [1.6,  92,  42, 150, 0.95]
+      ];
+
+      function disegnaRagno(context, punto, s, eta, scala, sfondo) {
+        const luce = luceDelColpo(eta);
+        if (luce <= 0.02 || prefersReducedMotion) return;
+        const ragno = ragnoDellaScarica(s);
+        // Il canale si allunga mentre si accende: e' la stessa salita della
+        // curva del colpo, quindi il filamento non compare gia' fatto.
+        const fino = Math.min(1, 0.25 + 0.75 * eta / ATTIVITA_SALITA_MS);
+        const giorno = clamp(
+          ((sfondo || 0) - SFONDO_NOTTE) / (SFONDO_GIORNO - SFONDO_NOTTE), 0, 1
+        );
+        context.save();
+        // Di notte la luce si somma, di giorno tinge: sommare un viola a una
+        // sommita' bianca non lascerebbe niente.
+        context.globalCompositeOperation = giorno < 0.5 ? "lighter" : "source-over";
+        for (let p = 0; p < RAGNO_NOTTE.length; p += 1) {
+          const n = RAGNO_NOTTE[p], d = RAGNO_GIORNO[p];
+          const tinta = [
+            Math.round(n[1] + (d[1] - n[1]) * giorno),
+            Math.round(n[2] + (d[2] - n[2]) * giorno),
+            Math.round(n[3] + (d[3] - n[3]) * giorno)
+          ].join(",");
+          const largo = n[0] * scala;
+          const alfa = (n[4] + (d[4] - n[4]) * giorno) * luce;
+          for (let f = 0; f < ragno.length; f += 1) {
+            const filo = ragno[f];
+            const lungo = filo.lunghezza * RAGNO_RAGGIO_PX * scala;
+            strokeSfumato(context,
+              puntiFilamento(filo.forma, punto.x, punto.y, lungo, filo.direzione, fino),
+              largo, tinta, alfa);
+            // I rami si accendono a canale formato: finche' il filamento si
+            // sta allungando non si e' ancora biforcato. E si disegnano solo
+            // sulle passate strette: sulla piu' larga sarebbero un alone
+            // dentro un alone, indistinguibile, e ingrosserebbero soltanto
+            // la macchia attorno al punto.
+            if (fino < 1 || p === 0) continue;
+            for (let r = 0; r < filo.rami.length; r += 1) {
+              const ramo = filo.rami[r];
+              const radice = puntoDelFilamento(filo.forma, ramo.nodo,
+                punto.x, punto.y, lungo, filo.direzione);
+              strokeSfumato(context,
+                puntiFilamento(ramo.forma, radice.x, radice.y,
+                  ramo.lunghezza * RAGNO_RAGGIO_PX * scala, ramo.direzione),
+                largo * 0.6, tinta, alfa * 0.8);
+            }
+          }
+        }
+        context.restore();
+      }
+
       function disegnaNuovoRilevamento(context, punto, scarica, etaArrivo, scala) {
         if (prefersReducedMotion || etaArrivo < 0 || etaArrivo > STRIKE_PING_MS) return;
         const t = etaArrivo / STRIKE_PING_MS;
@@ -7481,15 +7806,20 @@
 
         context.save();
         context.globalCompositeOperation = "lighter";
+        // L'alone centrale e' molto piu' tenue di quando era l'unico segno
+        // di arrivo: adesso al centro c'e' il canale, e un disco bianco a
+        // tre quarti di opacita' se lo mangiava -- provato e guardato. Qui
+        // basta un nocciolo appena, quel tanto che ancora il ciano si
+        // distingua dal lilla del canale.
         const alone = context.createRadialGradient(
-          punto.x, punto.y, 0, punto.x, punto.y, (19 - 6 * t) * scala
+          punto.x, punto.y, 0, punto.x, punto.y, (13 - 4 * t) * scala
         );
-        alone.addColorStop(0, "rgba(255,255,255," + (0.74 * coda).toFixed(3) + ")");
-        alone.addColorStop(0.22, "rgba(205,247,255," + (0.48 * coda).toFixed(3) + ")");
+        alone.addColorStop(0, "rgba(226,250,255," + (0.30 * coda).toFixed(3) + ")");
+        alone.addColorStop(0.3, "rgba(178,236,255," + (0.20 * coda).toFixed(3) + ")");
         alone.addColorStop(1, "rgba(82,211,244,0)");
         context.fillStyle = alone;
         context.beginPath();
-        context.arc(punto.x, punto.y, (19 - 6 * t) * scala, 0, Math.PI * 2);
+        context.arc(punto.x, punto.y, (13 - 4 * t) * scala, 0, Math.PI * 2);
         context.fill();
 
         context.strokeStyle = "rgba(177,243,255,"
@@ -7578,11 +7908,40 @@
         const punti = new Array(liveStrikes.length);
         for (let i = 0; i < liveStrikes.length; i += 1) {
           const s = liveStrikes[i];
-          const punto = projectParticle(s.lon, s.lat, 0);
-          punti[i] = punto;
+          punti[i] = projectParticle(s.lon, s.lat, 0);
+        }
+
+        // I RAGNI. Si accendono con la stessa curva che illumina la nube:
+        // e' lo stesso colpo di ritorno, visto da vicino invece che diffuso
+        // nel ghiaccio. La forma e' un segno nostro, il ritmo e' della rete.
+        //
+        // Se ne disegnano pochi e distinti, scorrendo dal fondo perche'
+        // liveStrikes e' in ordine di arrivo: i piu' recenti stanno li'.
+        const separazioneRagni = RAGNO_SEPARAZIONE_PX * scala;
+        const ragniFatti = [];
+        for (let i = liveStrikes.length - 1; i >= 0; i -= 1) {
+          if (ragniFatti.length >= RAGNO_MAX) break;
+          const punto = punti[i];
           if (!punto) continue;
+          const s = liveStrikes[i];
+          const daArrivo = adessoFrame - s.ricevuta;
+          if (!(daArrivo >= 0) || daArrivo >= ATTIVITA_LAMPO_MS) continue;
+          let vicino = false;
+          for (let k = 0; k < ragniFatti.length; k += 1) {
+            if (Math.hypot(ragniFatti[k].x - punto.x, ragniFatti[k].y - punto.y)
+                < separazioneRagni) { vicino = true; break; }
+          }
+          if (vicino) continue;
+          ragniFatti.push(punto);
+          disegnaRagno(context, punto, s, daArrivo, scala,
+            sfondoSottoCella(s.lon, s.lat));
+        }
+
+        for (let i = 0; i < liveStrikes.length; i += 1) {
+          if (!punti[i]) continue;
           disegnaNuovoRilevamento(
-            context, punto, s, adessoFrame - s.ricevuta, scala
+            context, punti[i], liveStrikes[i],
+            adessoFrame - liveStrikes[i].ricevuta, scala
           );
         }
 
@@ -7672,7 +8031,8 @@
         if (showLiveLightning && showLightning) {
           key.textContent = "● punto/età dalla rete · alone = densità 15 km / 90 s · AFA MTG invariata";
         } else if (showLiveLightning) {
-          key.textContent = "● punto rilevato · colore = età · alone = densità 15 km / 90 s";
+          key.textContent = "● punto rilevato · colore = età · alone = densità "
+            + "15 km / 90 s · filamenti = segno grafico, non geometria misurata";
         } else {
           key.textContent = "MTG LI · AFA osservata e pubblicata senza ricolorazione";
         }
@@ -9154,7 +9514,8 @@
             if (strikeSoundOn) ensureStrikeAudio();
             toast(
               "Fulmini live · punti e tempi rilevati; alone = attività 15 km / 90 s. "
-              + "L'anello iniziale è solo un segnale di arrivo."
+              + "I filamenti e l'anello sono segni grafici: la rete non misura "
+              + "la forma del canale."
             );
           } else {
             blitzDisconnect();
