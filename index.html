@@ -7118,9 +7118,9 @@
       // campionamenti: e' quello che decide se uno strato sottile viene
       // attraversato o scavalcato.
       var QUALITA_VOLUME = isMobile()
-        ? { forma: 1200, pelle: 1400, misura: 800, esagerazione: 6.5, passoKm: 0.30, pixel: 560000,
+        ? { forma: 1200, pelle: 1400, misura: 800, esagerazione: 3.2, passoKm: 0.30, pixel: 560000,
             rumore: 48, passiLuce: 4 }
-        : { forma: 2048, pelle: 2048, misura: 1100, esagerazione: 7, passoKm: 0.22, pixel: 1900000,
+        : { forma: 2048, pelle: 2048, misura: 1100, esagerazione: 3.5, passoKm: 0.22, pixel: 1900000,
             rumore: 64, passiLuce: 6 };
 
       // Due misure complementari dello stesso istante: l'IR stima la cima,
@@ -7354,11 +7354,11 @@
       var ESAGERAZIONE_GRANA = 5;
       // L'esagerazione serve a leggere il rilievo da lontano. Da vicino la
       // stessa esagerazione fa di un cumulo un grattacielo: allora cala con lo
-      // zoom, di poco oltre la vista d'insieme e fino a un terzo in primo
+      // zoom, di poco oltre la vista d'insieme e fino a circa meta' in primo
       // piano, dove la nube si vede gia' per quello che e'.
       var ESAGERAZIONE_ZOOM_PIENO = 5.0;
       var ESAGERAZIONE_CALO_PER_ZOOM = 0.55;
-      var ESAGERAZIONE_MINIMA = 2.5;
+      var ESAGERAZIONE_MINIMA = 1.6;
 
       // Di notte il sole e' sotto l'orizzonte: il volume viene illuminato
       // dall'ambiente notturno e dai lampi, e basta. Non si accende un sole
@@ -7922,16 +7922,12 @@
       var SPESSORE_OTTICO_NOTTE = 0.6;
       // La base delle nubi a strato e' piatta: si stende su questa distanza.
       var BASE_DISTESA_KM = 10;
-      // LA CONVEZIONE PROFONDA. Nello schema ISCCP una nube alta e otticamente
-      // spessa non e' un cirrostrato: e' convezione profonda, un cumulonembo
-      // con la sua incudine. Si riconosce senza bisogno del prodotto RDT (che
-      // di notte o con il servizio giu' spesso manca). La TORRE sta sotto la
-      // cima piu' fredda del sistema -- l'overshooting top -- entro
-      // SISTEMA_RAGGIO_KM, larga TORRE_RAGGIO_KM; tutto il resto della cima
-      // fredda e' incudine, sospesa in quota. Prima l'intera cella diventava
-      // un altopiano pieno dal suolo alla cima.
+      // Una cima alta e opaca da sola non identifica un cumulonembo: anche un
+      // fronte puo' avere cime fredde. Il nucleo convettivo richiede un rilievo
+      // infrarosso locale osservato, sostenuto dalla tessitura o da RDT. In
+      // assenza di quel rilievo la scena conserva un manto alto, senza
+      // inventare una torre in un pixel arbitrario dell'altopiano termico.
       var SISTEMA_RAGGIO_KM = 35;
-      var TORRE_RAGGIO_KM = 11;
       // Sopra i dieci chilometri: le cime frontali d'autunno alle nostre
       // latitudini arrivano a otto-nove, i cumulonembi sfondano la tropopausa.
       var PROFONDA_MIN_KM = 9.8;
@@ -8061,21 +8057,11 @@
         var devIr = campo.devIr || deviazioneLocale(quotaIr, cancello, w, h, raggioT);
         var devLuce = campo.devLuce || (luminanza ? deviazioneLocale(luminanza, cancello, w, h, raggioT) : null);
         var rdt = campo.celle ? sfoca(campo.celle, w, h, 1) : null;
-        // Le torri: la cima piu' fredda del sistema, cioe' il massimo entro
-        // SISTEMA_RAGGIO_KM, allargata a TORRE_RAGGIO_KM. Le cime piu' fredde
-        // sono spesso un altopiano (la scala infrarossa satura): uno scarto
-        // minuscolo e fisso per pixel rompe i pareggi, cosi' da un altopiano
-        // esce una torre ogni SISTEMA_RAGGIO_KM e non un muro lungo quanto
-        // l'altopiano.
-        var quotaUnica = new Float32Array(n);
-        for (var kq = 0; kq < n; kq++) quotaUnica[kq] = quotaIr[kq] + ((kq * 2654435761) >>> 0) / 4294967296 * 1e-3;
-        var massimoSistema = massimoScorrevole(quotaUnica, w, h, Math.max(1, Math.round(SISTEMA_RAGGIO_KM / kmpx)));
-        var picco = new Float32Array(n);
-        for (var kp = 0; kp < n; kp++) {
-          picco[kp] = quotaUnica[kp] >= massimoSistema[kp] && cancello[kp] > 0.3 ? 1 : 0;
-        }
-        var raggioTorre = Math.max(1, Math.round(TORRE_RAGGIO_KM / kmpx));
-        var torreArea = sfoca(massimoScorrevole(picco, w, h, raggioTorre), w, h, Math.max(1, Math.round(raggioTorre / 2)));
+        // Un massimo relativo IR su 18 km conserva la posizione della cima
+        // che sfonda davvero. La media pesa solo i pixel nuvolosi: il bordo
+        // contro il cielo sereno non diventa un falso massimo convettivo.
+        var ambienteIr = sfocaPesata(quotaIr, cancello, w, h,
+          Math.max(1, Math.round(18 / kmpx)));
         var tau = new Float32Array(n), kappa = new Float32Array(n), chi = new Float32Array(n);
         var fibra = new Float32Array(n), base = new Float32Array(n), incudine = new Float32Array(n);
         var prova = new Float32Array(n), freddoOpaco = new Float32Array(n);
@@ -8093,26 +8079,29 @@
           // Convezione profonda: alta, fredda, opaca E con la cima ribollente
           // (le cime che sfondano rendono irregolare l'infrarosso). Senza
           // l'ultima prova anche un fronte, di notte, e' alto freddo e
-          // opaco: ne uscivano torri in fila lungo i sistemi frontali. Con
-          // RDT e' certa.
-          prova[k] = Math.max(
-            alto * lisciaFra(PROFONDA_MIN_KM, PROFONDA_MIN_KM + 1.5, T) * lisciaFra(0.7, 0.88, tau[k])
-              * lisciaFra(0.4, 0.85, cumuli),
-            rdt ? rdt[k] * alto : 0);
+          // opaco: ne uscivano torri in fila lungo i sistemi frontali. RDT
+          // sostiene l'interpretazione, ma non determina la forma da solo.
+          var rilievoIr = Math.max(0, quotaIr[k] - ambienteIr[k]);
+          var provaTermica = lisciaFra(0.4, 1.3, rilievoIr) * lisciaFra(0.25, 0.7, cumuli);
+          var provaRdt = rdt ? rdt[k] * lisciaFra(0.15, 0.75, rilievoIr) : 0;
+          prova[k] = alto * lisciaFra(PROFONDA_MIN_KM, PROFONDA_MIN_KM + 1.5, T)
+            * lisciaFra(0.62, 0.86, tau[k]) * Math.max(provaTermica, provaRdt)
+            * lisciaFra(0.25, 0.7, cancello[k]);
           freddoOpaco[k] = alto * lisciaFra(PROFONDA_MIN_KM - 1, PROFONDA_MIN_KM + 0.5, T)
             * lisciaFra(0.6, 0.8, tau[k]);
           chi[k] = 0;
           fibra[k] = alto * (1 - lisciaFra(0.3, 0.7, tau[k]));
         }
-        // La prova della convezione e' puntuale -- le cime che sfondano --
-        // ma l'incudine attorno e' liscia: il sistema convettivo e' tutta la
-        // cima fredda e opaca entro SISTEMA_RAGGIO_KM da una prova.
-        var sistema = sfoca(massimoScorrevole(prova, w, h, Math.max(1, Math.round(SISTEMA_RAGGIO_KM / kmpx))),
+        // Il nucleo segue il rilievo misurato, senza allargare un singolo
+        // pixel in un cilindro. Il manto freddo vicino a quel nucleo e'
+        // l'incudine; dove manca la prova resta una nube alta stratificata.
+        var nucleo = sfocaPesata(prova, cancello, w, h, Math.max(1, Math.round(3 / kmpx)));
+        var sistema = sfoca(massimoScorrevole(nucleo, w, h, Math.max(1, Math.round(SISTEMA_RAGGIO_KM / kmpx))),
           w, h, Math.max(1, Math.round(4 / kmpx)));
         for (k = 0; k < n; k++) {
-          var profondo = Math.max(prova[k], sistema[k] * freddoOpaco[k]);
-          chi[k] = torreArea[k] * profondo;
-          incudine[k] = profondo * (1 - torreArea[k]);
+          var profondo = sistema[k] * freddoOpaco[k];
+          chi[k] = nucleo[k] * freddoOpaco[k];
+          incudine[k] = Math.max(0, profondo - chi[k]) * cancello[k];
           // L'incudine e' liscia in cima e sfilacciata sotto: niente bolle.
           fibra[k] = Math.max(fibra[k], 0.45 * incudine[k]);
           kappa[k] *= 1 - 0.85 * incudine[k];
@@ -8146,11 +8135,9 @@
         for (k = 0; k < n; k++) base[k] = limita(base[k], propria[k] - 0.8, propria[k] + 0.8);
         var densita = new Float32Array(n), classe = new Uint8Array(n);
         for (k = 0; k < n; k++) {
-          // Il nucleo sfumato vale per intero gia' a meta': una torre e' una
-          // torre in tutto il suo nucleo, non solo nel pixel piu' freddo.
-          // Non sotto 0,35: sotto e' solo la sfumatura dell'allargamento, e
-          // con 0,1 la torre si mangiava quasi tutta l'incudine.
-          var x = lisciaFra(0.35, 0.65, chi[k]);
+          // Il passaggio fra nucleo profondo e incudine e' continuo: una
+          // soglia binaria generava un pilastro col bordo verticale.
+          var x = lisciaFra(0.08, 0.75, chi[k]) * cancello[k];
           chi[k] = x;
           var T3 = cima[k], t3 = tau[k], c3 = kappa[k];
           var b = base[k];
@@ -8158,10 +8145,8 @@
           // cima e' a quota media; il cumulonembo parte dal basso sempre.
           var congesto = c3 * lisciaFra(0.6, 0.9, t3) * (1 - lisciaFra(PIANO_ALTO_KM - 1, PIANO_ALTO_KM + 0.5, T3));
           b += (BASE_CUMULO_KM - b) * congesto * 0.9;
-          // La torre del cumulonembo NON abbassa qui la base: interpolata fra
-          // la torre (un chilometro) e l'incudine (dieci), la base sfumata
-          // faceva pendere dall'incudine una lingua. La scende lo shader, con
-          // un gradino netto sul bordo della torre: un pilastro, come dal vero.
+          // La base dell'incudine resta in quota; solo il nucleo osservato
+          // collega la cima al livello basso, con raccordo morbido nello shader.
           base[k] = limita(b, 0.2, Math.max(0.2, T3 - 0.25));
           densita[k] = 0.22 + 0.78 * t3;
           if (cancello[k] < 0.15 || T3 < 0.2) { classe[k] = 0; continue; }
@@ -8580,15 +8565,14 @@
         "  vec4 genere = textureLod(uGeneri, uv, lodLiscio);",
         "  float fibra = genere.g, torre = genere.b;",
         "  float cumulo = max(genere.r, torre);",
-        // Quanto la cima e' a bolle. Il cumulo del tutto; lo stratocumulo e lo
-        // strato a zolle piu' basse -- visti dall'alto sono cosi', non lisci
-        // come un lenzuolo --; il cirro fibroso, non a bolle.
-        "  float bolla = max(cumulo, 0.55) * (1.0 - 0.6 * fibra);",
+        // Solo le nubi con tessitura convettiva osservata hanno grandi lobi.
+        // Il minimo di 0,55 scolpiva anche nembostrati e strati come colline.
+        "  float bolla = mix(0.08, 1.0, cumulo) * (1.0 - 0.9 * smoothstep(0.2, 0.85, fibra));",
         "  cimaKm = mix(liscia.r, fine.r, 0.35) * uScalaKm;",
         "  float baseKm = min(liscia.b * uScalaKm, cimaKm - 0.2);",
-        // La torre del cumulonembo parte dal livello di condensazione, con
-        // la parete netta sul suo bordo.
-        "  baseKm = mix(baseKm, min(1.0, baseKm), smoothstep(0.35, 0.6, torre));",
+        // La base scende soltanto sotto il nucleo convettivo riconosciuto;
+        // il raccordo progressivo non produce un cilindro o una parete.
+        "  baseKm = mix(baseKm, min(1.0, baseKm), 0.9 * smoothstep(0.08, 0.85, torre));",
         "  gDensita = liscia.a;",
         "  if (cimaKm < 0.24) return 0.0;",
         "  float cosLat = cosLatDa(p.y);",
@@ -8630,12 +8614,13 @@
         "  float liscia2 = sf.r;",
         "  forma = mix(0.8 + 0.2 * forma, forma, bolla);",
         "  forma = mix(forma, 0.55 + 0.45 * liscia2, fibra);",
-        // Il campo di cumuli e' fatto di nubi SEPARATE con il cielo in mezzo,
-        // anche dove il satellite, a due chilometri per pixel, vede tutto
-        // coperto: fra le bolle piu' grosse si apre il vuoto (circa un quinto
-        // dello spazio, misurato sulla texture).
+        // Se il satellite vede cielo fra i cumuli, la forma ne segue i vuoti.
+        // In una copertura compatta non si scavano buchi inventati; una
+        // incudine o un nembostrato conserva la propria impronta osservata.
         "  float separati = smoothstep(0.5, 0.82, sf.r * 0.55 + fbm * 0.45);",
-        "  forma = mix(forma, separati, smoothstep(0.6, 1.0, bolla));",
+        "  float separazione = smoothstep(0.55, 0.95, bolla)",
+        "    * (1.0 - smoothstep(0.65, 0.93, copertura)) * (1.0 - torre);",
+        "  forma = mix(forma, separati, separazione);",
         // IL GRADIENTE IN QUOTA (Schneider, Nubis): nei cumuli la nube si
         // restringe salendo, e ogni cella finisce in una cupola tonda che si
         // stacca dalle vicine. Prima la copertura era la stessa a ogni quota:
@@ -9567,19 +9552,37 @@
         // scansione, cioe' pochi minuti dopo l'orario dello slot -- lo stesso
         // momento in cui MTG, dieci minuti dopo, la osserva.
         var slotMsg = Math.floor(slotScena / STRATI.maschera.slotMs) * STRATI.maschera.slotMs;
-        // Tutte le richieste partono insieme, ma il volume NON aspetta la
-        // pesante GeoColour. Appena arrivano infrarosso, maschera e quota si
-        // pubblica il volume; GeoColour aggiunge poi dettaglio e superficie in
-        // un secondo passaggio.
+        // Le richieste partono insieme. RDT e GeoColour affinano la scena,
+        // ma non bloccano il primo fotogramma satellitare: RDT puo' impiegare
+        // due timeout da nove secondi anche quando non ci sono celle.
         var promessaPelle = scarica(STRATI.pelle, misure.pelle, adesso, slotScena);
+        var promessaCelle = scaricaRdt(slotMsg);
         Promise.all([
           scarica(STRATI.forma, misure.forma, adesso, slotScena),
           scarica(STRATI.maschera, misure.msg, adesso, slotMsg),
-          scarica(STRATI.cime, misure.msg, adesso, slotMsg),
-          scaricaRdt(slotMsg)
+          scarica(STRATI.cime, misure.msg, adesso, slotMsg)
         ]).then(function (arrivati) {
           if (!attiva || seriale !== scenaSeriale) return;
-          componi(arrivati[0], arrivati[1], arrivati[2], arrivati[3], promessaPelle, misure, seriale);
+          var campo = componi(arrivati[0], arrivati[1], arrivati[2], null, promessaPelle, misure, seriale);
+          if (!campo) return;
+          promessaCelle.then(function (celle) {
+            campo.rdtTerminato = true;
+            if (!attiva || seriale !== scenaSeriale || !celle || !celle.length) {
+              campo.otticaMorfologia = null;
+              return;
+            }
+            try {
+              campo.celle = celleRdt(celle, campo.larghezza, campo.altezza);
+              campo.rdt = celle.length;
+              var ottica = campo.otticaMorfologia;
+              classificaNubi(campo, ottica && ottica.luce, ottica && ottica.giorno,
+                ottica && ottica.luminanza);
+              volume.pubblicaCampo(campo);
+            } catch (errore) {
+              // Il volume satellitare e' gia' pronto anche senza RDT.
+            }
+            campo.otticaMorfologia = null;
+          });
         }).catch(function () {
           if (attiva && seriale === scenaSeriale) {
             toast("Nubi in volume: infrarosso non disponibile, resta visibile il satellite");
@@ -9752,6 +9755,7 @@
             });
           }, 0);
         });
+        return campo;
       }
 
       function completaScenaOttica(campo, pelle, misuraPelle, seriale) {
@@ -9764,7 +9768,11 @@
               var luce = dettaglioDaGeoColour(pixelPelle, misuraPelle, campo);
               var giorno = luceDelGiorno(campo, pelle.slot.epoca);
               componiCopertura(campo, luce, giorno);
-              classificaNubi(campo, luce, giorno, luminanzaDellaNube(pixelPelle, misuraPelle, campo));
+              var luminanza = luminanzaDellaNube(pixelPelle, misuraPelle, campo);
+              if (!campo.rdtTerminato) {
+                campo.otticaMorfologia = { luce: luce, giorno: giorno, luminanza: luminanza };
+              }
+              classificaNubi(campo, luce, giorno, luminanza);
             } else {
               var telaOsservata = document.createElement("canvas");
               telaOsservata.width = misuraPelle.larghezza;
