@@ -2169,7 +2169,7 @@ console.log("nubi in volume: spessore continuo, niente grana, niente coni, nient
   vm.createContext(contesto);
   vm.runInContext("this.m = (function () {" + corpo + ";return { mascheraDaClm, quoteDaCth,"
     + " campoMisurato, componiCopertura, dettaglioDaGeoColour, tessituraDelCampo, CTH_SCALA,"
-    + " QUOTA_SCALA_KM };})();", contesto);
+    + " QUOTA_SCALA_KM, classificaNubi, GENERI };})();", contesto);
   const m = contesto.m;
   const immagine = (w, h, colore) => {
     const px = new Uint8Array(w * h * 4);
@@ -2227,17 +2227,39 @@ console.log("nubi in volume: spessore continuo, niente grana, niente coni, nient
   assert.ok(Math.abs(campo.quota[10 * w + 32] - 1.2) < 0.3,
     "la quota non e' piu' quella misurata dal Cloud Top Height: " + campo.quota[10 * w + 32]);
 
-  // Cirro contro torre: stessa cima misurata, diversa temperatura IR.
-  const spessoreDi = (quotaIr) => {
-    const c = { larghezza: w, altezza: h, quota: new Float32Array(quanti).fill(quotaIr),
+  // I GENERI. Ogni nube sta alla quota del suo genere: la base non e' la
+  // cima meno uno spessore -- che attaccava ogni nube a terra come una
+  // montagna -- ma la quota a cui quel genere si forma.
+  const scena = (cimaKm, quotaIr, conCella, irregolare) => {
+    const c = { larghezza: w, altezza: h, quota: new Float32Array(quanti),
       copertura: new Float32Array(quanti).fill(1) };
+    for (let k = 0; k < quanti; k++) {
+      // Celle di quattro pixel, circa otto chilometri: la scala dei cumuli
+      // che il satellite risolve.
+      const cx = Math.floor((k % w) / 4), cy = Math.floor(Math.floor(k / w) / 4);
+      c.quota[k] = quotaIr + (irregolare ? ((cx * 7919 + cy * 104729) % 13) / 13 * 3 - 1.5 : 0);
+    }
     const tutto = new Float32Array(quanti).fill(1);
-    m.campoMisurato(c, tutto, { quota: new Float32Array(quanti).fill(12), valida: tutto }, { larghezza: w, altezza: h });
-    return m.tessituraDelCampo(c)[(10 * w + 20) * 4 + 2] * m.QUOTA_SCALA_KM;
+    m.campoMisurato(c, tutto, { quota: new Float32Array(quanti).fill(cimaKm), valida: tutto },
+      { larghezza: w, altezza: h });
+    if (conCella) c.celle = new Float32Array(quanti).fill(1);
+    m.classificaNubi(c, null, null, null);
+    const centro = 10 * w + 20, kc = 5 * c.classeMisura.larghezza + 10;
+    return { base: c.base[centro], genere: m.GENERI[c.classe[kc]], cima: c.quota[centro] };
   };
-  const cirro = spessoreDi(3), torre = spessoreDi(12);
-  assert.ok(cirro < 3, "un cirro a 12 km, caldo all'infrarosso, torna spesso " + cirro.toFixed(1) + " km: la pinna");
-  assert.ok(torre > 6, "una torre fredda quanto la sua cima non e' piu' profonda: " + torre.toFixed(1) + " km");
+  const cirro = scena(11, 3, false, false);
+  assert.equal(cirro.genere, "Cirro", "un velo alto e caldo all'infrarosso non e' riconosciuto come cirro: " + cirro.genere);
+  assert.ok(cirro.base > 8.5, "il cirro non sta piu' in quota: base " + cirro.base.toFixed(1) + " km");
+  const torre = scena(12, 12, true, true);
+  assert.equal(torre.genere, "Cumulonembo", "una cella RDT fredda quanto la sua cima non e' un cumulonembo: " + torre.genere);
+  assert.ok(torre.base < 2, "il cumulonembo non parte piu' dal basso: base " + torre.base.toFixed(1) + " km");
+  const strato = scena(1.4, 1.2, false, false);
+  assert.equal(strato.genere, "Stratocumulo", "uno strato basso liscio di notte non e' uno stratocumulo: " + strato.genere);
+  assert.ok(strato.base < 0.8, "la nube bassa liscia non sta bassa: base " + strato.base.toFixed(1) + " km");
+  const cumulo = scena(1.8, 1.8, false, true);
+  assert.equal(cumulo.genere, "Cumulo", "una nube bassa a cima irregolare non e' un cumulo: " + cumulo.genere);
+  assert.ok(Math.abs(cumulo.base - 1.0) < 0.25, "il cumulo non ha la base al livello di condensazione: "
+    + cumulo.base.toFixed(2) + " km");
 
   // Sabbia e nube in GeoColour: la sabbia del Sahara e' luminosa ma arancione.
   const pelle = { data: new Uint8Array([162, 137, 111, 255, 200, 200, 204, 255]) };
@@ -2245,4 +2267,28 @@ console.log("nubi in volume: spessore continuo, niente grana, niente coni, nient
   assert.ok(dettaglio[0] < 0.05, "la sabbia del Sahara conta come nube: " + dettaglio[0].toFixed(2));
   assert.ok(dettaglio[1] > 0.8, "una nube bianca non conta piu' come nube");
 }
-console.log("nubi in volume: maschera CLM, quota CTH, opacita', sabbia");
+{
+  // Sotto le nubi il suolo non e' un buco: si riempie dai dintorni sereni e
+  // va in ombra. E lo shader prende la base dal campo e la forma dal genere.
+  const vm = require("node:vm");
+  const contesto = { Math, Float32Array, Uint8Array };
+  vm.createContext(contesto);
+  vm.runInContext(implementazione("limita") + implementazione("lisciaFra")
+    + implementazione("riempiDaiDintorni"), contesto);
+  const w = 16, h = 8, rgb = new Float32Array(w * h * 3), peso = new Float32Array(w * h);
+  for (let k = 0; k < w * h; k++) {
+    const sereno = (k % w) < 8;
+    rgb.set(sereno ? [200, 40, 20] : [240, 240, 240], k * 3);  // a destra la nube
+    peso[k] = sereno ? 1 : 0;
+  }
+  const pieno = contesto.riempiDaiDintorni(rgb, peso, w, h);
+  const k = 4 * w + 13;
+  assert.ok(pieno[k * 3] > 150 && pieno[k * 3 + 1] < 90,
+    "sotto la nube il suolo non viene dai dintorni: " + Array.from(pieno.slice(k * 3, k * 3 + 3)).map(Math.round));
+  const frammento = html.slice(html.indexOf("var FRAMMENTO = ["), html.indexOf("var STESURA = ["));
+  assert.match(frammento, /float baseKm = min\(liscia\.b \* uScalaKm/,
+    "la base della nube torna a essere la cima meno uno spessore: le montagne");
+  assert.match(frammento, /vec4 genere = textureLod\(uGeneri, uv, lodLiscio\);/,
+    "lo shader non legge piu' il genere della nube");
+}
+console.log("nubi in volume: maschera CLM, quota CTH, opacita', generi, sabbia, suolo sotto le nubi");
