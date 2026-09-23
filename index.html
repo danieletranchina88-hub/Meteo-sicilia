@@ -2330,7 +2330,7 @@
           </button>
           <button class="sat-layer" type="button" data-toggle="volume" aria-pressed="false">
             <svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M3 16c2-4 5-6 9-6s7 2 9 6"></path><path d="M13 3l-3 6h4l-3 6"></path></svg>
-            <span><b>Nubi in volume</b><small>IR + GeoColour · luce solare reale · flash Blitz</small></span>
+            <span><b>Nubi in volume</b><small>maschera e quota cime EUMETSAT · luce solare · flash Blitz</small></span>
           </button>
           <p id="lightning-physics-key" hidden></p>
           <details id="lightning-alerts" class="sat-alerts" hidden>
@@ -7115,18 +7115,71 @@
       // campionamenti: e' quello che decide se uno strato sottile viene
       // attraversato o scavalcato.
       var QUALITA_VOLUME = isMobile()
-        ? { forma: 1100, pelle: 1400, esagerazione: 8, passoKm: 0.34, pixel: 560000 }
-        : { forma: 1600, pelle: 2048, esagerazione: 9, passoKm: 0.24, pixel: 1900000 };
+        ? { forma: 1200, pelle: 1400, misura: 800, esagerazione: 6.5, passoKm: 0.30, pixel: 560000 }
+        : { forma: 2048, pelle: 2048, misura: 1100, esagerazione: 7, passoKm: 0.22, pixel: 1900000 };
 
       // Due misure complementari dello stesso istante: l'IR stima la cima,
       // GeoColour recupera la copertura calda, bassa o otticamente sottile.
+      //
+      // Due prodotti OPERATIVI EUMETSAT, dallo stesso punto di vista (0
+      // gradi, come MTG) e dallo stesso server, dicono le due cose che
+      // un'immagine sola non puo' dire:
+      //  - DOVE c'e' nube: la maschera nubi di MSG (CLM), classificata pixel
+      //    per pixel su tutti i canali. Senza, l'infrarosso scambiava per nube
+      //    il suolo FREDDO -- la Spagna e il Sahara all'alba, le Alpi, i
+      //    Balcani -- che in GeoColour e' sereno: le nubi spuntavano in 3D
+      //    dove l'immagine piana non ne mostrava.
+      //  - A CHE QUOTA sta la cima: il prodotto Cloud Top Height di MSG, in
+      //    metri, invece della stima dalla sola luminosita' infrarossa.
+      // MTG, con il suo chilometro, resta quello che da' la FORMA fine.
       var STRATI = {
-        forma:  { layer: "mtg_fd:ir105_hrfi",    slotMs: 10 * 60 * 1000, ritardoMin: 22 },
-        pelle:  { layer: "mtg_fd:rgb_geocolour", slotMs: 10 * 60 * 1000, ritardoMin: 22 }
+        forma:    { layer: "mtg_fd:ir105_hrfi",    slotMs: 10 * 60 * 1000, ritardoMin: 22 },
+        pelle:    { layer: "mtg_fd:rgb_geocolour", slotMs: 10 * 60 * 1000, ritardoMin: 22 },
+        maschera: { layer: "msg_fes:clm",          slotMs: 15 * 60 * 1000, ritardoMin: 20 },
+        cime:     { layer: "msg_fes:cth",          slotMs: 15 * 60 * 1000, ritardoMin: 20 }
       };
+
+      // La scala dei colori del prodotto Cloud Top Height, letta dalla sua
+      // legenda ufficiale (GetLegendGraphic di msg_fes:cth): quota in metri,
+      // rosso, verde, blu. Il WMS consegna colori, non numeri, e il WCS dello
+      // stesso server consegna le stesse bande colorate: la quota si ricava
+      // allora al contrario, cercando il colore nella scala.
+      var CTH_SCALA = [
+        [340,0,0,0], [530,17,6,0], [720,32,14,0], [920,53,23,0], [1110,79,35,0],
+        [1300,105,45,5], [1500,113,41,26], [1690,122,36,42], [1880,140,27,79],
+        [2080,157,18,117], [2270,170,12,146], [2470,179,7,165], [2660,192,0,192],
+        [2850,154,0,204], [3050,117,0,216], [3240,96,0,224], [3430,79,0,229],
+        [3630,41,0,241], [3820,4,1,253], [4010,0,19,255], [4210,0,35,255],
+        [4400,0,45,255], [4590,0,69,255], [4790,0,95,255], [4980,0,116,255],
+        [5180,0,121,255], [5370,0,146,255], [5560,0,169,255], [5760,0,194,255],
+        [5950,0,206,255], [6140,0,220,255], [6340,0,244,255], [6530,0,248,226],
+        [6720,0,236,180], [6920,0,231,162], [7110,0,224,128], [7310,0,211,77],
+        [7500,0,198,27], [7690,5,197,17], [7890,18,195,0], [8080,34,200,0],
+        [8270,60,206,0], [8470,83,212,0], [8660,99,216,0], [8850,109,219,0],
+        [9050,134,225,0], [9240,159,231,0], [9430,184,237,0], [9630,190,238,0],
+        [9820,208,243,0], [10020,233,249,0], [10210,254,251,0], [10400,254,232,0],
+        [10600,254,226,0], [10790,254,201,0], [10980,254,177,0], [11180,254,152,0],
+        [11370,254,141,0], [11560,254,122,0], [11760,254,102,0], [11950,254,77,0],
+        [12140,254,53,0], [12340,254,47,0], [12530,254,28,0], [12730,254,3,0],
+        [12920,238,26,26], [13110,226,48,48], [13310,216,63,63], [13500,201,88,88],
+        [13690,183,120,120], [13890,166,150,150], [14080,166,160,160],
+        [14270,169,169,169], [14470,181,181,181], [14660,193,193,193],
+        [14850,205,205,205], [15050,208,208,208], [15240,218,218,218],
+        [15440,230,230,230], [15630,243,243,243], [15820,255,255,255],
+        [15980,255,255,255]
+      ];
+      // Un colore piu' lontano di cosi' da ogni gradino della scala non e' una
+      // quota: e' il bordo fra due pixel che il server ha mescolato. Si
+      // scarta e lo si ricostruisce dai vicini validi.
+      var CTH_DISTANZA_MAX = 22;
+      // Dove la maschera vede nube ma nessuna quota e' valida -- in pratica
+      // strati bassi e caldi ai bordi -- si assume uno strato basso. E'
+      // l'unico numero di quota non misurato, e vale solo li'.
+      var NUBE_SENZA_QUOTA_KM = 1.5;
 
       var LARGHEZZA_FORMA = QUALITA_VOLUME.forma;
       var LARGHEZZA_PELLE = QUALITA_VOLUME.pelle;
+      var LARGHEZZA_MISURA = QUALITA_VOLUME.misura;
 
       // --- le costanti dichiarate -----------------------------------------
       // Il fondo di cielo sereno. Su un dominio che va dal Sahara al Baltico
@@ -7258,7 +7311,7 @@
       // piano, dove la nube si vede gia' per quello che e'.
       var ESAGERAZIONE_ZOOM_PIENO = 5.0;
       var ESAGERAZIONE_CALO_PER_ZOOM = 0.55;
-      var ESAGERAZIONE_MINIMA = 3.0;
+      var ESAGERAZIONE_MINIMA = 2.5;
 
       // Di notte il sole e' sotto l'orizzonte: il volume viene illuminato
       // dall'ambiente notturno e dai lampi, e basta. Non si accende un sole
@@ -7560,13 +7613,229 @@
           copertura[k] = presenza * c * c * (3 - 2 * c);
         }
         return {
-          quota: allargaCime(
-            sfoca(mediana3(quota, larghezza, altezza), larghezza, altezza, SFOCATURA_GRADINI_PX),
-            larghezza, altezza),
+          quota: sfoca(mediana3(quota, larghezza, altezza), larghezza, altezza, SFOCATURA_GRADINI_PX),
           copertura: sfoca(copertura, larghezza, altezza, SFOCATURA_GRADINI_PX),
           fondoTipico: fondoTipico, cima: cima, ampiezza: ampiezza,
           larghezza: larghezza, altezza: altezza
         };
+      }
+
+      // --- le misure MSG: maschera e quota -----------------------------------
+      // Ricampionamento bilineare fra due griglie che coprono lo stesso
+      // riquadro Mercatore.
+      function ricampiona(campo, sw, sh, dw, dh) {
+        if (sw === dw && sh === dh) return campo.slice();
+        var fuori = new Float32Array(dw * dh);
+        for (var y = 0; y < dh; y++) {
+          var fy = limita((y + 0.5) * sh / dh - 0.5, 0, sh - 1);
+          var y0 = Math.floor(fy), y1 = Math.min(sh - 1, y0 + 1), ty = fy - y0;
+          for (var x = 0; x < dw; x++) {
+            var fx = limita((x + 0.5) * sw / dw - 0.5, 0, sw - 1);
+            var x0 = Math.floor(fx), x1 = Math.min(sw - 1, x0 + 1), tx = fx - x0;
+            fuori[y * dw + x] = (campo[y0 * sw + x0] * (1 - tx) + campo[y0 * sw + x1] * tx) * (1 - ty)
+              + (campo[y1 * sw + x0] * (1 - tx) + campo[y1 * sw + x1] * tx) * ty;
+          }
+        }
+        return fuori;
+      }
+
+      // La maschera CLM ha tre colori: bianco nube, verde sereno su terra, blu
+      // sereno su mare. Entrambi i sereni hanno il rosso a zero, la nube a
+      // 255: il rosso E' la frazione di nube, anche nei pixel di bordo che il
+      // server ha mescolato. Fuori dal disco (trasparente) non c'e' misura.
+      function mascheraDaClm(pixel, quanti) {
+        var fuori = new Float32Array(quanti);
+        for (var k = 0, i = 0; k < quanti; k++, i += 4) {
+          fuori[k] = pixel[i + 3] > 127 ? pixel[i] / 255 : 0;
+        }
+        return fuori;
+      }
+
+      // Da colore a quota: la scala si infittisce di otto passi fra un gradino
+      // e l'altro, e si prepara una volta sola una tabella a 32 livelli per
+      // canale con il gradino piu' vicino a ogni colore. Poi ogni pixel costa
+      // una lettura.
+      var tabellaCth = null;
+      function tabellaDelleQuote() {
+        if (tabellaCth) return tabellaCth;
+        var fine = [];
+        for (var s = 0; s < CTH_SCALA.length - 1; s++) {
+          for (var p = 0; p < 8; p++) {
+            var t = p / 8, a = CTH_SCALA[s], b = CTH_SCALA[s + 1];
+            fine.push([a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t,
+              a[2] + (b[2] - a[2]) * t, a[3] + (b[3] - a[3]) * t]);
+          }
+        }
+        fine.push(CTH_SCALA[CTH_SCALA.length - 1]);
+        var quota = new Float32Array(32768);
+        var valida = new Uint8Array(32768);
+        var limite = CTH_DISTANZA_MAX * CTH_DISTANZA_MAX;
+        for (var r = 0; r < 32; r++) {
+          for (var g = 0; g < 32; g++) {
+            for (var bl = 0; bl < 32; bl++) {
+              var cr = r * 8 + 4, cg = g * 8 + 4, cb = bl * 8 + 4;
+              var meglio = Infinity, qui = 0;
+              for (var f = 0; f < fine.length; f++) {
+                var dr = cr - fine[f][1], dg = cg - fine[f][2], db = cb - fine[f][3];
+                var d = dr * dr + dg * dg + db * db;
+                if (d < meglio) { meglio = d; qui = fine[f][0]; }
+              }
+              var cella = (r << 10) | (g << 5) | bl;
+              quota[cella] = qui / 1000;
+              valida[cella] = meglio <= limite ? 1 : 0;
+            }
+          }
+        }
+        tabellaCth = { quota: quota, valida: valida };
+        return tabellaCth;
+      }
+
+      // Le quote CTH in chilometri e, a parte, quanto ciascuna e' affidabile
+      // (0 dove manca o dove il colore era un bordo mescolato). I vuoti si
+      // riempiono con la media dei vicini validi -- convoluzione normalizzata
+      // -- e poi si ammorbidiscono i riquadri di elaborazione del prodotto,
+      // che e' calcolato su gruppi di pixel e a tutta risoluzione si vede a
+      // scatole.
+      function quoteDaCth(pixel, larghezza, altezza) {
+        var tab = tabellaDelleQuote();
+        var quanti = larghezza * altezza;
+        var somma = new Float32Array(quanti), peso = new Float32Array(quanti);
+        for (var k = 0, i = 0; k < quanti; k++, i += 4) {
+          if (pixel[i + 3] < 250) continue;
+          var cella = ((pixel[i] >> 3) << 10) | ((pixel[i + 1] >> 3) << 5) | (pixel[i + 2] >> 3);
+          if (!tab.valida[cella]) continue;
+          somma[k] = tab.quota[cella];
+          peso[k] = 1;
+        }
+        var sommaLiscia = sfoca(somma, larghezza, altezza, 2);
+        var pesoLiscio = sfoca(peso, larghezza, altezza, 2);
+        var quota = new Float32Array(quanti);
+        for (k = 0; k < quanti; k++) {
+          quota[k] = pesoLiscio[k] > 0.02 ? sommaLiscia[k] / pesoLiscio[k] : 0;
+        }
+        return {
+          quota: sfoca(quota, larghezza, altezza, 3),
+          valida: sfoca(pesoLiscio, larghezza, altezza, 1)
+        };
+      }
+
+      // Il campo MISURATO: la maschera decide dove, la quota CTH quanto in
+      // alto, MTG la forma fine dentro la maschera.
+      //
+      // La maschera e' larga tre-quattro chilometri e ha quindici minuti di
+      // scarto rispetto a MTG: e' un CANCELLO morbido, non un ritaglio. Dentro
+      // il cancello la densita' la da' il dettaglio MTG (infrarosso, poi anche
+      // la luminosita' GeoColour di giorno): dove MTG vede un filamento c'e'
+      // un filamento. Una nube bassa e calda, che l'infrarosso non separa dal
+      // suolo, resta comunque visibile, un po' piu' tenue, perche' la maschera
+      // la vede.
+      //
+      // Quanto vale la maschera da sola, dove MTG non vede niente, dipende da
+      // cosa MTG PUO' vedere. Di notte la nube bassa e calda e' invisibile
+      // all'infrarosso, e la maschera deve bastare: 0,35. Di giorno GeoColour
+      // vede ogni nube, e un pixel della maschera largo quattro chilometri su
+      // un campo di cumuli sparsi non deve diventare una macchia piena: 0,10.
+      var CANCELLO_NOTTE = 0.35;
+      var CANCELLO_GIORNO = 0.10;
+      function componiCopertura(campo, dettaglioOttico, giorno) {
+        var quanti = campo.larghezza * campo.altezza;
+        for (var k = 0; k < quanti; k++) {
+          var dettaglio = campo.dettaglioIr[k];
+          if (dettaglioOttico && dettaglioOttico[k] > dettaglio) dettaglio = dettaglioOttico[k];
+          var base = giorno
+            ? CANCELLO_NOTTE + (CANCELLO_GIORNO - CANCELLO_NOTTE) * giorno[k]
+            : CANCELLO_NOTTE;
+          var c = campo.cancello[k] * (base + (1 - base) * dettaglio);
+          var opaco = campo.opacita ? campo.opacita[k] : 1;
+          campo.copertura[k] = lisciaFra(0.06, 0.55, c) * (0.45 + 0.55 * opaco);
+        }
+      }
+
+      // Quanto e' giorno in ogni pixel: il sole calcolato su una griglia rada
+      // (ogni sedici pixel) e letto al punto piu' vicino, perche' cambia di
+      // pochissimo da un pixel all'altro.
+      function luceDelGiorno(campo, epoca) {
+        var w = campo.larghezza, h = campo.altezza, passo = 16;
+        var r = riquadroMercatore();
+        var gw = Math.ceil(w / passo) + 1, gh = Math.ceil(h / passo) + 1;
+        var griglia = new Float32Array(gw * gh);
+        for (var gy = 0; gy < gh; gy++) {
+          var my = r.nord - Math.min(h, gy * passo) / h * (r.nord - r.sud);
+          var lat = (2 * Math.atan(Math.exp(my / RAGGIO_TERRA)) - Math.PI / 2) * 180 / Math.PI;
+          for (var gx = 0; gx < gw; gx++) {
+            var lon = DOMINIO.ovest + Math.min(w, gx * passo) / w * (DOMINIO.est - DOMINIO.ovest);
+            var gradi = posizioneSole(epoca, lat, lon).elevazione * 180 / Math.PI;
+            griglia[gy * gw + gx] = lisciaFra(-2, 8, gradi);
+          }
+        }
+        var fuori = new Float32Array(w * h);
+        for (var y = 0; y < h; y++) {
+          var riga = Math.round(y / passo) * gw;
+          for (var x = 0; x < w; x++) fuori[y * w + x] = griglia[riga + Math.round(x / passo)];
+        }
+        return fuori;
+      }
+
+      function campoMisurato(campo, clm, cth, misuraMsg) {
+        var w = campo.larghezza, h = campo.altezza, quanti = w * h;
+        var cancello = ricampiona(clm, misuraMsg.larghezza, misuraMsg.altezza, w, h);
+        var quotaCth = ricampiona(cth.quota, misuraMsg.larghezza, misuraMsg.altezza, w, h);
+        var validaCth = ricampiona(cth.valida, misuraMsg.larghezza, misuraMsg.altezza, w, h);
+        // Il rilievo fine delle cime: dove l'infrarosso di MTG e' piu' freddo
+        // dei dintorni la cima e' piu' alta -- le torrette dei cumuli, le
+        // sommita' che sfondano. La quota assoluta e' quella CTH; da MTG
+        // arriva solo la differenza locale, limitata.
+        var quotaIr = campo.quota;
+        var ampiaIr = sfoca(quotaIr, w, h, 6);
+        var quota = new Float32Array(quanti);
+        // L'OPACITA', dal confronto fra le due misure. Una nube spessa emette
+        // come un corpo nero alla temperatura della sua cima: l'infrarosso la
+        // vede fredda quanto dice la quota CTH. Un cirro sottile lascia
+        // passare il calore del suolo e all'infrarosso sembra molto piu' basso
+        // di quanto e'. Il rapporto fra le due quote separa allora il velo
+        // dalla torre -- ed e' quello che decide lo spessore: prima ogni nube
+        // alta dentro la maschera diventava una torre di otto chilometri, e
+        // una fascia di cirri si alzava come una pinna. Conta solo per le nubi
+        // alte: sotto i cinque chilometri il contrasto termico e' troppo
+        // piccolo per dire qualcosa.
+        var opacita = new Float32Array(quanti);
+        for (var k = 0; k < quanti; k++) {
+          var fiducia = limita(validaCth[k] * 1.4, 0, 1);
+          var misurata = fiducia > 0 ? quotaCth[k] : 0;
+          var ripiego = Math.max(quotaIr[k], NUBE_SENZA_QUOTA_KM);
+          var q = misurata * fiducia + ripiego * (1 - fiducia);
+          q += limita((quotaIr[k] - ampiaIr[k]) * 0.35, -0.8, 0.8) * fiducia;
+          quota[k] = cancello[k] > 0.02 ? Math.max(0, q) : 0;
+          var alta = lisciaFra(5, 8, misurata) * fiducia;
+          var rapporto = misurata > 0.5 ? ampiaIr[k] / misurata : 1;
+          opacita[k] = 1 - alta + alta * lisciaFra(0.25, 0.8, rapporto);
+        }
+        campo.opacita = opacita;
+        campo.cancello = cancello;
+        campo.dettaglioIr = campo.copertura.slice();
+        campo.quota = quota;
+        campo.misurato = true;
+        componiCopertura(campo, null, null);
+        return campo;
+      }
+
+      // Di giorno GeoColour aggiunge il dettaglio ottico dentro la maschera:
+      // piu' una nube e' luminosa e BIANCA, piu' e' spessa. Il bianco conta:
+      // dentro un pixel di maschera sopra il Sahara, fra un cumulo e l'altro,
+      // c'e' sabbia luminosa quanto una nube ma arancione -- misurato: croma
+      // 0,17-0,23 contro 0,02-0,06 delle nubi -- e senza questo filtro ogni
+      // campo di cumuli sparsi diventava una macchia bianca piena.
+      function dettaglioDaGeoColour(pixelPelle, misuraPelle, campo) {
+        var quanti = misuraPelle.larghezza * misuraPelle.altezza;
+        var luce = new Float32Array(quanti);
+        var d = pixelPelle.data;
+        for (var k = 0, i = 0; k < quanti; k++, i += 4) {
+          var l = (d[i] * 0.2126 + d[i + 1] * 0.7152 + d[i + 2] * 0.0722) / 255;
+          var croma = (Math.max(d[i], d[i + 1], d[i + 2]) - Math.min(d[i], d[i + 1], d[i + 2])) / 255;
+          luce[k] = d[i + 3] > 127 ? lisciaFra(0.18, 0.62, l) * (1 - lisciaFra(0.07, 0.19, croma)) : 0;
+        }
+        return ricampiona(luce, misuraPelle.larghezza, misuraPelle.altezza,
+          campo.larghezza, campo.altezza);
       }
 
       // L'infrarosso vede benissimo le cime fredde ma una nube bassa quasi
@@ -7651,13 +7920,27 @@
       // dall'esagerazione ogni gradino diventava una curva di livello, e le
       // cupole uscivano rigate come un legno tagliato. Mezza precisione basta
       // e avanza: una decina di metri al massimo.
+      //
+      // LO SPESSORE GUARDA I DINTORNI. Una torre temporalesca profonda e'
+      // larga decine di chilometri; una fascia stretta con la cima alta e'
+      // una lama di cirro. Con la copertura del singolo pixel la regola non
+      // le distingueva, e ogni fascia alta e stretta diventava una pinna
+      // verticale di otto chilometri. La copertura che decide lo spessore e'
+      // allora la media su SPESSORE_DINTORNI_KM.
+      var SPESSORE_DINTORNI_KM = 15;
       function tessituraDelCampo(campo) {
         var quanti = campo.larghezza * campo.altezza;
         var dati = new Float32Array(quanti * 4);
+        var kmPerPixel = (DOMINIO.est - DOMINIO.ovest) * 111.32
+          * Math.cos(45 * Math.PI / 180) / campo.larghezza;
+        var dintorni = sfoca(campo.copertura, campo.larghezza, campo.altezza,
+          Math.max(1, Math.round(SPESSORE_DINTORNI_KM / kmPerPixel)));
         for (var k = 0; k < quanti; k++) {
           var cima = campo.quota[k];
           // Lo spessore NON e' misurato: e' la regola morfologica dichiarata.
-          var spessore = spessoreDellaNube(cima, campo.copertura[k]);
+          var pieno = Math.min(campo.copertura[k], dintorni[k]);
+          if (campo.opacita) pieno = Math.min(pieno, campo.opacita[k]);
+          var spessore = spessoreDellaNube(cima, pieno);
           // Sotto la cima, mai sottoterra: dove non c'e' sommita' non c'e'
           // nemmeno nube, e lo spessore deve andare a zero con lei.
           spessore = Math.max(0, Math.min(spessore, cima * 0.92));
@@ -7851,7 +8134,15 @@
         // buona e la fa scendere solo sull'orlo. Prima la cima calava in
         // proporzione alla copertura, e ogni cella finiva a punta.
         "  float cupola = sqrt(smoothstep(0.0, 0.5, liscia.g));",
-        "  cimaKm = baseKm + (cimaKm - baseKm) * mix(0.30, 1.0, cupola);",
+        // E la cima segue anche la trama FINE osservata: dove MTG vede la
+        // nube piu' rada -- un filamento, lo spazio fra due cumuli -- la cima
+        // si abbassa. La forma in rilievo e' quella dell'immagine, non una
+        // superficie liscia con i bordi tagliati.
+        // Presa a meta' fra la scala fine e quella liscia: a piena finezza,
+        // stirata dall'esagerazione, la trama diventava una fila di colonne
+        // sui fianchi delle nubi.
+        "  float trama = sqrt(smoothstep(0.0, 0.75, mix(copertura, liscia.g, 0.5)));",
+        "  cimaKm = baseKm + (cimaKm - baseKm) * mix(0.30, 1.0, cupola * mix(0.72, 1.0, trama));",
         "  if (altKm < baseKm || altKm > cimaKm) return 0.0;",
         "  float h = (altKm - baseKm) / max(0.15, cimaKm - baseKm);",
         // Il profilo verticale: la nube si apre dal basso, e' piena nel mezzo
@@ -7992,6 +8283,21 @@
         // il fianco in ombra di una cella era acceso quanto quello al sole e
         // il rilievo spariva.
         "    float camminoSole = max(0.0, cimaKm - altKm) / suSole;",
+        // L'ombra VICINA: a ottocento metri di salita verso il sole, sulla
+        // trama fine. E' quella che fa vedere il rilievo delle cime -- le
+        // torrette, i filamenti -- che altrimenti, tutte in piena luce,
+        // sarebbero una superficie bianca uniforme.
+        "    vec2 vicinoUv = uvDi(p.xy + versoSole * 0.8 / (uCircKm * cosLat));",
+        "    if (!fuoriDominio(vicinoUv)) {",
+        "      vec4 fineV = textureLod(uCampo, vicinoUv, lodFine);",
+        "      vec4 lisciaV = textureLod(uCampo, vicinoUv, max(uGrana, lodFine));",
+        "      float cimaV = mix(lisciaV.r, fineV.r, 0.35) * uScalaKm;",
+        "      float baseV = max(0.2, cimaV - lisciaV.b * uScalaKm);",
+        "      cimaV = baseV + (cimaV - baseV) * mix(0.30, 1.0,",
+        "        sqrt(smoothstep(0.0, 0.5, lisciaV.g))",
+        "        * mix(0.72, 1.0, sqrt(smoothstep(0.0, 0.75, mix(fineV.g, lisciaV.g, 0.5)))));",
+        "      camminoSole += max(0.0, cimaV - (altKm + 0.8)) * fineV.g / suSole;",
+        "    }",
         "    vec2 ombraUv = uvDi(p.xy + versoSole * 2.0 / (uCircKm * cosLat));",
         "    if (!fuoriDominio(ombraUv)) {",
         "      vec4 vicina = textureLod(uCampo, ombraUv, uGrana + 1.0);",
@@ -8561,17 +8867,28 @@
           return;
         }
         var seriale = ++scenaSeriale;
-        var misuraForma = misuraRaster(LARGHEZZA_FORMA);
-        var misuraPelle = misuraRaster(LARGHEZZA_PELLE);
-        // Le due richieste partono insieme, ma il volume NON aspetta la piu'
-        // pesante GeoColour. Appena arriva l'IR si pubblicano quota e forma;
-        // la copertura ottica completa poi nubi basse e superficie in un
-        // secondo passaggio. Prima Promise.all teneva il layer vuoto fino a
-        // quando erano finiti download, maschera, PNG e sorgente MapLibre.
-        var promessaPelle = scarica(STRATI.pelle, misuraPelle, adesso, slotScena);
-        scarica(STRATI.forma, misuraForma, adesso, slotScena).then(function (forma) {
+        var misure = {
+          forma: misuraRaster(LARGHEZZA_FORMA),
+          pelle: misuraRaster(LARGHEZZA_PELLE),
+          msg: misuraRaster(LARGHEZZA_MISURA)
+        };
+        // Lo slot MSG che contiene quello MTG: MSG scandisce ogni quindici
+        // minuti dal basso verso l'alto e passa sull'Europa alla fine della
+        // scansione, cioe' pochi minuti dopo l'orario dello slot -- lo stesso
+        // momento in cui MTG, dieci minuti dopo, la osserva.
+        var slotMsg = Math.floor(slotScena / STRATI.maschera.slotMs) * STRATI.maschera.slotMs;
+        // Tutte le richieste partono insieme, ma il volume NON aspetta la
+        // pesante GeoColour. Appena arrivano infrarosso, maschera e quota si
+        // pubblica il volume; GeoColour aggiunge poi dettaglio e superficie in
+        // un secondo passaggio.
+        var promessaPelle = scarica(STRATI.pelle, misure.pelle, adesso, slotScena);
+        Promise.all([
+          scarica(STRATI.forma, misure.forma, adesso, slotScena),
+          scarica(STRATI.maschera, misure.msg, adesso, slotMsg),
+          scarica(STRATI.cime, misure.msg, adesso, slotMsg)
+        ]).then(function (arrivati) {
           if (!attiva || seriale !== scenaSeriale) return;
-          componi(forma, promessaPelle, misuraForma, misuraPelle, seriale);
+          componi(arrivati[0], arrivati[1], arrivati[2], promessaPelle, misure, seriale);
         }).catch(function () {
           if (attiva && seriale === scenaSeriale) {
             toast("Nubi in volume: infrarosso non disponibile, resta visibile il satellite");
@@ -8606,7 +8923,8 @@
         return pixelPelle;
       }
 
-      function componi(forma, promessaPelle, misuraForma, misuraPelle, seriale) {
+      function componi(forma, maschera, cime, promessaPelle, misure, seriale) {
+        var misuraForma = misure.forma, misuraPelle = misure.pelle, misuraMsg = misure.msg;
         if (!attiva || seriale !== scenaSeriale) return;
 
         if (!forma) {
@@ -8620,6 +8938,26 @@
         try {
           var pixelForma = leggiPixel(forma.immagine, misuraForma);
           campo = campoDelleNubi(pixelForma.data, misuraForma.larghezza, misuraForma.altezza);
+          if (maschera) {
+            try {
+              var quantiMsg = misuraMsg.larghezza * misuraMsg.altezza;
+              var clm = mascheraDaClm(leggiPixel(maschera.immagine, misuraMsg).data, quantiMsg);
+              var cth = cime
+                ? quoteDaCth(leggiPixel(cime.immagine, misuraMsg).data, misuraMsg.larghezza, misuraMsg.altezza)
+                : { quota: new Float32Array(quantiMsg), valida: new Float32Array(quantiMsg) };
+              campoMisurato(campo, clm, cth, misuraMsg);
+              campo.conQuota = !!cime;
+            } catch (errore) {
+              campo = campoDelleNubi(pixelForma.data, misuraForma.larghezza, misuraForma.altezza);
+            }
+          }
+          // Senza la maschera si torna alla stima dal solo infrarosso, e le
+          // cime a picco si allargano con la regola dichiarata; con la quota
+          // CTH la forma delle cime e' misurata e non si tocca.
+          if (!campo.misurato) {
+            campo.quota = allargaCime(campo.quota, campo.larghezza, campo.altezza);
+            toast("Nubi in volume: maschera nubi EUMETSAT assente, ricostruzione dal solo infrarosso");
+          }
           // Questo e' il primo frame vero: viene caricato nella GPU prima di
           // qualunque lavoro opzionale. Cosi' una canvas GeoColour lenta o a
           // corto di memoria non puo' piu' cancellare anche le nubi IR.
@@ -8656,11 +8994,16 @@
         if (pelle) {
           try {
             var pixelPelle = leggiPixel(pelle.immagine, misuraPelle);
-            var telaOsservata = document.createElement("canvas");
-            telaOsservata.width = misuraPelle.larghezza;
-            telaOsservata.height = misuraPelle.altezza;
-            telaOsservata.getContext("2d").putImageData(pixelPelle, 0, 0);
-            integraCoperturaOttica(campo, telaOsservata);
+            if (campo.misurato) {
+              componiCopertura(campo, dettaglioDaGeoColour(pixelPelle, misuraPelle, campo),
+                luceDelGiorno(campo, pelle.slot.epoca));
+            } else {
+              var telaOsservata = document.createElement("canvas");
+              telaOsservata.width = misuraPelle.larghezza;
+              telaOsservata.height = misuraPelle.altezza;
+              telaOsservata.getContext("2d").putImageData(pixelPelle, 0, 0);
+              integraCoperturaOttica(campo, telaOsservata);
+            }
             // Secondo upload: stessa scena, ora include anche nubi basse e
             // calde che il solo infrarosso non separa bene dal suolo.
             volume.pubblicaCampo(campo);
@@ -8866,7 +9209,8 @@
         blitzRetryDelay = 2000;
         blitzConnect();
         toast(
-          "Nubi in volume · IR + GeoColour, sole astronomico. "
+          "Nubi in volume · dove: maschera nubi EUMETSAT; quota: prodotto Cloud Top Height; "
+          + "forma: MTG. Lo spessore e' stimato, sole astronomico. "
           + "Le nubi si illuminano solo quando arriva una scarica Blitzortung."
         );
         costruisciScena();

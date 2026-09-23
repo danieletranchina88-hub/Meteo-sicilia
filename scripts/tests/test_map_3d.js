@@ -2155,3 +2155,94 @@ assert.equal(schermoAlto.width, schermoBasso.width,
   assert.ok(Math.abs(fuori[60 * w + 180] - 1.5) < 1e-4, "lo strato basso e' stato alzato");
 }
 console.log("nubi in volume: spessore continuo, niente grana, niente coni, niente quadretti");
+
+// Nubi in volume dalle misure EUMETSAT: dove (maschera CLM), a che quota
+// (Cloud Top Height), quanto opache. Il modulo gira davvero, su immagini
+// sintetiche con i colori dei prodotti.
+{
+  const vm = require("node:vm");
+  const inizio = html.indexOf("const NubiVolumetriche = (function");
+  const corpo = html.slice(html.indexOf('"use strict";', inizio) + 13,
+    html.indexOf("      // --- il volume, attraversato dai raggi", inizio));
+  const contesto = { Math, Float32Array, Float64Array, Uint32Array, Uint8Array, Date,
+    isMobile: () => false, costruisciMascheraNube: () => null, CLOUD_PRODUCTS: {} };
+  vm.createContext(contesto);
+  vm.runInContext("this.m = (function () {" + corpo + ";return { mascheraDaClm, quoteDaCth,"
+    + " campoMisurato, componiCopertura, dettaglioDaGeoColour, tessituraDelCampo, CTH_SCALA,"
+    + " QUOTA_SCALA_KM };})();", contesto);
+  const m = contesto.m;
+  const immagine = (w, h, colore) => {
+    const px = new Uint8Array(w * h * 4);
+    for (let k = 0; k < w * h; k++) {
+      const c = typeof colore === "function" ? colore(k % w, Math.floor(k / w)) : colore;
+      px.set(c, k * 4);
+    }
+    return px;
+  };
+
+  // La maschera: il rosso e' la frazione di nube.
+  const clm = m.mascheraDaClm(new Uint8Array([
+    255, 255, 255, 255,  0, 192, 0, 255,  0, 0, 255, 255,  255, 255, 255, 0,  128, 224, 128, 255]), 5);
+  assert.deepEqual(Array.from(clm).map((v) => Math.round(v * 100) / 100), [1, 0, 0, 0, 0.5],
+    "la maschera nubi CLM non si legge piu' come frazione di nube");
+
+  // La quota: ogni colore della legenda torna la sua quota.
+  let peggiore = 0;
+  for (const [metri, r, g, b] of m.CTH_SCALA) {
+    if (metri < 600) continue;  // i primi gradini sono quasi neri: indistinguibili
+    const q = m.quoteDaCth(immagine(12, 12, [r, g, b, 255]), 12, 12).quota[6 * 12 + 6];
+    peggiore = Math.max(peggiore, Math.abs(q - metri / 1000));
+  }
+  assert.ok(peggiore < 0.35, "la scala del Cloud Top Height non si decodifica: errore "
+    + peggiore.toFixed(2) + " km");
+  // Un colore di bordo, lontano dalla scala, non diventa una quota: si prende
+  // dai vicini.
+  const bordo = m.quoteDaCth(immagine(12, 12, (x) => x === 6 ? [120, 200, 240, 255] : [254, 102, 0, 255]), 12, 12);
+  assert.ok(Math.abs(bordo.quota[6 * 12 + 6] - 11.76) < 0.3,
+    "un pixel mescolato dal server diventa una quota inventata: " + bordo.quota[6 * 12 + 6]);
+
+  // Il caso della segnalazione: all'alba il suolo spagnolo e' freddo e
+  // l'infrarosso lo stima alto, ma la maschera dice sereno. Non deve esserci
+  // nube. Accanto, uno strato basso e caldo che l'infrarosso non vede ma la
+  // maschera si': deve esserci, alla quota misurata.
+  const w = 40, h = 20, quanti = w * h;
+  const campo = {
+    larghezza: w, altezza: h,
+    quota: new Float32Array(quanti).fill(0),
+    copertura: new Float32Array(quanti).fill(0)
+  };
+  for (let y = 0; y < h; y++) for (let x = 0; x < 20; x++) {
+    campo.quota[y * w + x] = 7; campo.copertura[y * w + x] = 1;  // suolo freddo scambiato per nube
+  }
+  const maschera = new Float32Array(quanti);
+  for (let y = 0; y < h; y++) for (let x = 20; x < w; x++) maschera[y * w + x] = 1;
+  const cth = { quota: new Float32Array(quanti), valida: new Float32Array(quanti) };
+  for (let y = 0; y < h; y++) for (let x = 20; x < w; x++) { cth.quota[y * w + x] = 1.2; cth.valida[y * w + x] = 1; }
+  m.campoMisurato(campo, maschera, cth, { larghezza: w, altezza: h });
+  assert.ok(campo.copertura[10 * w + 5] < 0.01,
+    "il suolo freddo che la maschera dice sereno torna a essere nube: copertura "
+    + campo.copertura[10 * w + 5].toFixed(2));
+  assert.ok(campo.copertura[10 * w + 32] > 0.3,
+    "lo strato basso visto dalla maschera ma non dall'infrarosso sparisce");
+  assert.ok(Math.abs(campo.quota[10 * w + 32] - 1.2) < 0.3,
+    "la quota non e' piu' quella misurata dal Cloud Top Height: " + campo.quota[10 * w + 32]);
+
+  // Cirro contro torre: stessa cima misurata, diversa temperatura IR.
+  const spessoreDi = (quotaIr) => {
+    const c = { larghezza: w, altezza: h, quota: new Float32Array(quanti).fill(quotaIr),
+      copertura: new Float32Array(quanti).fill(1) };
+    const tutto = new Float32Array(quanti).fill(1);
+    m.campoMisurato(c, tutto, { quota: new Float32Array(quanti).fill(12), valida: tutto }, { larghezza: w, altezza: h });
+    return m.tessituraDelCampo(c)[(10 * w + 20) * 4 + 2] * m.QUOTA_SCALA_KM;
+  };
+  const cirro = spessoreDi(3), torre = spessoreDi(12);
+  assert.ok(cirro < 3, "un cirro a 12 km, caldo all'infrarosso, torna spesso " + cirro.toFixed(1) + " km: la pinna");
+  assert.ok(torre > 6, "una torre fredda quanto la sua cima non e' piu' profonda: " + torre.toFixed(1) + " km");
+
+  // Sabbia e nube in GeoColour: la sabbia del Sahara e' luminosa ma arancione.
+  const pelle = { data: new Uint8Array([162, 137, 111, 255, 200, 200, 204, 255]) };
+  const dettaglio = m.dettaglioDaGeoColour(pelle, { larghezza: 2, altezza: 1 }, { larghezza: 2, altezza: 1 });
+  assert.ok(dettaglio[0] < 0.05, "la sabbia del Sahara conta come nube: " + dettaglio[0].toFixed(2));
+  assert.ok(dettaglio[1] > 0.8, "una nube bianca non conta piu' come nube");
+}
+console.log("nubi in volume: maschera CLM, quota CTH, opacita', sabbia");
