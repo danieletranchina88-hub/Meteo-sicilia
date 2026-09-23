@@ -2024,3 +2024,47 @@ assert.equal(schermoAlto.width, schermoBasso.width,
   "la larghezza richiesta cambia con l'ALTEZZA dello schermo ("
   + schermoAlto.width + " contro " + schermoBasso.width
   + "): un tetto sull'altezza sta mordendo, ed e' quello che peggiorava il PC");
+
+// updateSkyPalette a mappa INCLINATA. Il ramo che colora lo sfondo gira solo
+// in prospettiva, e per mesi ha contenuto un riferimento a `onDark`, una
+// variabile tolta quando il fondo e' diventato sempre la carta chiara. Finche'
+// l'inclinazione era solo quella del 3D non se ne accorgeva nessuno; quando
+// "Nubi in volume" ha cominciato a inclinare la mappa, il ReferenceError
+// fermava attivaNubiVolumetriche prima di costruire il volume, e le nubi non
+// comparivano ne' su PC ne' su telefono. La funzione qui gira davvero, in
+// tutte e tre le combinazioni, con una mappa finta che ha lo sfondo.
+{
+  const vm = require("node:vm");
+  const sorgente = implementazione("updateSkyPalette");
+  for (const [show3D, showVolumeClouds] of [[true, false], [false, true], [true, true]]) {
+    const dipinti = {};
+    const contesto = {
+      show3D, showVolumeClouds, synopticChart: false,
+      mapBackgroundColour: () => "rgb(0,0,0)",
+      document: { documentElement: { style: { setProperty: () => {} } } },
+      map: {
+        setSky: () => {},
+        getLayer: (id) => id === "background" ? {} : undefined,
+        setPaintProperty: (id, chiave, valore) => { dipinti[id + ":" + chiave] = valore; }
+      }
+    };
+    vm.createContext(contesto);
+    vm.runInContext(sorgente, contesto);
+    assert.doesNotThrow(() => contesto.updateSkyPalette(),
+      "updateSkyPalette si rompe a mappa inclinata (show3D=" + show3D
+      + ", showVolumeClouds=" + showVolumeClouds + "): le nubi in volume non partono");
+    assert.ok(dipinti["background:background-color"],
+      "a mappa inclinata lo sfondo non viene piu' colorato");
+  }
+}
+
+// L'inclinazione e' contorno: se un suo errore arriva fino a
+// attivaNubiVolumetriche, il volume non viene costruito. Deve restare
+// isolata, e costruisciScena deve venire dopo.
+{
+  const attiva = implementazione("attivaNubiVolumetriche");
+  assert.match(attiva, /try \{\s*abilitaInclinazioneVolume\(true\);\s*\} catch/,
+    "l'inclinazione delle nubi in volume non e' piu' isolata: un suo errore torna a bloccare il volume");
+  assert.ok(attiva.indexOf("costruisciScena()") > attiva.indexOf("abilitaInclinazioneVolume(true)"),
+    "costruisciScena non viene piu' dopo l'inclinazione");
+}

@@ -5573,9 +5573,14 @@
           map.setPaintProperty(
             "background",
             "background-color",
-            synopticChart
-              ? mapBackgroundColour()
-              : (onDark ? "rgb(38,48,64)" : "rgb(188,204,218)")
+            // Qui c'era ancora "onDark ? scuro : chiaro", ma onDark e' stato
+            // tolto quando il fondo e' diventato sempre la carta chiara: il
+            // resto della funzione usa gia' solo i valori chiari. Il ramo
+            // gira solo a mappa inclinata, quindi il ReferenceError e'
+            // rimasto nascosto finche' "Nubi in volume" non ha cominciato a
+            // inclinare la mappa -- e da li' bloccava la costruzione del
+            // volume prima ancora che partisse.
+            synopticChart ? mapBackgroundColour() : "rgb(188,204,218)"
           );
         }
       }
@@ -8537,7 +8542,15 @@
         volume.acceso = false;
         volume.lampi = [];
         mostraSuperficie(true);
-        abilitaInclinazioneVolume(true);
+        // L'inclinazione e' contorno: cielo, foschia, pitch. Un suo errore
+        // non deve piu' poter fermare la costruzione del volume, che viene
+        // dopo -- e' esattamente cosi' che le nubi sparivano del tutto,
+        // su PC e telefono, per un ReferenceError dentro updateSkyPalette.
+        try {
+          abilitaInclinazioneVolume(true);
+        } catch (errore) {
+          console.error("Nubi in volume: inclinazione non applicata", errore);
+        }
         blitzRetryDelay = 2000;
         blitzConnect();
         toast(
