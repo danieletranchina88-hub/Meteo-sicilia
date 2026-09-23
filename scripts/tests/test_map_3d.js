@@ -2068,3 +2068,90 @@ assert.equal(schermoAlto.width, schermoBasso.width,
   assert.ok(attiva.indexOf("costruisciScena()") > attiva.indexOf("abilitaInclinazioneVolume(true)"),
     "costruisciScena non viene piu' dopo l'inclinazione");
 }
+
+// Le nubi in volume: i difetti che si vedevano, uno per uno, con la causa.
+{
+  const vm = require("node:vm");
+  const contesto = { Math };
+  vm.createContext(contesto);
+  vm.runInContext(implementazione("limita") + implementazione("lisciaFra")
+    + implementazione("spessoreDellaNube"), contesto);
+  // GRADINI ALLA BASE. Lo spessore a rami saltava di chilometri lungo le
+  // isolinee della cima, e la base della nube lo seguiva a scalini. Su tutta
+  // la griglia di cime e coperture, un passo di dieci metri non deve mai
+  // spostare lo spessore di piu' di pochi metri.
+  let salto = 0, dove = "";
+  for (let copertura = 0; copertura <= 1.0001; copertura += 0.02) {
+    for (let cima = 0.2; cima < 16; cima += 0.01) {
+      const d = Math.abs(contesto.spessoreDellaNube(cima + 0.01, copertura)
+        - contesto.spessoreDellaNube(cima, copertura));
+      if (d > salto) { salto = d; dove = "cima " + cima.toFixed(2) + " km, copertura " + copertura.toFixed(2); }
+    }
+  }
+  assert.ok(salto < 0.03, "lo spessore delle nubi salta di " + (salto * 1000).toFixed(0)
+    + " m in 10 m di cima (" + dove + "): la base torna a gradini");
+  // Le tre morfologie restano: strato basso sottile, cirro lama, torre profonda.
+  assert.ok(contesto.spessoreDellaNube(1.5, 0.8) < 1.3, "lo strato basso non e' piu' sottile");
+  assert.ok(contesto.spessoreDellaNube(10, 0.25) < 1.5, "il cirro alto non e' piu' una lama");
+  assert.ok(contesto.spessoreDellaNube(12, 0.95) > 6, "la torre fredda non e' piu' profonda");
+}
+{
+  const frammento = html.slice(html.indexOf("var FRAMMENTO = ["), html.indexOf("var STESURA = ["));
+  // GRANA BIANCA: l'hash per pixel faceva partire ogni raggio a caso.
+  assert.doesNotMatch(frammento, /fract\(sin\(dot\(gl_FragCoord/,
+    "lo scarto dei raggi e' tornato un hash casuale: la grana bianca torna");
+  assert.match(frammento, /float intreccio\(vec2 f\)/, "manca lo scarto a gradiente interlacciato");
+  // PUNTE: la cima calava in proporzione alla copertura e ogni cella era un cono.
+  assert.doesNotMatch(frammento, /scemare/, "la cima torna a scendere a cono verso il bordo");
+  assert.match(frammento, /float cupola = sqrt\(/, "il bordo della nube non e' piu' una cupola");
+  // ANELLI: senza bisezione i campioni cadevano a scatti rispetto al bordo.
+  assert.match(frammento, /for \(int k = 0; k < 5; k\+\+\)/, "manca la bisezione all'ingresso nella nube");
+  // La sagoma viene dal campo a piena risoluzione, non dal rumore.
+  assert.match(frammento, /vec4 fine = textureLod\(uCampo, uv, lodFine\);/,
+    "la copertura non si legge piu' alla risoluzione piena del satellite");
+  assert.doesNotMatch(frammento, /texture\(uRumore, q \* 3\.7/,
+    "e' tornata l'ottava fine del rumore, quella che faceva i puntini");
+  // Il lampo deve poter schiarire anche una nube al sole.
+  assert.match(frammento, /colore = 1\.0 - exp\(-colore \* /,
+    "manca la curva di risposta: al sole il lampo torna invisibile");
+}
+{
+  // ANELLI, seconda causa: la quota a otto bit. Il campo va in mezza precisione.
+  const pubblica = html.slice(html.indexOf("StratoVolume.prototype.pubblicaCampo"),
+    html.indexOf("StratoVolume.prototype.matriceDi"));
+  assert.match(pubblica, /gl\.RGBA16F/, "il campo del volume e' tornato a otto bit: le cupole si rigano");
+  // QUADRETTI: la copertura letta col pixel piu' vicino.
+  const superficie = implementazione("superficieSenzaNubi");
+  assert.doesNotMatch(superficie, /Math\.round\(y \* campo\.altezza/,
+    "la superficie torna a leggere la copertura a quadretti");
+  const ottica = implementazione("integraCoperturaOttica");
+  assert.match(ottica, /otticaIn\(mx, my\)/, "la maschera GeoColour torna a essere letta a quadretti");
+  // Il volume dal telefono: disegnato in una texture di dimensione limitata.
+  assert.match(html, /StratoVolume\.prototype\.prerender = function/,
+    "il volume non si disegna piu' nella sua texture: sul telefono costa il quadruplo");
+}
+{
+  // Le cime allargate non superano mai la cima piu' alta dei dintorni e
+  // lasciano stare le nubi basse.
+  const vm = require("node:vm");
+  // Stessa scala del campo vero sul PC: circa 2,6 km per pixel.
+  const contesto = { Math, Float32Array, DOMINIO: { ovest: 0, est: 54 * 200 / 1600 },
+    CIMA_ALLARGA_KM: 14, CIMA_ALLARGA_PESO: 0.62 };
+  vm.createContext(contesto);
+  vm.runInContext(implementazione("limita") + implementazione("lisciaFra")
+    + implementazione("sfoca") + implementazione("massimoScorrevole")
+    + implementazione("allargaCime"), contesto);
+  const w = 200, h = 120, quota = new Float32Array(w * h);
+  for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) {
+    const r = Math.hypot(x - 60, y - 60);
+    quota[y * w + x] = Math.max(0, 13 * Math.exp(-r * r / 40));  // una torre a punta
+    if (x > 150) quota[y * w + x] = 1.5;                           // uno strato basso
+  }
+  const fuori = contesto.allargaCime(quota, w, h);
+  let massimo = 0;
+  for (const v of fuori) massimo = Math.max(massimo, v);
+  assert.ok(massimo <= 13 + 1e-4, "l'allargamento ha alzato la cima oltre la misura");
+  assert.ok(fuori[60 * w + 64] > quota[60 * w + 64] + 1, "la torre a punta non si allarga in cupola");
+  assert.ok(Math.abs(fuori[60 * w + 180] - 1.5) < 1e-4, "lo strato basso e' stato alzato");
+}
+console.log("nubi in volume: spessore continuo, niente grana, niente coni, niente quadretti");

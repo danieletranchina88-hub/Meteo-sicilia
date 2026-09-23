@@ -7106,9 +7106,17 @@
       // passi del raggio -- un ray marcher a piena grana e' pesante per una
       // GPU mobile, e la richiesta era chiara: alta qualita' di default, ma
       // senza scaldare il telefono in mano.
+      // Il volume non si disegna piu' direttamente sullo schermo: si disegna
+      // in una texture di al massimo "pixel" pixel e poi la si stende sulla
+      // mappa. Sul telefono lo schermo ha tre milioni di pixel fisici e ogni
+      // pixel fa decine di campionamenti: meta' risoluzione lineare costa un
+      // quarto e su una nube, che e' morbida per natura, non si vede.
+      // "passoKm" e' quanto sale il raggio, in chilometri veri, fra due
+      // campionamenti: e' quello che decide se uno strato sottile viene
+      // attraversato o scavalcato.
       var QUALITA_VOLUME = isMobile()
-        ? { forma: 900, pelle: 1100, esagerazione: 11, passi: 40 }
-        : { forma: 1600, pelle: 2048, esagerazione: 14, passi: 64 };
+        ? { forma: 1100, pelle: 1400, esagerazione: 8, passoKm: 0.34, pixel: 560000 }
+        : { forma: 1600, pelle: 2048, esagerazione: 9, passoKm: 0.24, pixel: 1900000 };
 
       // Due misure complementari dello stesso istante: l'IR stima la cima,
       // GeoColour recupera la copertura calda, bassa o otticamente sottile.
@@ -7180,7 +7188,18 @@
       // dettaglio che erode i bordi.
       var RUMORE_LATO = 64;
       var RUMORE_SCALA_KM = 34;
-      var RUMORE_FORZA = 0.44;
+      // Debole di proposito: la forma e' quella misurata dal satellite, il
+      // rumore aggiunge solo la grana dei bordi. Piu' forte rifaceva nubi
+      // inventate, fatte di puntini, al posto di quelle osservate.
+      var RUMORE_FORZA = 0.26;
+      // Le sommita' convettive osservate nell'IR sono picchi stretti: il
+      // pixel piu' freddo e' la torre che sfonda, e attorno la temperatura
+      // risale in fretta. Stirato in verticale, quel picco diventava un cono
+      // appuntito. Una nube temporalesca vista da fuori e' invece una cupola
+      // che si allarga in incudine: la cima si allarga allora di un raggio
+      // dichiarato prima di essere ammorbidita.
+      var CIMA_ALLARGA_KM = 14;
+      var CIMA_ALLARGA_PESO = 0.62;
 
       // IL LAMPO. Dove nasce non e' una scelta grafica. Il fulmine si accende
       // nella regione di carica principale della cella, quella fra i -10 e i
@@ -7198,8 +7217,12 @@
       // perche' e' quello che succede.
       var LAMPO_QUOTA_CARICA_KM = 6.0;
       var LAMPO_SOTTO_LA_CIMA_MIN_KM = 1.2;
-      var LAMPO_DIFFUSIONE_KM = 7.0;
-      var LAMPO_FORZA = 17.0;
+      // Una scarica illumina la nube per una decina di chilometri attorno: e'
+      // la misura dei bagliori visti dalla Stazione Spaziale, e con sette
+      // chilometri il lampo restava un punto di pochi pixel invisibile a
+      // scala regionale.
+      var LAMPO_DIFFUSIONE_KM = 11.0;
+      var LAMPO_FORZA = 24.0;
       // Il ghiaccio fitto ferma la luce, l'incudine sottile la lascia correre.
       // La copertura misurata pesa il cammino ottico: e' l'unico modo in cui
       // il dato entra nella forma del bagliore.
@@ -7229,7 +7252,13 @@
       // nube si ingrossa in orizzontale nella stessa proporzione in cui viene
       // stirata in verticale.
       var ESAGERAZIONE_GRANA = 5;
-      var PASSI_INIZIALI = QUALITA_VOLUME.passi;
+      // L'esagerazione serve a leggere il rilievo da lontano. Da vicino la
+      // stessa esagerazione fa di un cumulo un grattacielo: allora cala con lo
+      // zoom, di poco oltre la vista d'insieme e fino a un terzo in primo
+      // piano, dove la nube si vede gia' per quello che e'.
+      var ESAGERAZIONE_ZOOM_PIENO = 5.0;
+      var ESAGERAZIONE_CALO_PER_ZOOM = 0.55;
+      var ESAGERAZIONE_MINIMA = 3.0;
 
       // Di notte il sole e' sotto l'orizzonte: il volume viene illuminato
       // dall'ambiente notturno e dai lampi, e basta. Non si accende un sole
@@ -7342,6 +7371,54 @@
           fondo = eroso;
         }
         return { valori: sfoca(fondo, nx, ny, FONDO_SFOCATURA_BLOCCHI), nx: nx, ny: ny };
+      }
+
+      // Massimo su una finestra quadrata, separabile: O(pixel x raggio).
+      function massimoScorrevole(campo, larghezza, altezza, raggio) {
+        if (raggio < 1) return campo.slice();
+        var mezzo = new Float32Array(larghezza * altezza);
+        var fuori = new Float32Array(larghezza * altezza);
+        var x, y, i, m;
+        for (y = 0; y < altezza; y++) {
+          var riga = y * larghezza;
+          for (x = 0; x < larghezza; x++) {
+            m = 0;
+            for (i = Math.max(0, x - raggio); i <= Math.min(larghezza - 1, x + raggio); i++) {
+              if (campo[riga + i] > m) m = campo[riga + i];
+            }
+            mezzo[riga + x] = m;
+          }
+        }
+        for (x = 0; x < larghezza; x++) {
+          for (y = 0; y < altezza; y++) {
+            m = 0;
+            for (i = Math.max(0, y - raggio); i <= Math.min(altezza - 1, y + raggio); i++) {
+              if (mezzo[i * larghezza + x] > m) m = mezzo[i * larghezza + x];
+            }
+            fuori[y * larghezza + x] = m;
+          }
+        }
+        return fuori;
+      }
+
+      // La cima allargata: il massimo dei dintorni, ammorbidito, pesato su
+      // quanto la cella e' alta. Un cumulo basso resta com'e'; una torre
+      // fredda diventa una cupola larga invece di un ago. Non sale mai sopra
+      // la cima piu' alta misurata li' attorno e non tocca la copertura:
+      // dove il satellite non vede nube, la nube non c'e' comunque.
+      function allargaCime(quota, larghezza, altezza) {
+        var kmPerPixel = (DOMINIO.est - DOMINIO.ovest) * 111.32
+          * Math.cos(45 * Math.PI / 180) / larghezza;
+        var raggio = Math.max(1, Math.round(CIMA_ALLARGA_KM / kmPerPixel));
+        var larga = sfoca(massimoScorrevole(quota, larghezza, altezza, raggio),
+          larghezza, altezza, raggio);
+        var fuori = new Float32Array(quota.length);
+        for (var k = 0; k < quota.length; k++) {
+          var peso = CIMA_ALLARGA_PESO * lisciaFra(3.5, 8.5, larga[k]);
+          var v = quota[k] + (Math.max(quota[k], larga[k]) - quota[k]) * peso;
+          fuori[k] = v;
+        }
+        return fuori;
       }
 
       // Mediana 3x3: il PNG dell'infrarosso e' a otto bit e porta pixel
@@ -7483,7 +7560,9 @@
           copertura[k] = presenza * c * c * (3 - 2 * c);
         }
         return {
-          quota: sfoca(mediana3(quota, larghezza, altezza), larghezza, altezza, SFOCATURA_GRADINI_PX),
+          quota: allargaCime(
+            sfoca(mediana3(quota, larghezza, altezza), larghezza, altezza, SFOCATURA_GRADINI_PX),
+            larghezza, altezza),
           copertura: sfoca(copertura, larghezza, altezza, SFOCATURA_GRADINI_PX),
           fondoTipico: fondoTipico, cima: cima, ampiezza: ampiezza,
           larghezza: larghezza, altezza: altezza
@@ -7507,11 +7586,25 @@
         var mc = maschera.tela.getContext("2d", { willReadFrequently: true });
         var mw = maschera.tela.width, mh = maschera.tela.height;
         var alfa = mc.getImageData(0, 0, mw, mh).data;
+        // La maschera e' larga mezzo migliaio di pixel, il campo tre volte
+        // tanto. Letta col pixel piu' vicino ogni suo pixel diventava un
+        // quadrato di tre per tre nella copertura -- e sulla superficie, che
+        // da quella copertura prende i buchi: erano i quadrati visibili sotto
+        // le nubi. Si legge allora interpolando fra i quattro vicini.
+        var otticaIn = function (fx, fy) {
+          fx = limita(fx, 0, mw - 1); fy = limita(fy, 0, mh - 1);
+          var x0 = Math.floor(fx), y0 = Math.floor(fy);
+          var x1 = Math.min(mw - 1, x0 + 1), y1 = Math.min(mh - 1, y0 + 1);
+          var tx = fx - x0, ty = fy - y0;
+          var a00 = alfa[(y0 * mw + x0) * 4 + 3], a10 = alfa[(y0 * mw + x1) * 4 + 3];
+          var a01 = alfa[(y1 * mw + x0) * 4 + 3], a11 = alfa[(y1 * mw + x1) * 4 + 3];
+          return ((a00 * (1 - tx) + a10 * tx) * (1 - ty) + (a01 * (1 - tx) + a11 * tx) * ty) / 255;
+        };
         for (var y = 0; y < campo.altezza; y++) {
-          var my = limita(Math.round((y + 0.5) / campo.altezza * mh - 0.5), 0, mh - 1);
+          var my = (y + 0.5) / campo.altezza * mh - 0.5;
           for (var x = 0; x < campo.larghezza; x++) {
-            var mx = limita(Math.round((x + 0.5) / campo.larghezza * mw - 0.5), 0, mw - 1);
-            var ottica = alfa[(my * mw + mx) * 4 + 3] / 255;
+            var mx = (x + 0.5) / campo.larghezza * mw - 0.5;
+            var ottica = otticaIn(mx, my);
             if (ottica < 0.025) continue;
             var k = y * campo.larghezza + x;
             campo.copertura[k] = Math.max(campo.copertura[k], ottica);
@@ -7527,27 +7620,40 @@
 
       // Lo spessore non e' misurabile da un'immagine zenitale. La regola
       // conserva pero' tre morfologie diverse: strati bassi sottili, cirri
-      // alti e laminari, torri fredde e profonde. Trattarle tutte con la
-      // stessa frazione della cima era la causa principale dell'aspetto a
-      // blocchi e dei cirri gonfi come cumulonembi.
+      // alti e laminari, torri fredde e profonde.
+      //
+      // DEV'ESSERE CONTINUA. La versione a rami -- se la cima e' sotto 3,2
+      // km, se e' sopra 7,5, se e' sopra 8 -- saltava di mezzo chilometro a
+      // 3,2 e di due chilometri e mezzo a 7,5: la base di una nube seguiva
+      // quei salti lungo le isolinee della cima, e con l'esagerazione ogni
+      // salto diventava un gradino orizzontale sul fianco delle torri. Le
+      // stesse tre morfologie sono qui raccordate da rampe dolci.
+      function lisciaFra(a, b, v) {
+        var t = limita((v - a) / (b - a), 0, 1);
+        return t * t * (3 - 2 * t);
+      }
       function spessoreDellaNube(cima, copertura) {
-        if (cima <= 3.2) {
-          return limita(0.28 + cima * 0.28 + copertura * 0.38, 0.28, 1.55);
-        }
-        if (cima >= 7.5 && copertura < 0.58) {
-          return limita(0.48 + copertura * 2.15, 0.55, 2.15);
-        }
-        if (cima >= 8.0) {
-          return limita(1.0 + cima * (0.38 + copertura * 0.25), 2.0, 9.5);
-        }
-        return limita(0.55 + cima * 0.36 + copertura * 0.55, 0.8, 4.6);
+        var bassa = 0.28 + cima * 0.28 + copertura * 0.38;
+        var media = 0.55 + cima * 0.36 + copertura * 0.55;
+        var cirro = 0.48 + copertura * 2.15;
+        var torre = 1.0 + cima * (0.38 + copertura * 0.25);
+        var inMezzo = bassa + (media - bassa) * lisciaFra(2.4, 4.2, cima);
+        var inAlto = cirro + (torre - cirro) * lisciaFra(0.42, 0.74, copertura);
+        return limita(inMezzo + (inAlto - inMezzo) * lisciaFra(6.8, 9.2, cima), 0.28, 9.5);
       }
 
       // La texture del volume: R quota della cima, G copertura, B spessore.
       // Tutto normalizzato su QUOTA_SCALA_KM.
+      //
+      // IN VIRGOLA MOBILE, NON A OTTO BIT. Con otto bit la quota va a
+      // gradini di 63 metri, e le GPU interpolano un canale a otto bit
+      // restituendo di nuovo otto bit: il gradino resta. Stirato
+      // dall'esagerazione ogni gradino diventava una curva di livello, e le
+      // cupole uscivano rigate come un legno tagliato. Mezza precisione basta
+      // e avanza: una decina di metri al massimo.
       function tessituraDelCampo(campo) {
         var quanti = campo.larghezza * campo.altezza;
-        var dati = new Uint8Array(quanti * 4);
+        var dati = new Float32Array(quanti * 4);
         for (var k = 0; k < quanti; k++) {
           var cima = campo.quota[k];
           // Lo spessore NON e' misurato: e' la regola morfologica dichiarata.
@@ -7555,12 +7661,39 @@
           // Sotto la cima, mai sottoterra: dove non c'e' sommita' non c'e'
           // nemmeno nube, e lo spessore deve andare a zero con lei.
           spessore = Math.max(0, Math.min(spessore, cima * 0.92));
-          dati[k * 4] = Math.round(limita(cima / QUOTA_SCALA_KM, 0, 1) * 255);
-          dati[k * 4 + 1] = Math.round(limita(campo.copertura[k], 0, 1) * 255);
-          dati[k * 4 + 2] = Math.round(limita(spessore / QUOTA_SCALA_KM, 0, 1) * 255);
-          dati[k * 4 + 3] = 255;
+          dati[k * 4] = limita(cima / QUOTA_SCALA_KM, 0, 1);
+          dati[k * 4 + 1] = limita(campo.copertura[k], 0, 1);
+          dati[k * 4 + 2] = limita(spessore / QUOTA_SCALA_KM, 0, 1);
+          dati[k * 4 + 3] = 1;
         }
         return dati;
+      }
+
+      // La piramide della texture, calcolata qui: una texture in mezza
+      // precisione non e' disegnabile ovunque, e generateMipmap su un
+      // telefono senza EXT_color_buffer_float fallirebbe. Media 2x2, la
+      // stessa cosa che farebbe la GPU.
+      function piramideDelCampo(dati, larghezza, altezza) {
+        var livelli = [{ dati: dati, larghezza: larghezza, altezza: altezza }];
+        while (larghezza > 1 || altezza > 1) {
+          var lw = Math.max(1, Math.floor(larghezza / 2));
+          var lh = Math.max(1, Math.floor(altezza / 2));
+          var sotto = new Float32Array(lw * lh * 4);
+          for (var y = 0; y < lh; y++) {
+            var y0 = Math.min(altezza - 1, y * 2), y1 = Math.min(altezza - 1, y * 2 + 1);
+            for (var x = 0; x < lw; x++) {
+              var x0 = Math.min(larghezza - 1, x * 2), x1 = Math.min(larghezza - 1, x * 2 + 1);
+              for (var c = 0; c < 4; c++) {
+                sotto[(y * lw + x) * 4 + c] = 0.25 * (
+                  dati[(y0 * larghezza + x0) * 4 + c] + dati[(y0 * larghezza + x1) * 4 + c]
+                  + dati[(y1 * larghezza + x0) * 4 + c] + dati[(y1 * larghezza + x1) * 4 + c]);
+              }
+            }
+          }
+          livelli.push({ dati: sotto, larghezza: lw, altezza: lh });
+          dati = sotto; larghezza = lw; altezza = lh;
+        }
+        return livelli;
       }
 
       // --- il rumore --------------------------------------------------------
@@ -7640,12 +7773,14 @@
         "uniform vec3 uAmbiente;",
         "uniform float uForzaSole;",
         "uniform float uZMax;",
-        "uniform int uPassi;",
+        "uniform float uPassoFine;",     // quanto sale il raggio fra due campioni (z Mercatore)
+        "uniform float uPassoMax;",      // passo orizzontale massimo (Mercatore)
+        "uniform float uPixelAngolo;",   // ampiezza angolare di un pixel del volume
+        "uniform float uTexelCampo;",    // lato di un pixel del campo (Mercatore)
         "uniform float uSemenza;",
         "uniform vec2 uRumorePasso;",    // x: per le unita' mercatore, y: per i km in verticale
         "uniform float uRumoreForza;",
         "uniform float uGrana;",
-        "uniform float uPassoMax;",
         "uniform int uQuantiLampi;",
         "uniform vec4 uLampi[16];",      // x, y mercatore unitario; z km veri; w intensita'
         "uniform vec3 uLampoColore;",
@@ -7667,11 +7802,9 @@
         "  return (1.0 - g2) / (4.0 * PIGRECO * pow(1.0 + g2 - 2.0 * g * coseno, 1.5));",
         "}",
         "",
-        // Un lobo solo non basta. Guardando una nube dall'alto con il sole
-        // alle spalle si e' in pieno retro-scattering, dove Henyey-Greenstein
-        // in avanti vale quasi zero: la nube veniva fuori grigia e spenta.
-        // Le gocce pero' retrodiffondono eccome -- e' la gloria che si vede
-        // dall'aereo -- e allora i lobi sono due, uno avanti e uno indietro.
+        // Un lobo solo non basta: guardando dall'alto con il sole alle spalle
+        // si e' in pieno retro-scattering. I lobi sono due, uno avanti e uno
+        // indietro.
         "float faseDoppia(float coseno, float g) {",
         "  return mix(faseHG(coseno, g), faseHG(coseno, -0.25 * g - 0.08), 0.48)",
         "    * 4.0 * PIGRECO;",
@@ -7679,62 +7812,74 @@
         "",
         "float cosLatDa(float y) { return 1.0 / cosh(PIGRECO * (1.0 - 2.0 * y)); }",
         "",
-        // La colonna: cima, copertura, spessore. Le prime due dal satellite,
-        // la terza dalla regola dichiarata in tessituraDelCampo.
-        "vec3 colonna(vec2 p) {",
-        "  vec2 uv = vec2((p.x - uDominio.x) / (uDominio.z - uDominio.x),",
-        "                 (p.y - uDominio.y) / (uDominio.w - uDominio.y));",
-        "  if (uv.x < 0.0 || uv.y < 0.0 || uv.x > 1.0 || uv.y > 1.0) return vec3(0.0);",
-        // L'esagerazione verticale non viene da sola. Stirare in altezza un
-        // campo fitto trasforma ogni colonna stretta in un ago: a ventisei
-        // volte la scena diventava una selva di aghi bianchi. Si ingrossa
-        // allora anche in orizzontale, della stessa misura, prendendo un
-        // livello piu' grosso della piramide della texture. La nube resta una
-        // nube: quello che cambia e' la SCALA a cui la si guarda, in tutte e
-        // tre le direzioni insieme.
-        "  vec4 c = textureLod(uCampo, uv, uGrana);",
-        "  return vec3(c.r * uScalaKm, c.g, c.b * uScalaKm);",
+        "vec2 uvDi(vec2 p) {",
+        "  return vec2((p.x - uDominio.x) / (uDominio.z - uDominio.x),",
+        "              (p.y - uDominio.y) / (uDominio.w - uDominio.y));",
+        "}",
+        "bool fuoriDominio(vec2 uv) {",
+        "  return uv.x < 0.0 || uv.y < 0.0 || uv.x > 1.0 || uv.y > 1.0;",
         "}",
         "",
-        "float densita(vec3 p, out float altKm, out float cimaKm, out float copertura) {",
-        "  vec3 col = colonna(p.xy);",
-        "  cimaKm = col.x; copertura = col.y;",
-        "  float spessKm = col.z;",
-        "  altKm = 0.0;",
-        "  if (copertura < 0.012 || cimaKm < 0.24) return 0.0;",
+        // DUE LETTURE DELLO STESSO CAMPO, a due scale. La geometria -- cima e
+        // spessore -- si legge ingrossata di uGrana livelli: stirata in
+        // verticale, una colonna stretta diventerebbe un ago. Il CONTORNO
+        // invece -- la copertura -- si legge alla risoluzione piena che il
+        // pixel sullo schermo riesce a distinguere: e' la sagoma che il
+        // satellite ha visto, e non c'e' ragione di impastarla. Prima la
+        // sagoma veniva dal rumore, ed era una nube inventata; adesso viene
+        // dall'immagine.
+        "float densita(vec3 p, float lodFine, out float altKm, out float cimaKm,",
+        "              out float copertura, out float spessKm) {",
+        "  altKm = 0.0; cimaKm = 0.0; copertura = 0.0; spessKm = 0.0;",
+        "  vec2 uv = uvDi(p.xy);",
+        "  if (fuoriDominio(uv)) return 0.0;",
+        "  vec4 liscia = textureLod(uCampo, uv, max(uGrana, lodFine));",
+        "  vec4 fine = textureLod(uCampo, uv, lodFine);",
+        "  copertura = fine.g;",
+        "  if (max(copertura, liscia.g) < 0.012) return 0.0;",
+        // La cima e' quella liscia, con dentro una parte di quella fine: le
+        // torrette che l'infrarosso vede davvero restano, ma non diventano
+        // spilli.
+        "  cimaKm = mix(liscia.r, fine.r, 0.35) * uScalaKm;",
+        "  spessKm = liscia.b * uScalaKm;",
+        "  if (cimaKm < 0.24) return 0.0;",
         "  float cosLat = cosLatDa(p.y);",
         "  altKm = p.z * uCircKm * cosLat / uEsagerazione;",
         "  float baseKm = max(0.2, cimaKm - spessKm);",
-        // Al bordo di una nube la copertura cala, e con lei deve calare anche
-        // la CIMA: se no un pixel coperto al dieci per cento continua a
-        // svettare quanto il cuore della cella, e il bordo diventa un muro
-        // verticale alto dieci chilometri -- moltiplicato per l'esagerazione,
-        // una crosta di ghiaccio attorno a ogni nube. Cosi' invece la nube si
-        // assottiglia verso l'esterno, che e' anche quello che fa davvero.
-        "  float scemare = smoothstep(0.0, 0.55, copertura);",
-        "  cimaKm = baseKm + (cimaKm - baseKm) * scemare;",
+        // Verso il bordo la nube si abbassa, ma come una CUPOLA e non come un
+        // cono: la radice tiene la cima quasi piena finche' la copertura e'
+        // buona e la fa scendere solo sull'orlo. Prima la cima calava in
+        // proporzione alla copertura, e ogni cella finiva a punta.
+        "  float cupola = sqrt(smoothstep(0.0, 0.5, liscia.g));",
+        "  cimaKm = baseKm + (cimaKm - baseKm) * mix(0.30, 1.0, cupola);",
         "  if (altKm < baseKm || altKm > cimaKm) return 0.0;",
         "  float h = (altKm - baseKm) / max(0.15, cimaKm - baseKm);",
-        // Il profilo verticale: la nube non e' un mattone. Si apre dal basso,
-        // e' piena nel mezzo e sfuma verso la sommita', dove il ghiaccio si
-        // sfilaccia.
-        "  float profilo = smoothstep(0.0, 0.20, h) * (1.0 - smoothstep(0.58, 1.0, h));",
+        // Il profilo verticale: la nube si apre dal basso, e' piena nel mezzo
+        // e sfuma verso la sommita'.
+        "  float profilo = smoothstep(0.0, 0.22, h) * (1.0 - smoothstep(0.62, 1.0, h));",
         "  float d = copertura * profilo;",
-        // Il ribollire: due ottave di rumore erodono la densita' dal basso.
-        // Sopra la scala che il satellite risolve la forma e' dato; sotto, e'
-        // tessitura dichiarata.
+        // Il ribollire sotto la scala che il satellite risolve: una sola
+        // ottava, debole, letta al livello di dettaglio che il pixel regge.
+        // Il rumore piu' fine di un pixel non si vede: si vede solo come
+        // puntini che cambiano a ogni movimento, ed era la grana bianca.
         "  vec3 q = vec3(p.xy * uRumorePasso.x, altKm * uRumorePasso.y);",
-        "  float grossa = texture(uRumore, q + vec3(uSemenza * 0.013)).r;",
-        "  float fine = texture(uRumore, q * 3.7 + vec3(4.3, 1.7, 2.9)).r;",
-        "  float erosione = mix(grossa, fine, 0.34);",
-        // Gli strati bassi sono lisci, le torri convettive frastagliate. La
-        // forza del dettaglio dipende quindi dalla morfologia gia' inferita,
-        // senza aggiungere texture o campioni allo shader mobile.
+        "  float lodRumore = max(0.0, lodFine + log2(uTexelCampo * uRumorePasso.x * 64.0));",
+        "  float grossa = textureLod(uRumore, q + vec3(uSemenza * 0.013), lodRumore).r;",
         "  float convettiva = smoothstep(3.0, 9.5, cimaKm) * smoothstep(0.35, 0.82, copertura);",
-        "  float forzaRumore = uRumoreForza * mix(0.30, 1.0, convettiva);",
-        "  float soglia = forzaRumore * (1.0 - erosione);",
-        "  d = (d - soglia) / max(0.08, 1.0 - soglia);",
+        "  float forzaRumore = uRumoreForza * mix(0.45, 1.0, convettiva);",
+        // Erode i bordi e lascia stare il cuore: dove la nube e' piena il
+        // rumore pesa poco, dove e' rada la scava.
+        "  float soglia = forzaRumore * (1.0 - grossa) * (1.0 - 0.55 * d);",
+        "  d = (d - soglia) / max(0.1, 1.0 - soglia);",
         "  return clamp(d, 0.0, 1.0);",
+        "}",
+        "",
+        // Rumore a gradiente interlacciato (Jimenez 2014): sposta l'inizio del
+        // raggio pixel per pixel come l'hash di prima, ma con una trama
+        // regolare e fine invece che a sale e pepe. Le fasce del passo
+        // spariscono senza lasciare al loro posto la grana.
+        "float intreccio(vec2 f) {",
+        "  return fract(52.9829189 * fract(dot(f, vec2(0.06711056, 0.00583715))));",
         "}",
         "",
         "void main() {",
@@ -7758,70 +7903,81 @@
         "  float tLontano = min(min(tMax.x, tMax.y), tMax.z);",
         "  if (tLontano <= tVicino) { colorePixel = vec4(0.0); return; }",
         "",
-        // QUANTO DEV'ESSERE FITTO IL PASSO. Dividere la traversata per il
-        // numero di passi sembra ovvio ed e' sbagliato: di sbieco, su un
-        // dominio largo cinquemila chilometri, il raggio ne percorre migliaia
-        // e con sessantaquattro passi attraversa la nube due volte in tutto.
-        // Quello che si vedeva -- creste sottili, croste, aghi -- non era la
-        // nube: era il sottocampionamento. Il passo si prende allora dalla
-        // FETTA, non dalla traversata, e per non pagarlo si salta a passo
-        // lungo dove non c'e' niente.
-        "  float attraversata = uZMax / max(abs(direzione.z), 0.06);",
-        // Due vincoli insieme. Il primo: quaranta campionamenti nello spessore
-        // della fetta, che e' quello che serve per vedere una nube invece di
-        // sfiorarla. Il secondo: mai un passo piu' lungo di mezzo mammellone,
-        // perche' di sbieco la fetta si attraversa in migliaia di chilometri e
-        // il primo vincolo da solo lascerebbe passi da centocinquanta -- ed e'
-        // li' che restavano i punti neri. Sotto, il tetto di trecento passi.
-        "  float passi = float(uPassi);",
-        "  float passoFine = min(attraversata / passi, uPassoMax);",
-        "  passoFine = max(passoFine, (tLontano - tVicino) / (passi * 7.0));",
-        "  float passoGrosso = passoFine * 3.0;",
-        "  float passo = passoGrosso;",
-        // Un pizzico di disturbo sul punto di partenza: senza, i passi si
-        // allineano e si vedono come fasce concentriche.
-        "  float disturbo = fract(sin(dot(gl_FragCoord.xy, vec2(12.9898, 78.233)) + uSemenza) * 43758.5453);",
-        "  float t = tVicino + passoFine * disturbo;",
+        // IL PASSO. Si decide in VERTICALE: fra due campioni il raggio sale o
+        // scende di uPassoFine, qualunque sia l'inclinazione. E' la misura
+        // che conta, perche' le nubi sono strati: uno strato basso spesso
+        // quattrocento metri va attraversato almeno una volta, e con il passo
+        // preso dalla traversata intera un raggio obliquo lo scavalcava in un
+        // pixel e lo colpiva in quello accanto -- la grana bianca. In
+        // orizzontale il passo non supera uPassoMax, cioe' un paio di pixel
+        // del campo, e per i raggi radenti un tetto tiene il costo limitato.
+        "  float passoFine = min(uPassoFine / max(abs(direzione.z), 0.02), uPassoMax);",
+        "  passoFine = max(passoFine, (tLontano - tVicino) / 300.0);",
+        "  float scarto = intreccio(gl_FragCoord.xy);",
+        "  float t = tVicino + passoFine * scarto;",
         "",
         "  vec3 direzioneVera = normalize(vec3(direzione.xy, direzione.z / uEsagerazione));",
         "  float coseno = dot(direzioneVera, uSole);",
         "  float suSole = max(0.12, uSole.z);",
-        // Le tre ottave della diffusione multipla: un fotone che ha gia'
-        // rimbalzato una volta vede una nube piu' trasparente e una fase piu'
-        // isotropa di quello appena entrato. Sommare tre ottave con sigma e
-        // anisotropia che decadono e' il modo economico di tenerne conto --
-        // ed e' quello che rende BIANCA una nube invece che grigia.
+        // Tre ottave di diffusione multipla: e' quello che rende BIANCA una
+        // nube invece che grigia.
         "  float fase0 = faseDoppia(coseno, uFaseG);",
         "  float fase1 = faseDoppia(coseno, uFaseG * 0.5);",
         "  float fase2 = faseDoppia(coseno, uFaseG * 0.25);",
+        // Verso il sole, sul piano: di quanto ci si sposta per salire di un
+        // chilometro lungo il raggio di luce. Serve all'ombra delle torri
+        // vicine.
+        "  vec2 versoSole = uSole.xy / max(uSole.z, 0.18);",
         "",
         "  vec3 accumulo = vec3(0.0);",
         "  float trasmissione = 1.0;",
-        "  int vuoti = 0;",
-        "  for (int i = 0; i < 512; i++) {",
-        "    if (t > tLontano || trasmissione < 0.012) break;",
+        "  bool dentro = false;",
+        "  float passo = passoFine;",
+        "  float vuoto = 0.0;",
+        "  for (int i = 0; i < 420; i++) {",
+        "    if (t > tLontano || trasmissione < 0.01) break;",
         "    vec3 p = origine + direzione * t;",
-        "    float altKm, cimaKm, copertura;",
-        "    float d = densita(p, altKm, cimaKm, copertura);",
+        // Quanto e' largo il pixel a questa distanza, in unita' del campo:
+        // e' il livello di dettaglio a cui ha senso leggere.
+        "    float lodFine = max(0.0, log2(max(1e-12, t * uPixelAngolo) / uTexelCampo));",
+        "    float altKm, cimaKm, copertura, spessKm;",
+        "    float d = densita(p, lodFine, altKm, cimaKm, copertura, spessKm);",
+        "    float cosLat = cosLatDa(p.y);",
         "    if (d <= 0.001) {",
-        "      vuoti++;",
-        // Attenzione a non tornare troppo presto al passo lungo. Appena si
-        // esce da una nube si e' appena fatto un passo indietro, e i prossimi
-        // campionamenti sono per forza vuoti: rimettendosi subito a saltare si
-        // ricade dentro la nube senza vederla, e il raggio esce trasparente.
-        // Erano i punti neri sparsi sulle nubi -- sale e pepe, ma fatto di
-        // raggi che avevano scavalcato quello che dovevano attraversare.
-        "      if (vuoti > 8) passo = passoGrosso;",
+        "      if (dentro) {",
+        "        vuoto += passo;",
+        "        if (vuoto > passoFine * 1.5) { dentro = false; passo = passoFine; }",
+        "      }",
         "      t += passo;",
         "      continue;",
         "    }",
-        // Appena si incontra qualcosa si torna indietro di un passo lungo e si
-        // riprende fitti: cosi' il bordo della nube non viene tagliato dove
-        // capita il passo.
-        "    if (passo > passoFine) { t -= passo; passo = passoFine; vuoti = 0; continue; }",
-        "    vuoti = 0;",
+        // Appena si entra in una nube si torna indietro di un passo e si
+        // riparte con un passo commisurato al SUO spessore: sette campioni
+        // per attraversarla da cima a base. Le basi piatte non escono piu' a
+        // fasce, e lo strato sottile viene letto quanto quello spesso.
+        "    if (!dentro) {",
+        "      dentro = true;",
+        "      float spessoreVisto = max(0.15, spessKm) * uEsagerazione / (uCircKm * cosLat);",
+        "      passo = clamp(spessoreVisto / 7.0 / max(abs(direzione.z), 0.02),",
+        "        passoFine * 0.2, passoFine);",
+        // Dove comincia davvero la nube, per bisezione fra l'ultimo
+        // campione vuoto e questo. Senza, i campioni dentro la nube
+        // cadevano a una distanza dal bordo che cambiava a scatti da un
+        // pixel all'altro -- secondo dove era capitato il passo lungo -- e
+        // gli scatti si vedevano come anelli concentrici sulle cupole.
+        "      float vuotoT = max(tVicino, t - passoFine), pienoT = t;",
+        "      for (int k = 0; k < 5; k++) {",
+        "        float mezzo = 0.5 * (vuotoT + pienoT);",
+        "        float a1, c1, o1, s1;",
+        "        if (densita(origine + direzione * mezzo, lodFine, a1, c1, o1, s1) > 0.001) pienoT = mezzo;",
+        "        else vuotoT = mezzo;",
+        "      }",
+        "      t = pienoT + passo * scarto;",
+        "      vuoto = 0.0;",
+        "      continue;",
+        "    }",
+        "    vuoto = 0.0;",
         "    t += passo;",
-        "    float cosLat = cosLatDa(p.y);",
         // La lunghezza VERA del passo: il volume e' disegnato allungato in
         // verticale, ma la luce lo attraversa come se non lo fosse.
         "    vec3 vero = vec3(direzione.xy, direzione.z / uEsagerazione) * passo;",
@@ -7829,19 +7985,25 @@
         "    float estinzione = uSigma * d * passoKm;",
         "    float trasmPasso = exp(-estinzione);",
         "",
-        // Quanta nube c'e' fra questo punto e il sole. Il volume e' uno
-        // strato -- una cima e una base per ogni colonna -- e allora il
-        // cammino verso il sole e' quanto manca alla sommita' diviso il seno
-        // dell'elevazione. E' la prima approssimazione giusta per uno strato,
-        // e costa una riga invece di quattro campionamenti per passo.
+        // Quanta nube c'e' fra questo punto e il sole. Prima la propria
+        // colonna: quanto manca alla sommita' diviso il seno dell'elevazione.
+        // Poi la colonna a due chilometri di salita verso il sole: se li'
+        // c'e' una torre piu' alta, questo punto e' nella sua ombra. Senza,
+        // il fianco in ombra di una cella era acceso quanto quello al sole e
+        // il rilievo spariva.
         "    float camminoSole = max(0.0, cimaKm - altKm) / suSole;",
+        "    vec2 ombraUv = uvDi(p.xy + versoSole * 2.0 / (uCircKm * cosLat));",
+        "    if (!fuoriDominio(ombraUv)) {",
+        "      vec4 vicina = textureLod(uCampo, ombraUv, uGrana + 1.0);",
+        "      float sopra = vicina.r * uScalaKm - (altKm + 2.0);",
+        "      camminoSole += max(0.0, sopra) * vicina.g / suSole;",
+        "    }",
         "    float spessoreSole = uSigma * copertura * camminoSole;",
         "    float luceSole = exp(-spessoreSole) * fase0",
         "      + 0.52 * exp(-spessoreSole * 0.42) * fase1",
         "      + 0.26 * exp(-spessoreSole * 0.18) * fase2;",
         // Il termine 'polvere': il bordo di una nube, guardato con il sole
-        // dietro, e' piu' scuro del centro perche' li' la luce non ha avuto
-        // spazio per rimbalzare. Senza, la nube sembra di gesso.
+        // dietro, e' piu' scuro del centro.
         "    float polvere = 1.0 - exp(-estinzione * 2.4);",
         "",
         "    vec3 lampi = vec3(0.0);",
@@ -7850,42 +8012,63 @@
         "      vec4 L = uLampi[j];",
         "      float dxKm = (p.x - L.x) * uCircKm * cosLat;",
         "      float dyKm = (p.y - L.y) * uCircKm * cosLat;",
-        // Il bagliore e' una palla nello spazio vero. Lo spazio pero' e'
-        // disegnato stirato in verticale, e una palla stirata quattordici
-        // volte diventa una colonna di luce che sbuca dalla nube come un
-        // faro: si vedeva, e non e' un lampo. Come per la grana del rumore,
-        // la verticale viene schiacciata della stessa proporzione, cosi' il
-        // bagliore resta una palla IN QUELLO CHE SI VEDE. E' una scelta di
-        // disegno, dichiarata: l'attenuazione verso l'alto -- quella che fa
-        // il nucleo scuro -- resta in chilometri veri.
+        // Il bagliore e' una palla nello spazio vero, schiacciata in
+        // verticale della stessa proporzione dell'ingrossamento: se no,
+        // stirata dall'esagerazione, diventava una colonna di luce.
         "      float dzKm = (altKm - L.z) * uLampoSchiaccia;",
         "      float distanza = sqrt(dxKm * dxKm + dyKm * dyKm + dzKm * dzKm);",
         "      if (distanza > 3.0 * uLampoDiffusione) continue;",
-        // La luce nasce dentro il ghiaccio e nel ghiaccio si spegne. Il
-        // cammino che conta non e' la distanza ma il CAMMINO OTTICO: dentro
-        // il cuore fitto della cella la luce si ferma in pochi chilometri,
-        // dentro l'incudine sottile corre lontano. La copertura misurata pesa
-        // quel cammino, ed e' cosi' che il bordo dell'incudine si accende.
+        // Il cammino che conta e' quello OTTICO: dentro il cuore fitto della
+        // cella la luce si ferma in pochi chilometri, dentro l'incudine
+        // sottile corre lontano.
         "      float ottico = distanza * (1.0 - uLampoPesoCopertura",
         "        + uLampoPesoCopertura * copertura);",
-        "      float fuga = exp(-ottico / uLampoDiffusione) / (1.0 + 0.42 * distanza);",
+        "      float fuga = exp(-ottico / uLampoDiffusione) / (1.0 + 0.25 * distanza);",
         "      float acceso = L.w * uLampoForza * fuga;",
-        // Verso la sorgente la luce satura e il colore sbianca: nessuna riga
-        // spettrale regge da sola una luminosita' che sfonda.
         "      vec3 tinta = mix(uLampoColore, uLampoNucleo, clamp(acceso * 0.55, 0.0, 1.0));",
         "      lampi += tinta * acceso;",
         "    }",
         "",
-        "    float h = clamp((altKm - (cimaKm - max(0.15, cimaKm))) / max(0.5, cimaKm), 0.0, 1.0);",
         "    vec3 luce = ALBEDO * (",
         "        uForzaSole * uColoreSole * luceSole * mix(0.45, 1.0, polvere)",
         "      + uAmbiente * mix(0.45, 1.0, altKm / max(1.0, cimaKm))",
         "    ) + lampi * ALBEDO;",
         "    accumulo += trasmissione * (1.0 - trasmPasso) * luce;",
         "    trasmissione *= trasmPasso;",
-        "    if (h < -1.0) break;",
         "  }",
-        "  colorePixel = vec4(accumulo, 1.0 - trasmissione);",
+        // LA CURVA DI RISPOSTA. La cima al sole vale una volta e mezzo il
+        // bianco: tagliata a uno, tutta la parte illuminata usciva bianca
+        // piatta, senza forma, e un lampo che le si sommava sopra non
+        // cambiava niente -- era gia' al massimo. Una curva esponenziale,
+        // come la pellicola, tiene la cima al sole sotto il bianco con il suo
+        // rilievo e lascia al lampo lo spazio per farsi vedere.
+        "  float alfa = 1.0 - trasmissione;",
+        "  vec3 colore = accumulo / max(alfa, 1e-4);",
+        "  colore = 1.0 - exp(-colore * 1.6);",
+        "  colorePixel = vec4(colore * alfa, alfa);",
+        "}"
+      ].join("\n");
+
+      // La stesura: la texture del volume viene distesa sullo schermo con un
+      // filtro a tenda 3x3 -- quattro letture bilineari a mezzo pixel in
+      // diagonale. Lo scarto del punto di partenza del raggio (intreccio) e'
+      // costruito perche' ogni finestra 3x3 ne contenga tutti i valori: la
+      // tenda li media e la trama sparisce, mentre la nube, che e' morbida,
+      // non perde niente.
+      var STESURA = [
+        "#version 300 es",
+        "precision mediump float;",
+        "in vec2 vNdc;",
+        "out vec4 colorePixel;",
+        "uniform sampler2D uVolume;",
+        "uniform vec2 uTexel;",
+        "void main() {",
+        "  vec2 uv = vNdc * 0.5 + 0.5;",
+        "  colorePixel = 0.25 * (",
+        "      texture(uVolume, uv + uTexel * vec2(-0.5, -0.5))",
+        "    + texture(uVolume, uv + uTexel * vec2(0.5, -0.5))",
+        "    + texture(uVolume, uv + uTexel * vec2(-0.5, 0.5))",
+        "    + texture(uVolume, uv + uTexel * vec2(0.5, 0.5)));",
         "}"
       ].join("\n");
 
@@ -7936,24 +8119,30 @@
         this.lampi = [];
         this.sole = { elevazione: 0, azimut: 0 };
         this.esagerazione = ESAGERAZIONE_INIZIALE;
-        this.passi = PASSI_INIZIALI;
         this.acceso = true;
+        this.fbo = null;
+        this.texVolume = null;
+        this.misuraVolume = { larghezza: 0, altezza: 0 };
+        this.quotaMassimaKm = QUOTA_SCALA_KM;
       }
 
-      StratoVolume.prototype.onAdd = function (mappa, gl) {
-        this.gl = gl;
-        this.mappa = mappa;
-        var v = compila(gl, gl.VERTEX_SHADER, VERTICE);
-        var f = compila(gl, gl.FRAGMENT_SHADER, FRAMMENTO);
+      function collega(gl, sorgenteFrammento) {
         var programma = gl.createProgram();
-        gl.attachShader(programma, v);
-        gl.attachShader(programma, f);
+        gl.attachShader(programma, compila(gl, gl.VERTEX_SHADER, VERTICE));
+        gl.attachShader(programma, compila(gl, gl.FRAGMENT_SHADER, sorgenteFrammento));
         gl.bindAttribLocation(programma, 0, "aPos");
         gl.linkProgram(programma);
         if (!gl.getProgramParameter(programma, gl.LINK_STATUS)) {
           throw new Error("programma: " + gl.getProgramInfoLog(programma));
         }
-        this.programma = programma;
+        return programma;
+      }
+
+      StratoVolume.prototype.onAdd = function (mappa, gl) {
+        this.gl = gl;
+        this.mappa = mappa;
+        this.programma = collega(gl, FRAMMENTO);
+        this.programmaStesura = collega(gl, STESURA);
         this.buffer = gl.createBuffer();
         gl.bindBuffer(gl.ARRAY_BUFFER, this.buffer);
         // Un triangolo solo, piu' grande dello schermo: costa meno di due.
@@ -7976,7 +8165,10 @@
         gl.pixelStorei(gl.UNPACK_ALIGNMENT, 1);
         gl.texImage3D(gl.TEXTURE_3D, 0, gl.R8, RUMORE_LATO, RUMORE_LATO, RUMORE_LATO,
           0, gl.RED, gl.UNSIGNED_BYTE, rumore);
-        gl.texParameteri(gl.TEXTURE_3D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
+        // Anche il rumore ha la sua piramide: da lontano si legge un livello
+        // piu' grosso invece di campionare a caso celle piu' piccole del pixel.
+        gl.generateMipmap(gl.TEXTURE_3D);
+        gl.texParameteri(gl.TEXTURE_3D, gl.TEXTURE_MIN_FILTER, gl.LINEAR_MIPMAP_LINEAR);
         gl.texParameteri(gl.TEXTURE_3D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
         gl.texParameteri(gl.TEXTURE_3D, gl.TEXTURE_WRAP_S, gl.REPEAT);
         gl.texParameteri(gl.TEXTURE_3D, gl.TEXTURE_WRAP_T, gl.REPEAT);
@@ -7995,11 +8187,32 @@
         if (!gl) return;
         gl.bindTexture(gl.TEXTURE_2D, this.texCampo);
         gl.pixelStorei(gl.UNPACK_ALIGNMENT, 1);
-        gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, campo.larghezza, campo.altezza, 0,
-          gl.RGBA, gl.UNSIGNED_BYTE, tessituraDelCampo(campo));
         // La piramide serve per l'ingrossamento orizzontale: senza, non c'e'
         // niente di piu' grosso da prendere.
-        gl.generateMipmap(gl.TEXTURE_2D);
+        var livelli = piramideDelCampo(tessituraDelCampo(campo), campo.larghezza, campo.altezza);
+        while (gl.getError() !== gl.NO_ERROR) { /* errori altrui, non nostri */ }
+        livelli.forEach(function (l, i) {
+          gl.texImage2D(gl.TEXTURE_2D, i, gl.RGBA16F, l.larghezza, l.altezza, 0,
+            gl.RGBA, gl.FLOAT, l.dati);
+        });
+        if (gl.getError() !== gl.NO_ERROR) {
+          // Un driver che rifiuta la mezza precisione: si torna agli otto
+          // bit, con le righe ma con il volume.
+          livelli.forEach(function (l, i) {
+            var otto = new Uint8Array(l.dati.length);
+            for (var k = 0; k < otto.length; k++) otto[k] = Math.round(limita(l.dati[k], 0, 1) * 255);
+            gl.texImage2D(gl.TEXTURE_2D, i, gl.RGBA8, l.larghezza, l.altezza, 0,
+              gl.RGBA, gl.UNSIGNED_BYTE, otto);
+          });
+        }
+        // Il tetto del volume e' la cima piu' alta della scena, non il
+        // fondoscala: sopra non c'e' niente da attraversare, e ogni
+        // chilometro in meno sono campioni risparmiati su ogni pixel.
+        var massima = 0;
+        for (var k = 0; k < campo.quota.length; k++) {
+          if (campo.quota[k] > massima && campo.copertura[k] > 0.012) massima = campo.quota[k];
+        }
+        this.quotaMassimaKm = limita(massima + 0.6, 2, QUOTA_SCALA_KM);
         this.campo = campo;
         this.pronto = true;
       };
@@ -8013,12 +8226,97 @@
         return null;
       };
 
+      // L'esagerazione del momento: piena alla vista d'insieme, poi cala con
+      // lo zoom fino a ESAGERAZIONE_MINIMA.
+      StratoVolume.prototype.esagerazioneAlloZoom = function () {
+        var zoom = this.mappa && this.mappa.getZoom ? this.mappa.getZoom() : ESAGERAZIONE_ZOOM_PIENO;
+        var calo = Math.pow(2, -Math.max(0, zoom - ESAGERAZIONE_ZOOM_PIENO) * ESAGERAZIONE_CALO_PER_ZOOM);
+        return Math.max(ESAGERAZIONE_MINIMA, ESAGERAZIONE_INIZIALE * calo);
+      };
+
+      // La texture in cui si disegna il volume: al massimo QUALITA_VOLUME.pixel
+      // pixel, con le proporzioni dello schermo.
+      StratoVolume.prototype.preparaTela = function (gl) {
+        var w = gl.drawingBufferWidth, h = gl.drawingBufferHeight;
+        var scala = Math.min(1, Math.sqrt(QUALITA_VOLUME.pixel / Math.max(1, w * h)));
+        var lw = Math.max(1, Math.round(w * scala)), lh = Math.max(1, Math.round(h * scala));
+        if (this.fbo && this.misuraVolume.larghezza === lw && this.misuraVolume.altezza === lh) {
+          return true;
+        }
+        if (!this.texVolume) this.texVolume = gl.createTexture();
+        gl.bindTexture(gl.TEXTURE_2D, this.texVolume);
+        gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA8, lw, lh, 0, gl.RGBA, gl.UNSIGNED_BYTE, null);
+        gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
+        gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
+        gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+        gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+        if (!this.fbo) this.fbo = gl.createFramebuffer();
+        gl.bindFramebuffer(gl.FRAMEBUFFER, this.fbo);
+        gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, this.texVolume, 0);
+        var completo = gl.checkFramebufferStatus(gl.FRAMEBUFFER) === gl.FRAMEBUFFER_COMPLETE;
+        gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+        if (!completo) {
+          // Nessuna texture disegnabile: si torna a disegnare dritto sullo
+          // schermo, com'era prima. Piu' caro, ma il volume c'e'.
+          gl.deleteFramebuffer(this.fbo);
+          this.fbo = null;
+          this.senzaTela = true;
+          return false;
+        }
+        this.misuraVolume = { larghezza: lw, altezza: lh };
+        return true;
+      };
+
+      // Prima del passaggio principale MapLibre lascia disegnare dove si
+      // vuole: qui il volume va nella sua texture.
+      StratoVolume.prototype.prerender = function (gl, argomenti) {
+        this.disegnatoInTela = false;
+        if (!this.pronto || !this.acceso || this.senzaTela) return;
+        if (!this.preparaTela(gl)) return;
+        gl.bindFramebuffer(gl.FRAMEBUFFER, this.fbo);
+        gl.viewport(0, 0, this.misuraVolume.larghezza, this.misuraVolume.altezza);
+        gl.disable(gl.SCISSOR_TEST);
+        gl.colorMask(true, true, true, true);
+        gl.clearColor(0, 0, 0, 0);
+        gl.clear(gl.COLOR_BUFFER_BIT);
+        gl.disable(gl.BLEND);
+        this.disegnatoInTela = this.disegnaVolume(gl, argomenti, this.misuraVolume.altezza);
+        gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+      };
+
       StratoVolume.prototype.render = function (gl, argomenti) {
         if (!this.pronto || !this.acceso) return;
+        gl.disable(gl.DEPTH_TEST);
+        gl.disable(gl.CULL_FACE);
+        gl.disable(gl.STENCIL_TEST);
+        gl.disable(gl.SCISSOR_TEST);
+        gl.colorMask(true, true, true, true);
+        gl.depthMask(false);
+        gl.enable(gl.BLEND);
+        // Il colore esce gia' moltiplicato per la trasmissione: si compone
+        // come premoltiplicato, altrimenti i bordi sottili si scuriscono.
+        gl.blendFunc(gl.ONE, gl.ONE_MINUS_SRC_ALPHA);
+        if (this.disegnatoInTela) {
+          gl.useProgram(this.programmaStesura);
+          gl.bindVertexArray(this.vao);
+          gl.activeTexture(gl.TEXTURE0);
+          gl.bindTexture(gl.TEXTURE_2D, this.texVolume);
+          gl.uniform1i(gl.getUniformLocation(this.programmaStesura, "uVolume"), 0);
+          gl.uniform2f(gl.getUniformLocation(this.programmaStesura, "uTexel"),
+            1 / this.misuraVolume.larghezza, 1 / this.misuraVolume.altezza);
+          gl.drawArrays(gl.TRIANGLES, 0, 3);
+          gl.bindVertexArray(null);
+          return;
+        }
+        this.disegnaVolume(gl, argomenti, gl.drawingBufferHeight);
+      };
+
+      StratoVolume.prototype.disegnaVolume = function (gl, argomenti, altezzaPixel) {
         var matrice = this.matriceDi(argomenti);
-        if (!matrice) return;
+        if (!matrice) return false;
         var inversa = inverti4(matrice);
-        if (!inversa) return;
+        if (!inversa) return false;
+        this.esagerazione = this.esagerazioneAlloZoom();
 
         var p = this.programma;
         gl.useProgram(p);
@@ -8032,7 +8330,7 @@
         // Il tetto del volume, in unita' di MapLibre. Si prende alla latitudine
         // piu' estrema, dove quelle unita' valgono meno chilometri: cosi' il
         // riquadro contiene tutto e non taglia niente.
-        var zMax = QUOTA_SCALA_KM * this.esagerazione / (circKm * cosLatEstremo);
+        var zMax = this.quotaMassimaKm * this.esagerazione / (circKm * cosLatEstremo);
 
         // Sole calcolato nello stesso istante del satellite e nel centro
         // reale della vista: spostandosi dalla Sicilia al Baltico cambiano
@@ -8075,7 +8373,14 @@
         gl.uniform3fv(u("uAmbiente"), new Float32Array(ambiente));
         gl.uniform1f(u("uForzaSole"), forzaSole);
         gl.uniform1f(u("uZMax"), zMax);
-        gl.uniform1i(u("uPassi"), this.passi);
+        gl.uniform1f(u("uPassoFine"), QUALITA_VOLUME.passoKm * this.esagerazione * unitaPerKm);
+        // L'ampiezza di un pixel: il campo visivo della camera diviso le
+        // righe della tela su cui si disegna.
+        var tr = this.mappa && this.mappa.transform;
+        var fov = (tr && (tr.fovInRadians || (tr.fov && tr.fov * Math.PI / 180))) || 0.6435;
+        gl.uniform1f(u("uPixelAngolo"), 2 * Math.tan(fov / 2) / Math.max(1, altezzaPixel));
+        var texelCampo = (dom.x1 - dom.x0) / (this.campo ? this.campo.larghezza : LARGHEZZA_FORMA);
+        gl.uniform1f(u("uTexelCampo"), texelCampo);
         // La grana appartiene al fotogramma satellitare: animarla con
         // performance.now() faceva bollire nubi che il sensore osserva ferme
         // e costringeva la GPU a ridisegnare un mondo diverso a ogni frame.
@@ -8094,8 +8399,11 @@
         gl.uniform2f(u("uRumorePasso"),
           1 / (orizzontaleKm * unitaPerKm), 1 / verticaleKm);
         gl.uniform1f(u("uRumoreForza"), RUMORE_FORZA);
-        gl.uniform1f(u("uGrana"), Math.max(0, Math.log2(this.esagerazione / ESAGERAZIONE_GRANA)));
-        gl.uniform1f(u("uPassoMax"), RUMORE_SCALA_KM * ingrosso * 0.34 * unitaPerKm);
+        var grana = Math.max(0, Math.log2(this.esagerazione / ESAGERAZIONE_GRANA));
+        gl.uniform1f(u("uGrana"), grana);
+        // In orizzontale mai piu' di un pixel e mezzo del campo ingrossato:
+        // oltre, il raggio salterebbe i contorni che il campo contiene.
+        gl.uniform1f(u("uPassoMax"), texelCampo * Math.pow(2, grana) * 1.5);
 
         var lampi = new Float32Array(LAMPI_MAX * 4);
         var quanti = 0;
@@ -8127,15 +8435,11 @@
         gl.disable(gl.DEPTH_TEST);
         gl.disable(gl.CULL_FACE);
         gl.disable(gl.STENCIL_TEST);
-        gl.disable(gl.SCISSOR_TEST);
-        gl.colorMask(true, true, true, true);
         gl.depthMask(false);
-        gl.enable(gl.BLEND);
-        // Il colore esce gia' moltiplicato per la trasmissione: si compone
-        // come premoltiplicato, altrimenti i bordi sottili si scuriscono.
-        gl.blendFunc(gl.ONE, gl.ONE_MINUS_SRC_ALPHA);
         gl.drawArrays(gl.TRIANGLES, 0, 3);
         gl.bindVertexArray(null);
+        gl.activeTexture(gl.TEXTURE0);
+        return true;
       };
 
       // Nessuna luce direzionale finta di notte: il sole astronomico scende a
@@ -8281,14 +8585,22 @@
       // resta il fondo cartografico. Non si inventa una costa dove c'e' una
       // nube davanti.
       function superficieSenzaNubi(pixelPelle, misuraPelle, campo) {
+        // La copertura e' piu' rada dell'immagine: si interpola, altrimenti
+        // i buchi della superficie escono a quadretti. E il buco si apre con
+        // una rampa, non a soglia, perche' il bordo sfumato della nube
+        // disegnata sopra lo copra senza lasciare uno scalino.
+        var cw = campo.larghezza, ch = campo.altezza, cop = campo.copertura;
         for (var y = 0; y < misuraPelle.altezza; y++) {
-          var sy = limita(Math.round(y * campo.altezza / misuraPelle.altezza), 0, campo.altezza - 1);
+          var fy = limita((y + 0.5) * ch / misuraPelle.altezza - 0.5, 0, ch - 1);
+          var y0 = Math.floor(fy), y1 = Math.min(ch - 1, y0 + 1), ty = fy - y0;
           for (var x = 0; x < misuraPelle.larghezza; x++) {
-            var sx = limita(Math.round(x * campo.larghezza / misuraPelle.larghezza),
-              0, campo.larghezza - 1);
-            var copertura = campo.copertura[sy * campo.larghezza + sx];
+            var fx = limita((x + 0.5) * cw / misuraPelle.larghezza - 0.5, 0, cw - 1);
+            var x0 = Math.floor(fx), x1 = Math.min(cw - 1, x0 + 1), tx = fx - x0;
+            var copertura = (cop[y0 * cw + x0] * (1 - tx) + cop[y0 * cw + x1] * tx) * (1 - ty)
+              + (cop[y1 * cw + x0] * (1 - tx) + cop[y1 * cw + x1] * tx) * ty;
             var k = (y * misuraPelle.larghezza + x) * 4 + 3;
-            pixelPelle.data[k] = Math.round(pixelPelle.data[k] * limita(1 - copertura * 1.25, 0, 1));
+            var resta = 1 - lisciaFra(0.12, 0.78, copertura);
+            pixelPelle.data[k] = Math.round(pixelPelle.data[k] * resta);
           }
         }
         return pixelPelle;
