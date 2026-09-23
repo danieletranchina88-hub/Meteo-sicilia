@@ -7926,6 +7926,7 @@
         this.type = "custom";
         this.renderingMode = "3d";
         this.pronto = false;
+        this.epoca = 0;
         this.campo = null;
         this.lampi = [];
         this.sole = { elevazione: 0, azimut: 0 };
@@ -7952,6 +7953,17 @@
         gl.bindBuffer(gl.ARRAY_BUFFER, this.buffer);
         // Un triangolo solo, piu' grande dello schermo: costa meno di due.
         gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([-1, -1, 3, -1, -1, 3]), gl.STATIC_DRAW);
+        // In WebGL2 gli attributi appartengono a un VAO. Affidarsi al VAO
+        // lasciato attivo da MapLibre funzionava su alcune GPU desktop, ma su
+        // diversi driver Android il triangolo a pieno schermo restava senza
+        // attributi e il volume risultava completamente trasparente. Il layer
+        // possiede il suo stato, come deve fare ogni custom layer WebGL2.
+        this.vao = gl.createVertexArray();
+        gl.bindVertexArray(this.vao);
+        gl.bindBuffer(gl.ARRAY_BUFFER, this.buffer);
+        gl.enableVertexAttribArray(0);
+        gl.vertexAttribPointer(0, 2, gl.FLOAT, false, 0, 0);
+        gl.bindVertexArray(null);
 
         this.texRumore = gl.createTexture();
         gl.bindTexture(gl.TEXTURE_3D, this.texRumore);
@@ -8005,9 +8017,7 @@
 
         var p = this.programma;
         gl.useProgram(p);
-        gl.bindBuffer(gl.ARRAY_BUFFER, this.buffer);
-        gl.enableVertexAttribArray(0);
-        gl.vertexAttribPointer(0, 2, gl.FLOAT, false, 0, 0);
+        gl.bindVertexArray(this.vao);
 
         var dom = this.dominioUnitario();
         var latCentro = (DOMINIO.sud + DOMINIO.nord) / 2;
@@ -8110,12 +8120,17 @@
         gl.uniform1i(u("uRumore"), 1);
 
         gl.disable(gl.DEPTH_TEST);
+        gl.disable(gl.CULL_FACE);
+        gl.disable(gl.STENCIL_TEST);
+        gl.disable(gl.SCISSOR_TEST);
+        gl.colorMask(true, true, true, true);
         gl.depthMask(false);
         gl.enable(gl.BLEND);
         // Il colore esce gia' moltiplicato per la trasmissione: si compone
         // come premoltiplicato, altrimenti i bordi sottili si scuriscono.
         gl.blendFunc(gl.ONE, gl.ONE_MINUS_SRC_ALPHA);
         gl.drawArrays(gl.TRIANGLES, 0, 3);
+        gl.bindVertexArray(null);
       };
 
       // Nessuna luce direzionale finta di notte: il sole astronomico scende a
@@ -8204,21 +8219,54 @@
         [DOMINIO.est, DOMINIO.sud], [DOMINIO.ovest, DOMINIO.sud]
       ];
       var volume = new StratoVolume();
+      var scenaSeriale = 0;
+      var aggiornaScenaTimer = 0;
+
+      function slotCoerenteDellaScena() {
+        // IR e GeoColour non arrivano sempre nello stesso minuto. Chiedere a
+        // entrambi l'ultimo slot dell'IR produceva spesso una risposta XML di
+        // errore per uno dei due prodotti, seguita da un secondo download
+        // senza tempo: sul telefono significava parecchi secondi di vuoto.
+        // L'intersezione piu' recente e' il minore dei due ultimi slot.
+        var ir = cloudSlot(CLOUD_PRODUCTS.ir105).value;
+        var geocolour = cloudSlot(CLOUD_PRODUCTS.geocolour).value;
+        return Math.min(ir, geocolour);
+      }
+
+      function nascondiNubePianaQuandoPronto() {
+        if (!attiva || !volume.pronto || !map) return;
+        volume.acceso = true;
+        if (map.getLayer("satellite-clouds-layer")) {
+          map.setLayoutProperty("satellite-clouds-layer", "visibility", "none");
+        }
+        map.triggerRepaint();
+      }
 
       function costruisciScena() {
         var adesso = Date.now();
         // Se la barra e' nel passato, il volume nasce dallo stesso slot che
         // si sta guardando; in diretta usa l'ultimo IR dichiarato disponibile.
-        var slotScena = cloudSlot(CLOUD_PRODUCTS.ir105).value;
+        var slotScena = slotCoerenteDellaScena();
+        if (volume.pronto && volume.epoca === slotScena) {
+          nascondiNubePianaQuandoPronto();
+          return;
+        }
+        var seriale = ++scenaSeriale;
         var misuraForma = misuraRaster(LARGHEZZA_FORMA);
         var misuraPelle = misuraRaster(LARGHEZZA_PELLE);
-        Promise.all([
-          scarica(STRATI.forma, misuraForma, adesso, slotScena),
-          scarica(STRATI.pelle, misuraPelle, adesso, slotScena)
-        ]).then(function (esiti) {
-          componi(esiti[0], esiti[1], misuraForma, misuraPelle);
+        // Le due richieste partono insieme, ma il volume NON aspetta la piu'
+        // pesante GeoColour. Appena arriva l'IR si pubblicano quota e forma;
+        // la copertura ottica completa poi nubi basse e superficie in un
+        // secondo passaggio. Prima Promise.all teneva il layer vuoto fino a
+        // quando erano finiti download, maschera, PNG e sorgente MapLibre.
+        var promessaPelle = scarica(STRATI.pelle, misuraPelle, adesso, slotScena);
+        scarica(STRATI.forma, misuraForma, adesso, slotScena).then(function (forma) {
+          if (!attiva || seriale !== scenaSeriale) return;
+          componi(forma, promessaPelle, misuraForma, misuraPelle, seriale);
         }).catch(function () {
-          if (attiva) toast("Nubi in volume: la scena non si e' potuta costruire");
+          if (attiva && seriale === scenaSeriale) {
+            toast("Nubi in volume: infrarosso non disponibile, resta visibile il satellite");
+          }
         });
       }
 
@@ -8241,8 +8289,8 @@
         return pixelPelle;
       }
 
-      function componi(forma, pelle, misuraForma, misuraPelle) {
-        if (!attiva) return;
+      function componi(forma, promessaPelle, misuraForma, misuraPelle, seriale) {
+        if (!attiva || seriale !== scenaSeriale) return;
 
         if (!forma) {
           // Senza l'infrarosso non c'e' ne' quota ne' volume: e' la misura
@@ -8251,39 +8299,81 @@
           return;
         }
 
-        var pixelForma = leggiPixel(forma.immagine, misuraForma);
-        var campo = campoDelleNubi(pixelForma.data, misuraForma.larghezza, misuraForma.altezza);
+        var campo;
+        try {
+          var pixelForma = leggiPixel(forma.immagine, misuraForma);
+          campo = campoDelleNubi(pixelForma.data, misuraForma.larghezza, misuraForma.altezza);
+          // Questo e' il primo frame vero: viene caricato nella GPU prima di
+          // qualunque lavoro opzionale. Cosi' una canvas GeoColour lenta o a
+          // corto di memoria non puo' piu' cancellare anche le nubi IR.
+          volume.epoca = forma.slot.epoca;
+          volume.lampi = [];
+          volume.pubblicaCampo(campo);
+          nascondiNubePianaQuandoPronto();
+        } catch (errore) {
+          toast("Nubi in volume: impossibile leggere l'infrarosso, resta visibile il satellite");
+          return;
+        }
+
+        // Si lascia al browser un fotogramma per presentare davvero il volume
+        // IR. Subito dopo si completa la scena con la copertura ottica. Il
+        // setTimeout dentro requestAnimationFrame evita che il lungo lavoro
+        // su canvas venga eseguito prima del paint appena richiesto.
+        requestAnimationFrame(function () {
+          setTimeout(function () {
+            promessaPelle.then(function (pelle) {
+              if (!attiva || seriale !== scenaSeriale) return;
+              completaScenaOttica(campo, pelle, misuraPelle, seriale);
+            }).catch(function () {
+              if (attiva && seriale === scenaSeriale) {
+                toast("Nubi in volume: GeoColour assente, resta la ricostruzione infrarossa");
+              }
+            });
+          }, 0);
+        });
+      }
+
+      function completaScenaOttica(campo, pelle, misuraPelle, seriale) {
+        if (!attiva || seriale !== scenaSeriale) return;
 
         if (pelle) {
-          var pixelPelle = leggiPixel(pelle.immagine, misuraPelle);
-          var telaOsservata = document.createElement("canvas");
-          telaOsservata.width = misuraPelle.larghezza;
-          telaOsservata.height = misuraPelle.altezza;
-          telaOsservata.getContext("2d").putImageData(pixelPelle, 0, 0);
-          integraCoperturaOttica(campo, telaOsservata);
-          superficieSenzaNubi(pixelPelle, misuraPelle, campo);
-          var tela = document.createElement("canvas");
-          tela.width = misuraPelle.larghezza; tela.height = misuraPelle.altezza;
-          tela.getContext("2d").putImageData(pixelPelle, 0, 0);
-          if (map.getSource("volume-superficie")) {
-            map.getSource("volume-superficie").updateImage({
-              url: tela.toDataURL("image/png"), coordinates: coordinateDominio
-            });
-          } else {
-            map.addSource("volume-superficie", { type: "image",
-              url: tela.toDataURL("image/png"), coordinates: coordinateDominio });
-            map.addLayer({ id: "volume-superficie-strato", type: "raster",
-              source: "volume-superficie",
-              paint: { "raster-opacity": 1, "raster-fade-duration": 0 } },
-              "volume-nubi");
+          try {
+            var pixelPelle = leggiPixel(pelle.immagine, misuraPelle);
+            var telaOsservata = document.createElement("canvas");
+            telaOsservata.width = misuraPelle.larghezza;
+            telaOsservata.height = misuraPelle.altezza;
+            telaOsservata.getContext("2d").putImageData(pixelPelle, 0, 0);
+            integraCoperturaOttica(campo, telaOsservata);
+            // Secondo upload: stessa scena, ora include anche nubi basse e
+            // calde che il solo infrarosso non separa bene dal suolo.
+            volume.pubblicaCampo(campo);
+            superficieSenzaNubi(pixelPelle, misuraPelle, campo);
+            var tela = document.createElement("canvas");
+            tela.width = misuraPelle.larghezza; tela.height = misuraPelle.altezza;
+            tela.getContext("2d").putImageData(pixelPelle, 0, 0);
+            var urlSuperficie = tela.toDataURL("image/png");
+            if (map.getSource("volume-superficie")) {
+              map.getSource("volume-superficie").updateImage({
+                url: urlSuperficie, coordinates: coordinateDominio
+              });
+            } else {
+              map.addSource("volume-superficie", { type: "image",
+                url: urlSuperficie, coordinates: coordinateDominio });
+              map.addLayer({ id: "volume-superficie-strato", type: "raster",
+                source: "volume-superficie",
+                paint: { "raster-opacity": 1, "raster-fade-duration": 0 } },
+                "volume-nubi");
+            }
+            mostraSuperficie(true);
+          } catch (errore) {
+            // La ricostruzione IR e' gia' pubblicata. GeoColour e superficie
+            // sono un affinamento: se una GPU mobile e' a corto di memoria non
+            // si torna piu' a una mappa vuota.
+            toast("Nubi in volume: dettaglio GeoColour ridotto su questo dispositivo");
           }
         } else {
           toast("Nubi in volume: GeoColour assente, restano le nubi rilevate dall'infrarosso");
         }
-
-        volume.epoca = forma.slot.epoca;
-        volume.lampi = [];
-        volume.pubblicaCampo(campo);
         map.triggerRepaint();
       }
 
@@ -8440,12 +8530,13 @@
         attiva = true;
         showVolumeClouds = true;
         assicuraStrato();
-        volume.acceso = true;
+        // Finche' la texture non e' pronta resta il satellite 2D: inclinare
+        // subito una mappa gia' priva delle nubi produceva esattamente il
+        // rettangolo vuoto visto su Android. costruisciScena riaccende il
+        // ray marcher nello stesso istante in cui pubblica il primo campo.
+        volume.acceso = false;
         volume.lampi = [];
         mostraSuperficie(true);
-        if (map.getLayer("satellite-clouds-layer")) {
-          map.setLayoutProperty("satellite-clouds-layer", "visibility", "none");
-        }
         abilitaInclinazioneVolume(true);
         blitzRetryDelay = 2000;
         blitzConnect();
@@ -8459,6 +8550,11 @@
       function disattivaNubiVolumetriche() {
         if (!attiva) return;
         attiva = false;
+        scenaSeriale++;
+        if (aggiornaScenaTimer) {
+          clearTimeout(aggiornaScenaTimer);
+          aggiornaScenaTimer = 0;
+        }
         showVolumeClouds = false;
         volume.acceso = false;
         volume.lampi = [];
@@ -8474,9 +8570,23 @@
         if (map) map.triggerRepaint();
       }
 
+      function aggiornaNubiVolumetriche() {
+        if (!attiva) return;
+        // La barra puo' generare decine di input al secondo. Il volume gia'
+        // visibile resta fermo mentre il dito si muove e viene sostituito con
+        // lo slot definitivo appena il gesto si posa, senza lampeggiare o
+        // lasciare la mappa vuota fra due istanti.
+        if (aggiornaScenaTimer) clearTimeout(aggiornaScenaTimer);
+        aggiornaScenaTimer = setTimeout(function () {
+          aggiornaScenaTimer = 0;
+          costruisciScena();
+        }, 140);
+      }
+
       return {
         attiva: attivaNubiVolumetriche,
         disattiva: disattivaNubiVolumetriche,
+        aggiorna: aggiornaNubiVolumetriche,
         notificaScarica: notificaScarica
       };
     })();
@@ -9904,6 +10014,7 @@
             ? 0
             : Math.floor(Date.now() / CLOUD_SLOT_MS) * CLOUD_SLOT_MS - back * CLOUD_SLOT_MS;
           updateSatelliteScrubLabel();
+          if (showVolumeClouds) NubiVolumetriche.aggiorna();
           // Ogni livello prova la propria cache nello stesso evento input:
           // nubi e AFA cambiano nel fotogramma in cui si muove il cursore,
           // senza attendere il debounce o la rete.
