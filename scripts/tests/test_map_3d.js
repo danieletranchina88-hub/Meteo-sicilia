@@ -2281,7 +2281,8 @@ console.log("nubi in volume: spessore continuo, niente grana, niente coni, nient
     };
     const temporale = sistema(true), fronte = sistema(false);
     const cb = m.GENERI.indexOf("Cumulonembo"), incudine = m.GENERI.indexOf("Incudine");
-    assert.ok(temporale.torreCentro > 0.5, "la cima piu' fredda di un sistema convettivo non diventa una torre");
+    assert.ok(temporale.torreCentro > 0.5,
+      "la cima piu' fredda di un sistema convettivo non diventa un nucleo: " + temporale.torreCentro.toFixed(2));
     assert.ok(temporale.conta[incudine] > temporale.conta[cb],
       "attorno alla torre non c'e' l'incudine: il temporale torna un altopiano pieno");
     assert.equal(fronte.conta[cb] + fronte.conta[incudine], 0,
