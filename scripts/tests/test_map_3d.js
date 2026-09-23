@@ -2246,20 +2246,21 @@ console.log("nubi in volume: spessore continuo, niente grana, niente coni, nient
     if (conCella) c.celle = new Float32Array(quanti).fill(1);
     m.classificaNubi(c, null, null, null);
     const centro = 10 * w + 20, kc = 5 * c.classeMisura.larghezza + 10;
-    // La torre del cumulonembo scende al livello di condensazione nello
-    // shader, con il bordo netto: qui conta che sia marcata come torre.
+    // Solo una cima convettiva osservata puo' collegare l'incudine alla base.
     const base = c.chi[centro] > 0.5 ? Math.min(1, c.base[centro]) : c.base[centro];
     return { base, genere: m.GENERI[c.classe[kc]], cima: c.quota[centro] };
   };
   const cirro = scena(11, 3, false, false);
   assert.equal(cirro.genere, "Cirro", "un velo alto e caldo all'infrarosso non e' riconosciuto come cirro: " + cirro.genere);
   assert.ok(cirro.base > 8.5, "il cirro non sta piu' in quota: base " + cirro.base.toFixed(1) + " km");
-  const torre = scena(12, 12, true, true);
-  assert.equal(torre.genere, "Cumulonembo", "una cella RDT fredda quanto la sua cima non e' un cumulonembo: " + torre.genere);
-  assert.ok(torre.base < 2, "il cumulonembo non parte piu' dal basso: base " + torre.base.toFixed(1) + " km");
+  const rdtSenzaPicco = scena(12, 12, true, false);
+  assert.notEqual(rdtSenzaPicco.genere, "Cumulonembo",
+    "una cella RDT con cima uniforme inventa una torre: " + rdtSenzaPicco.genere);
+  assert.ok(rdtSenzaPicco.base > 5,
+    "la nube alta senza nucleo convettivo scende artificiosamente al suolo");
   // CONVEZIONE PROFONDA senza RDT: un sistema alto, freddo, opaco e con la
-  // cima ribollente e' un cumulonembo, con UNA torre sotto la cima piu'
-  // fredda e l'incudine attorno. Un fronte altrettanto alto ma liscio no.
+  // cima ribollente e un rilievo termico coerente ha un nucleo profondo e
+  // l'incudine attorno. Un fronte altrettanto alto ma liscio no.
   {
     const W = 1024, H = 400, N = W * H;  // circa 4 km per pixel, come il campo vero
     const sistema = (ribollente) => {
@@ -2268,7 +2269,8 @@ console.log("nubi in volume: spessore continuo, niente grana, niente coni, nient
         const x = k % W, y = Math.floor(k / W);
         const caso = Math.abs(Math.sin(x * 12.9898 + y * 78.233) * 43758.5453) % 1;
         const r = Math.hypot(x - 512, y - 200);
-        c.quota[k] = 11.5 + (ribollente ? caso * 3 - 1.5 : 0) + (r < 2 ? 1.5 : 0);
+        c.quota[k] = 11.5 + (ribollente ? caso * 3 - 1.5
+          + (r < 5 ? 3.5 * Math.exp(-r * r / 16) : 0) : 0);
       }
       const tutto = new Float32Array(N).fill(1);
       m.campoMisurato(c, tutto, { quota: new Float32Array(N).fill(12), valida: tutto }, { larghezza: W, altezza: H });
