@@ -7296,7 +7296,7 @@
       // la misura dei bagliori visti dalla Stazione Spaziale, e con sette
       // chilometri il lampo restava un punto di pochi pixel invisibile a
       // scala regionale.
-      var LAMPO_DIFFUSIONE_KM = 11.0;
+      var LAMPO_DIFFUSIONE_KM = 14.0;
       var LAMPO_FORZA = 24.0;
       // Il ghiaccio fitto ferma la luce, l'incudine sottile la lascia correre.
       // La copertura misurata pesa il cammino ottico: e' l'unico modo in cui
@@ -7307,7 +7307,7 @@
       // rilevazione usa quindi la stessa ampiezza normalizzata. Il nucleo e'
       // bianco caldo, la diffusione esterna appena azzurra come la luce
       // dispersa da acqua e ghiaccio, senza imporre il rosso del canale LI.
-      var LAMPO_COLORE = [0.72, 0.86, 1.0];
+      var LAMPO_COLORE = [0.76, 0.80, 1.0];
       // Dove la sorgente satura, il colore sbianca: nessuna riga spettrale
       // regge da sola una luminosita' che sfonda: e' quello che fa ogni
       // sorgente intensa, e quello che fa un lampo visto da vicino.
@@ -7317,6 +7317,29 @@
       var LAMPO_PICCO_MS = 46;
       var LAMPO_CODA_MS = 150;
       var LAMPO_CODA_PESO = 0.26;
+
+      // IL CANALE. Un fulmine non e' un punto: e' un canale. Una scarica a
+      // terra -- quello che Blitzortung rileva -- scende dalla regione di
+      // carica fino al suolo, e dentro la nube si ramifica in orizzontale
+      // per chilometri ('ragno'). La luce che accende la nube viene da tutto
+      // il canale; la parte fra la base e il suolo si vede da fuori, sotto la
+      // nube. Direzione e lunghezza dei rami non sono misurate: sono estratte
+      // dalla scarica stessa (lat, lon, istante), sempre uguali per lo stesso
+      // fulmine, e dichiarate come tali.
+      var RAGNO_MIN_KM = 5, RAGNO_MAX_KM = 14;
+      // I COLPI DI RITORNO. Un lampo a terra e' fatto in media di tre o
+      // quattro scariche nello stesso canale, a 40-80 ms l'una dall'altra,
+      // ognuna piu' debole (Rakov e Uman, "Lightning", 2003). E' il tremolio
+      // che si vede di notte; l'ultima lascia una corrente continua che tiene
+      // il canale acceso ancora per un centinaio di millisecondi.
+      var COLPI_MIN = 2, COLPI_MAX = 4;
+      var COLPO_INTERVALLO_MS = [38, 82];
+      var COLPO_DECADIMENTO_MS = 26;
+      var COLPO_CORRENTE_MS = 130;
+      var LAMPO_DURATA_MS = 420;
+      // Il canale visto sotto la nube: largo quanto un pixel, mai meno di
+      // cosi' (in chilometri veri), e diviso in tratti spezzati.
+      var CANALE_LARGO_KM = 0.05;
 
       // Il dominio e' largo cinquemila chilometri e una nube e' alta dodici:
       // in scala vera sarebbe una pellicola. Questo numero e' l'unica cosa
@@ -8397,6 +8420,9 @@
         "uniform float uGrana;",
         "uniform int uQuantiLampi;",
         "uniform vec4 uLampi[16];",      // x, y mercatore unitario; z km veri; w intensita'
+        "uniform vec4 uCanali[16];",     // x base della nube (km), y seme del canale
+        "uniform vec4 uRagni[16];",      // xy direzione del ramo principale, z lunghezza (km)
+        "uniform float uCanaleLargoKm;",
         "uniform vec3 uLampoColore;",
         "uniform vec3 uLampoNucleo;",
         "uniform float uLampoDiffusione;",
@@ -8710,21 +8736,52 @@
         "    for (int j = 0; j < 16; j++) {",
         "      if (j >= uQuantiLampi) break;",
         "      vec4 L = uLampi[j];",
-        "      float dxKm = (p.x - L.x) * uCircKm * cosLat;",
-        "      float dyKm = (p.y - L.y) * uCircKm * cosLat;",
-        // Il bagliore e' una palla nello spazio vero, schiacciata in
-        // verticale della stessa proporzione dell'ingrossamento: se no,
-        // stirata dall'esagerazione, diventava una colonna di luce.
-        "      float dzKm = (altKm - L.z) * uLampoSchiaccia;",
-        "      float distanza = sqrt(dxKm * dxKm + dyKm * dyKm + dzKm * dzKm);",
+        "      vec4 R = uRagni[j];",
+        "      float kmU = uCircKm * cosLat;",
+        "      vec2 dKm = (p.xy - L.xy) * kmU;",
+        "      if (dot(dKm, dKm) > pow(3.0 * uLampoDiffusione + R.z, 2.0)) continue;",
+        // LA SORGENTE E' IL CANALE, non un punto: il tronco verticale dal
+        // suolo alla regione di carica e, a quella quota, i rami a ragno --
+        // quello principale e uno piu' corto a centoventi gradi. Di ogni
+        // tratto si prende il punto piu' vicino. La verticale e' schiacciata
+        // come prima, perche' l'esagerazione non stiri il bagliore in una
+        // colonna.
+        "      float zc = clamp(altKm, 0.0, L.z);",
+        "      vec3 verso = vec3(dKm, (altKm - zc) * uLampoSchiaccia);",
+        "      float migliore = length(verso);",
+        "      vec3 sorgente = vec3(L.xy, zc);",
+        "      vec2 dir1 = R.xy;",
+        "      vec2 dir2 = vec2(dir1.x * -0.5 - dir1.y * 0.866, dir1.x * 0.866 + dir1.y * -0.5);",
+        "      for (int r = 0; r < 2; r++) {",
+        "        vec2 dr = r == 0 ? dir1 : dir2;",
+        "        float lung = r == 0 ? R.z : R.z * 0.55;",
+        "        float s = clamp(dot(dKm, dr), 0.0, lung);",
+        "        vec3 v = vec3(dKm - dr * s, (altKm - L.z) * uLampoSchiaccia);",
+        "        float dv = length(v);",
+        "        if (dv < migliore) { migliore = dv; sorgente = vec3(L.xy + dr * s / kmU, L.z); }",
+        "      }",
+        "      float distanza = migliore;",
         "      if (distanza > 3.0 * uLampoDiffusione) continue;",
-        // Il cammino che conta e' quello OTTICO: dentro il cuore fitto della
-        // cella la luce si ferma in pochi chilometri, dentro l'incudine
-        // sottile corre lontano.
-        "      float ottico = distanza * (1.0 - uLampoPesoCopertura",
-        "        + uLampoPesoCopertura * copertura);",
-        "      float fuga = exp(-ottico / uLampoDiffusione) / (1.0 + 0.25 * distanza);",
+        // LA NUBE FRA LA SORGENTE E QUESTO PUNTO. Tre campioni sul cammino:
+        // il cuore fitto della cella fa ombra, l'incudine sottile e i bordi
+        // lasciano passare. Una parte della luce pero' si diffonde -- la nube
+        // e' bianca, non assorbe -- e arriva comunque, piu' debole e
+        // sfumata: e' il chiarore che accende tutta la cella da dentro.
+        "      vec3 qS = vec3(sorgente.xy, sorgente.z * uEsagerazione / kmU);",
+        "      float tauL = 0.0;",
+        "      for (int k = 0; k < 3; k++) {",
+        "        vec3 qq = mix(p, qS, 0.2 + 0.3 * float(k));",
+        "        float a2, c2, o2, s2;",
+        "        tauL += densita(qq, lodGrezzo + 1.0, true, a2, c2, o2, s2) * gDensita;",
+        "      }",
+        "      float camminoKm = length(vec3(dKm - (sorgente.xy - L.xy) * kmU, altKm - sorgente.z));",
+        "      tauL *= uSigma * camminoKm / 3.0;",
+        "      float passa = 0.3 * exp(-tauL) + 0.7 * exp(-tauL * 0.07);",
+        "      float fuga = passa * exp(-distanza / uLampoDiffusione) / (1.0 + 0.25 * distanza);",
         "      float acceso = L.w * uLampoForza * fuga;",
+        // Vicino al canale la luce e' bianca e satura; lontano, dopo molti
+        // rimbalzi fra le gocce, prende la tinta azzurro-lavanda delle
+        // fotografie dei temporali notturni.
         "      vec3 tinta = mix(uLampoColore, uLampoNucleo, clamp(acceso * 0.55, 0.0, 1.0));",
         "      lampi += tinta * acceso;",
         "    }",
@@ -8747,15 +8804,64 @@
         "  float alfa = 1.0 - trasmissione;",
         "  vec3 colore = accumulo / max(alfa, 1e-4);",
         "  colore = 1.0 - exp(-colore * 1.6);",
-        // LA FOSCHIA: l'aria fra chi guarda e la nube non e' vuota. Con la
-        // distanza la nube si stempera nell'azzurro dell'orizzonte, ed e'
-        // questo che da' la profondita' delle fotografie dall'aereo.
-        "  if (tPrimo > 0.0) {",
-        "    float distanzaKm = tPrimo * uCircKm * cosLatDa(origine.y);",
-        "    float foschia = (1.0 - exp(-distanzaKm / uFoschiaKm)) * uFoschiaForza;",
-        "    colore = mix(colore, uColoreFoschia, foschia);",
+        // IL CANALE SOTTO LA NUBE. Dalla base della nube al suolo, dove
+        // Blitzortung ha misurato la scarica, il canale e' fuori dalla nube e
+        // si vede: una linea bianca spezzata in sei tratti, larga quanto
+        // basta a restare visibile, con un alone nell'aria piovosa attorno.
+        // Dietro una nube si vede attraverso quanta nube resta davanti.
+        "  vec3 canale = vec3(0.0);",
+        "  float canaleAlfa = 0.0;",
+        "  for (int j = 0; j < 16; j++) {",
+        "    if (j >= uQuantiLampi) break;",
+        "    vec4 L = uLampi[j];",
+        "    vec4 C = uCanali[j];",
+        "    float kmU = uCircKm * cosLatDa(L.y);",
+        // Il canale si costruisce dal suolo verso l'alto come una passeggiata
+        // a caso: ogni tratto parte da dove finisce il precedente e piega di
+        // poco -- e' la tortuosita' dei fulmini veri, che a questa scala
+        // cambiano direzione ogni poche centinaia di metri. Due rami corti
+        // si staccano dal tronco verso il basso, come nelle fotografie.
+        "    vec2 deriva = vec2(0.0);",
+        "    vec3 prima = vec3(L.xy, 0.0);",
+        "    vec3 nodo1 = prima, nodo2 = prima;",
+        "    for (int k = 1; k <= 14; k++) {",
+        "      float f = float(k) / 14.0;",
+        "      vec2 passo = vec2(fract(sin(C.y + float(k) * 12.9898) * 43758.5453),",
+        "        fract(sin(C.y + float(k) * 78.233) * 24634.6345)) - 0.5;",
+        "      deriva = k == 14 ? deriva * 0.5 : deriva + passo * 0.32;",
+        "      vec3 dopo = vec3(L.xy + deriva / kmU, C.x * f * uEsagerazione / kmU);",
+        "      if (k == 5) nodo1 = dopo;",
+        "      if (k == 9) nodo2 = dopo;",
+        "      for (int ramo = 0; ramo < 3; ramo++) {",
+        "        vec3 a1 = prima, b1 = dopo;",
+        "        float forza = 1.0;",
+        "        if (ramo > 0) {",
+        "          if (k != 14) continue;",
+        "          vec3 radice = ramo == 1 ? nodo1 : nodo2;",
+        "          float ang = fract(sin(C.y * 3.7 + float(ramo) * 91.7) * 3758.5) * 6.2832;",
+        "          float lung = (ramo == 1 ? 0.9 : 0.6) / kmU;",
+        "          a1 = radice;",
+        "          b1 = radice + vec3(cos(ang) * lung, sin(ang) * lung, -C.x * (ramo == 1 ? 0.22 : 0.16) * uEsagerazione / kmU);",
+        "          forza = 0.45;",
+        "        }",
+        "        vec3 e = b1 - a1, w0 = origine - a1;",
+        "        float bb = dot(direzione, e), cc = dot(e, e), dd = dot(direzione, w0), ee = dot(e, w0);",
+        "        float den = max(1e-20, cc - bb * bb);",
+        "        float ss = clamp((ee - bb * dd) / den, 0.0, 1.0);",
+        "        float tt = max(0.0, bb * ss - dd);",
+        "        float dKm = length(w0 + direzione * tt - e * ss) * kmU;",
+        "        float larghezza = max(uCanaleLargoKm * forza, tt * uPixelAngolo * kmU * 0.7);",
+        "        float nucleo = exp(-pow(dKm / larghezza, 2.0)) * min(1.0, uCanaleLargoKm * forza / larghezza * 3.0);",
+        "        float alone = exp(-dKm / (larghezza * 8.0)) * 0.1 * forza;",
+        "        float davanti = (tPrimo < 0.0 || tt < tPrimo) ? 1.0 : trasmissione;",
+        "        float v = min(1.0, L.w * 1.6) * davanti;",
+        "        canale += (uLampoNucleo * nucleo + uLampoColore * alone) * v;",
+        "        canaleAlfa = max(canaleAlfa, min(1.0, nucleo + alone) * v);",
+        "      }",
+        "      prima = dopo;",
+        "    }",
         "  }",
-        "  colorePixel = vec4(colore * alfa, alfa);",
+        "  colorePixel = vec4(colore * alfa + canale, max(alfa, canaleAlfa));",
         "}"
       ].join("\n");
 
@@ -9141,6 +9247,8 @@
         gl.uniform1f(u("uPassoMax"), texelCampo * Math.pow(2, grana) * 1.5);
 
         var lampi = new Float32Array(LAMPI_MAX * 4);
+        var canali = new Float32Array(LAMPI_MAX * 4);
+        var ragni = new Float32Array(LAMPI_MAX * 4);
         var quanti = 0;
         for (var i = 0; i < this.lampi.length && quanti < LAMPI_MAX; i++) {
           var l = this.lampi[i];
@@ -9149,9 +9257,17 @@
           lampi[quanti * 4 + 1] = l.uy;
           lampi[quanti * 4 + 2] = l.quotaKm;
           lampi[quanti * 4 + 3] = l.intensita;
+          canali[quanti * 4] = l.baseKm || 1.0;
+          canali[quanti * 4 + 1] = l.semeCanale || 0;
+          ragni[quanti * 4] = l.ragnoX || 1;
+          ragni[quanti * 4 + 1] = l.ragnoY || 0;
+          ragni[quanti * 4 + 2] = l.ragnoKm || RAGNO_MIN_KM;
           quanti++;
         }
         gl.uniform4fv(u("uLampi"), lampi);
+        gl.uniform4fv(u("uCanali"), canali);
+        gl.uniform4fv(u("uRagni"), ragni);
+        gl.uniform1f(u("uCanaleLargoKm"), CANALE_LARGO_KM);
         gl.uniform1i(u("uQuantiLampi"), quanti);
         gl.uniform3fv(u("uLampoColore"), new Float32Array(LAMPO_COLORE));
         gl.uniform3fv(u("uLampoNucleo"), new Float32Array(LAMPO_NUCLEO));
@@ -9213,14 +9329,41 @@
       // --- i lampi ----------------------------------------------------------
       // Inviluppo ottico di una singola scarica osservata: salita, picco e
       // coda di corrente continua. Non si aggiungono colpi casuali.
-      function luceDelLampo(eta) {
-        var durata = LAMPO_PICCO_MS * 6;
-        if (eta < 0 || eta > durata) return 0;
-        var salita = Math.min(1, eta / LAMPO_SALITA_MS);
-        var t = Math.max(0, eta - LAMPO_SALITA_MS);
-        var picco = Math.exp(-t / LAMPO_PICCO_MS);
-        var coda = LAMPO_CODA_PESO * Math.exp(-t / LAMPO_CODA_MS);
-        return salita * (picco + coda) * (1 - t / durata) / (1 + LAMPO_CODA_PESO);
+      // Un numero fra 0 e 1, sempre lo stesso per la stessa scarica.
+      function semeDellaScarica(lat, lon, quando, n) {
+        var h = Math.imul(Math.round(lat * 1e4) ^ 0x9e3779b9, 2654435761)
+          ^ Math.imul(Math.round(lon * 1e4) + n * 7919, 1597334677)
+          ^ Math.imul(Math.round(quando || 0) & 0x7fffffff, 3812015801);
+        h = Math.imul(h ^ (h >>> 15), 2246822507);
+        h = Math.imul(h ^ (h >>> 13), 3266489909);
+        return ((h ^ (h >>> 16)) >>> 0) / 4294967296;
+      }
+
+      // I tempi dei colpi di ritorno di una scarica.
+      function colpiDelLampo(seme) {
+        var quanti = COLPI_MIN + Math.floor(seme(1) * (COLPI_MAX - COLPI_MIN + 1));
+        var colpi = [], t = 0;
+        for (var i = 0; i < quanti; i++) {
+          colpi.push({ t: t, forza: i === 0 ? 1 : 0.35 + 0.35 * seme(10 + i) });
+          t += COLPO_INTERVALLO_MS[0] + (COLPO_INTERVALLO_MS[1] - COLPO_INTERVALLO_MS[0]) * seme(20 + i);
+        }
+        return colpi;
+      }
+
+      // La luce del lampo nel tempo: ogni colpo si accende in un istante e
+      // si spegne in qualche decina di millisecondi; dopo l'ultimo, la
+      // corrente continua.
+      function luceDelLampo(eta, colpi) {
+        if (!(eta >= 0) || eta > LAMPO_DURATA_MS) return 0;
+        colpi = colpi || [{ t: 0, forza: 1 }];
+        var luce = 0;
+        for (var i = 0; i < colpi.length; i++) {
+          var dt = eta - colpi[i].t;
+          if (dt < 0) continue;
+          luce += colpi[i].forza * Math.exp(-dt / COLPO_DECADIMENTO_MS);
+          if (i === colpi.length - 1) luce += 0.22 * Math.exp(-dt / COLPO_CORRENTE_MS);
+        }
+        return Math.min(1.2, luce) * (1 - eta / LAMPO_DURATA_MS);
       }
 
       // --- caricamento -------------------------------------------------------
@@ -9598,7 +9741,7 @@
         // inclinata dal vento e due griglie con risoluzione diversa, ma non
         // puo' saltare dalla scarica a un altro temporale.
         var raggio = Math.max(4, Math.round(campo.larghezza * 40 / 6000));
-        var migliore = 0, punteggio = 0;
+        var migliore = 0, punteggio = 0, kMigliore = -1;
         for (var dy = -raggio; dy <= raggio; dy++) {
           var y = limita(cy + dy, 0, campo.altezza - 1);
           for (var dx = -raggio; dx <= raggio; dx++) {
@@ -9607,9 +9750,10 @@
             var k = y * campo.larghezza + x;
             var distanza = Math.sqrt(dx * dx + dy * dy) / Math.max(1, raggio);
             var qui = campo.quota[k] * campo.copertura[k] * (1 - 0.35 * distanza);
-            if (qui > punteggio) { punteggio = qui; migliore = campo.quota[k]; }
+            if (qui > punteggio) { punteggio = qui; migliore = campo.quota[k]; kMigliore = k; }
           }
         }
+        cimaVicinoAllaScarica.base = kMigliore >= 0 && campo.base ? campo.base[kMigliore] : 1.0;
         return migliore;
       }
 
@@ -9622,11 +9766,22 @@
         if (!attiva || cloudTimeSelected || !volume.campo || !scarica) return;
         var cima = cimaVicinoAllaScarica(scarica.lat, scarica.lon);
         if (cima < 1.0) return;
+        var seme = function (n) { return semeDellaScarica(scarica.lat, scarica.lon, scarica.at, n); };
+        var angolo = seme(2) * 2 * Math.PI;
+        var carica = quotaDiCarica(cima);
         volume.lampi.push({
           ux: unitaX(scarica.lon),
           uy: unitaY(scarica.lat),
           cimaKm: cima,
-          quotaKm: quotaDiCarica(cima),
+          quotaKm: carica,
+          // La base della nube sopra la scarica: da li' in giu' il canale e'
+          // fuori dalla nube e si vede.
+          baseKm: limita(cimaVicinoAllaScarica.base || 1.0, 0.3, carica),
+          // Il ragno: direzione (est, sud nel Mercatore) e lunghezza.
+          ragnoX: Math.cos(angolo), ragnoY: Math.sin(angolo),
+          ragnoKm: RAGNO_MIN_KM + (RAGNO_MAX_KM - RAGNO_MIN_KM) * seme(3),
+          semeCanale: seme(4) * 100,
+          colpi: colpiDelLampo(seme),
           ricevuta: scarica.ricevuta || performance.now(),
           intensita: 0
         });
@@ -9651,11 +9806,11 @@
         var ora = performance.now();
         var acceso = false;
         volume.lampi.forEach(function (l) {
-          l.intensita = prefersReducedMotion ? 0 : luceDelLampo(ora - l.ricevuta);
+          l.intensita = prefersReducedMotion ? 0 : luceDelLampo(ora - l.ricevuta, l.colpi);
           if (l.intensita > 0.004) acceso = true;
         });
         volume.lampi = volume.lampi.filter(function (l) {
-          return ora - l.ricevuta <= LAMPO_PICCO_MS * 6;
+          return ora - l.ricevuta <= LAMPO_DURATA_MS;
         });
         // Solo i piu' luminosi entrano nei sedici posti dello shader.
         volume.lampi.sort(function (a, b) { return b.intensita - a.intensita; });

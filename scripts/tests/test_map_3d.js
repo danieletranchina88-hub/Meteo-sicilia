@@ -2330,4 +2330,33 @@ console.log("nubi in volume: spessore continuo, niente grana, niente coni, nient
   assert.match(frammento, /uv \+= spinta \* kmSpinta/,
     "la copertura si legge di nuovo uguale a ogni quota: i fianchi tornano muri a tende");
 }
-console.log("nubi in volume: maschera CLM, quota CTH, opacita', generi, sabbia, suolo sotto le nubi, luce e scultura, fianchi");
+{
+  // Il lampo nelle nubi: colpi di ritorno, canale esteso, ombra della nube.
+  const vm = require("node:vm");
+  const costanti = ["COLPI_MIN", "COLPO_INTERVALLO_MS", "COLPO_DECADIMENTO_MS",
+    "COLPO_CORRENTE_MS", "LAMPO_DURATA_MS"].map((n) => html.match(new RegExp("var " + n + " = [^;]+;"))[0]);
+  const contesto = { Math };
+  vm.createContext(contesto);
+  vm.runInContext(costanti.join("\n") + implementazione("semeDellaScarica")
+    + implementazione("colpiDelLampo") + implementazione("luceDelLampo"), contesto);
+  const seme = (n) => contesto.semeDellaScarica(37.5, 14.2, 1727100000000, n);
+  const colpi = contesto.colpiDelLampo(seme);
+  assert.ok(colpi.length >= 2 && colpi.length <= 4, "un lampo a terra non ha piu' 2-4 colpi di ritorno: " + colpi.length);
+  assert.deepEqual(contesto.colpiDelLampo(seme), colpi, "la stessa scarica non da' piu' gli stessi colpi");
+  // Fra un colpo e l'altro la luce cala e poi risale: il tremolio.
+  const t2 = colpi[1].t;
+  const prima = contesto.luceDelLampo(t2 - 1, colpi), dopo = contesto.luceDelLampo(t2 + 1, colpi);
+  const picco = contesto.luceDelLampo(1, colpi);
+  assert.ok(prima < picco * 0.5 && dopo > prima * 1.4,
+    "il secondo colpo di ritorno non riaccende il lampo: " + [picco, prima, dopo].map((v) => v.toFixed(2)));
+  assert.equal(contesto.luceDelLampo(10000, colpi), 0, "il lampo non si spegne");
+  const frammento = html.slice(html.indexOf("var FRAMMENTO = ["), html.indexOf("var STESURA = ["));
+  assert.match(frammento, /float zc = clamp\(altKm, 0\.0, L\.z\);/,
+    "la sorgente del lampo e' tornata un punto: deve essere il canale verticale");
+  assert.match(frammento, /float s = clamp\(dot\(dKm, dr\), 0\.0, lung\);/,
+    "mancano i rami orizzontali del canale dentro la nube");
+  assert.match(frammento, /float passa = 0\.3 \* exp\(-tauL\) \+ 0\.7 \* exp\(-tauL \* 0\.07\);/,
+    "la luce del lampo non attraversa piu' la nube vera: il nucleo fitto non fa ombra");
+  assert.match(frammento, /IL CANALE SOTTO LA NUBE/, "manca il canale visibile fra la base e il suolo");
+}
+console.log("nubi in volume: maschera CLM, quota CTH, opacita', generi, sabbia, suolo sotto le nubi, luce e scultura, fianchi, lampi");
