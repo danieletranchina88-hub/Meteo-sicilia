@@ -2234,10 +2234,11 @@ console.log("nubi in volume: spessore continuo, niente grana, niente coni, nient
     const c = { larghezza: w, altezza: h, quota: new Float32Array(quanti),
       copertura: new Float32Array(quanti).fill(1) };
     for (let k = 0; k < quanti; k++) {
-      // Celle di quattro pixel, circa otto chilometri: la scala dei cumuli
-      // che il satellite risolve.
-      const cx = Math.floor((k % w) / 4), cy = Math.floor(Math.floor(k / w) / 4);
-      c.quota[k] = quotaIr + (irregolare ? ((cx * 7919 + cy * 104729) % 13) / 13 * 3 - 1.5 : 0);
+      // Celle di un pixel: piu' celle nella finestra della tessitura, come i cumuli
+      // veri rispetto ai dieci chilometri della finestra.
+      const cx = k % w, cy = Math.floor(k / w);
+      const caso = Math.abs(Math.sin(cx * 12.9898 + cy * 78.233) * 43758.5453) % 1;
+      c.quota[k] = quotaIr + (irregolare ? caso * 3 - 1.5 : 0);
     }
     const tutto = new Float32Array(quanti).fill(1);
     m.campoMisurato(c, tutto, { quota: new Float32Array(quanti).fill(cimaKm), valida: tutto },
@@ -2245,7 +2246,10 @@ console.log("nubi in volume: spessore continuo, niente grana, niente coni, nient
     if (conCella) c.celle = new Float32Array(quanti).fill(1);
     m.classificaNubi(c, null, null, null);
     const centro = 10 * w + 20, kc = 5 * c.classeMisura.larghezza + 10;
-    return { base: c.base[centro], genere: m.GENERI[c.classe[kc]], cima: c.quota[centro] };
+    // La torre del cumulonembo scende al livello di condensazione nello
+    // shader, con il bordo netto: qui conta che sia marcata come torre.
+    const base = c.chi[centro] > 0.5 ? Math.min(1, c.base[centro]) : c.base[centro];
+    return { base, genere: m.GENERI[c.classe[kc]], cima: c.quota[centro] };
   };
   const cirro = scena(11, 3, false, false);
   assert.equal(cirro.genere, "Cirro", "un velo alto e caldo all'infrarosso non e' riconosciuto come cirro: " + cirro.genere);
@@ -2253,6 +2257,34 @@ console.log("nubi in volume: spessore continuo, niente grana, niente coni, nient
   const torre = scena(12, 12, true, true);
   assert.equal(torre.genere, "Cumulonembo", "una cella RDT fredda quanto la sua cima non e' un cumulonembo: " + torre.genere);
   assert.ok(torre.base < 2, "il cumulonembo non parte piu' dal basso: base " + torre.base.toFixed(1) + " km");
+  // CONVEZIONE PROFONDA senza RDT: un sistema alto, freddo, opaco e con la
+  // cima ribollente e' un cumulonembo, con UNA torre sotto la cima piu'
+  // fredda e l'incudine attorno. Un fronte altrettanto alto ma liscio no.
+  {
+    const W = 1024, H = 400, N = W * H;  // circa 4 km per pixel, come il campo vero
+    const sistema = (ribollente) => {
+      const c = { larghezza: W, altezza: H, quota: new Float32Array(N), copertura: new Float32Array(N).fill(1) };
+      for (let k = 0; k < N; k++) {
+        const x = k % W, y = Math.floor(k / W);
+        const caso = Math.abs(Math.sin(x * 12.9898 + y * 78.233) * 43758.5453) % 1;
+        const r = Math.hypot(x - 512, y - 200);
+        c.quota[k] = 11.5 + (ribollente ? caso * 3 - 1.5 : 0) + (r < 2 ? 1.5 : 0);
+      }
+      const tutto = new Float32Array(N).fill(1);
+      m.campoMisurato(c, tutto, { quota: new Float32Array(N).fill(12), valida: tutto }, { larghezza: W, altezza: H });
+      m.classificaNubi(c, null, null, null);
+      const conta = new Array(11).fill(0);
+      for (const v of c.classe) conta[v]++;
+      return { conta, torreCentro: c.chi[200 * W + 512], torreLontano: c.chi[200 * W + 40] };
+    };
+    const temporale = sistema(true), fronte = sistema(false);
+    const cb = m.GENERI.indexOf("Cumulonembo"), incudine = m.GENERI.indexOf("Incudine");
+    assert.ok(temporale.torreCentro > 0.5, "la cima piu' fredda di un sistema convettivo non diventa una torre");
+    assert.ok(temporale.conta[incudine] > temporale.conta[cb],
+      "attorno alla torre non c'e' l'incudine: il temporale torna un altopiano pieno");
+    assert.equal(fronte.conta[cb] + fronte.conta[incudine], 0,
+      "un fronte alto e liscio diventa un cumulonembo: le torri in fila lungo i fronti");
+  }
   const strato = scena(1.4, 1.2, false, false);
   assert.equal(strato.genere, "Stratocumulo", "uno strato basso liscio di notte non e' uno stratocumulo: " + strato.genere);
   assert.ok(strato.base < 0.8, "la nube bassa liscia non sta bassa: base " + strato.base.toFixed(1) + " km");
