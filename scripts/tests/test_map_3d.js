@@ -2320,4 +2320,14 @@ console.log("nubi in volume: spessore continuo, niente grana, niente coni, nient
   assert.ok(min >= 0 && max <= 1 && max - min > 0.6, "il rumore di Worley non ha piu' bolle: " + min + ".." + max);
   assert.ok(bordo / n < 2.5 * dentro / n, "il rumore di Worley ha una giuntura al bordo: si vedrebbe una riga nelle nubi");
 }
-console.log("nubi in volume: maschera CLM, quota CTH, opacita', generi, sabbia, suolo sotto le nubi, luce e scultura");
+{
+  // Da vicino: niente grana sui fianchi, niente pareti a tende.
+  const frammento = html.slice(html.indexOf("var FRAMMENTO = ["), html.indexOf("var STESURA = ["));
+  assert.match(frammento, /float passoScultura = 0\.18 \/ max\(0\.3, gDensita\) \* unitaPerKmVero;/,
+    "il passo dentro la nube non segue piu' la scala della scultura: torna la grana sui fianchi");
+  assert.match(frammento, /bool fascia = copertura > 0\.03/,
+    "fuori dalla nube, nella sua fascia di quota, si torna al passo largo: puntinatura sull'orlo");
+  assert.match(frammento, /uv \+= spinta \* kmSpinta/,
+    "la copertura si legge di nuovo uguale a ogni quota: i fianchi tornano muri a tende");
+}
+console.log("nubi in volume: maschera CLM, quota CTH, opacita', generi, sabbia, suolo sotto le nubi, luce e scultura, fianchi");

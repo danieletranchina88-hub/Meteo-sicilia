@@ -8470,6 +8470,20 @@
         "  altKm = 0.0; cimaKm = 0.0; copertura = 0.0; spessKm = 0.0; gDensita = 1.0; gAltezza = 0.0;",
         "  vec2 uv = uvDi(p.xy);",
         "  if (fuoriDominio(uv)) return 0.0;",
+        // I FIANCHI NON SONO MURI. La copertura del satellite e' una mappa
+        // piana: letta uguale a ogni quota, il fianco di una nube diventava
+        // una parete verticale che ripeteva la stessa trama dal basso
+        // all'alto, a tende rigate. Da vicino la lettura si sposta di poco
+        // (fino a 1,5 km) secondo un rumore che cambia con la quota: il
+        // fianco si gonfia e rientra come in una nube vera. Da lontano non
+        // si vede e non si paga.
+        "  if (lodGrezzo < 2.5) {",
+        "    float altW = p.z * uCircKm * cosLatDa(p.y) / uEsagerazione;",
+        "    vec3 qw = vec3(p.xy * uDettaglioPasso.x * 0.35, altW * uDettaglioPasso.y * 0.35);",
+        "    vec2 spinta = textureLod(uDettaglio, qw + vec3(0.37, 0.61, 0.11), max(0.0, lodGrezzo + 1.0)).rg - 0.5;",
+        "    float kmSpinta = 1.5 * (1.0 - smoothstep(1.0, 2.5, lodGrezzo));",
+        "    uv += spinta * kmSpinta / (uCircKm * cosLatDa(p.y)) / vec2(uDominio.z - uDominio.x, uDominio.w - uDominio.y);",
+        "  }",
         "  float lodLiscio = max(uGrana, lodFine);",
         "  vec4 liscia = textureLod(uCampo, uv, lodLiscio);",
         "  vec4 fine = textureLod(uCampo, uv, lodFine);",
@@ -8619,8 +8633,20 @@
         "      if (dentro) {",
         "        vuoto += passo;",
         "        if (vuoto > passoFine * 1.5) { dentro = false; passo = passoFine; }",
+        "        t += passo;",
+        "        continue;",
         "      }",
-        "      t += passo;",
+        // Fuori dalla nube ma dentro la fascia di quota di una colonna
+        // nuvolosa: qui ci sono i filamenti erosi del bordo, e il passo
+        // largo li prendeva a caso -- la puntinatura sull'orlo esterno.
+        // Si avanza fitti anche prima di entrare.
+        "      bool fascia = copertura > 0.03 && altKm > cimaKm - spessKm - 0.05 && altKm < cimaKm + 0.05;",
+        "      float avanti = passoFine;",
+        "      if (fascia) {",
+        "        float unitaKm = 1.0 / (uCircKm * cosLat * length(vec3(direzione.xy, direzione.z / uEsagerazione)));",
+        "        avanti = clamp(0.45 * unitaKm, max(t * uPixelAngolo * 1.5, passoFine * 0.02), passoFine);",
+        "      }",
+        "      t += avanti;",
         "      continue;",
         "    }",
         // Appena si entra in una nube: bisezione per trovarne il bordo vero,
@@ -8628,8 +8654,19 @@
         "    if (!dentro) {",
         "      dentro = true;",
         "      float spessoreVisto = max(0.15, spessKm) * uEsagerazione / (uCircKm * cosLat);",
-        "      passo = clamp(spessoreVisto / 7.0 / max(abs(direzione.z), 0.02),",
-        "        passoFine * 0.2, passoFine);",
+        // IL PASSO DENTRO LA NUBE. Deve stare sotto la bolla piu' piccola
+        // della scultura: circa 180 m veri di cammino (di piu' nelle nubi
+        // rade, che attenuano poco). Prima arrivava a quattro chilometri e
+        // mezzo in orizzontale, e da vicino il raggio saltava a caso decine
+        // di bolle da 250 m: ogni pixel diverso dal vicino, la grana sui
+        // fianchi. Ma non sotto il pixel: da lontano il dettaglio non si vede
+        // e il passo resta largo, e il costo non esplode.
+        "      float unitaPerKmVero = 1.0 / (uCircKm * cosLat",
+        "        * length(vec3(direzione.xy, direzione.z / uEsagerazione)));",
+        "      float passoScultura = 0.18 / max(0.3, gDensita) * unitaPerKmVero;",
+        "      float impronta = t * uPixelAngolo * 1.5;",
+        "      passo = min(spessoreVisto / 7.0 / max(abs(direzione.z), 0.02), passoScultura);",
+        "      passo = clamp(passo, max(impronta, passoFine * 0.02), passoFine);",
         "      float vuotoT = max(tVicino, t - passoFine), pienoT = t;",
         "      for (int k = 0; k < 5; k++) {",
         "        float mezzo = 0.5 * (vuotoT + pienoT);",
