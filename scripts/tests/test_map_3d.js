@@ -2291,4 +2291,33 @@ console.log("nubi in volume: spessore continuo, niente grana, niente coni, nient
   assert.match(frammento, /vec4 genere = textureLod\(uGeneri, uv, lodLiscio\);/,
     "lo shader non legge piu' il genere della nube");
 }
-console.log("nubi in volume: maschera CLM, quota CTH, opacita', generi, sabbia, suolo sotto le nubi");
+{
+  // Il realismo: luce cercata verso il sole, scultura di Worley letta al
+  // dettaglio giusto, rumore periodico senza giunture.
+  const frammento = html.slice(html.indexOf("var FRAMMENTO = ["), html.indexOf("var STESURA = ["));
+  assert.match(frammento, /float profonditaVersoSole\(vec3 p, float lodGrezzo, float cosLat\)/,
+    "manca la marcia della luce verso il sole: le nubi tornano illuminate uguali dappertutto");
+  assert.match(frammento, /versoSole = profonditaVersoSole\(p, lodGrezzo, cosLat\)/,
+    "la marcia della luce non viene piu' usata");
+  assert.match(frammento, /float lodF = max\(0\.0, lodGrezzo \+ log2\(/,
+    "il rumore della forma torna a partire dal livello gia' limitato: da vicino le bolle si spianano");
+  assert.match(frammento, /float lodD = max\(0\.0, lodGrezzo \+ log2\(/,
+    "il rumore del dettaglio torna a partire dal livello gia' limitato: l'erosione si spegne da vicino");
+  assert.match(frammento, /uColoreFoschia/, "manca la foschia con la distanza");
+  const vm = require("node:vm");
+  const contesto = { Math, Float32Array };
+  vm.createContext(contesto);
+  vm.runInContext(implementazione("casuale3") + implementazione("worley3"), contesto);
+  const lato = 24, w = contesto.worley3(lato, 4, 1);
+  let min = 1, max = 0, bordo = 0, dentro = 0, n = 0;
+  for (let z = 0; z < lato; z++) for (let y = 0; y < lato; y++) {
+    const riga = (z * lato + y) * lato;
+    bordo += Math.abs(w[riga] - w[riga + lato - 1]);
+    dentro += Math.abs(w[riga + 10] - w[riga + 11]);
+    n++;
+    for (let x = 0; x < lato; x++) { min = Math.min(min, w[riga + x]); max = Math.max(max, w[riga + x]); }
+  }
+  assert.ok(min >= 0 && max <= 1 && max - min > 0.6, "il rumore di Worley non ha piu' bolle: " + min + ".." + max);
+  assert.ok(bordo / n < 2.5 * dentro / n, "il rumore di Worley ha una giuntura al bordo: si vedrebbe una riga nelle nubi");
+}
+console.log("nubi in volume: maschera CLM, quota CTH, opacita', generi, sabbia, suolo sotto le nubi, luce e scultura");
