@@ -2330,7 +2330,7 @@
           </button>
           <button class="sat-layer" type="button" data-toggle="volume" aria-pressed="false">
             <svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M3 16c2-4 5-6 9-6s7 2 9 6"></path><path d="M13 3l-3 6h4l-3 6"></path></svg>
-            <span><b>Nubi in volume</b><small>ricostruzione 3D dall'infrarosso · sperimentale</small></span>
+            <span><b>Nubi in volume</b><small>IR + GeoColour · luce solare reale · flash Blitz</small></span>
           </button>
           <p id="lightning-physics-key" hidden></p>
           <details id="lightning-alerts" class="sat-alerts" hidden>
@@ -5547,6 +5547,7 @@
         const horizonG = 229;
         const horizonB = 238;
         const root = document.documentElement;
+        const prospettiva = show3D || showVolumeClouds;
         root.style.setProperty("--sky-top", "rgba(" + r + "," + g + "," + b + ",0.6)");
         root.style.setProperty("--sky-mid", "rgba(" + horizonR + "," + horizonG + "," + horizonB + ",0.22)");
 
@@ -5558,17 +5559,17 @@
             "sky-color": "rgb(" + r + "," + g + "," + b + ")",
             "horizon-color": "rgb(" + horizonR + "," + horizonG + "," + horizonB + ")",
             "fog-color": "rgb(" + horizonR + "," + horizonG + "," + horizonB + ")",
-            "fog-ground-blend": show3D ? 0.66 : 1,
-            "horizon-fog-blend": show3D ? 0.72 : 1,
+            "fog-ground-blend": prospettiva ? 0.66 : 1,
+            "horizon-fog-blend": prospettiva ? 0.72 : 1,
             "sky-horizon-blend": 0.78,
-            "atmosphere-blend": show3D ? 0.84 : 0
+            "atmosphere-blend": prospettiva ? 0.84 : 0
           });
         }
 
         // Oltre il bordo del terreno si vede lo sfondo della mappa: in 3D lo
         // tengo coerente con la stessa luce, altrimenti di notte resterebbe
         // un rettangolo chiaro dietro un rilievo buio.
-        if (show3D && map.getLayer("background")) {
+        if (prospettiva && map.getLayer("background")) {
           map.setPaintProperty(
             "background",
             "background-color",
@@ -6488,7 +6489,7 @@
       }
 
       function blitzConnect() {
-        if (!showLiveLightning || blitzSocket) return;
+        if ((!showLiveLightning && !showVolumeClouds) || blitzSocket) return;
         if (typeof WebSocket === "undefined") return;
         const host = BLITZORTUNG_HOSTS[blitzHostIndex % BLITZORTUNG_HOSTS.length];
         let socket;
@@ -6520,7 +6521,7 @@
       }
 
       function blitzRetry() {
-        if (!showLiveLightning || blitzRetryTimer) return;
+        if ((!showLiveLightning && !showVolumeClouds) || blitzRetryTimer) return;
         blitzRetryTimer = setTimeout(function () {
           blitzRetryTimer = 0;
           blitzConnect();
@@ -7076,13 +7077,14 @@
       // dominio che va dal Sahara al Baltico una soglia unica scambierebbe
       // la Scandinavia notturna, piu' fredda di un cumulo mediterraneo, per
       // un altopiano alto dieci chilometri. Il volume viene attraversato dai
-      // raggi con estinzione e diffusione multipla, e i lampi -- dal
-      // Lightning Imager di MTG-I1 -- sono sorgenti che nascono nella
-      // regione di carica della cella, non sotto la sommita': e' da li' che
-      // vengono da soli il nucleo scuro e il bordo dell'incudine acceso.
+      // raggi con estinzione e diffusione multipla. GeoColour completa il
+      // campo con nubi basse e sottili che nel solo contrasto termico quasi
+      // scompaiono. I flash non vengono mai inventati da un accumulo: nasce
+      // una sorgente soltanto quando arriva una scarica Blitzortung, dentro
+      // la regione di carica della nube osservata in quelle coordinate.
       //
-      // MISURATO: quota della sommita', copertura, posizione e area dei
-      // lampi, posizione del sole. DICHIARATO: il fondoscala in chilometri,
+      // MISURATO: contrasto termico, sagoma ottica, posizione e tempo delle
+      // scariche, posizione astronomica del sole. DICHIARATO: il fondoscala,
       // lo spessore della nube (il satellite vede la cima, non la base), il
       // ribollire sotto la scala che il satellite risolve, l'esagerazione
       // verticale. Niente qui e' regolabile dall'interfaccia: la qualita' e'
@@ -7100,20 +7102,18 @@
       // GPU mobile, e la richiesta era chiara: alta qualita' di default, ma
       // senza scaldare il telefono in mano.
       var QUALITA_VOLUME = isMobile()
-        ? { forma: 900, pelle: 1100, lampi: 480, esagerazione: 11, passi: 40 }
-        : { forma: 1600, pelle: 2048, lampi: 768, esagerazione: 14, passi: 64 };
+        ? { forma: 900, pelle: 1100, esagerazione: 11, passi: 40 }
+        : { forma: 1600, pelle: 2048, esagerazione: 14, passi: 64 };
 
-      // Gli stessi strati, gli stessi slot e le stesse latenze di radar.html:
-      // FCI ogni 10 minuti con circa 22 di ritardo, LI ogni 5 con circa 8.
+      // Due misure complementari dello stesso istante: l'IR stima la cima,
+      // GeoColour recupera la copertura calda, bassa o otticamente sottile.
       var STRATI = {
         forma:  { layer: "mtg_fd:ir105_hrfi",    slotMs: 10 * 60 * 1000, ritardoMin: 22 },
-        pelle:  { layer: "mtg_fd:rgb_geocolour", slotMs: 10 * 60 * 1000, ritardoMin: 22 },
-        lampi:  { layer: "mtg_fd:li_afa",        slotMs:  5 * 60 * 1000, ritardoMin:  8 }
+        pelle:  { layer: "mtg_fd:rgb_geocolour", slotMs: 10 * 60 * 1000, ritardoMin: 22 }
       };
 
       var LARGHEZZA_FORMA = QUALITA_VOLUME.forma;
       var LARGHEZZA_PELLE = QUALITA_VOLUME.pelle;
-      var LARGHEZZA_LAMPI = QUALITA_VOLUME.lampi;
 
       // --- le costanti dichiarate -----------------------------------------
       // Il fondo di cielo sereno. Su un dominio che va dal Sahara al Baltico
@@ -7142,8 +7142,13 @@
       // gia' di qualche centesimo di grigio, e senza questa soglia ognuna di
       // quelle differenze diventava un velo di nube steso sull'Europa limpida.
       // Non e' una nube sottile: e' la superficie che non e' uniforme.
-      var NUBE_SOGLIA_GRIGIO = 0.06;
+      // La soglia e' morbida: il vecchio taglio a 0,06 cancellava cirri e
+      // strati tiepidi. La conferma ottica di GeoColour impedisce che questa
+      // maggiore sensibilita' trasformi la superficie in nube.
+      var NUBE_SOGLIA_GRIGIO = 0.025;
       var QUOTA_CIMA_PCT = 0.980;
+      var NUBE_BASSA_MIN_KM = 0.45;
+      var NUBE_BASSA_MAX_KM = 2.6;
 
       // La scala verticale del volume. Tutto quello che entra nella texture e'
       // normalizzato su questa: e' il fondoscala, non una misura.
@@ -7155,10 +7160,6 @@
       // anche profonda -- un cumulonembo occupa quasi tutta la troposfera,
       // un cirro e' una lama -- e questa e' la regola, dichiarata, con cui la
       // base scende sotto la cima.
-      var SPESSORE_MINIMO_KM = 0.7;
-      var SPESSORE_FRAZIONE = 0.62;
-      var SPESSORE_MASSIMO_KM = 9.5;
-
       var SFOCATURA_GRADINI_PX = 2;
 
       // Ottica del volume. SIGMA e' il coefficiente di estinzione per
@@ -7168,14 +7169,6 @@
       var FASE_G = 0.58;          // anisotropia di Henyey-Greenstein
       var AMBIENTE_GIORNO = [0.42, 0.50, 0.62];
       var AMBIENTE_NOTTE = [0.13, 0.16, 0.23];
-      var SOLE_COLORE = [1.0, 0.96, 0.90];
-      // Di notte il sole e' sotto l'orizzonte e un volume illuminato dal vero
-      // sarebbe nero: fisicamente giusto e del tutto inutile. Si accende
-      // allora una luce CONVENZIONALE da nord-ovest a 40 gradi -- la stessa
-      // convenzione delle carte in rilievo -- fredda, perche' non finga di
-      // essere il sole. L'HUD lo dichiara riga per riga.
-      var LUCE_CONVENZIONALE = { azimutGradi: -45, elevazioneGradi: 40, forza: 0.62 };
-      var LUCE_CONVENZIONALE_COLORE = [0.70, 0.80, 1.0];
 
       // Il ribollire sotto la scala che il satellite risolve. Le due scale
       // sono dichiarate: la prima e' la grana grossa del cumulo, la seconda il
@@ -7207,30 +7200,16 @@
       // il dato entra nella forma del bagliore.
       var LAMPO_PESO_COPERTURA = 0.72;
 
-      // La MOLTEPLICITA'. Un fulmine non e' un lampo solo: e' una sequenza di
-      // colpi di ritorno lungo lo stesso canale, in media tre o quattro,
-      // separati da qualche decina di millisecondi, ed e' quello che si vede
-      // come sfarfallio. L'accumulo a cinque minuti del Lightning Imager non
-      // porta ne' i tempi ne' la molteplicita': questi numeri sono
-      // DICHIARATI, e l'HUD lo scrive.
-      var LAMPO_COLPI_MIN = 2;
-      var LAMPO_COLPI_MAX = 5;
-      var LAMPO_FRA_COLPI_MS = [38, 95];
-      // Il leader corre dentro l'incudine a un centinaio di chilometri al
-      // secondo: un flash largo trenta chilometri non si accende tutto
-      // insieme, si accende attraversando la cella. Anche questo e' un ordine
-      // di grandezza dichiarato.
-      var LAMPO_VELOCITA_KM_S = 140;
-      // 777,4 nm e' la riga dell'ossigeno neutro che il Lightning Imager
-      // osserva davvero. E' rosso profondo. Qui e' un SEGNO: la cromia viene
-      // da quella riga, la luminosita' no.
-      var LAMPO_COLORE = [1.0, 0.42, 0.20];
+      // Blitzortung misura tempo e coordinate, non energia ottica: ogni
+      // rilevazione usa quindi la stessa ampiezza normalizzata. Il nucleo e'
+      // bianco caldo, la diffusione esterna appena azzurra come la luce
+      // dispersa da acqua e ghiaccio, senza imporre il rosso del canale LI.
+      var LAMPO_COLORE = [0.72, 0.86, 1.0];
       // Dove la sorgente satura, il colore sbianca: nessuna riga spettrale
       // regge da sola una luminosita' che sfonda: e' quello che fa ogni
       // sorgente intensa, e quello che fa un lampo visto da vicino.
-      var LAMPO_NUCLEO = [1.0, 0.88, 0.78];
+      var LAMPO_NUCLEO = [1.0, 0.98, 0.93];
       var LAMPI_MAX = 16;
-      var LAMPO_RAGGIO_GRUPPO_KM = 130;
       var LAMPO_SALITA_MS = 34;
       var LAMPO_PICCO_MS = 46;
       var LAMPO_CODA_MS = 150;
@@ -7261,9 +7240,6 @@
       function mercY(lat) {
         var f = limita(lat, -85.0511, 85.0511) * Math.PI / 180;
         return RAGGIO_TERRA * Math.log(Math.tan(Math.PI / 4 + f / 2));
-      }
-      function latDaMercY(y) {
-        return (2 * Math.atan(Math.exp(y / RAGGIO_TERRA)) - Math.PI / 2) * 180 / Math.PI;
       }
       // Le coordinate unitarie di MapLibre: x e y in [0,1], y verso sud.
       function unitaX(lon) { return (lon + 180) / 360; }
@@ -7481,7 +7457,13 @@
         var copertura = new Float32Array(quanti);
         for (k = 0; k < quanti; k++) {
           var px = k % larghezza, py = (k - px) / larghezza;
-          var t = Math.max(0, (grigio[k] - fondoIn(px, py) - NUBE_SOGLIA_GRIGIO) / ampiezza);
+          var contrasto = Math.max(0, grigio[k] - fondoIn(px, py));
+          // Il contrasto non subisce piu' un taglio secco: sotto soglia si
+          // spegne con una rampa, cosi' cirri e veli non spariscono tutti
+          // insieme per un solo livello a otto bit del PNG.
+          var presenza = limita((contrasto - NUBE_SOGLIA_GRIGIO * 0.35)
+            / (NUBE_SOGLIA_GRIGIO * 1.3), 0, 1);
+          var t = Math.max(0, (contrasto - NUBE_SOGLIA_GRIGIO * 0.45) / ampiezza);
           if (t <= 1) {
             quota[k] = t * t * (3 - 2 * t) * QUOTA_GINOCCHIO_KM;
           } else {
@@ -7492,8 +7474,8 @@
           }
           // La copertura: quanto quella colonna e' piena. Sale in fretta -- una
           // nube sottile copre gia' molto -- e satura.
-          var c = limita(t / 0.34, 0, 1);
-          copertura[k] = c * c * (3 - 2 * c);
+          var c = limita(t / 0.30, 0, 1);
+          copertura[k] = presenza * c * c * (3 - 2 * c);
         }
         return {
           quota: sfoca(mediana3(quota, larghezza, altezza), larghezza, altezza, SFOCATURA_GRADINI_PX),
@@ -7503,6 +7485,59 @@
         };
       }
 
+      // L'infrarosso vede benissimo le cime fredde ma una nube bassa quasi
+      // alla temperatura del suolo puo' avere contrasto termico nullo. La
+      // sagoma GeoColour colma esattamente quel buco: non alza una cima gia'
+      // misurata dall'IR, aggiunge soltanto copertura e una quota bassa
+      // prudente dove l'ottico vede nube e l'IR no. Costo: una lettura a
+      // 512 px per ogni nuovo slot, mai nel ciclo di rendering.
+      function integraCoperturaOttica(campo, sorgente) {
+        var maschera = costruisciMascheraNube(
+          sorgente,
+          { west: DOMINIO.ovest, east: DOMINIO.est,
+            south: DOMINIO.sud, north: DOMINIO.nord },
+          CLOUD_PRODUCTS.geocolour
+        );
+        if (!maschera || !maschera.tela) return campo;
+        var mc = maschera.tela.getContext("2d", { willReadFrequently: true });
+        var mw = maschera.tela.width, mh = maschera.tela.height;
+        var alfa = mc.getImageData(0, 0, mw, mh).data;
+        for (var y = 0; y < campo.altezza; y++) {
+          var my = limita(Math.round((y + 0.5) / campo.altezza * mh - 0.5), 0, mh - 1);
+          for (var x = 0; x < campo.larghezza; x++) {
+            var mx = limita(Math.round((x + 0.5) / campo.larghezza * mw - 0.5), 0, mw - 1);
+            var ottica = alfa[(my * mw + mx) * 4 + 3] / 255;
+            if (ottica < 0.025) continue;
+            var k = y * campo.larghezza + x;
+            campo.copertura[k] = Math.max(campo.copertura[k], ottica);
+            if (campo.quota[k] < NUBE_BASSA_MAX_KM) {
+              var cimaBassa = NUBE_BASSA_MIN_KM
+                + (NUBE_BASSA_MAX_KM - NUBE_BASSA_MIN_KM) * Math.pow(ottica, 0.68);
+              campo.quota[k] = Math.max(campo.quota[k], cimaBassa);
+            }
+          }
+        }
+        return campo;
+      }
+
+      // Lo spessore non e' misurabile da un'immagine zenitale. La regola
+      // conserva pero' tre morfologie diverse: strati bassi sottili, cirri
+      // alti e laminari, torri fredde e profonde. Trattarle tutte con la
+      // stessa frazione della cima era la causa principale dell'aspetto a
+      // blocchi e dei cirri gonfi come cumulonembi.
+      function spessoreDellaNube(cima, copertura) {
+        if (cima <= 3.2) {
+          return limita(0.28 + cima * 0.28 + copertura * 0.38, 0.28, 1.55);
+        }
+        if (cima >= 7.5 && copertura < 0.58) {
+          return limita(0.48 + copertura * 2.15, 0.55, 2.15);
+        }
+        if (cima >= 8.0) {
+          return limita(1.0 + cima * (0.38 + copertura * 0.25), 2.0, 9.5);
+        }
+        return limita(0.55 + cima * 0.36 + copertura * 0.55, 0.8, 4.6);
+      }
+
       // La texture del volume: R quota della cima, G copertura, B spessore.
       // Tutto normalizzato su QUOTA_SCALA_KM.
       function tessituraDelCampo(campo) {
@@ -7510,10 +7545,8 @@
         var dati = new Uint8Array(quanti * 4);
         for (var k = 0; k < quanti; k++) {
           var cima = campo.quota[k];
-          // Lo spessore NON e' misurato: e' la regola dichiarata con cui la
-          // base scende sotto la cima. Una nube alta e' anche profonda.
-          var spessore = limita(SPESSORE_MINIMO_KM + SPESSORE_FRAZIONE * cima,
-            SPESSORE_MINIMO_KM, SPESSORE_MASSIMO_KM);
+          // Lo spessore NON e' misurato: e' la regola morfologica dichiarata.
+          var spessore = spessoreDellaNube(cima, campo.copertura[k]);
           // Sotto la cima, mai sottoterra: dove non c'e' sommita' non c'e'
           // nemmeno nube, e lo spessore deve andare a zero con lei.
           spessore = Math.max(0, Math.min(spessore, cima * 0.92));
@@ -7663,7 +7696,7 @@
         "  cimaKm = col.x; copertura = col.y;",
         "  float spessKm = col.z;",
         "  altKm = 0.0;",
-        "  if (copertura < 0.03 || cimaKm < 0.35) return 0.0;",
+        "  if (copertura < 0.012 || cimaKm < 0.24) return 0.0;",
         "  float cosLat = cosLatDa(p.y);",
         "  altKm = p.z * uCircKm * cosLat / uEsagerazione;",
         "  float baseKm = max(0.2, cimaKm - spessKm);",
@@ -7689,7 +7722,12 @@
         "  float grossa = texture(uRumore, q + vec3(uSemenza * 0.013)).r;",
         "  float fine = texture(uRumore, q * 3.7 + vec3(4.3, 1.7, 2.9)).r;",
         "  float erosione = mix(grossa, fine, 0.34);",
-        "  float soglia = uRumoreForza * (1.0 - erosione);",
+        // Gli strati bassi sono lisci, le torri convettive frastagliate. La
+        // forza del dettaglio dipende quindi dalla morfologia gia' inferita,
+        // senza aggiungere texture o campioni allo shader mobile.
+        "  float convettiva = smoothstep(3.0, 9.5, cimaKm) * smoothstep(0.35, 0.82, copertura);",
+        "  float forzaRumore = uRumoreForza * mix(0.30, 1.0, convettiva);",
+        "  float soglia = forzaRumore * (1.0 - erosione);",
         "  d = (d - soglia) / max(0.08, 1.0 - soglia);",
         "  return clamp(d, 0.0, 1.0);",
         "}",
@@ -7981,6 +8019,14 @@
         // riquadro contiene tutto e non taglia niente.
         var zMax = QUOTA_SCALA_KM * this.esagerazione / (circKm * cosLatEstremo);
 
+        // Sole calcolato nello stesso istante del satellite e nel centro
+        // reale della vista: spostandosi dalla Sicilia al Baltico cambiano
+        // altezza, direzione e temperatura della luce.
+        var centroMappa = map && map.getCenter ? map.getCenter() : null;
+        var soleLat = centroMappa ? limita(centroMappa.lat, DOMINIO.sud, DOMINIO.nord) : latCentro;
+        var soleLon = centroMappa ? limita(centroMappa.lng, DOMINIO.ovest, DOMINIO.est)
+          : (DOMINIO.ovest + DOMINIO.est) / 2;
+        this.sole = posizioneSole(this.epoca || Date.now(), soleLat, soleLon);
         var luce = this.luceDiScena();
         var forzaSole = luce.forza;
         var sole = [
@@ -7993,11 +8039,11 @@
         var lungo = Math.hypot(soleGL[0], soleGL[1], soleGL[2]) || 1;
         soleGL = [soleGL[0] / lungo, soleGL[1] / lungo, soleGL[2] / lungo];
 
-        var giorno = luce.vera ? forzaSole : 0;
+        var giorno = forzaSole;
         var ambiente = AMBIENTE_NOTTE.map(function (v, i) {
           return v + (AMBIENTE_GIORNO[i] - v) * giorno;
         });
-        var coloreLuce = luce.vera ? SOLE_COLORE : LUCE_CONVENZIONALE_COLORE;
+        var coloreLuce = luce.colore;
 
         var unitaPerKm = 1 / (circKm * Math.cos(latCentro * Math.PI / 180));
         var ingrosso = Math.max(1, this.esagerazione / ESAGERAZIONE_GRANA);
@@ -8015,7 +8061,10 @@
         gl.uniform1f(u("uForzaSole"), forzaSole);
         gl.uniform1f(u("uZMax"), zMax);
         gl.uniform1i(u("uPassi"), this.passi);
-        gl.uniform1f(u("uSemenza"), (performance.now() % 100000) / 1000);
+        // La grana appartiene al fotogramma satellitare: animarla con
+        // performance.now() faceva bollire nubi che il sensore osserva ferme
+        // e costringeva la GPU a ridisegnare un mondo diverso a ogni frame.
+        gl.uniform1f(u("uSemenza"), ((this.epoca || 0) % 100000000) / 1000000);
         // Una cella di rumore vale RUMORE_SCALA_KM sul piano; il passo e'
         // quante celle stanno in un'unita' di Mercatore.
         // La cella di rumore dev'essere CUBICA IN QUELLO CHE SI VEDE, non in
@@ -8069,19 +8118,23 @@
         gl.drawArrays(gl.TRIANGLES, 0, 3);
       };
 
-      // Quale luce illumina il volume: il sole, quando c'e'; altrimenti la
-      // convenzione. Restituisce anche COME si chiama, perche' l'HUD lo dica.
+      // Nessuna luce direzionale finta di notte: il sole astronomico scende a
+      // zero nel crepuscolo, restano ambiente notturno e scariche osservate.
       StratoVolume.prototype.luceDiScena = function () {
         var gradi = this.sole.elevazione * 180 / Math.PI;
-        var forza = limita((gradi - SOLE_MINIMO_GRADI) / 8, 0, 1);
-        if (forza > 0.05) {
-          return { azimut: this.sole.azimut, elevazione: this.sole.elevazione,
-                   forza: forza, vera: true };
-        }
+        var forza = limita((gradi - SOLE_MINIMO_GRADI) / 14, 0, 1);
+        forza = forza * forza * (3 - 2 * forza);
+        var neutra = limita((gradi + 1) / 24, 0, 1);
         return {
-          azimut: LUCE_CONVENZIONALE.azimutGradi * Math.PI / 180,
-          elevazione: LUCE_CONVENZIONALE.elevazioneGradi * Math.PI / 180,
-          forza: LUCE_CONVENZIONALE.forza, vera: false
+          azimut: this.sole.azimut,
+          elevazione: this.sole.elevazione,
+          forza: forza,
+          vera: forza > 0,
+          colore: [
+            1.0,
+            0.48 + (0.96 - 0.48) * neutra,
+            0.27 + (0.90 - 0.27) * neutra
+          ]
         };
       };
 
@@ -8093,113 +8146,8 @@
       };
 
       // --- i lampi ----------------------------------------------------------
-      // L'accumulo a cinque minuti del Lightning Imager e' un'immagine: dove
-      // c'e' colore, li' ci sono stati lampi. Non porta ne' i tempi dei
-      // singoli lampi ne' la loro energia, e questa funzione non finge il
-      // contrario: ne ricava posizione e area, che e' quello che c'e'.
-      function lampiDaAccumulo(pixel, larghezza, altezza) {
-        var visti = new Uint8Array(larghezza * altezza);
-        var acceso = function (k) { return pixel[k * 4 + 3] > 40; };
-        var trovati = [];
-        var pila = [];
-        for (var k0 = 0; k0 < larghezza * altezza; k0++) {
-          if (visti[k0] || !acceso(k0)) continue;
-          var sommaX = 0, sommaY = 0, area = 0;
-          pila.length = 0;
-          pila.push(k0);
-          visti[k0] = 1;
-          while (pila.length) {
-            var k = pila.pop();
-            var x = k % larghezza, y = (k - x) / larghezza;
-            sommaX += x; sommaY += y; area++;
-            for (var dy = -1; dy <= 1; dy++) {
-              for (var dx = -1; dx <= 1; dx++) {
-                if (!dx && !dy) continue;
-                var nx = x + dx, ny = y + dy;
-                if (nx < 0 || ny < 0 || nx >= larghezza || ny >= altezza) continue;
-                var nk = ny * larghezza + nx;
-                if (visti[nk] || !acceso(nk)) continue;
-                visti[nk] = 1;
-                pila.push(nk);
-              }
-            }
-          }
-          // Un pixel isolato e' rumore di ricampionamento del WMS, non un
-          // lampo: due contigui sono il minimo per crederci.
-          if (area < 2) continue;
-          var cx = sommaX / area, cy = sommaY / area;
-          trovati.push({
-            area: area,
-            lon: DOMINIO.ovest + 0,   // riempito sotto, serve il Mercatore
-            mx: 0, my: 0, x: cx, y: cy, larghezza: larghezza, altezza: altezza
-          });
-        }
-        var r = riquadroMercatore();
-        trovati.forEach(function (l) {
-          l.mx = r.ovest + (l.x + 0.5) / larghezza * (r.est - r.ovest);
-          l.my = r.nord - (l.y + 0.5) / altezza * (r.nord - r.sud);
-          l.lon = l.mx / RAGGIO_TERRA * 180 / Math.PI;
-          l.lat = latDaMercY(l.my);
-          l.ux = unitaX(l.lon);
-          l.uy = unitaY(l.lat);
-        });
-        return trovati;
-      }
-
-      // Riunisce per vicinanza: le aree accese entro un raggio appartengono
-      // di fatto allo stesso sistema, e far lampeggiare insieme una cella
-      // intera e' piu' vicino al vero che accendere punti a sorte.
-      function riunisciPerVicinanza(elenco, raggioKm) {
-        var gruppi = [];
-        var vicino = function (a, b) {
-          var lat = (a.lat + b.lat) / 2 * Math.PI / 180;
-          var dx = (a.mx - b.mx) * Math.cos(lat) / 1000;
-          var dy = (a.my - b.my) * Math.cos(lat) / 1000;
-          return Math.sqrt(dx * dx + dy * dy) <= raggioKm;
-        };
-        elenco.forEach(function (lampo) {
-          for (var i = 0; i < gruppi.length; i++) {
-            for (var j = 0; j < gruppi[i].length; j++) {
-              if (vicino(lampo, gruppi[i][j])) { gruppi[i].push(lampo); return; }
-            }
-          }
-          gruppi.push([lampo]);
-        });
-        return gruppi;
-      }
-
-      // L'inviluppo di un lampo nel tempo: una salita ripida, un picco breve e
-      // una coda -- la corrente continua che segue il colpo di ritorno, che e'
-      // quella che davvero illumina la nube a lungo. Due scale temporali,
-      // perche' con una sola tre colpi vicini si fondono in un'unica onda.
-      // La sequenza dei colpi di ritorno di un flash. Quanti siano e quanto
-      // distino NON viene dal dato: l'accumulo a cinque minuti non porta i
-      // tempi. Sono ordini di grandezza dichiarati, presi dalla molteplicita'
-      // media misurata al suolo -- tre o quattro colpi, qualche decina di
-      // millisecondi l'uno dall'altro -- ed e' quello che si vede come
-      // sfarfallio invece che come un unico gonfiarsi di luce.
-      function sequenzaDiColpi() {
-        var quanti = LAMPO_COLPI_MIN
-          + Math.floor(Math.random() * (LAMPO_COLPI_MAX - LAMPO_COLPI_MIN + 1));
-        var colpi = [0];
-        var t = 0;
-        for (var i = 1; i < quanti; i++) {
-          t += LAMPO_FRA_COLPI_MS[0]
-            + Math.random() * (LAMPO_FRA_COLPI_MS[1] - LAMPO_FRA_COLPI_MS[0]);
-          colpi.push(t);
-        }
-        return colpi;
-      }
-
-      // La luce di una sorgente, sommando i colpi ancora accesi. La somma si
-      // satura: due colpi sovrapposti non fanno il doppio della luce.
-      function luceDellaSequenza(colpi, eta) {
-        if (!colpi) return 0;
-        var somma = 0;
-        for (var i = 0; i < colpi.length; i++) somma += luceDelLampo(eta - colpi[i]);
-        return somma > 0 ? 1 - Math.exp(-somma) : 0;
-      }
-
+      // Inviluppo ottico di una singola scarica osservata: salita, picco e
+      // coda di corrente continua. Non si aggiungono colpi casuali.
       function luceDelLampo(eta) {
         var durata = LAMPO_PICCO_MS * 6;
         if (eta < 0 || eta > durata) return 0;
@@ -8211,8 +8159,15 @@
       }
 
       // --- caricamento -------------------------------------------------------
-      function scarica(strato, misura, adesso) {
-        var slot = slotPiuRecente(strato, adesso);
+      function scarica(strato, misura, adesso, epocaRichiesta) {
+        var epoca = Number(epocaRichiesta);
+        var slot = Number.isFinite(epoca) && epoca > 0
+          ? {
+              epoca: Math.floor(epoca / strato.slotMs) * strato.slotMs,
+              iso: new Date(Math.floor(epoca / strato.slotMs) * strato.slotMs)
+                .toISOString().replace(/\.\d{3}Z$/, ".000Z")
+            }
+          : slotPiuRecente(strato, adesso);
         return new Promise(function (risolvi) {
           var senzaTempo = false;
           var immagine = new Image();
@@ -8249,54 +8204,19 @@
         [DOMINIO.est, DOMINIO.sud], [DOMINIO.ovest, DOMINIO.sud]
       ];
       var volume = new StratoVolume();
-      var gruppiLampo = [];
-      var cellaViva = null;
-
-      function cellaPiuViva(campo, lampi) {
-        if (!campo) return null;
-        var lato = 48, meglio = -1, bx = 0, by = 0;
-        for (var y = lato; y < campo.altezza - lato; y += lato) {
-          for (var x = lato; x < campo.larghezza - lato; x += lato) {
-            var somma = 0;
-            for (var j = -lato; j <= lato; j += 8) {
-              for (var i = -lato; i <= lato; i += 8) {
-                var q = campo.quota[(y + j) * campo.larghezza + (x + i)];
-                somma += q * q;
-              }
-            }
-            if (somma > meglio) { meglio = somma; bx = x; by = y; }
-          }
-        }
-        var r = riquadroMercatore();
-        var punto = {
-          lon: (r.ovest + (bx + 0.5) / campo.larghezza * (r.est - r.ovest))
-            / RAGGIO_TERRA * 180 / Math.PI,
-          lat: latDaMercY(r.nord - (by + 0.5) / campo.altezza * (r.nord - r.sud))
-        };
-        // Se c'e' un lampo, il tempo vero e' li', e fra i lampi vince quello
-        // con l'area accumulata piu' grande: e' l'unica misura di attivita'
-        // che l'accumulo a cinque minuti porta con se'.
-        if (lampi && lampi.length) {
-          var grosso = lampi[0];
-          lampi.forEach(function (l) { if (l.area > grosso.area) grosso = l; });
-          return { lon: grosso.lon, lat: grosso.lat };
-        }
-        return punto;
-      }
-
-      var cellaViva = null;
 
       function costruisciScena() {
         var adesso = Date.now();
+        // Se la barra e' nel passato, il volume nasce dallo stesso slot che
+        // si sta guardando; in diretta usa l'ultimo IR dichiarato disponibile.
+        var slotScena = cloudSlot(CLOUD_PRODUCTS.ir105).value;
         var misuraForma = misuraRaster(LARGHEZZA_FORMA);
         var misuraPelle = misuraRaster(LARGHEZZA_PELLE);
-        var misuraLampi = misuraRaster(LARGHEZZA_LAMPI);
         Promise.all([
-          scarica(STRATI.forma, misuraForma, adesso),
-          scarica(STRATI.pelle, misuraPelle, adesso),
-          scarica(STRATI.lampi, misuraLampi, adesso)
+          scarica(STRATI.forma, misuraForma, adesso, slotScena),
+          scarica(STRATI.pelle, misuraPelle, adesso, slotScena)
         ]).then(function (esiti) {
-          componi(esiti[0], esiti[1], esiti[2], misuraForma, misuraPelle, misuraLampi);
+          componi(esiti[0], esiti[1], misuraForma, misuraPelle);
         }).catch(function () {
           if (attiva) toast("Nubi in volume: la scena non si e' potuta costruire");
         });
@@ -8321,7 +8241,7 @@
         return pixelPelle;
       }
 
-      function componi(forma, pelle, lampi, misuraForma, misuraPelle, misuraLampi) {
+      function componi(forma, pelle, misuraForma, misuraPelle) {
         if (!attiva) return;
 
         if (!forma) {
@@ -8333,10 +8253,14 @@
 
         var pixelForma = leggiPixel(forma.immagine, misuraForma);
         var campo = campoDelleNubi(pixelForma.data, misuraForma.larghezza, misuraForma.altezza);
-        volume.pubblicaCampo(campo);
 
         if (pelle) {
           var pixelPelle = leggiPixel(pelle.immagine, misuraPelle);
+          var telaOsservata = document.createElement("canvas");
+          telaOsservata.width = misuraPelle.larghezza;
+          telaOsservata.height = misuraPelle.altezza;
+          telaOsservata.getContext("2d").putImageData(pixelPelle, 0, 0);
+          integraCoperturaOttica(campo, telaOsservata);
           superficieSenzaNubi(pixelPelle, misuraPelle, campo);
           var tela = document.createElement("canvas");
           tela.width = misuraPelle.larghezza; tela.height = misuraPelle.altezza;
@@ -8354,67 +8278,13 @@
               "volume-nubi");
           }
         } else {
-          toast("Nubi in volume: GeoColour assente, sotto le nubi resta il fondo cartografico");
+          toast("Nubi in volume: GeoColour assente, restano le nubi rilevate dall'infrarosso");
         }
 
-        var centroLat = (DOMINIO.sud + DOMINIO.nord) / 2;
-        var centroLon = (DOMINIO.ovest + DOMINIO.est) / 2;
-        volume.sole = posizioneSole(forma.slot.epoca, centroLat, centroLon);
-
-        var elenco = [];
-        if (lampi) {
-          var pixelLampi = leggiPixel(lampi.immagine, misuraLampi);
-          elenco = lampiDaAccumulo(pixelLampi.data, misuraLampi.larghezza, misuraLampi.altezza);
-        } else {
-          toast("Nubi in volume: accumulo del Lightning Imager assente, nessuna sorgente accesa");
-        }
-        preparaLampi(elenco, campo);
-        cellaViva = cellaPiuViva(campo, elenco);
-        map.triggerRepaint();
-      }
-
-      // Ogni lampo diventa una sorgente dentro il volume, alla quota della
-      // sommita' misurata sopra di lui meno la profondita' dichiarata.
-      function preparaLampi(elenco, campo) {
+        volume.epoca = forma.slot.epoca;
         volume.lampi = [];
-        gruppiLampo = [];
-        if (!elenco.length) return;
-        var quotaIn = function (lampo) {
-          var r = riquadroMercatore();
-          var x = limita(Math.round((lampo.mx - r.ovest) / (r.est - r.ovest) * campo.larghezza),
-            0, campo.larghezza - 1);
-          var y = limita(Math.round((r.nord - lampo.my) / (r.nord - r.sud) * campo.altezza),
-            0, campo.altezza - 1);
-          return campo.quota[y * campo.larghezza + x];
-        };
-        var insiemi = riunisciPerVicinanza(elenco, LAMPO_RAGGIO_GRUPPO_KM);
-        insiemi.forEach(function (insieme, indice) {
-          var area = 0;
-          // Il capofila: l'area accumulata piu' grande del gruppo. Il flash
-          // parte di li' e attraversa la cella, non si accende tutto insieme.
-          var capo = insieme[0];
-          insieme.forEach(function (l) { if (l.area > capo.area) capo = l; });
-          insieme.forEach(function (lampo) {
-            var cima = quotaIn(lampo);
-            var lat = (lampo.lat + capo.lat) / 2 * Math.PI / 180;
-            var dx = (lampo.mx - capo.mx) * Math.cos(lat) / 1000;
-            var dy = (lampo.my - capo.my) * Math.cos(lat) / 1000;
-            volume.lampi.push({
-              ux: lampo.ux, uy: lampo.uy, gruppo: indice, area: lampo.area,
-              cimaKm: cima, quotaKm: quotaDiCarica(cima),
-              ritardoMs: Math.sqrt(dx * dx + dy * dy) / LAMPO_VELOCITA_KM_S * 1000,
-              intensita: 0
-            });
-            area += lampo.area;
-          });
-          // La cadenza: piu' area accumulata, piu' spesso. E' l'unico legame
-          // fra il dato e il ritmo, ed e' dichiarato per quello che vale.
-          gruppiLampo.push({
-            intervallo: limita(9000 / (1 + Math.log2(1 + area / insieme.length)), 900, 4800),
-            prossimo: performance.now() + Math.random() * 1800,
-            acceso: -1e9, colpi: null
-          });
-        });
+        volume.pubblicaCampo(campo);
+        map.triggerRepaint();
       }
 
       // La quota da cui parte la luce: la regione di carica principale, a meno
@@ -8425,35 +8295,84 @@
           cimaKm - LAMPO_SOTTO_LA_CIMA_MIN_KM));
       }
 
-      function aggiornaQuoteLampi() {
-        volume.lampi.forEach(function (l) { l.quotaKm = quotaDiCarica(l.cimaKm); });
+      function cimaVicinoAllaScarica(lat, lon) {
+        var campo = volume.campo;
+        if (!campo) return 0;
+        var r = riquadroMercatore();
+        var mx = mercX(lon), my = mercY(lat);
+        var cx = limita(Math.round((mx - r.ovest) / (r.est - r.ovest) * campo.larghezza),
+          0, campo.larghezza - 1);
+        var cy = limita(Math.round((r.nord - my) / (r.nord - r.sud) * campo.altezza),
+          0, campo.altezza - 1);
+        // Circa quaranta chilometri: assorbe lo scarto fra punto CG, cima
+        // inclinata dal vento e due griglie con risoluzione diversa, ma non
+        // puo' saltare dalla scarica a un altro temporale.
+        var raggio = Math.max(4, Math.round(campo.larghezza * 40 / 6000));
+        var migliore = 0, punteggio = 0;
+        for (var dy = -raggio; dy <= raggio; dy++) {
+          var y = limita(cy + dy, 0, campo.altezza - 1);
+          for (var dx = -raggio; dx <= raggio; dx++) {
+            if (dx * dx + dy * dy > raggio * raggio) continue;
+            var x = limita(cx + dx, 0, campo.larghezza - 1);
+            var k = y * campo.larghezza + x;
+            var distanza = Math.sqrt(dx * dx + dy * dy) / Math.max(1, raggio);
+            var qui = campo.quota[k] * campo.copertura[k] * (1 - 0.35 * distanza);
+            if (qui > punteggio) { punteggio = qui; migliore = campo.quota[k]; }
+          }
+        }
+        return migliore;
+      }
+
+      // Unica porta d'ingresso dei flash volumetrici: viene chiamata da
+      // addLiveStrike dopo deduplica. Nessun timer, accumulo LI o casualita'
+      // puo' accendere una nube senza una nuova rilevazione Blitzortung.
+      function notificaScarica(scarica) {
+        // Il flusso Blitz e' live e non ha archivio: non puo' illuminare una
+        // nube di tre ore fa solo perche' in questo istante arriva un punto.
+        if (!attiva || cloudTimeSelected || !volume.campo || !scarica) return;
+        var cima = cimaVicinoAllaScarica(scarica.lat, scarica.lon);
+        if (cima < 1.0) return;
+        volume.lampi.push({
+          ux: unitaX(scarica.lon),
+          uy: unitaY(scarica.lat),
+          cimaKm: cima,
+          quotaKm: quotaDiCarica(cima),
+          ricevuta: scarica.ricevuta || performance.now(),
+          intensita: 0
+        });
+        if (volume.lampi.length > LAMPI_MAX * 2) {
+          volume.lampi.splice(0, volume.lampi.length - LAMPI_MAX * 2);
+        }
+        avviaBattito();
+        if (map) map.triggerRepaint();
+      }
+
+      function avviaBattito() {
+        if (battitoAvviato) return;
+        battitoAvviato = true;
+        requestAnimationFrame(battito);
       }
 
       function battito() {
-        requestAnimationFrame(battito);
-        if (!attiva || !gruppiLampo.length || !map) return;
+        if (!attiva || !volume.lampi.length || !map) {
+          battitoAvviato = false;
+          return;
+        }
         var ora = performance.now();
         var acceso = false;
-        gruppiLampo.forEach(function (gruppo) {
-          if (ora >= gruppo.prossimo) {
-            gruppo.acceso = ora;
-            gruppo.colpi = sequenzaDiColpi();
-            gruppo.prossimo = ora + gruppo.intervallo * (0.6 + Math.random() * 0.9);
-          }
-        });
         volume.lampi.forEach(function (l) {
-          var gruppo = gruppiLampo[l.gruppo];
-          // Ogni sorgente vede la stessa sequenza di colpi, ma in ritardo di
-          // quanto il leader ci ha messo ad arrivare fin li'.
-          l.intensita = gruppo
-            ? luceDellaSequenza(gruppo.colpi, ora - gruppo.acceso - (l.ritardoMs || 0))
-            : 0;
+          l.intensita = prefersReducedMotion ? 0 : luceDelLampo(ora - l.ricevuta);
           if (l.intensita > 0.004) acceso = true;
+        });
+        volume.lampi = volume.lampi.filter(function (l) {
+          return ora - l.ricevuta <= LAMPO_PICCO_MS * 6;
         });
         // Solo i piu' luminosi entrano nei sedici posti dello shader.
         volume.lampi.sort(function (a, b) { return b.intensita - a.intensita; });
         if (acceso || volume.eraAcceso) map.triggerRepaint();
         volume.eraAcceso = acceso;
+        if (volume.lampi.length) requestAnimationFrame(battito);
+        else battitoAvviato = false;
       }
 
 
@@ -8482,6 +8401,32 @@
         }
       }
 
+      function abilitaInclinazioneVolume(visibile) {
+        if (!map) return;
+        if (visibile) {
+          map.setMaxPitch(68);
+          if (map.dragRotate) map.dragRotate.enable();
+          if (map.touchZoomRotate) map.touchZoomRotate.enableRotation();
+          if (map.touchPitch) map.touchPitch.enable();
+          if (map.keyboard && map.keyboard.enableRotation) map.keyboard.enableRotation();
+          map.easeTo({
+            pitch: isMobile() ? 48 : 56,
+            bearing: map.getBearing ? map.getBearing() : 0,
+            duration: 720
+          });
+          updateSkyPalette();
+          updateHazeStrength();
+          return;
+        }
+        if (map.dragRotate) map.dragRotate.disable();
+        if (map.touchZoomRotate) map.touchZoomRotate.disableRotation();
+        if (map.touchPitch) map.touchPitch.disable();
+        if (map.keyboard && map.keyboard.disableRotation) map.keyboard.disableRotation();
+        map.easeTo({ pitch: 0, bearing: 0, duration: 620 });
+        updateSkyPalette();
+        updateHazeStrength();
+      }
+
       function attivaNubiVolumetriche() {
         if (attiva) return;
         if (!map || !map.painter || !map.painter.context
@@ -8493,17 +8438,20 @@
           return;
         }
         attiva = true;
+        showVolumeClouds = true;
         assicuraStrato();
         volume.acceso = true;
+        volume.lampi = [];
         mostraSuperficie(true);
         if (map.getLayer("satellite-clouds-layer")) {
           map.setLayoutProperty("satellite-clouds-layer", "visibility", "none");
         }
-        if (!battitoAvviato) { battitoAvviato = true; requestAnimationFrame(battito); }
+        abilitaInclinazioneVolume(true);
+        blitzRetryDelay = 2000;
+        blitzConnect();
         toast(
-          "Nubi in volume · quota e copertura misurate dall'infrarosso, "
-          + "lampi dal Lightning Imager. Spessore, ribollire ed esagerazione "
-          + "sono scelte dichiarate, non misure."
+          "Nubi in volume · IR + GeoColour, sole astronomico. "
+          + "Le nubi si illuminano solo quando arriva una scarica Blitzortung."
         );
         costruisciScena();
       }
@@ -8511,8 +8459,12 @@
       function disattivaNubiVolumetriche() {
         if (!attiva) return;
         attiva = false;
+        showVolumeClouds = false;
         volume.acceso = false;
+        volume.lampi = [];
         mostraSuperficie(false);
+        abilitaInclinazioneVolume(false);
+        if (!showLiveLightning) blitzDisconnect();
         if (map && map.getLayer("satellite-clouds-layer")) {
           map.setLayoutProperty(
             "satellite-clouds-layer", "visibility",
@@ -8524,7 +8476,8 @@
 
       return {
         attiva: attivaNubiVolumetriche,
-        disattiva: disattivaNubiVolumetriche
+        disattiva: disattivaNubiVolumetriche,
+        notificaScarica: notificaScarica
       };
     })();
 
@@ -9328,21 +9281,23 @@
         if (duplicata) return;
 
         blitzLastStrikeAt = Date.now();
-        liveStrikes.push({
+        const scarica = {
           lat: lat,
           lon: lon,
           at: Number.isFinite(quando) ? quando : Date.now(),
           ricevuta: performance.now(),
           stazioni: stazioni
-        });
+        };
+        liveStrikes.push(scarica);
         if (liveStrikes.length > STRIKE_MAX) {
           liveStrikes.splice(0, liveStrikes.length - STRIKE_MAX);
         }
         // Anche nei primi 700 ms di vita della pagina il nuovo dato deve
         // entrare nel fotogramma immediatamente.
         celleCalcolateA = -Infinity;
+        NubiVolumetriche.notificaScarica(scarica);
         updateLiveLightningNote();
-        startStrikeAnimation();
+        if (showLiveLightning) startStrikeAnimation();
         suonaTick(lon, lat, 0.94 + supportoRete(stazioni) * 0.12);
         vibraScarica(lon, lat);
       }
@@ -10088,6 +10043,7 @@
         if (showRadar) parti.push("radar");
         if (showLiveLightning) parti.push("fulmini in diretta");
         if (showLightning) parti.push("fulmini MTG");
+        if (showVolumeClouds) parti.push("nubi in volume");
         riga.textContent = parti.length
           ? parti.join(" · ")
           : "nessun livello acceso · tocca per aprire";
@@ -10170,7 +10126,7 @@
       let hazeLevel = -1;
 
       function updateHazeStrength() {
-        const pitch = show3D && map && map.getPitch ? map.getPitch() : 0;
+        const pitch = (show3D || showVolumeClouds) && map && map.getPitch ? map.getPitch() : 0;
         const nativeSky = map && typeof map.setSky === "function";
         const fallbackScale = nativeSky ? 0 : 1;
         const level = Math.round(clamp((pitch - 12) / 48, 0, 1) * fallbackScale * 100) / 100;
@@ -10984,7 +10940,7 @@
               + "Luce normalizzata: stima visiva, non energia misurata."
             );
           } else {
-            blitzDisconnect();
+            if (!showVolumeClouds) blitzDisconnect();
             stopStrikeAnimation();
             liveStrikes = [];
             requestVectorRender();
@@ -12372,14 +12328,15 @@
           } else {
             syncTerrainExaggeration(true);
           }
-          map.setMaxPitch(TERRAIN_3D.maxPitch);
-          if (map.dragRotate) map.dragRotate.enable();
-          if (map.touchZoomRotate) map.touchZoomRotate.enableRotation();
-          if (map.touchPitch) map.touchPitch.enable();
-          map.easeTo({
-            pitch: isMobile() ? TERRAIN_3D.mobilePitch : TERRAIN_3D.desktopPitch,
-            duration: 950
-          });
+          // Il rilievo puo' essere acceso dall'alto, ma l'inclinazione della
+          // camera appartiene soltanto al comando Nubi in volume.
+          if (!showVolumeClouds) {
+            if (map.dragRotate) map.dragRotate.disable();
+            if (map.touchZoomRotate) map.touchZoomRotate.disableRotation();
+            if (map.touchPitch) map.touchPitch.disable();
+            if (map.keyboard && map.keyboard.disableRotation) map.keyboard.disableRotation();
+            map.easeTo({ pitch: 0, bearing: 0, duration: 420 });
+          }
           updateMapPresentation();
           resetParticles();
           if (showParticles) startParticles();
@@ -12387,7 +12344,9 @@
           // render della griglia.
           renderWeather();
           updateReliefShading();
-          toast("Vista 3D attiva · ruota e inclina con due dita");
+          toast(showVolumeClouds
+            ? "Rilievo 3D attivo · inclinazione controllata da Nubi in volume"
+            : "Rilievo 3D attivo · vista zenitale");
         } else {
           stopParticles();
           if (map.getLayer("background")) {
@@ -12396,9 +12355,12 @@
             );
           }
           updateReliefShading();
-          if (map.dragRotate) map.dragRotate.disable();
-          if (map.touchZoomRotate) map.touchZoomRotate.disableRotation();
-          if (map.touchPitch) map.touchPitch.disable();
+          if (!showVolumeClouds) {
+            if (map.dragRotate) map.dragRotate.disable();
+            if (map.touchZoomRotate) map.touchZoomRotate.disableRotation();
+            if (map.touchPitch) map.touchPitch.disable();
+            if (map.keyboard && map.keyboard.disableRotation) map.keyboard.disableRotation();
+          }
           resetParticles();
           // Rimuovo il rilievo solo quando la vista è tornata davvero piana:
           // toglierlo mentre la mappa è ancora inclinata farebbe "collassare"
@@ -12406,7 +12368,7 @@
           // dell'utente a metà discesa, perciò controllo il pitch reale.
           terrain3DEaseCleanup = function () {
             if (show3D) return;
-            if (map.getPitch() > 0.5) return;
+            if (!showVolumeClouds && map.getPitch() > 0.5) return;
             if (map.getTerrain()) map.setTerrain(null);
             currentTerrainExaggeration = 0;
             map.setMaxPitch(60);
@@ -12418,7 +12380,8 @@
             if (showParticles) startParticles();
           };
           map.on("moveend", terrain3DEaseCleanup);
-          map.easeTo({ pitch: 0, bearing: 0, duration: 750 });
+          if (showVolumeClouds) terrain3DEaseCleanup();
+          else map.easeTo({ pitch: 0, bearing: 0, duration: 750 });
         }
       }
 
@@ -16767,6 +16730,7 @@
 
         map.addControl(new maplibregl.NavigationControl({ visualizePitch: false }), "bottom-right");
         if (map.touchPitch) map.touchPitch.disable();
+        if (map.keyboard && map.keyboard.disableRotation) map.keyboard.disableRotation();
 
         map.on("load", async function () {
           mapLoaded = true;
@@ -17542,10 +17506,10 @@
           blitzDisconnect();
         } else {
           startParticles();
-          if (showLiveLightning) {
+          if (showLiveLightning || showVolumeClouds) {
             blitzRetryDelay = 2000;
             blitzConnect();
-            startStrikeAnimation();
+            if (showLiveLightning) startStrikeAnimation();
             // Il contesto audio viene sospeso dal browser con la scheda
             // nascosta: tornando va risvegliato, o il tick resta muto.
             if (strikeSoundOn && strikeAudio) ensureStrikeAudio();
