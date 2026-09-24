@@ -2402,6 +2402,16 @@ console.log("nubi in volume: spessore continuo, niente grana, niente coni, nient
     "manca la marcia della luce verso il sole: le nubi tornano illuminate uguali dappertutto");
   assert.match(frammento, /versoSole = profonditaVersoSole\(p, lodGrezzo, cosLat\)/,
     "la marcia della luce non viene piu' usata");
+  assert.match(frammento, /vec3 q = p \+ versoR \* \(\(fatto \+ \(float\(i\) \+ 0\.5\) \* tratto\) \/ kmPerUnita\);/,
+    "l'ombra lontana non segue il raggio reale verso il Sole");
+  assert.match(frammento, /vec4 lontana = textureLod\(uCampo, uv, max\(2\.0, lodGrezzo \+ 2\.0\)\);/,
+    "l'ombra lontana non usa la copertura misurata dal satellite");
+  assert.doesNotMatch(frammento, /versoSole \+= max\(0\.0, \(cimaKm - altKm\)/,
+    "un fianco illuminato proietta ancora l'ombra di una colonna immaginaria");
+  assert.match(frammento, /float passa = diretta \+ 0\.38 \* uLampoPesoCopertura \* \(diffusa - diretta\);/,
+    "la luce del fulmine attraversa il nucleo fitto senza attenuazione coerente");
+  assert.match(frammento, /0\.022 \* distanza \* distanza/,
+    "il lampo lontano illumina l'intera nube come una luce uniforme");
   assert.match(frammento, /float lodF = max\(0\.0, lodGrezzo \+ log2\(/,
     "il rumore della forma torna a partire dal livello gia' limitato: da vicino le bolle si spianano");
   assert.match(frammento, /float lodD = max\(0\.0, lodGrezzo \+ log2\(/,
@@ -2458,7 +2468,7 @@ console.log("nubi in volume: spessore continuo, niente grana, niente coni, nient
     "la sorgente del lampo e' tornata un punto: deve essere il canale verticale");
   assert.match(frammento, /float s = clamp\(dot\(dKm, dr\), 0\.0, lung\);/,
     "mancano i rami orizzontali del canale dentro la nube");
-  assert.match(frammento, /float passa = 0\.3 \* exp\(-tauL\) \+ 0\.7 \* exp\(-tauL \* 0\.07\);/,
+  assert.match(frammento, /tauL \+= densita\(qq, lodGrezzo \+ 1\.0, true, a2, c2, o2, s2\) \* gDensita;/,
     "la luce del lampo non attraversa piu' la nube vera: il nucleo fitto non fa ombra");
   assert.match(frammento, /IL CANALE SOTTO LA NUBE/, "manca il canale visibile fra la base e il suolo");
 }

@@ -8940,7 +8940,9 @@
         // abbaglianti, i fianchi in ombra, le basi grigie e il bordo
         // d'argento controluce: prima il cammino verso il sole era stimato
         // dalla sola colonna, e ogni nube era illuminata uguale dappertutto.
-        // Oltre l'ultimo passo il resto della colonna si stima come prima.
+        // Oltre i campioni 3D, la parte lontana usa tre letture leggere del
+        // campo satellitare lungo lo STESSO raggio: un fianco che finisce
+        // non continua a fare ombra come una colonna immaginaria.
         "float profonditaVersoSole(vec3 p, float lodGrezzo, float cosLat) {",
         "  vec3 versoR = vec3(uSole.xy, uSole.z * uEsagerazione);",
         "  float kmPerUnita = uCircKm * cosLat;",
@@ -8953,6 +8955,21 @@
         "    somma += dl * gDensita * lung;",
         "    fatto += lung;",
         "    lung *= 2.0;",
+        "  }",
+        "  float resto = min(24.0, max(0.0,",
+        "    (uZMax - p.z) * kmPerUnita / (uEsagerazione * max(0.12, uSole.z)) - fatto));",
+        "  float tratto = resto / 3.0;",
+        "  for (int i = 0; i < 3; i++) {",
+        "    if (tratto < 0.1) break;",
+        "    vec3 q = p + versoR * ((fatto + (float(i) + 0.5) * tratto) / kmPerUnita);",
+        "    vec2 uv = uvDi(q.xy);",
+        "    if (fuoriDominio(uv)) continue;",
+        "    vec4 lontana = textureLod(uCampo, uv, max(2.0, lodGrezzo + 2.0));",
+        "    float altitudine = q.z * kmPerUnita / uEsagerazione;",
+        "    float base = lontana.b * uScalaKm, cima = lontana.r * uScalaKm;",
+        "    float dentro = smoothstep(base - 0.35, base + 0.4, altitudine)",
+        "      * (1.0 - smoothstep(cima - 0.5, cima + 0.25, altitudine));",
+        "    somma += lontana.g * lontana.a * dentro * tratto * 0.55;",
         "  }",
         "  return somma;",
         "}",
@@ -8992,14 +9009,12 @@
         "",
         "  vec3 direzioneVera = normalize(vec3(direzione.xy, direzione.z / uEsagerazione));",
         "  float coseno = dot(direzioneVera, uSole);",
-        "  float suSole = max(0.12, uSole.z);",
         // Tre ottave di diffusione multipla: e' quello che rende BIANCA una
         // nube invece che grigia, e fa passare luce anche dove il sole diretto
         // non arriva piu'.
         "  float fase0 = faseDoppia(coseno, uFaseG);",
         "  float fase1 = faseDoppia(coseno, uFaseG * 0.5);",
         "  float fase2 = faseDoppia(coseno, uFaseG * 0.25);",
-        "  float marciatoKm = 0.25 * (exp2(float(uPassiLuce)) - 1.0);",
         "",
         "  vec3 accumulo = vec3(0.0);",
         "  float trasmissione = 1.0;",
@@ -9079,11 +9094,10 @@
         "",
         "    float versoSole = 0.0;",
         "    if (uForzaSole > 0.01) versoSole = profonditaVersoSole(p, lodGrezzo, cosLat);",
-        "    versoSole += max(0.0, (cimaKm - altKm) / suSole - marciatoKm) * copertura * densitaGenere * 0.6;",
         "    float tauSole = uSigma * versoSole;",
         "    float luceSole = exp(-tauSole) * fase0",
-        "      + 0.6 * exp(-tauSole * 0.3) * fase1",
-        "      + 0.35 * exp(-tauSole * 0.1) * fase2;",
+        "      + 0.55 * exp(-tauSole * 0.36) * fase1",
+        "      + 0.22 * exp(-tauSole * 0.12) * fase2;",
         // Il termine 'polvere' (Schneider): dove la nube e' sottile la luce
         // non ha avuto spazio per rimbalzare, e i bordi rivolti al sole sono
         // piu' scuri del cuore -- e' cio' che fa sembrare soffice un cumulo.
@@ -9093,7 +9107,7 @@
         // scendendo dentro una nube spessa.
         "    float coperta = exp(-uSigma * densitaGenere * copertura * max(0.0, cimaKm - altKm) * 0.3);",
         "    vec3 ambiente = mix(uAmbienteSuolo, uAmbiente, smoothstep(0.0, 1.0, altezzaNube))",
-        "      * (0.45 + 0.55 * coperta);",
+        "      * (0.45 + 0.55 * coperta) * (0.82 + 0.18 * exp(-tauSole * 0.12));",
         "",
         "    vec3 lampi = vec3(0.0);",
         "    for (int j = 0; j < 16; j++) {",
@@ -9139,8 +9153,11 @@
         "      }",
         "      float camminoKm = length(vec3(dKm - (sorgente.xy - L.xy) * kmU, altKm - sorgente.z));",
         "      tauL *= uSigma * camminoKm / 3.0;",
-        "      float passa = 0.3 * exp(-tauL) + 0.7 * exp(-tauL * 0.07);",
-        "      float fuga = passa * exp(-distanza / uLampoDiffusione) / (1.0 + 0.25 * distanza);",
+        "      float diretta = exp(-tauL);",
+        "      float diffusa = exp(-tauL * 0.16);",
+        "      float passa = diretta + 0.38 * uLampoPesoCopertura * (diffusa - diretta);",
+        "      float fuga = passa * exp(-distanza / (2.0 * uLampoDiffusione))",
+        "        / (1.0 + 0.2 * distanza + 0.022 * distanza * distanza);",
         "      float acceso = L.w * uLampoForza * fuga;",
         // Vicino al canale la luce e' bianca e satura; lontano, dopo molti
         // rimbalzi fra le gocce, prende la tinta azzurro-lavanda delle
