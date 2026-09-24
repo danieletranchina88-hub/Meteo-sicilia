@@ -7144,7 +7144,8 @@
         cime:     { layer: "msg_fes:cth",          slotMs: 15 * 60 * 1000, ritardoMin: 20 },
         tipo:     { layer: "mtg_fd:rgb_cloudtype", slotMs: 10 * 60 * 1000, ritardoMin: 22 },
         fase:     { layer: "mtg_fd:rgb_cloudphase",slotMs: 10 * 60 * 1000, ritardoMin: 30 },
-        basse:    { layer: "mtg_fd:rgb_fog",       slotMs: 10 * 60 * 1000, ritardoMin: 22 }
+        basse:    { layer: "mtg_fd:rgb_fog",       slotMs: 10 * 60 * 1000, ritardoMin: 22 },
+        scariche: { layer: "mtg_fd:li_afa",        slotMs: 5 * 60 * 1000, ritardoMin: 21 }
       };
 
       // La scala dei colori del prodotto Cloud Top Height, letta dalla sua
@@ -7931,8 +7932,9 @@
       // assenza di quel rilievo la scena conserva un manto alto, senza
       // inventare una torre in un pixel arbitrario dell'altopiano termico.
       var SISTEMA_RAGGIO_KM = 35;
-      // Sopra i dieci chilometri: le cime frontali d'autunno alle nostre
-      // latitudini arrivano a otto-nove, i cumulonembi sfondano la tropopausa.
+      // Senza radar e scariche, una cima alta deve avere anche un rilievo IR
+      // coerente. Con due sensori indipendenti e' ammessa una cima piu' bassa:
+      // un cumulonembo in aria fredda non arriva necessariamente a 10 km.
       var PROFONDA_MIN_KM = 9.8;
       var SPESSORE_INCUDINE_KM = 2.6;
       var FASI_RDT = { Triggering: 0.6, Triggering_from_split: 0.6, Growing: 0.85, Mature: 1, Decaying: 0.7 };
@@ -8102,6 +8104,12 @@
               diagnostica.larghezza, diagnostica.altezza, w2, h2);
           });
         }
+        // Radar e Lightning Imager sono gia' sulla griglia dimezzata;
+        // non ricampionare gli echi fino a perdere il nucleo del rovescio.
+        if (campo.ecoRadar && campo.ecoRadar.length === w2 * h2) ridotto.ecoRadar = campo.ecoRadar;
+        if (campo.scaricheOsservate && campo.scaricheOsservate.length === w2 * h2) {
+          ridotto.scaricheOsservate = campo.scaricheOsservate;
+        }
         var giornoRidotto = giorno ? giu(giorno)
           : (diagnostica ? luceDelGiorno(ridotto, campo.epoca) : null);
         classificaGriglia(ridotto, giu(luce), giornoRidotto, giu(luminanza));
@@ -8112,6 +8120,8 @@
         campo.materia = su(ridotto.materia);
         campo.classe = ridotto.classe;
         campo.fiduciaGenere = ridotto.fiduciaGenere;
+        campo.radarNube = ridotto.ecoRadar;
+        campo.scaricheNube = ridotto.scaricheOsservate;
         campo.classeMisura = { larghezza: w2, altezza: h2 };
         return campo;
       }
@@ -8128,6 +8138,24 @@
         var devIr = campo.devIr || deviazioneLocale(quotaIr, cancello, w, h, raggioT);
         var devLuce = campo.devLuce || (luminanza ? deviazioneLocale(luminanza, cancello, w, h, raggioT) : null);
         var rdt = campo.celle ? sfoca(campo.celle, w, h, 1) : null;
+        var eco = campo.ecoRadar;
+        var lampi = campo.scaricheOsservate;
+        // L'eco isolato e' un rovescio, l'eco esteso su un banco uniforme
+        // sostiene il nembostrato. Il massimo locale conserva il nucleo
+        // intenso anche se occupa solo parte di una cella satellitare.
+        var pioggia = null, pioggiaDiffusa = null, rovescio = null;
+        if (eco) {
+          var piove = new Float32Array(n), forte = new Float32Array(n);
+          for (var e = 0; e < n; e++) {
+            piove[e] = lisciaFra(16, 27, eco[e]);
+            forte[e] = lisciaFra(33, 47, eco[e]);
+          }
+          pioggia = sfoca(piove, w, h, Math.max(1, Math.round(7 / kmpx)));
+          pioggiaDiffusa = sfoca(piove, w, h, Math.max(1, Math.round(28 / kmpx)));
+          rovescio = sfoca(massimoScorrevole(forte, w, h,
+            Math.max(1, Math.round(5 / kmpx))), w, h, 1);
+        }
+        var elettrica = lampi ? sfoca(lampi, w, h, Math.max(1, Math.round(9 / kmpx))) : null;
         // Il rilievo IR coerente, non il rumore di un singolo pixel, indica
         // una cima che sfonda. Entrambe le medie pesano solo i pixel nuvolosi:
         // il bordo contro il cielo sereno non diventa un falso massimo.
@@ -8169,15 +8197,25 @@
           var rilievoIr = Math.max(0, cimaIr[k] - ambienteIr[k]);
           var provaTermica = lisciaFra(0.4, 1.3, rilievoIr) * lisciaFra(0.25, 0.7, cumuli);
           var provaRdt = rdt ? rdt[k] * lisciaFra(0.15, 0.75, rilievoIr) : 0;
+          // Radar forte + scarica osservata nello STESSO slot distinguono
+          // un temporale sotto l'incudine da un fronte alto freddo. L'uno
+          // senza l'altro non puo' creare dal nulla una colonna convettiva.
+          var provaMultisensore = rovescio && elettrica
+            ? rovescio[k] * elettrica[k] : 0;
           // La parte spessa del Cloud Type rafforza una cima gia' convettiva;
           // non basta mai da sola a creare una torre nell'incudine o nel fronte.
           var sostegnoTipo = campo.tipoValido
             ? 1 + 0.15 * (campo.tipoSpesso[k] - 0.5) * campo.tipoValido[k] * g : 1;
-          prova[k] = alto * lisciaFra(PROFONDA_MIN_KM, PROFONDA_MIN_KM + 1.5, T)
-            * lisciaFra(0.62, 0.86, tau[k]) * Math.max(provaTermica, provaRdt)
+          var nucleoTermico = lisciaFra(PROFONDA_MIN_KM, PROFONDA_MIN_KM + 1.5, T)
+            * lisciaFra(0.62, 0.86, tau[k]) * Math.max(provaTermica, provaRdt);
+          var nucleoElettrico = lisciaFra(5.5, 8.5, T)
+            * lisciaFra(0.46, 0.76, tau[k]) * provaMultisensore;
+          prova[k] = alto * Math.max(nucleoTermico, nucleoElettrico)
             * lisciaFra(0.25, 0.7, cancello[k]) * sostegnoTipo;
-          freddoOpaco[k] = alto * lisciaFra(PROFONDA_MIN_KM - 1, PROFONDA_MIN_KM + 0.5, T)
-            * lisciaFra(0.6, 0.8, tau[k]);
+          freddoOpaco[k] = alto * Math.max(
+            lisciaFra(PROFONDA_MIN_KM - 1, PROFONDA_MIN_KM + 0.5, T)
+              * lisciaFra(0.6, 0.8, tau[k]),
+            lisciaFra(5.5, 8.5, T) * provaMultisensore);
           chi[k] = 0;
           fibra[k] = alto * (1 - lisciaFra(0.3, 0.7, tau[k]));
           if (campo.tipoValido && campo.tipoCirro) {
@@ -8229,11 +8267,21 @@
               * (1 - (giorno ? giorno[k] : 0)) * (1 - lisciaFra(0.2, 0.6, c));
           }
           var baseMedia = T2 - (SPESSORE_ALTOCUMULO_KM + (SPESSORE_ALTOSTRATO_KM - SPESSORE_ALTOCUMULO_KM) * t);
-          var nembo = lisciaFra(0.75, 0.95, t) * (1 - c);
+          var nembo = Math.max(lisciaFra(0.75, 0.95, t),
+            pioggia && pioggiaDiffusa
+              ? pioggia[k] * lisciaFra(0.26, 0.65, pioggiaDiffusa[k]) * 0.85 : 0) * (1 - c);
           baseMedia += (BASE_NEMBO_KM - baseMedia) * nembo;
           var baseAlta = Math.max(BASE_ALTA_MIN_KM,
             T2 - (SPESSORE_CIRRO_KM + (SPESSORE_CIRROSTRATO_KM - SPESSORE_CIRRO_KM) * t));
           baseAlta += (Math.max(BASE_ALTA_MIN_KM, T2 - SPESSORE_INCUDINE_KM) - baseAlta) * incudine[k];
+          // Il tetto di un nembostrato puo' entrare nel piano alto. Un'eco
+          // ampia sotto un banco spesso ne abbassa la base stimata; il velo
+          // sottile in quota e l'incudine conservano invece la propria base.
+          if (pioggia && pioggiaDiffusa) {
+            var pioggiaEstesa = pioggia[k] * lisciaFra(0.2, 0.62, pioggiaDiffusa[k])
+              * lisciaFra(0.45, 0.75, t) * (1 - incudine[k]) * (1 - chi[k]);
+            baseAlta += (BASE_NEMBO_KM - baseAlta) * 0.82 * pioggiaEstesa;
+          }
           base[k] = basso * baseBassa + medio * baseMedia + alto2 * baseAlta;
         }
         // Le basi a strato sono piatte: si distendono sui dintorni. Ma non
@@ -8275,13 +8323,19 @@
           var convettivo = lisciaFra(0.2, 0.7, c3);
           var fog = campo.basseValide && campo.basseAcqua
             ? campo.basseValide[k] * campo.basseAcqua[k] * (1 - (giorno ? giorno[k] : 0)) : 0;
+          var diffusa = pioggia && pioggiaDiffusa
+            ? pioggia[k] * lisciaFra(0.2, 0.62, pioggiaDiffusa[k]) * banco : 0;
+          var temporale = rovescio && elettrica ? rovescio[k] * elettrica[k] : 0;
           pesi[1] = alto3 * (0.15 + 1.6 * sottile3 + 0.5 * fibra[k]) * (1 - 0.8 * incudine[k]);
           pesi[2] = alto3 * (0.3 + 1.25 * (1 - sottile3)) * (1 - 0.8 * incudine[k]);
           pesi[3] = alto3 * incudine[k] * 4.5 * (1 - x) * (1 - x);
-          pesi[4] = alto3 * x * 3.5;
+          pesi[4] = alto3 * x * (3.5 + 1.4 * temporale);
           pesi[5] = medio3 * (0.2 + 1.5 * convettivo) * (1 - 0.7 * opaco3 * banco);
           pesi[6] = medio3 * (0.45 + 0.9 * (1 - convettivo)) * (1 - 0.65 * opaco3 * banco);
-          pesi[7] = medio3 * opaco3 * banco * (1 - 0.75 * convettivo) * 2.5;
+          var pianoNembo = Math.max(medio3,
+            alto3 * 0.72 * diffusa * lisciaFra(0.45, 0.75, t3) * (1 - x));
+          pesi[7] = pianoNembo * banco * (1 - 0.75 * convettivo)
+            * (2.5 * opaco3 + 2.8 * diffusa);
           pesi[8] = basso3 * convettivo * (1.2 + 0.55 * (1 - banco));
           pesi[9] = basso3 * (0.6 + 0.6 * banco) * (1 - 0.55 * convettivo) * (1 - 0.6 * fog);
           pesi[10] = basso3 * (0.1 + 1.8 * fog) * (1 - 0.75 * convettivo);
@@ -8303,7 +8357,7 @@
           // La massa interna distingue un altostrato/nembostrato pieno da
           // un velo fibroso: sagoma sempre satellitare, niente fori di rumore
           // scolpiti nel mezzo di un banco otticamente spesso.
-          materia[k] = limita((0.2 + 0.55 * t3 + 0.25 * banco)
+          materia[k] = limita((0.2 + 0.55 * t3 + 0.25 * banco + 0.2 * diffusa)
             * (1 - 0.75 * sottile3 * alto3) * (1 - 0.25 * convettivo), 0, 1);
         }
         campo.base = base; campo.densita = densita; campo.kappa = kappa;
@@ -9672,6 +9726,168 @@
         contesto.drawImage(immagine, 0, 0, misura.larghezza, misura.altezza);
         return contesto.getImageData(0, 0, misura.larghezza, misura.altezza);
       }
+
+      // Tavolozza "Universal Blue", dBZ 15..65, dal CSV pubblico RainViewer.
+      // Le tessere 2/0_0 conservano i colori discreti, senza sfocare l'eco.
+      // dBZ e' riflettivita', non un'intensita' di pioggia in mm/h: grandine,
+      // neve e pioggia intensa non si distinguono con un solo canale radar.
+      var RADAR_COLORI = "88ddee6cd1eb51c5e836bae51baee200a3e0009ad50091ca0088bf007fb40077aa0070a300699c006295005b8e005588005180004e78004a70004768ffee00ffe000ffd200ffc500ffb700ffaa00ff9f00ff9500ff8b00ff8100ff4400f23600e62800d91b00cd0d00c10000a800008f00007600005d0000ffaaffff9fffff95ffff8bffff81ffff77ffff6cffff62ffff58ffff4effffffff".match(/.{6}/g).map(function (esadecimale) {
+        return parseInt(esadecimale, 16);
+      });
+      var radarMemoria = new Map();
+      var radarIndiceFinoA = 0;
+      var radarIndicePromessa = null;
+      function dbzDelPixel(r, g, b, alfa, memo) {
+        if (alfa < 210) return 0;
+        var rgb = (r << 16) | (g << 8) | b;
+        if (memo.has(rgb)) return memo.get(rgb);
+        var migliore = Infinity, dbz = 0;
+        for (var i = 0; i < RADAR_COLORI.length; i++) {
+          var colore = RADAR_COLORI[i];
+          var dr = r - (colore >> 16), dg = g - ((colore >> 8) & 255), db = b - (colore & 255);
+          var distanza = dr * dr + dg * dg + db * db;
+          if (distanza < migliore) { migliore = distanza; dbz = i + 15; }
+        }
+        // Un colore fuori tavolozza non deve diventare precipitazione.
+        if (migliore > 2400) dbz = 0;
+        memo.set(rgb, dbz);
+        return dbz;
+      }
+
+      function indiceRadar() {
+        if (radarHost && radarFrames.length
+            && radarFrames[radarFrames.length - 1].time * 1000 > Date.now() - 20 * 60 * 1000) {
+          return Promise.resolve();
+        }
+        if (radarIndicePromessa) return radarIndicePromessa;
+        if (Date.now() < radarIndiceFinoA) return Promise.resolve();
+        radarIndiceFinoA = Date.now() + 3 * 60 * 1000;
+        radarIndicePromessa = fetch("https://api.rainviewer.com/public/weather-maps.json").then(function (r) {
+          return r.ok ? r.json() : null;
+        }).then(function (d) {
+          if (d && d.host && d.radar && d.radar.past) {
+            radarHost = d.host;
+            radarFrames = d.radar.past;
+          }
+        }).catch(function () { /* si procede col solo satellite */ }).then(function () {
+          radarIndicePromessa = null;
+        });
+        return radarIndicePromessa;
+      }
+
+      function tesseraRadar(frame, x, y) {
+        return new Promise(function (risolvi) {
+          var immagine = new Image(), finita = false;
+          var termina = function (valore) {
+            if (finita) return;
+            finita = true;
+            clearTimeout(timer);
+            risolvi(valore);
+          };
+          var timer = setTimeout(function () {
+            immagine.onload = immagine.onerror = null;
+            immagine.src = "data:,";
+            termina(null);
+          }, 7000);
+          immagine.crossOrigin = "anonymous";
+          immagine.onload = function () {
+            try { termina(leggiPixel(immagine, { larghezza: 512, altezza: 512 }).data); }
+            catch (errore) { termina(null); }
+          };
+          immagine.onerror = function () { termina(null); };
+          immagine.src = radarHost + frame.path + "/512/4/" + x + "/" + y + "/2/0_0.png";
+        });
+      }
+
+      function ecoRadarPerScena(epoca, w, h) {
+        return indiceRadar().then(function () {
+          var frame = radarFrameNearestTo(epoca);
+          if (!frame || !radarHost || Math.abs(frame.time * 1000 - epoca) > RADAR_MATCH_TOLERANCE_MS) {
+            return null;
+          }
+          var chiave = frame.path + ":" + w + "x" + h;
+          if (radarMemoria.has(chiave)) return radarMemoria.get(chiave);
+          var nx = 16, xOvest = unitaX(DOMINIO.ovest) * nx, xEst = unitaX(DOMINIO.est) * nx;
+          var yNord = unitaY(DOMINIO.nord) * nx, ySud = unitaY(DOMINIO.sud) * nx;
+          var minX = Math.floor(xOvest), maxX = Math.floor(xEst);
+          var minY = Math.floor(yNord), maxY = Math.floor(ySud);
+          var richieste = [], chiavi = [];
+          for (var yy = minY; yy <= maxY; yy++) for (var xx = minX; xx <= maxX; xx++) {
+            chiavi.push(xx + ":" + yy);
+            richieste.push(tesseraRadar(frame, xx, yy));
+          }
+          var lavoro = Promise.all(richieste).then(function (risposte) {
+            var tiles = new Map(), validi = 0;
+            for (var j = 0; j < risposte.length; j++) {
+              if (risposte[j]) { tiles.set(chiavi[j], risposte[j]); validi++; }
+            }
+            if (!validi) return null;
+            var coloriVisti = new Map(), eco = new Float32Array(w * h);
+            var xT = new Int16Array(w), xP = new Uint16Array(w);
+            for (var x = 0; x < w; x++) {
+              var ux = xOvest + (x + 0.5) / w * (xEst - xOvest);
+              xT[x] = Math.floor(ux); xP[x] = Math.min(511, Math.floor((ux - xT[x]) * 512));
+            }
+            for (var y = 0; y < h; y++) {
+              var uy = yNord + (y + 0.5) / h * (ySud - yNord);
+              var ty = Math.floor(uy), py = Math.min(511, Math.floor((uy - ty) * 512));
+              for (x = 0; x < w; x++) {
+                var dati = tiles.get(xT[x] + ":" + ty);
+                if (!dati) continue;
+                var q = (py * 512 + xP[x]) * 4;
+                eco[y * w + x] = dbzDelPixel(dati[q], dati[q + 1], dati[q + 2],
+                  dati[q + 3], coloriVisti);
+              }
+            }
+            return eco;
+          });
+          radarMemoria.set(chiave, lavoro);
+          while (radarMemoria.size > 3) radarMemoria.delete(radarMemoria.keys().next().value);
+          return lavoro;
+        });
+      }
+
+      function scarichePerScena(immagine, misura, w, h, epoca) {
+        var fuori = new Float32Array(w * h), riscontrate = false;
+        if (immagine && !immagine.ultimo) {
+          var rgba = leggiPixel(immagine.immagine, misura).data;
+          var seme = new Float32Array(misura.larghezza * misura.altezza);
+          for (var i = 0; i < seme.length; i++) {
+            var j = i * 4;
+            seme[i] = rgba[j + 3] > 60 && Math.max(rgba[j], rgba[j + 1], rgba[j + 2]) > 35 ? 1 : 0;
+          }
+          // Una AFA occupa pochi pixel; max 3x3 prima del ricampionamento
+          // impedisce che un flash osservato sparisca fra due celle.
+          fuori = ricampiona(massimoScorrevole(seme, misura.larghezza, misura.altezza, 1),
+            misura.larghezza, misura.altezza, w, h);
+          riscontrate = true;
+        }
+        // Blitzortung fornisce coordinate reali in diretta. Le si adopera
+        // SOLO quando tempo di scarica e tempo del satellite coincidono.
+        var r = riquadroMercatore(), km = (DOMINIO.est - DOMINIO.ovest) * 111.32
+          * Math.cos(45 * Math.PI / 180) / w;
+        var raggio = Math.max(1, Math.round(12 / km));
+        for (var a = 0; a < liveStrikes.length; a++) {
+          var s = liveStrikes[a];
+          if (Math.abs(s.at - epoca) > 7 * 60 * 1000) continue;
+          if (s.lon < DOMINIO.ovest || s.lon > DOMINIO.est
+              || s.lat < DOMINIO.sud || s.lat > DOMINIO.nord) continue;
+          riscontrate = true;
+          var cx = Math.floor((mercX(s.lon) - r.ovest) / (r.est - r.ovest) * w);
+          var cy = Math.floor((r.nord - mercY(s.lat)) / (r.nord - r.sud) * h);
+          for (var dy = -raggio; dy <= raggio; dy++) {
+            var yy = cy + dy;
+            if (yy < 0 || yy >= h) continue;
+            for (var dx = -raggio; dx <= raggio; dx++) {
+              var xx = cx + dx, d2 = dx * dx + dy * dy;
+              if (xx < 0 || xx >= w || d2 > raggio * raggio) continue;
+              var k = yy * w + xx;
+              fuori[k] = Math.max(fuori[k], Math.exp(-2 * d2 / (raggio * raggio)));
+            }
+          }
+        }
+        return riscontrate ? fuori : null;
+      }
       var coordinateDominio = [
         [DOMINIO.ovest, DOMINIO.nord], [DOMINIO.est, DOMINIO.nord],
         [DOMINIO.est, DOMINIO.sud], [DOMINIO.ovest, DOMINIO.sud]
@@ -9701,9 +9917,10 @@
       }
 
       function rilasciaOtticaMorfologica(campo) {
-        // Le tre immagini ottiche a piena risoluzione servono solo finche'
-        // i due aggiornamenti opzionali (RDT e RGB) possono riclassificare.
-        if (campo.rdtTerminato && campo.diagnosticaTerminata) campo.otticaMorfologia = null;
+        // Conserva i canali ottici fino all'ultimo dato opzionale: radar e
+        // flash possono arrivare dopo RDT senza far sparire la tessitura.
+        if (campo.rdtTerminato && campo.diagnosticaTerminata
+            && campo.radarTerminato && campo.lampiTerminati) campo.otticaMorfologia = null;
       }
 
       function ripubblicaMorfologia(campo) {
@@ -9748,6 +9965,29 @@
         // satellitare aspetta solo IR, maschera e quota della cima.
         var promessaPelle = scarica(STRATI.pelle, misure.pelle, adesso, slotScena);
         var promessaCelle = scaricaRdt(slotMsg);
+        var misuraGeneri = {
+          larghezza: Math.max(8, Math.round(misure.forma.larghezza / 2)),
+          altezza: Math.max(8, Math.round(misure.forma.altezza / 2))
+        };
+        // Uno scrub rapido non deve scaricare nove tessere radar e un'AFA
+        // per ogni istante attraversato. I segnali aggiuntivi partono solo
+        // se dopo un breve respiro si guarda ancora lo stesso fotogramma.
+        var opzionale = function (avvia) {
+          return new Promise(function (risolvi) {
+            setTimeout(function () {
+              if (!attiva || seriale !== scenaSeriale || slotCoerenteDellaScena() !== slotScena) {
+                risolvi(null); return;
+              }
+              Promise.resolve().then(avvia).then(risolvi, function () { risolvi(null); });
+            }, 170);
+          });
+        };
+        var promessaEco = opzionale(function () {
+          return ecoRadarPerScena(slotScena, misuraGeneri.larghezza, misuraGeneri.altezza);
+        });
+        var promessaScariche = opzionale(function () {
+          return scarica(STRATI.scariche, diagnosi, adesso, slotScena, true);
+        });
         Promise.all([
           scarica(STRATI.forma, misure.forma, adesso, slotScena),
           scarica(STRATI.maschera, misure.msg, adesso, slotMsg),
@@ -9778,6 +10018,25 @@
               } catch (errore) {
                 // Le RGB sono opzionali, IR e CTH restano disponibili.
               }
+            }
+            rilasciaOtticaMorfologica(campo);
+          });
+          promessaEco.then(function (eco) {
+            campo.radarTerminato = true;
+            if (attiva && seriale === scenaSeriale && eco && !arrivati[0].ultimo) {
+              campo.ecoRadar = eco;
+              ripubblicaMorfologia(campo);
+            }
+            rilasciaOtticaMorfologica(campo);
+          });
+          promessaScariche.then(function (immagine) {
+            campo.lampiTerminati = true;
+            if (attiva && seriale === scenaSeriale && !arrivati[0].ultimo) {
+              try {
+                campo.scaricheOsservate = scarichePerScena(immagine, diagnosi,
+                  misuraGeneri.larghezza, misuraGeneri.altezza, slotScena);
+                if (campo.scaricheOsservate) ripubblicaMorfologia(campo);
+              } catch (errore) { /* l'IR resta visibile */ }
             }
             rilasciaOtticaMorfologica(campo);
           });
@@ -9968,7 +10227,8 @@
               var giorno = luceDelGiorno(campo, pelle.slot.epoca);
               componiCopertura(campo, luce, giorno);
               var luminanza = luminanzaDellaNube(pixelPelle, misuraPelle, campo);
-              if (!campo.rdtTerminato || !campo.diagnosticaTerminata) {
+              if (!campo.rdtTerminato || !campo.diagnosticaTerminata
+                  || !campo.radarTerminato || !campo.lampiTerminati) {
                 campo.otticaMorfologia = { luce: luce, giorno: giorno, luminanza: luminanza };
               }
               classificaNubi(campo, luce, giorno, luminanza);
@@ -10163,9 +10423,14 @@
         // osservata direttamente dai canali: esplicitare l'ambiguita'.
         var evidenza = campo.fiduciaGenere && campo.fiduciaGenere[kc] < 20
           ? "Tipo compatibile con " : "Tipo probabile: ";
+        var ecoQui = campo.radarNube && campo.radarNube[kc] >= 18
+          ? " · eco radar " + Math.round(campo.radarNube[kc]) + " dBZ" : "";
+        var lampiQui = campo.scaricheNube && campo.scaricheNube[kc] > 0.2
+          ? " · scariche rilevate" : "";
         return evidenza + genere + " · cima " + campo.quota[k].toFixed(1).replace(".", ",") + " km"
           + (misurata ? " (misurata, CTH)" : " (stimata)")
-          + " · base ~" + baseStimata.toFixed(1).replace(".", ",") + " km (stimata)";
+          + " · base ~" + baseStimata.toFixed(1).replace(".", ",") + " km (stimata)"
+          + ecoQui + lampiQui;
       }
 
       var toccoRegistrato = false;
