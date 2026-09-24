@@ -7141,8 +7141,60 @@
         forma:    { layer: "mtg_fd:ir105_hrfi",    slotMs: 10 * 60 * 1000, ritardoMin: 22 },
         pelle:    { layer: "mtg_fd:rgb_geocolour", slotMs: 10 * 60 * 1000, ritardoMin: 22 },
         maschera: { layer: "msg_fes:clm",          slotMs: 15 * 60 * 1000, ritardoMin: 20 },
-        cime:     { layer: "msg_fes:cth",          slotMs: 15 * 60 * 1000, ritardoMin: 20 }
+        cime:     { layer: "msg_fes:cth",          slotMs: 15 * 60 * 1000, ritardoMin: 20 },
+        // Le PROVE di quello che la nube fa, non solo di com'e' fatta: la
+        // pioggia al suolo e i fulmini. Stesso server e stesso istante delle
+        // nubi, e coprono anche il mare e l'Africa, dove il radar non c'e'.
+        pioggia:  { layer: "mtg_fd:h40b",          slotMs: 10 * 60 * 1000, ritardoMin: 22 },
+        fulmini:  { layer: "mtg_fd:li_afa",        slotMs: 5 * 60 * 1000,  ritardoMin: 21 }
       };
+
+      // LA PIOGGIA DAL SATELLITE (H SAF h40b, FCI fuso con le microonde dei
+      // satelliti polari). Le classi della sua legenda ufficiale: colore e
+      // intensita' centrale della classe in mm/h.
+      var H40B_SCALA = [
+        [1, 204, 255, 204], [3, 153, 229, 153], [5.5, 102, 204, 102], [8.5, 51, 178, 51],
+        [12.5, 51, 153, 204], [17.5, 51, 102, 255], [22.5, 0, 0, 255], [27.5, 102, 0, 204],
+        [35, 153, 51, 204], [45, 204, 0, 153], [55, 127, 0, 127]
+      ];
+
+      // IL RADAR (composito RainViewer). Il servizio pubblico consegna sempre
+      // lo schema colori 'Universal Blue', qualunque si chieda: la sua tabella
+      // ufficiale (rainviewer.com/files/rainviewer_api_colors_table.csv) da'
+      // il dBZ di ogni colore, esatto, prima per la pioggia e poi per la neve.
+      // Otto cifre esadecimali (RGBA) per ogni dBZ, a partire da quello
+      // indicato.
+      var RADAR_PIOGGIA_DA_DBZ = -10;
+      var RADAR_PIOGGIA = (
+        "6361591466635a1969665c1e6c685d246f6b5f29726e612e75706234787364397c75653e" +
+        "7f786744827b6949857d6a4e88806c548b826d598e856f5e928871649e93756eaa9e7978" +
+        "b6a97e82c2b4828ccec08796d2c48ba0d6c88faadacc93b4ded097be88ddeeff6cd1ebff" +
+        "51c5e8ff36bae5ff1baee2ff00a3e0ff009ad5ff0091caff0088bfff007fb4ff0077aaff" +
+        "0070a3ff00699cff006295ff005b8eff005588ff005180ff004e78ff004a70ff004768ff" +
+        "ffee00ffffe000ffffd200ffffc500ffffb700ffffaa00ffff9f00ffff9500ffff8b00ff" +
+        "ff8100ffff4400fff23600ffe62800ffd91b00ffcd0d00ffc10000ffa80000ff8f0000ff" +
+        "760000ff5d0000ffffaaffffff9fffffff95ffffff8bffffff81ffffff77ffffff6cffff" +
+        "ff62ffffff58ffffff4effffffffffffffffffffffffffffffffffffffffffffffffffff" +
+        "ffffffffffffffffffffffffffffffff00ff00ff00ff00ff00ff00ff00ff00ff00ff00ff" +
+        "00ff00ff00ff00ff00ff00ff00ff00ff00ff00ff00ff00ff00ff00ff00ff00ff00ff00ff" +
+        "00ff00ff00ff00ff00ff00ff00ff00ff00ff00ff00ff00ff00ff00ff");
+      var RADAR_NEVE_DA_DBZ = -9;
+      var RADAR_NEVE = (
+        "ceffff0ccdffff19ccffff26cbffff33cbffff3fcaffff4cc9ffff59c8ffff66c7ffff72" +
+        "c7ffff7fc6ffff8cc5ffff99c4ffffa5c3ffffb2c3ffffbfc2ffffccc1ffffd8c0ffffe5" +
+        "bffffff2bfffffffb8f8ffffb2f2ffffabebffffa5e5ffff9fdfffff98d8ffff92d2ffff" +
+        "8bcbffff85c5ffff7fbfffff78b8ffff72b2ffff6babffff65a5ffff5f9fffff5b9bffff" +
+        "5898ffff5595ffff5292ffff4f8fffff4b8bffff4888ffff4585ffff4282ffff3f7fffff" +
+        "3b7bffff3878ffff3575ffff3272ffff2f6fffff2b6bffff2868ffff2565ffff2262ffff" +
+        "1f5fffff1b5bffff1858ffff1555ffff1252ffff0f4fffff0c4bffff0948ffff0645ffff" +
+        "0242ffff003fffff003bffff0038ffff0035ffff0032ffff002fffff002bffff0028ffff" +
+        "0025ffff0022ffff001fffff001bffff0018ffff0015ffff0012ffff000fffff000cffff" +
+        "0009ffff0006ffff0002ffff0000ffff0000ffff0000ffff0000ffff0000ffff0000ffff" +
+        "0000ffff0000ffff0000ffff0000ffff0000ffff0000ffff0000ffff0000ffff0000ffff" +
+        "0000ffff0000ffff0000ffff0000ffff0000ffff0000ffff");
+      var RADAR_ZOOM = isMobile() ? 4 : 5;
+      // Un fotogramma radar vale per l'immagine se e' entro questo scarto.
+      var RADAR_SCARTO_MS = 12 * 60 * 1000;
 
       // La scala dei colori del prodotto Cloud Top Height, letta dalla sua
       // legenda ufficiale (GetLegendGraphic di msg_fes:cth): quota in metri,
@@ -7887,6 +7939,144 @@
           campo.larghezza, campo.altezza);
       }
 
+      // --- le prove: pioggia e fulmini -----------------------------------------
+      // Tabella colore -> dBZ del radar, costruita una volta. I colori che
+      // compaiono per piu' dBZ valgono la loro media.
+      var tabellaRadar = null;
+      function tabellaDelRadar() {
+        if (tabellaRadar) return tabellaRadar;
+        var somma = {}, quanti = {};
+        [[RADAR_PIOGGIA, RADAR_PIOGGIA_DA_DBZ], [RADAR_NEVE, RADAR_NEVE_DA_DBZ]].forEach(function (b) {
+          for (var i = 0; i + 8 <= b[0].length; i += 8) {
+            var chiave = parseInt(b[0].slice(i, i + 8), 16) >>> 0;
+            somma[chiave] = (somma[chiave] || 0) + b[1] + i / 8;
+            quanti[chiave] = (quanti[chiave] || 0) + 1;
+          }
+        });
+        tabellaRadar = {};
+        Object.keys(somma).forEach(function (c) { tabellaRadar[c] = somma[c] / quanti[c]; });
+        return tabellaRadar;
+      }
+
+      // dBZ -> mm/h, Marshall e Palmer (1948): Z = 200 R^1,6.
+      function mmOraDaDbz(dbz) {
+        return dbz < 5 ? 0 : Math.pow(Math.pow(10, dbz / 10) / 200, 1 / 1.6);
+      }
+
+      // Il radar sulla griglia del campo: le tessere Mercatore si disegnano
+      // senza interpolazione (il colore deve restare esatto per essere letto)
+      // direttamente al loro posto nel riquadro del dominio. Il fotogramma e'
+      // quello piu' vicino all'istante dell'immagine; se nessuno e' entro
+      // RADAR_SCARTO_MS -- per esempio in un passato piu' vecchio delle due ore
+      // di archivio -- il radar non c'e', e lo si dice.
+      function scaricaRadar(epoca, w, h) {
+        return fetch("https://api.rainviewer.com/public/weather-maps.json").then(function (r) {
+          return r.json();
+        }).then(function (mappe) {
+          var fotogrammi = (mappe.radar && mappe.radar.past) || [];
+          var migliore = null;
+          fotogrammi.forEach(function (f) {
+            var scarto = Math.abs(f.time * 1000 - epoca);
+            if (scarto <= RADAR_SCARTO_MS && (!migliore || scarto < migliore.scarto)) {
+              migliore = { f: f, scarto: scarto };
+            }
+          });
+          if (!migliore || !mappe.host) return null;
+          var z = RADAR_ZOOM, n = 1 << z;
+          var d = { x0: unitaX(DOMINIO.ovest), x1: unitaX(DOMINIO.est), y0: unitaY(DOMINIO.nord), y1: unitaY(DOMINIO.sud) };
+          var tela = document.createElement("canvas");
+          tela.width = w; tela.height = h;
+          var c = tela.getContext("2d", { willReadFrequently: true });
+          c.imageSmoothingEnabled = false;
+          var attese = [];
+          for (var tx = Math.floor(d.x0 * n); tx <= Math.floor(d.x1 * n); tx++) {
+            for (var ty = Math.floor(d.y0 * n); ty <= Math.floor(d.y1 * n); ty++) {
+              attese.push(new Promise(function (risolvi) {
+                var x = tx, y = ty, img = new Image();
+                img.crossOrigin = "anonymous";
+                img.onload = function () {
+                  c.drawImage(img,
+                    (x / n - d.x0) / (d.x1 - d.x0) * w, (y / n - d.y0) / (d.y1 - d.y0) * h,
+                    w / ((d.x1 - d.x0) * n), h / ((d.y1 - d.y0) * n));
+                  risolvi(true);
+                };
+                img.onerror = function () { risolvi(false); };
+                img.src = mappe.host + migliore.f.path + "/512/" + z + "/" + x + "/" + y + "/2/0_1.png";
+              }));
+            }
+          }
+          return Promise.all(attese).then(function (esiti) {
+            if (!esiti.some(Boolean)) return null;
+            var px = c.getImageData(0, 0, w, h).data, tab = tabellaDelRadar();
+            var mm = new Float32Array(w * h);
+            for (var k = 0, i = 0; k < w * h; k++, i += 4) {
+              if (!px[i + 3]) continue;
+              var chiave = ((px[i] << 24) | (px[i + 1] << 16) | (px[i + 2] << 8) | px[i + 3]) >>> 0;
+              var dbz = tab[chiave];
+              if (dbz !== undefined) mm[k] = mmOraDaDbz(dbz);
+            }
+            return { mm: mm, epoca: migliore.f.time * 1000 };
+          });
+        }).catch(function () { return null; });
+      }
+
+      // La pioggia satellitare h40b: il colore piu' vicino nella legenda.
+      function pioggiaDaH40b(pixel, quanti) {
+        var fuori = new Float32Array(quanti);
+        for (var k = 0, i = 0; k < quanti; k++, i += 4) {
+          if (pixel[i + 3] < 128) continue;
+          var meglio = Infinity, mm = 0;
+          for (var s = 0; s < H40B_SCALA.length; s++) {
+            var e = H40B_SCALA[s];
+            var d = (pixel[i] - e[1]) * (pixel[i] - e[1]) + (pixel[i + 1] - e[2]) * (pixel[i + 1] - e[2])
+              + (pixel[i + 2] - e[3]) * (pixel[i + 2] - e[3]);
+            if (d < meglio) { meglio = d; mm = e[0]; }
+          }
+          fuori[k] = meglio < 40 * 40 ? mm : 0;
+        }
+        return fuori;
+      }
+
+      // I fulmini del Lightning Imager: un pixel colorato e' un pixel toccato
+      // da un flash nei cinque minuti.
+      function fulminiDaLi(pixel, quanti, fuori) {
+        fuori = fuori || new Float32Array(quanti);
+        for (var k = 0, i = 0; k < quanti; k++, i += 4) if (pixel[i + 3] > 100) fuori[k] = 1;
+        return fuori;
+      }
+
+      // La pioggia sulla griglia del campo: il radar dove c'e', il satellite
+      // dove il radar non vede (mare aperto, Africa). Si prende il massimo
+      // delle due: il radar vede meglio i nuclei, il satellite copre tutto.
+      function componiProve(campo, radar, h40b, li, misuraMsg) {
+        var w = campo.larghezza, h = campo.altezza, n = w * h;
+        var pioggia = h40b ? ricampiona(h40b, misuraMsg.larghezza, misuraMsg.altezza, w, h) : new Float32Array(n);
+        if (radar) for (var k = 0; k < n; k++) if (radar.mm[k] > pioggia[k]) pioggia[k] = radar.mm[k];
+        // Una scarica occupa un punto, ma dice che la CELLA intorno e'
+        // temporalesca: si allarga di FULMINE_RAGGIO_KM.
+        var fulmini = li ? ricampiona(li, misuraMsg.larghezza, misuraMsg.altezza, w, h) : new Float32Array(n);
+        var r = riquadroMercatore();
+        if (!cloudTimeSelected && typeof liveStrikes !== "undefined") {
+          var ora = Date.now();
+          liveStrikes.forEach(function (s) {
+            if (!(ora - s.at < FULMINI_VIVI_MS)) return;
+            var x = Math.round((mercX(s.lon) - r.ovest) / (r.est - r.ovest) * w);
+            var y = Math.round((r.nord - mercY(s.lat)) / (r.nord - r.sud) * h);
+            if (x >= 0 && y >= 0 && x < w && y < h) fulmini[y * w + x] = 1;
+          });
+        }
+        var kmpx = kmPerPixelDi(campo);
+        // Allargamento TONDO: massimo su meta' raggio, poi media sull'altra
+        // meta'. Il massimo da solo e' quadrato, e le celle uscivano quadrate.
+        var mezzoF = Math.max(1, Math.round(FULMINE_RAGGIO_KM * 0.5 / kmpx));
+        fulmini = sfoca(massimoScorrevole(fulmini, w, h, mezzoF), w, h, mezzoF);
+        for (var kf = 0; kf < n; kf++) fulmini[kf] = Math.min(1, fulmini[kf] * 2);
+        campo.pioggia = sfoca(pioggia, w, h, 1);
+        campo.fulmini = fulmini;
+        campo.conRadar = !!radar;
+        return campo;
+      }
+
       // --- i generi di nube --------------------------------------------------
       // Dalle misure si riconosce il GENERE di ogni nube, con lo schema della
       // climatologia satellitare ISCCP (Rossow e Schiffer, 1999): la quota
@@ -7904,7 +8094,7 @@
       // vede la cima.
       var GENERI = [
         "sereno", "Cirro", "Cirrostrato", "Incudine", "Cumulonembo", "Altocumulo",
-        "Altostrato", "Nembostrato", "Cumulo", "Stratocumulo", "Strato"
+        "Altostrato", "Nembostrato", "Cumulo", "Stratocumulo", "Strato", "Cumulo congesto"
       ];
       // I piani ISCCP: 680 hPa (circa 3,2 km) e 440 hPa (circa 6,5 km).
       var PIANO_MEDIO_KM = 3.2;
@@ -7912,7 +8102,7 @@
       // Le basi stimate, per genere.
       var BASE_STRATO_KM = 0.4;       // strato e nebbia alta
       var BASE_CUMULO_KM = 1.0;       // livello di condensazione tipico
-      var BASE_NEMBO_KM = 1.2;        // nembostrato
+      var BASE_NEMBO_KM = 0.8;        // nembostrato: basso, sfilacciato
       var BASE_ALTA_MIN_KM = 5.0;     // sotto questa quota un cirro non scende
       // Gli spessori stimati degli strati in quota: velo sottile e strato pieno.
       var SPESSORE_ALTOCUMULO_KM = 0.6, SPESSORE_ALTOSTRATO_KM = 2.0;
@@ -7931,6 +8121,17 @@
       // fredda e' incudine, sospesa in quota. Prima l'intera cella diventava
       // un altopiano pieno dal suolo alla cima.
       var SISTEMA_RAGGIO_KM = 35;
+      // Le prove dirette. Una scarica rende temporalesca la cella entro
+      // FULMINE_RAGGIO_KM; le scariche Blitzortung valgono se piu' giovani di
+      // FULMINI_VIVI_MS. Le soglie di pioggia sono quelle di uso comune: da
+      // 10 mm/h (circa 40 dBZ) e' un rovescio da nube convettiva, sotto 0,5
+      // mm/h e' pioviggine o niente.
+      var FULMINE_RAGGIO_KM = 12;
+      var FULMINI_VIVI_MS = 15 * 60 * 1000;
+      var PIOGGIA_FORTE_MM = 10;
+      var PIOGGIA_ROVESCIO_MM = 2;
+      var PIOGGIA_DIFFUSA_MM = 0.5;
+      var PIOGGIA_DIFFUSA_KM = 25;
       var TORRE_RAGGIO_KM = 11;
       // Sopra i dieci chilometri: le cime frontali d'autunno alle nostre
       // latitudini arrivano a otto-nove, i cumulonembi sfondano la tropopausa.
@@ -8037,13 +8238,15 @@
           larghezza: w2, altezza: h2,
           quota: giu(campo.quota), quotaIr: giu(campo.quotaIr || campo.quota),
           cancello: giu(campo.cancello || campo.copertura), copertura: giu(campo.copertura),
-          opacita: giu(campo.opacita), celle: giu(campo.celle)
+          opacita: giu(campo.opacita), celle: giu(campo.celle),
+          pioggia: giu(campo.pioggia), fulmini: giu(campo.fulmini)
         };
         classificaGriglia(ridotto, giu(luce), giu(giorno), giu(luminanza));
         var su = function (v) { return ricampiona(v, w2, h2, w, h); };
         campo.base = su(ridotto.base); campo.densita = su(ridotto.densita);
         campo.kappa = su(ridotto.kappa); campo.fibra = su(ridotto.fibra);
         campo.chi = su(ridotto.chi); campo.tau = su(ridotto.tau);
+        campo.prove = ridotto.prove;
         campo.classe = ridotto.classe;
         campo.classeMisura = { larghezza: w2, altezza: h2 };
         return campo;
@@ -8079,6 +8282,21 @@
         var tau = new Float32Array(n), kappa = new Float32Array(n), chi = new Float32Array(n);
         var fibra = new Float32Array(n), base = new Float32Array(n), incudine = new Float32Array(n);
         var prova = new Float32Array(n), freddoOpaco = new Float32Array(n);
+        // LE PROVE DIRETTE: pioggia al suolo (radar, e satellite dove il radar
+        // non c'e') e fulmini. Sono loro a decidere, quando ci sono: una nube
+        // alta con fulmini e un rovescio forte sotto E' un cumulonembo; un
+        // velo esteso che piove a lungo E' un nembostrato. La forma delle cime
+        // resta l'indizio, non la prova.
+        var conPioggia = !!campo.pioggia;
+        var P = campo.pioggia || new Float32Array(n);
+        var F = campo.fulmini || new Float32Array(n);
+        var Pdiffusa = sfocaPesata(P, cancello, w, h, Math.max(1, Math.round(PIOGGIA_DIFFUSA_KM / kmpx)));
+        var provaDiretta = new Float32Array(n), freddoIncudine = new Float32Array(n);
+        var nucleoDiretto = new Float32Array(n), nemboProva = new Float32Array(n), rovescio = new Float32Array(n);
+        var profondoArr = new Float32Array(n);
+        // La pioggia nei dintorni: il nucleo di un temporale piove, ma non per
+        // forza esattamente sotto la cima piu' fredda.
+        var Pvicina = massimoScorrevole(P, w, h, Math.max(1, Math.round(15 / kmpx)));
         for (var k = 0; k < n; k++) {
           var T = cima[k], g = giorno ? giorno[k] : 0;
           var alto = lisciaFra(PIANO_ALTO_KM - 1, PIANO_ALTO_KM + 0.5, T);
@@ -8101,18 +8319,66 @@
             rdt ? rdt[k] * alto : 0);
           freddoOpaco[k] = alto * lisciaFra(PROFONDA_MIN_KM - 1, PROFONDA_MIN_KM + 0.5, T)
             * lisciaFra(0.6, 0.8, tau[k]);
+          // Il cumulonembo provato: fulmini sotto una cima alta; oppure
+          // fulmini e rovescio forte insieme; oppure rovescio forte sotto una
+          // cima che sfonda i nove chilometri. Le sue cime possono essere piu'
+          // basse di quelle estive: d'inverno un cumulonembo fa fulmini a sei
+          // chilometri, e le soglie sono piu' basse di quelle del solo indizio.
+          var forte = lisciaFra(PIOGGIA_FORTE_MM * 0.6, PIOGGIA_FORTE_MM * 1.2, P[k]);
+          provaDiretta[k] = Math.max(F[k] * lisciaFra(5.5, 7.5, T), forte * F[k] * lisciaFra(4.5, 6, T),
+            forte * lisciaFra(8.5, 10, T) * lisciaFra(0.5, 0.8, tau[k]));
+          // Un cumulonembo piove sempre: quando la pioggia e' misurata, la
+          // sola forma della cima non basta piu' se sotto non piove e non
+          // fulmina. Resta nube alta: incudine orfana o cirrostrato.
+          if (conPioggia) prova[k] *= Math.max(lisciaFra(0.5, 3, Pvicina[k]), F[k]);
+          prova[k] = Math.max(prova[k], provaDiretta[k]);
+          // L'incudine di un temporale provato comincia piu' in basso.
+          freddoIncudine[k] = lisciaFra(5.5, 7, T) * lisciaFra(0.5, 0.75, tau[k]);
+          // Il nucleo della torre: dove piove forte o fulmina. La torre e'
+          // grande quanto quel nucleo, non un raggio fisso.
+          nucleoDiretto[k] = Math.max(forte, F[k]) * lisciaFra(4, 6, T);
+          // Il rovescio da cumulo congesto: pioggia da due millimetri,
+          // cima a cumulo fra i tre e i sette chilometri.
+          rovescio[k] = lisciaFra(PIOGGIA_ROVESCIO_MM * 0.5, PIOGGIA_ROVESCIO_MM * 2, P[k])
+            * lisciaFra(0.3, 0.6, cumuli) * lisciaFra(2.5, 4, T);
+          // Il nembostrato: piove, poco o tanto ma su un'area larga, sotto una
+          // nube che arriva almeno al piano medio e ha la cima liscia.
+          nemboProva[k] = lisciaFra(PIOGGIA_DIFFUSA_MM * 0.6, PIOGGIA_DIFFUSA_MM * 2, Pdiffusa[k])
+            * lisciaFra(PIOGGIA_DIFFUSA_MM * 0.4, PIOGGIA_DIFFUSA_MM * 1.2, P[k])
+            * lisciaFra(2.2, 3.5, T) * (1 - lisciaFra(0.5, 0.8, cumuli));
           chi[k] = 0;
           fibra[k] = alto * (1 - lisciaFra(0.3, 0.7, tau[k]));
         }
         // La prova della convezione e' puntuale -- le cime che sfondano --
         // ma l'incudine attorno e' liscia: il sistema convettivo e' tutta la
         // cima fredda e opaca entro SISTEMA_RAGGIO_KM da una prova.
-        var sistema = sfoca(massimoScorrevole(prova, w, h, Math.max(1, Math.round(SISTEMA_RAGGIO_KM / kmpx))),
-          w, h, Math.max(1, Math.round(4 / kmpx)));
+        // Allargamenti tondi (massimo su meta' raggio, media sull'altra meta'):
+        // con il solo massimo le incudini uscivano quadrate.
+        var mezzoS = Math.max(1, Math.round(SISTEMA_RAGGIO_KM * 0.5 / kmpx));
+        var tondo = function (v) {
+          var t = sfoca(massimoScorrevole(v, w, h, mezzoS), w, h, mezzoS);
+          for (var i = 0; i < n; i++) t[i] = Math.min(1, t[i] * 1.6);
+          return t;
+        };
+        var sistema = tondo(prova);
+        var sistemaDiretto = tondo(provaDiretta);
+        // Dove ci sono prove dirette la torre segue il nucleo di pioggia e
+        // fulmini, allargato di poco; altrimenti resta sotto la cima piu'
+        // fredda del sistema.
+        var torreDiretta = sfoca(massimoScorrevole(nucleoDiretto, w, h, Math.max(1, Math.round(3 / kmpx))),
+          w, h, Math.max(1, Math.round(3 / kmpx)));
         for (k = 0; k < n; k++) {
-          var profondo = Math.max(prova[k], sistema[k] * freddoOpaco[k]);
-          chi[k] = torreArea[k] * profondo;
-          incudine[k] = profondo * (1 - torreArea[k]);
+          var profondo = Math.max(prova[k], sistema[k] * freddoOpaco[k], sistemaDiretto[k] * freddoIncudine[k]);
+          profondoArr[k] = profondo;
+          var torreQui = sistemaDiretto[k] > 0.3 ? Math.max(torreDiretta[k], torreArea[k] * 0.5) : torreArea[k];
+          chi[k] = torreQui * profondo;
+          // Il cumulo congesto: una torre anche lui, senza incudine.
+          chi[k] = Math.max(chi[k], rovescio[k] * (1 - profondo));
+          incudine[k] = profondo * (1 - torreQui);
+          var nembo = nemboProva[k] * (1 - profondo);
+          nemboProva[k] = nembo;
+          if (nembo > 0) tau[k] = Math.max(tau[k], 0.95 * nembo);
+          if (profondo > 0) tau[k] = Math.max(tau[k], 0.9 * profondo);
           // L'incudine e' liscia in cima e sfilacciata sotto: niente bolle.
           fibra[k] = Math.max(fibra[k], 0.45 * incudine[k]);
           kappa[k] *= 1 - 0.85 * incudine[k];
@@ -8130,12 +8396,24 @@
           // cumulo: la stessa soglia che le da' il nome.
           var baseBassa = BASE_STRATO_KM + (BASE_CUMULO_KM - BASE_STRATO_KM) * lisciaFra(0.2, 0.6, c);
           var baseMedia = T2 - (SPESSORE_ALTOCUMULO_KM + (SPESSORE_ALTOSTRATO_KM - SPESSORE_ALTOCUMULO_KM) * t);
-          var nembo = lisciaFra(0.75, 0.95, t) * (1 - c);
+          // Senza dati di pioggia, il nembostrato si indovina dallo spessore
+          // e dalla cima liscia; con la pioggia lo decide la pioggia.
+          var nembo = conPioggia ? 0 : lisciaFra(0.75, 0.95, t) * (1 - c);
           baseMedia += (BASE_NEMBO_KM - baseMedia) * nembo;
           var baseAlta = Math.max(BASE_ALTA_MIN_KM,
             T2 - (SPESSORE_CIRRO_KM + (SPESSORE_CIRROSTRATO_KM - SPESSORE_CIRRO_KM) * t));
           baseAlta += (Math.max(BASE_ALTA_MIN_KM, T2 - SPESSORE_INCUDINE_KM) - baseAlta) * incudine[k];
           base[k] = basso * baseBassa + medio * baseMedia + alto2 * baseAlta;
+          // Il nembostrato provato dalla pioggia e' pieno dal basso fino alla
+          // cima, qualunque sia la quota della cima: e' la nube che piove.
+          base[k] += (BASE_NEMBO_KM - base[k]) * nemboProva[k];
+          // Qualunque nube che piove ha la base bassa: la pioggia che arriva
+          // al suolo esce da nubi con la base sotto i due chilometri (sopra,
+          // evapora prima di toccare terra: e' virga). Vale per le nubi
+          // spesse; sotto un velo sottile la pioggia viene da una nube bassa
+          // nascosta, e il velo resta dov'e'.
+          var piove = lisciaFra(0.5, 2, P[k]) * lisciaFra(0.45, 0.7, t);
+          base[k] += (Math.min(base[k], 1.5) - base[k]) * piove;
         }
         // Le basi a strato sono piatte: si distendono sui dintorni. Ma non
         // oltre 0,8 km dalla propria: al confine fra un cirrostrato e uno
@@ -8151,6 +8429,9 @@
           // Non sotto 0,35: sotto e' solo la sfumatura dell'allargamento, e
           // con 0,1 la torre si mangiava quasi tutta l'incudine.
           var x = lisciaFra(0.35, 0.65, chi[k]);
+          // Il congesto provato da un rovescio e' una torre per intero.
+          var congestoProvato = rovescio[k] * (1 - lisciaFra(0.2, 0.4, profondoArr[k]));
+          x = Math.max(x, lisciaFra(0.4, 0.7, congestoProvato));
           chi[k] = x;
           var T3 = cima[k], t3 = tau[k], c3 = kappa[k];
           var b = base[k];
@@ -8165,9 +8446,12 @@
           base[k] = limita(b, 0.2, Math.max(0.2, T3 - 0.25));
           densita[k] = 0.22 + 0.78 * t3;
           if (cancello[k] < 0.15 || T3 < 0.2) { classe[k] = 0; continue; }
-          if (x > 0.5) classe[k] = 4;
+          if (congestoProvato > 0.5) classe[k] = 11;
+          else if (x > 0.5) classe[k] = 4;
+          else if (nemboProva[k] > 0.5) classe[k] = 7;
           else if (T3 >= PIANO_ALTO_KM) classe[k] = incudine[k] > 0.4 ? 3 : (t3 < 0.35 ? 1 : 2);
-          else if (T3 >= PIANO_MEDIO_KM) classe[k] = c3 > 0.5 ? 5 : (t3 > 0.8 && c3 < 0.4 ? 7 : 6);
+          // Con i dati di pioggia, un velo spesso che NON piove e' altostrato.
+          else if (T3 >= PIANO_MEDIO_KM) classe[k] = c3 > 0.5 ? 5 : (!conPioggia && t3 > 0.8 && c3 < 0.4 ? 7 : 6);
           else classe[k] = c3 > 0.55 ? 8 : (t3 > 0.75 && c3 < 0.3 ? 10 : 9);
         }
         campo.base = base; campo.densita = densita; campo.kappa = kappa;
@@ -8871,6 +9155,8 @@
         "      lampi += tinta * acceso;",
         "    }",
         "",
+        // La pioggia e' piu' scura della nube: gocce grandi, che diffondono
+        // meno e soprattutto in avanti.
         "    vec3 luce = ALBEDO * (",
         "        uForzaSole * uColoreSole * luceSole * mix(0.35, 1.0, polvere)",
         "      + ambiente",
@@ -9095,6 +9381,13 @@
         if (!gl) return;
         gl.bindTexture(gl.TEXTURE_2D, this.texCampo);
         gl.pixelStorei(gl.UNPACK_ALIGNMENT, 1);
+        // Lo stato di caricamento e' condiviso con MapLibre, che per le sue
+        // immagini lascia accesa la moltiplicazione per l'alfa. Qui l'alfa non
+        // e' trasparenza ma un dato (la densita', la pioggia): moltiplicato,
+        // dove non piove azzerava i caratteri del genere di ogni nube.
+        gl.pixelStorei(gl.UNPACK_PREMULTIPLY_ALPHA_WEBGL, false);
+        gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, false);
+        gl.pixelStorei(gl.UNPACK_COLORSPACE_CONVERSION_WEBGL, gl.NONE);
         // La piramide serve per l'ingrossamento orizzontale: senza, non c'e'
         // niente di piu' grosso da prendere.
         var livelli = piramideDelCampo(tessituraDelCampo(campo), campo.larghezza, campo.altezza);
@@ -9576,10 +9869,19 @@
           scarica(STRATI.forma, misure.forma, adesso, slotScena),
           scarica(STRATI.maschera, misure.msg, adesso, slotMsg),
           scarica(STRATI.cime, misure.msg, adesso, slotMsg),
-          scaricaRdt(slotMsg)
+          scaricaRdt(slotMsg),
+          // Le prove: la pioggia (satellite e radar) e i fulmini dei dieci
+          // minuti dell'immagine (due accumuli da cinque del Lightning
+          // Imager). Nessuna e' indispensabile: se manca, la classificazione
+          // torna agli indizi e lo dice.
+          scarica(STRATI.pioggia, misure.msg, adesso, slotScena),
+          scarica(STRATI.fulmini, misure.msg, adesso, slotScena),
+          scarica(STRATI.fulmini, misure.msg, adesso, slotScena + STRATI.fulmini.slotMs),
+          scaricaRadar(slotScena, misure.forma.larghezza, misure.forma.altezza)
         ]).then(function (arrivati) {
           if (!attiva || seriale !== scenaSeriale) return;
-          componi(arrivati[0], arrivati[1], arrivati[2], arrivati[3], promessaPelle, misure, seriale);
+          componi(arrivati[0], arrivati[1], arrivati[2], arrivati[3], promessaPelle, misure, seriale,
+            { pioggia: arrivati[4], fulmini: [arrivati[5], arrivati[6]], radar: arrivati[7] });
         }).catch(function () {
           if (attiva && seriale === scenaSeriale) {
             toast("Nubi in volume: infrarosso non disponibile, resta visibile il satellite");
@@ -9682,7 +9984,7 @@
         return pixelPelle;
       }
 
-      function componi(forma, maschera, cime, celle, promessaPelle, misure, seriale) {
+      function componi(forma, maschera, cime, celle, promessaPelle, misure, seriale, prove) {
         var misuraForma = misure.forma, misuraPelle = misure.pelle, misuraMsg = misure.msg;
         if (!attiva || seriale !== scenaSeriale) return;
 
@@ -9718,6 +10020,21 @@
             toast("Nubi in volume: maschera nubi EUMETSAT assente, ricostruzione dal solo infrarosso");
           }
           campo.rdt = celle ? celle.length : null;
+          try {
+            var qMsg = misuraMsg.larghezza * misuraMsg.altezza;
+            var h40b = prove && prove.pioggia && !prove.pioggia.ultimo
+              ? pioggiaDaH40b(leggiPixel(prove.pioggia.immagine, misuraMsg).data, qMsg) : null;
+            var li = null;
+            (prove && prove.fulmini || []).forEach(function (f) {
+              // Solo gli accumuli dell'istante giusto: quello 'ultimo
+              // disponibile' puo' essere di un'altra ora.
+              if (f && !f.ultimo) li = fulminiDaLi(leggiPixel(f.immagine, misuraMsg).data, qMsg, li);
+            });
+            componiProve(campo, prove && prove.radar, h40b, li, misuraMsg);
+            campo.fonti = { radar: !!(prove && prove.radar), satellite: !!h40b, fulmini: !!li };
+          } catch (errore) {
+            campo.pioggia = null; campo.fulmini = null;
+          }
           if (celle && celle.length) {
             try { campo.celle = celleRdt(celle, campo.larghezza, campo.altezza); } catch (e) { campo.celle = null; }
           }
@@ -9954,7 +10271,12 @@
           limita(Math.floor(fy * campo.altezza), 0, campo.altezza - 1) * campo.larghezza + x] > 0.3;
         return genere + " · cima " + campo.quota[k].toFixed(1).replace(".", ",") + " km"
           + (misurata ? " (misurata, CTH)" : " (stimata)")
-          + " · base ~" + baseStimata.toFixed(1).replace(".", ",") + " km (stimata)";
+          + " · base ~" + baseStimata.toFixed(1).replace(".", ",") + " km (stimata)"
+          + (campo.pioggia && campo.pioggia[k] >= 0.2
+            ? " · pioggia " + campo.pioggia[k].toFixed(1).replace(".", ",") + " mm/h"
+              + (campo.fonti && campo.fonti.radar ? " (radar/satellite)" : " (satellite)")
+            : "")
+          + (campo.fulmini && campo.fulmini[k] > 0.3 ? " · fulmini rilevati" : "");
       }
 
       var toccoRegistrato = false;
@@ -10028,8 +10350,9 @@
         blitzRetryDelay = 2000;
         blitzConnect();
         toast(
-          "Nubi in volume · genere di ogni nube da quota (CTH), spessore ottico e tessitura; "
-          + "cumulonembi dalle celle RDT. Tocca una nube per il suo genere. Basi stimate. "
+          "Nubi in volume · genere di ogni nube da quota (CTH), spessore ottico, tessitura, "
+          + "pioggia (radar RainViewer e satellite H SAF) e fulmini (Lightning Imager, Blitzortung). "
+          + "Tocca una nube per il suo genere. Basi e forme interne stimate. "
           + "Le nubi si illuminano solo quando arriva una scarica Blitzortung."
         );
         costruisciScena();

@@ -2391,4 +2391,53 @@ console.log("nubi in volume: spessore continuo, niente grana, niente coni, nient
     "la luce del lampo non attraversa piu' la nube vera: il nucleo fitto non fa ombra");
   assert.match(frammento, /IL CANALE SOTTO LA NUBE/, "manca il canale visibile fra la base e il suolo");
 }
-console.log("nubi in volume: maschera CLM, quota CTH, opacita', generi, sabbia, suolo sotto le nubi, luce e scultura, fianchi, lampi");
+{
+  // LE PROVE: la pioggia e i fulmini decidono il genere quando ci sono.
+  const vm = require("node:vm");
+  const inizio = html.indexOf("const NubiVolumetriche = (function");
+  const corpo = html.slice(html.indexOf('"use strict";', inizio) + 13,
+    html.indexOf("      // --- il volume, attraversato dai raggi", inizio));
+  const contesto = { Math, Float32Array, Float64Array, Uint32Array, Uint8Array, Date, Object,
+    isMobile: () => false, costruisciMascheraNube: () => null, CLOUD_PRODUCTS: {}, cloudTimeSelected: 1 };
+  vm.createContext(contesto);
+  vm.runInContext("this.m = (function () {" + corpo + ";return { campoMisurato, classificaNubi, GENERI,"
+    + " componiProve, pioggiaDaH40b, fulminiDaLi, tabellaDelRadar, mmOraDaDbz, tessituraDeiGeneri };})();", contesto);
+  const m = contesto.m;
+  // Il radar: ogni colore Universal Blue torna il suo dBZ.
+  const tab = m.tabellaDelRadar();
+  const chiave = (hex) => parseInt(hex, 16) >>> 0;
+  assert.ok(Math.abs(tab[chiave("00ff00ff")] - 95) < 0.6 || tab[chiave("00ff00ff")] > 60,
+    "la tabella dei colori del radar non si legge piu'");
+  assert.ok(Math.abs(m.mmOraDaDbz(40) - 11.5) < 0.6, "la conversione dBZ -> mm/h non e' Marshall-Palmer");
+  // La pioggia satellitare: il colore di classe torna la sua intensita'.
+  const h40b = m.pioggiaDaH40b(new Uint8Array([204, 255, 204, 255, 0, 0, 255, 255, 0, 0, 0, 0]), 3);
+  assert.deepEqual(Array.from(h40b), [1, 22.5, 0], "la legenda della pioggia satellitare non si decodifica");
+
+  const W = 400, H = 200, N = W * H;
+  const scena = (cimaKm, irregolare, pioggiaMm, fulmina) => {
+    const c = { larghezza: W, altezza: H, quota: new Float32Array(N), copertura: new Float32Array(N).fill(1) };
+    for (let k = 0; k < N; k++) {
+      const caso = Math.abs(Math.sin((k % W) * 12.9898 + Math.floor(k / W) * 78.233) * 43758.5453) % 1;
+      c.quota[k] = cimaKm + (irregolare ? caso * 3 - 1.5 : 0);
+    }
+    const tutto = new Float32Array(N).fill(1);
+    m.campoMisurato(c, tutto, { quota: new Float32Array(N).fill(cimaKm), valida: tutto }, { larghezza: W, altezza: H });
+    const piove = new Float32Array(N).fill(pioggiaMm), li = new Float32Array(N);
+    if (fulmina) for (let y = 95; y < 105; y++) for (let x = 195; x < 205; x++) li[y * W + x] = 1;
+    m.componiProve(c, null, piove, li, { larghezza: W, altezza: H });
+    m.classificaNubi(c, null, null, null);
+    const mm = c.classeMisura, kc = Math.floor(mm.altezza / 2) * mm.larghezza + Math.floor(mm.larghezza / 2);
+    return { genere: m.GENERI[c.classe[kc]], base: c.base[100 * W + 200], chi: c.chi[100 * W + 200], campo: c };
+  };
+  const nembo = scena(5.5, false, 3, false);
+  assert.equal(nembo.genere, "Nembostrato", "un velo spesso e liscio che piove in modo diffuso non e' un nembostrato: " + nembo.genere);
+  assert.ok(nembo.base < 1.2, "il nembostrato non parte dal basso: base " + nembo.base.toFixed(1));
+  const asciutto = scena(5.5, false, 0, false);
+  assert.equal(asciutto.genere, "Altostrato", "lo stesso velo che non piove non e' un altostrato: " + asciutto.genere);
+  const temporale = scena(11, true, 25, true);
+  assert.equal(temporale.genere, "Cumulonembo", "cima alta, fulmini e rovescio forte non fanno un cumulonembo: " + temporale.genere);
+  assert.ok(temporale.chi > 0.5, "il cumulonembo provato non ha la torre sul nucleo di pioggia e fulmini");
+  const secco = scena(11, true, 0, false);
+  assert.notEqual(secco.genere, "Cumulonembo", "una cima alta e ribollente senza pioggia ne' fulmini e' ancora un cumulonembo");
+}
+console.log("nubi in volume: maschera CLM, quota CTH, opacita', generi, sabbia, suolo sotto le nubi, luce e scultura, fianchi, lampi, prove di pioggia e fulmini");
