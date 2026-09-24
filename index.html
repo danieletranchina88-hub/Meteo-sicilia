@@ -8109,7 +8109,9 @@
         campo.base = su(ridotto.base); campo.densita = su(ridotto.densita);
         campo.kappa = su(ridotto.kappa); campo.fibra = su(ridotto.fibra);
         campo.chi = su(ridotto.chi); campo.tau = su(ridotto.tau);
+        campo.materia = su(ridotto.materia);
         campo.classe = ridotto.classe;
+        campo.fiduciaGenere = ridotto.fiduciaGenere;
         campo.classeMisura = { larghezza: w2, altezza: h2 };
         return campo;
       }
@@ -8207,6 +8209,10 @@
         tau = sfocaPesata(tau, cancello, w, h, 2);
         kappa = sfocaPesata(kappa, cancello, w, h, Math.max(1, Math.round(4 / kmpx)));
         chi = sfoca(chi, w, h, Math.max(1, Math.round(3 / kmpx)));
+        // Il contesto spaziale separa una cella isolata da un banco esteso.
+        // La finestra resta piccola e lineare nel numero di pixel: il campo
+        // dimezzato si puo' riclassificare quando arrivano i prodotti RGB.
+        var coperturaLocale = sfoca(cancello, w, h, Math.max(1, Math.round(12 / kmpx)));
         for (k = 0; k < n; k++) {
           var T2 = cima[k];
           var basso = 1 - lisciaFra(PIANO_MEDIO_KM - 0.7, PIANO_MEDIO_KM + 0.3, T2);
@@ -8237,7 +8243,9 @@
         var propria = base;
         base = sfocaPesata(base, cancello, w, h, Math.max(1, Math.round(BASE_DISTESA_KM / kmpx)));
         for (k = 0; k < n; k++) base[k] = limita(base[k], propria[k] - 0.8, propria[k] + 0.8);
-        var densita = new Float32Array(n), classe = new Uint8Array(n);
+        var densita = new Float32Array(n), materia = new Float32Array(n);
+        var classe = new Uint8Array(n), fiduciaGenere = new Uint8Array(n);
+        var pesi = new Float32Array(GENERI.length);
         for (k = 0; k < n; k++) {
           // Il passaggio fra nucleo profondo e incudine e' continuo: una
           // soglia binaria generava un pilastro col bordo verticale.
@@ -8254,13 +8262,47 @@
           base[k] = limita(b, 0.2, Math.max(0.2, T3 - 0.25));
           densita[k] = 0.22 + 0.78 * t3;
           if (cancello[k] < 0.15 || T3 < 0.2) { classe[k] = 0; continue; }
-          if (x > 0.5) classe[k] = 4;
-          else if (T3 >= PIANO_ALTO_KM) classe[k] = incudine[k] > 0.4 ? 3 : (t3 < 0.35 ? 1 : 2);
-          else if (T3 >= PIANO_MEDIO_KM) classe[k] = c3 > 0.5 ? 5 : (t3 > 0.8 && c3 < 0.4 ? 7 : 6);
-          else classe[k] = c3 > 0.55 ? 8 : (t3 > 0.75 && c3 < 0.3 ? 10 : 9);
+          // Pesi di compatibilita', NON probabilita' calibrate: il satellite
+          // misura la sommita', non vede con certezza la base o le nubi
+          // nascoste sotto. La classe piu' sostenuta guida la descrizione;
+          // il volume interpola i caratteri, evitando bordi fra categorie.
+          var basso3 = 1 - lisciaFra(PIANO_MEDIO_KM - 0.7, PIANO_MEDIO_KM + 0.3, T3);
+          var alto3 = lisciaFra(PIANO_ALTO_KM - 1, PIANO_ALTO_KM + 0.5, T3);
+          var medio3 = Math.max(0, 1 - basso3 - alto3);
+          var banco = lisciaFra(0.45, 0.85, coperturaLocale[k]);
+          var opaco3 = lisciaFra(0.65, 0.95, t3);
+          var sottile3 = 1 - lisciaFra(0.3, 0.7, t3);
+          var convettivo = lisciaFra(0.2, 0.7, c3);
+          var fog = campo.basseValide && campo.basseAcqua
+            ? campo.basseValide[k] * campo.basseAcqua[k] * (1 - (giorno ? giorno[k] : 0)) : 0;
+          pesi[1] = alto3 * (0.15 + 1.6 * sottile3 + 0.5 * fibra[k]) * (1 - 0.8 * incudine[k]);
+          pesi[2] = alto3 * (0.3 + 1.25 * (1 - sottile3)) * (1 - 0.8 * incudine[k]);
+          pesi[3] = alto3 * incudine[k] * 4.5 * (1 - x) * (1 - x);
+          pesi[4] = alto3 * x * 3.5;
+          pesi[5] = medio3 * (0.2 + 1.5 * convettivo) * (1 - 0.7 * opaco3 * banco);
+          pesi[6] = medio3 * (0.45 + 0.9 * (1 - convettivo)) * (1 - 0.65 * opaco3 * banco);
+          pesi[7] = medio3 * opaco3 * banco * (1 - 0.75 * convettivo) * 2.5;
+          pesi[8] = basso3 * convettivo * (1.2 + 0.55 * (1 - banco));
+          pesi[9] = basso3 * (0.6 + 0.6 * banco) * (1 - 0.55 * convettivo) * (1 - 0.6 * fog);
+          pesi[10] = basso3 * (0.1 + 1.8 * fog) * (1 - 0.75 * convettivo);
+          var somma = 0, migliore = 0, seconda = 0, indice = 0;
+          for (var j = 1; j < pesi.length; j++) {
+            var p = pesi[j]; somma += p;
+            if (p > migliore) { seconda = migliore; migliore = p; indice = j; }
+            else if (p > seconda) seconda = p;
+          }
+          classe[k] = indice;
+          // Ambiguita' dichiarata nei tocchi, specialmente di notte.
+          fiduciaGenere[k] = Math.round(255 * limita((migliore - seconda) / Math.max(0.01, somma), 0, 1));
+          // La massa interna distingue un altostrato/nembostrato pieno da
+          // un velo fibroso: sagoma sempre satellitare, niente fori di rumore
+          // scolpiti nel mezzo di un banco otticamente spesso.
+          materia[k] = limita((0.2 + 0.55 * t3 + 0.25 * banco)
+            * (1 - 0.75 * sottile3 * alto3) * (1 - 0.25 * convettivo), 0, 1);
         }
         campo.base = base; campo.densita = densita; campo.kappa = kappa;
-        campo.fibra = fibra; campo.chi = chi; campo.classe = classe; campo.tau = tau;
+        campo.fibra = fibra; campo.chi = chi; campo.classe = classe;
+        campo.fiduciaGenere = fiduciaGenere; campo.materia = materia; campo.tau = tau;
         return campo;
       }
 
@@ -8366,8 +8408,8 @@
         return dati;
       }
 
-      // Il carattere del genere, per lo shader: R quanto e' a cumulo, G quanto
-      // e' fibroso (cirro), B quanto e' torre convettiva.
+      // R convettivo, G fibroso, B nucleo profondo, A massa interna del banco.
+      // Una sola texture RGBA8 in piu' del campo, senza campionamenti aggiunti.
       function tessituraDeiGeneri(campo) {
         var quanti = campo.larghezza * campo.altezza;
         var dati = new Uint8Array(quanti * 4);
@@ -8375,7 +8417,7 @@
           dati[k * 4] = Math.round(limita(campo.kappa ? campo.kappa[k] : 0.5, 0, 1) * 255);
           dati[k * 4 + 1] = Math.round(limita(campo.fibra ? campo.fibra[k] : 0, 0, 1) * 255);
           dati[k * 4 + 2] = Math.round(limita(campo.chi ? campo.chi[k] : 0, 0, 1) * 255);
-          dati[k * 4 + 3] = 255;
+          dati[k * 4 + 3] = Math.round(limita(campo.materia ? campo.materia[k] : 0.5, 0, 1) * 255);
         }
         return dati;
       }
@@ -8667,7 +8709,7 @@
         "  copertura = fine.g;",
         "  if (max(copertura, liscia.g) < 0.012) return 0.0;",
         "  vec4 genere = textureLod(uGeneri, uv, lodLiscio);",
-        "  float fibra = genere.g, torre = genere.b;",
+        "  float fibra = genere.g, torre = genere.b, materia = genere.a;",
         "  float cumulo = max(genere.r, torre);",
         // Solo le nubi con tessitura convettiva osservata hanno grandi lobi.
         // Il minimo di 0,55 scolpiva anche nembostrati e strati come colline.
@@ -8677,7 +8719,9 @@
         // La base scende soltanto sotto il nucleo convettivo riconosciuto;
         // il raccordo progressivo non produce un cilindro o una parete.
         "  baseKm = mix(baseKm, min(1.0, baseKm), 0.9 * smoothstep(0.08, 0.85, torre));",
-        "  gDensita = liscia.a;",
+        // Uno strato spesso e continuo deve estinguere luce anche al centro:
+        // il rumore ne scava solo i bordi. Il cirro resta attraversabile.
+        "  gDensita = liscia.a * mix(0.8, 1.35, materia);",
         "  if (cimaKm < 0.24) return 0.0;",
         "  float cosLat = cosLatDa(p.y);",
         "  altKm = p.z * uCircKm * cosLat / uEsagerazione;",
@@ -8716,7 +8760,7 @@
         "  float forma = clamp(rimappa(sf.r, fbm - 1.0, 1.0, 0.0, 1.0), 0.0, 1.0);",
         // Gli strati sono lisci: la forma quasi non li scolpisce.
         "  float liscia2 = sf.r;",
-        "  forma = mix(0.8 + 0.2 * forma, forma, bolla);",
+        "  forma = mix(mix(0.76, 0.93, materia) + mix(0.24, 0.07, materia) * forma, forma, bolla);",
         "  forma = mix(forma, 0.55 + 0.45 * liscia2, fibra);",
         // Se il satellite vede cielo fra i cumuli, la forma ne segue i vuoti.
         // In una copertura compatta non si scavano buchi inventati; una
@@ -10109,7 +10153,11 @@
         if (!campo.classe[kc] || campo.copertura[k] < 0.05) return "Nessuna nube qui (maschera nubi EUMETSAT)";
         var misurata = campo.conQuotaMisurata && campo.conQuotaMisurata[
           limita(Math.floor(fy * campo.altezza), 0, campo.altezza - 1) * campo.larghezza + x] > 0.3;
-        return genere + " · cima " + campo.quota[k].toFixed(1).replace(".", ",") + " km"
+        // Il genere e' un'inferenza morfologica, non un'etichetta WMO
+        // osservata direttamente dai canali: esplicitare l'ambiguita'.
+        var evidenza = campo.fiduciaGenere && campo.fiduciaGenere[kc] < 20
+          ? "Tipo compatibile con " : "Tipo probabile: ";
+        return evidenza + genere + " · cima " + campo.quota[k].toFixed(1).replace(".", ",") + " km"
           + (misurata ? " (misurata, CTH)" : " (stimata)")
           + " · base ~" + baseStimata.toFixed(1).replace(".", ",") + " km (stimata)";
       }
