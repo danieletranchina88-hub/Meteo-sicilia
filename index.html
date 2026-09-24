@@ -7141,7 +7141,10 @@
         forma:    { layer: "mtg_fd:ir105_hrfi",    slotMs: 10 * 60 * 1000, ritardoMin: 22 },
         pelle:    { layer: "mtg_fd:rgb_geocolour", slotMs: 10 * 60 * 1000, ritardoMin: 22 },
         maschera: { layer: "msg_fes:clm",          slotMs: 15 * 60 * 1000, ritardoMin: 20 },
-        cime:     { layer: "msg_fes:cth",          slotMs: 15 * 60 * 1000, ritardoMin: 20 }
+        cime:     { layer: "msg_fes:cth",          slotMs: 15 * 60 * 1000, ritardoMin: 20 },
+        tipo:     { layer: "mtg_fd:rgb_cloudtype", slotMs: 10 * 60 * 1000, ritardoMin: 22 },
+        fase:     { layer: "mtg_fd:rgb_cloudphase",slotMs: 10 * 60 * 1000, ritardoMin: 30 },
+        basse:    { layer: "mtg_fd:rgb_fog",       slotMs: 10 * 60 * 1000, ritardoMin: 22 }
       };
 
       // La scala dei colori del prodotto Cloud Top Height, letta dalla sua
@@ -8011,6 +8014,62 @@
         return ricampiona(fuori, misuraPelle.larghezza, misuraPelle.altezza, campo.larghezza, campo.altezza);
       }
 
+      // Gli RGB scientifici sono compositi di canali, NON etichette WMO o
+      // altezze numeriche. Il tipo combina NIR1.38 (alto/sottile), VIS0.64
+      // (spessore) e NIR1.61 (fase); la fase usa NIR1.61, NIR2.25 e VIS0.64.
+      // Fog / Low Clouds usa invece differenze IR notturne. Si estraggono
+      // soltanto indizi deboli da immagini dello STESSO slot: la maschera CLM
+      // e la quota CTH restano l'autorita' su presenza e sommita'.
+      function evidenzaDagliRgb(tipo, fase, basse, misura) {
+        var n = misura.larghezza * misura.altezza, fuori = { larghezza: misura.larghezza,
+          altezza: misura.altezza };
+        var pixel = function (v) {
+          return v && !v.ultimo ? leggiPixel(v.immagine, misura).data : null;
+        };
+        var t = pixel(tipo), f = pixel(fase), b = pixel(basse);
+        if (!t && !f && !b) return null;
+        if (t) {
+          fuori.tipoValido = new Float32Array(n);
+          fuori.tipoSpesso = new Float32Array(n);
+          fuori.tipoCirro = new Float32Array(n);
+          for (var k = 0; k < n; k++) {
+            var i = k * 4;
+            if (t[i + 3] < 128) continue;
+            var r = t[i] / 255, g = t[i + 1] / 255;
+            fuori.tipoValido[k] = 1;
+            fuori.tipoSpesso[k] = lisciaFra(0.16, 0.8, g);
+            fuori.tipoCirro[k] = lisciaFra(0.04, 0.32, r - g);
+          }
+        }
+        if (f) {
+          fuori.faseValida = new Float32Array(n);
+          fuori.faseGhiaccio = new Float32Array(n);
+          for (k = 0; k < n; k++) {
+            i = k * 4;
+            if (f[i + 3] < 128) continue;
+            fuori.faseValida[k] = 1;
+            // Ghiaccio blu, acqua rosa/bianca. Su neve o veli sottili il
+            // colore e' ambiguo: una differenza piccola non prova nulla.
+            fuori.faseGhiaccio[k] = lisciaFra(0.06, 0.28,
+              (f[i + 2] - Math.max(f[i], f[i + 1])) / 255);
+          }
+        }
+        if (b) {
+          fuori.basseValide = new Float32Array(n);
+          fuori.basseAcqua = new Float32Array(n);
+          for (k = 0; k < n; k++) {
+            i = k * 4;
+            if (b[i + 3] < 128) continue;
+            fuori.basseValide[k] = 1;
+            // Aqua/verde nelle differenze IR notturne: indizio di strato
+            // basso d'acqua solo dove CLM e CTH lo confermano.
+            fuori.basseAcqua[k] = lisciaFra(0.07, 0.27,
+              (Math.min(b[i + 1], b[i + 2]) - b[i]) / 255);
+          }
+        }
+        return fuori;
+      }
+
       // I caratteri del genere sono lisci per natura -- piani, spessori,
       // tessitura su sei chilometri, basi distese su dieci -- e si calcolano
       // su una griglia a meta' risoluzione: costa un quarto. Le forme fini
@@ -8035,7 +8094,17 @@
           cancello: giu(campo.cancello || campo.copertura), copertura: giu(campo.copertura),
           opacita: giu(campo.opacita), celle: giu(campo.celle)
         };
-        classificaGriglia(ridotto, giu(luce), giu(giorno), giu(luminanza));
+        var diagnostica = campo.evidenzaSat;
+        if (diagnostica) {
+          ["tipoValido", "tipoSpesso", "tipoCirro", "faseValida", "faseGhiaccio",
+            "basseValide", "basseAcqua"].forEach(function (nome) {
+            if (diagnostica[nome]) ridotto[nome] = ricampiona(diagnostica[nome],
+              diagnostica.larghezza, diagnostica.altezza, w2, h2);
+          });
+        }
+        var giornoRidotto = giorno ? giu(giorno)
+          : (diagnostica ? luceDelGiorno(ridotto, campo.epoca) : null);
+        classificaGriglia(ridotto, giu(luce), giornoRidotto, giu(luminanza));
         var su = function (v) { return ricampiona(v, w2, h2, w, h); };
         campo.base = su(ridotto.base); campo.densita = su(ridotto.densita);
         campo.kappa = su(ridotto.kappa); campo.fibra = su(ridotto.fibra);
@@ -8075,8 +8144,20 @@
           var tauBassi = SPESSORE_OTTICO_NOTTE + (visibile - SPESSORE_OTTICO_NOTTE) * g;
           var tauAlti = opaco + (0.5 * opaco + 0.5 * visibile - opaco) * g;
           tau[k] = tauBassi + (tauAlti - tauBassi) * alto;
+          if (campo.tipoValido) {
+            // Il verde VIS0.64 del Cloud Type e' una misura qualitativa dello
+            // spessore ottico. Conta solo di giorno, dentro CLM, e pesa meno
+            // della quota e della copertura gia' ottenute dal satellite.
+            var affidabilitaTipo = campo.tipoValido[k] * g * cancello[k];
+            tau[k] += (campo.tipoSpesso[k] - tau[k]) * 0.42 * affidabilitaTipo;
+          }
           var cumuli = lisciaFra(0.3, 1.1, devIr[k]);
           if (devLuce) cumuli = Math.max(cumuli, g * lisciaFra(0.03, 0.09, devLuce[k]));
+          if (campo.basseValide && T < PIANO_MEDIO_KM + 0.5) {
+            // Una chiazza aqua osservata di notte e' piu' compatibile con
+            // strato/nebbia che con una sequenza di cupole convettive.
+            cumuli *= 1 - 0.35 * campo.basseAcqua[k] * campo.basseValide[k] * (1 - g);
+          }
           kappa[k] = cumuli;
           // Convezione profonda: alta, fredda, opaca E con la cima ribollente
           // (le cime che sfondano rendono irregolare l'infrarosso). Senza
@@ -8086,13 +8167,28 @@
           var rilievoIr = Math.max(0, cimaIr[k] - ambienteIr[k]);
           var provaTermica = lisciaFra(0.4, 1.3, rilievoIr) * lisciaFra(0.25, 0.7, cumuli);
           var provaRdt = rdt ? rdt[k] * lisciaFra(0.15, 0.75, rilievoIr) : 0;
+          // La parte spessa del Cloud Type rafforza una cima gia' convettiva;
+          // non basta mai da sola a creare una torre nell'incudine o nel fronte.
+          var sostegnoTipo = campo.tipoValido
+            ? 1 + 0.15 * (campo.tipoSpesso[k] - 0.5) * campo.tipoValido[k] * g : 1;
           prova[k] = alto * lisciaFra(PROFONDA_MIN_KM, PROFONDA_MIN_KM + 1.5, T)
             * lisciaFra(0.62, 0.86, tau[k]) * Math.max(provaTermica, provaRdt)
-            * lisciaFra(0.25, 0.7, cancello[k]);
+            * lisciaFra(0.25, 0.7, cancello[k]) * sostegnoTipo;
           freddoOpaco[k] = alto * lisciaFra(PROFONDA_MIN_KM - 1, PROFONDA_MIN_KM + 0.5, T)
             * lisciaFra(0.6, 0.8, tau[k]);
           chi[k] = 0;
           fibra[k] = alto * (1 - lisciaFra(0.3, 0.7, tau[k]));
+          if (campo.tipoValido && campo.tipoCirro) {
+            fibra[k] = Math.max(fibra[k], alto * campo.tipoCirro[k]
+              * campo.tipoValido[k] * g * (1 - lisciaFra(0.65, 0.95, tau[k])));
+          }
+          if (campo.faseValida && campo.faseGhiaccio) {
+            // La fase osservata riguarda la SOMMITA', non l'intera colonna.
+            // Raffina il velo alto, senza convertire un cumulonembo ghiacciato
+            // in cirro o trarre un tipo WMO dal solo colore.
+            fibra[k] = Math.max(fibra[k], 0.55 * alto * campo.faseGhiaccio[k]
+              * campo.faseValida[k] * g * (1 - lisciaFra(0.55, 0.9, tau[k])));
+          }
         }
         // Il nucleo segue il rilievo misurato, senza allargare un singolo
         // pixel in un cilindro. Il manto freddo vicino a quel nucleo e'
@@ -8120,6 +8216,12 @@
           // La base sale al livello di condensazione appena la nube e' a
           // cumulo: la stessa soglia che le da' il nome.
           var baseBassa = BASE_STRATO_KM + (BASE_CUMULO_KM - BASE_STRATO_KM) * lisciaFra(0.2, 0.6, c);
+          if (campo.basseValide) {
+            // L'aqua del prodotto notturno favorisce una base stratiforme
+            // bassa, soltanto dove il Cloud Top Height e' gia' basso.
+            baseBassa -= 0.12 * campo.basseValide[k] * campo.basseAcqua[k]
+              * (1 - (giorno ? giorno[k] : 0)) * (1 - lisciaFra(0.2, 0.6, c));
+          }
           var baseMedia = T2 - (SPESSORE_ALTOCUMULO_KM + (SPESSORE_ALTOSTRATO_KM - SPESSORE_ALTOCUMULO_KM) * t);
           var nembo = lisciaFra(0.75, 0.95, t) * (1 - c);
           baseMedia += (BASE_NEMBO_KM - baseMedia) * nembo;
@@ -9439,7 +9541,7 @@
       }
 
       // --- caricamento -------------------------------------------------------
-      function scarica(strato, misura, adesso, epocaRichiesta) {
+      function scarica(strato, misura, adesso, epocaRichiesta, soloSlot) {
         var epoca = Number(epocaRichiesta);
         var slot = Number.isFinite(epoca) && epoca > 0
           ? {
@@ -9451,12 +9553,26 @@
         return new Promise(function (risolvi) {
           var senzaTempo = false;
           var immagine = new Image();
+          var conclusa = false;
+          var timer = soloSlot ? setTimeout(function () {
+            if (conclusa) return;
+            conclusa = true;
+            immagine.onload = immagine.onerror = null;
+            immagine.src = "data:,";
+            risolvi(null);
+          }, 8000) : 0;
+          var termina = function (valore) {
+            if (conclusa) return;
+            conclusa = true;
+            if (timer) clearTimeout(timer);
+            risolvi(valore);
+          };
           immagine.crossOrigin = "anonymous";
           immagine.onload = function () {
-            risolvi({ immagine: immagine, slot: slot, ultimo: senzaTempo });
+            termina({ immagine: immagine, slot: slot, ultimo: senzaTempo });
           };
           immagine.onerror = function () {
-            if (!senzaTempo) {
+            if (!senzaTempo && !soloSlot) {
               // Se lo slot chiesto non c'e' ancora, EUMETView risponde
               // all'ultima immagine disponibile quando il tempo non viene
               // specificato: e' la stessa rete di sicurezza di radar.html.
@@ -9464,7 +9580,7 @@
               immagine.src = indirizzo(strato, misura, slot, true);
               return;
             }
-            risolvi(null);
+            termina(null);
           };
           immagine.src = indirizzo(strato, misura, slot, false);
         });
@@ -9534,6 +9650,19 @@
         map.triggerRepaint();
       }
 
+      function rilasciaOtticaMorfologica(campo) {
+        // Le tre immagini ottiche a piena risoluzione servono solo finche'
+        // i due aggiornamenti opzionali (RDT e RGB) possono riclassificare.
+        if (campo.rdtTerminato && campo.diagnosticaTerminata) campo.otticaMorfologia = null;
+      }
+
+      function ripubblicaMorfologia(campo) {
+        var ottica = campo.otticaMorfologia;
+        classificaNubi(campo, ottica && ottica.luce, ottica && ottica.giorno,
+          ottica && ottica.luminanza);
+        volume.pubblicaCampo(campo);
+      }
+
       function costruisciScena() {
         var adesso = Date.now();
         // Se la barra e' nel passato, il volume nasce dallo stesso slot che
@@ -9547,16 +9676,26 @@
         var misure = {
           forma: misuraRaster(LARGHEZZA_FORMA),
           pelle: misuraRaster(LARGHEZZA_PELLE),
-          msg: misuraRaster(LARGHEZZA_MISURA)
+          msg: misuraRaster(LARGHEZZA_MISURA),
+          diagnosi: misuraRaster(640)
         };
         // Lo slot MSG che contiene quello MTG: MSG scandisce ogni quindici
         // minuti dal basso verso l'alto e passa sull'Europa alla fine della
         // scansione, cioe' pochi minuti dopo l'orario dello slot -- lo stesso
         // momento in cui MTG, dieci minuti dopo, la osserva.
         var slotMsg = Math.floor(slotScena / STRATI.maschera.slotMs) * STRATI.maschera.slotMs;
-        // Le richieste partono insieme. RDT e GeoColour affinano la scena,
-        // ma non bloccano il primo fotogramma satellitare: RDT puo' impiegare
-        // due timeout da nove secondi anche quando non ci sono celle.
+        // Cloud Type/Phase funzionano col sole, Fog/Low Clouds di notte.
+        // Le RGB si usano solo per lo slot richiesto: il ripiego WMS all'ultimo
+        // fotogramma disponibile potrebbe essere di un altro temporale.
+        var diGiorno = posizioneSole(slotScena, 45, 13).elevazione > -0.04;
+        var diagnosi = misure.diagnosi;
+        var promessaDiagnostica = Promise.all(diGiorno ? [
+          scarica(STRATI.tipo, diagnosi, adesso, slotScena, true),
+          scarica(STRATI.fase, diagnosi, adesso, slotScena, true), Promise.resolve(null)
+        ] : [Promise.resolve(null), Promise.resolve(null),
+          scarica(STRATI.basse, diagnosi, adesso, slotScena, true)]);
+        // Tutti gli affinamenti restano asincroni: il primo fotogramma
+        // satellitare aspetta solo IR, maschera e quota della cima.
         var promessaPelle = scarica(STRATI.pelle, misure.pelle, adesso, slotScena);
         var promessaCelle = scaricaRdt(slotMsg);
         Promise.all([
@@ -9569,21 +9708,28 @@
           if (!campo) return;
           promessaCelle.then(function (celle) {
             campo.rdtTerminato = true;
-            if (!attiva || seriale !== scenaSeriale || !celle || !celle.length) {
-              campo.otticaMorfologia = null;
-              return;
+            if (attiva && seriale === scenaSeriale && celle && celle.length) {
+              try {
+                campo.celle = celleRdt(celle, campo.larghezza, campo.altezza);
+                campo.rdt = celle.length;
+                ripubblicaMorfologia(campo);
+              } catch (errore) {
+                // Il volume satellitare e' gia' pronto anche senza RDT.
+              }
             }
-            try {
-              campo.celle = celleRdt(celle, campo.larghezza, campo.altezza);
-              campo.rdt = celle.length;
-              var ottica = campo.otticaMorfologia;
-              classificaNubi(campo, ottica && ottica.luce, ottica && ottica.giorno,
-                ottica && ottica.luminanza);
-              volume.pubblicaCampo(campo);
-            } catch (errore) {
-              // Il volume satellitare e' gia' pronto anche senza RDT.
+            rilasciaOtticaMorfologica(campo);
+          });
+          promessaDiagnostica.then(function (immagini) {
+            campo.diagnosticaTerminata = true;
+            if (attiva && seriale === scenaSeriale) {
+              try {
+                campo.evidenzaSat = evidenzaDagliRgb(immagini[0], immagini[1], immagini[2], diagnosi);
+                if (campo.evidenzaSat) ripubblicaMorfologia(campo);
+              } catch (errore) {
+                // Le RGB sono opzionali, IR e CTH restano disponibili.
+              }
             }
-            campo.otticaMorfologia = null;
+            rilasciaOtticaMorfologica(campo);
           });
         }).catch(function () {
           if (attiva && seriale === scenaSeriale) {
@@ -9728,6 +9874,7 @@
           }
           // Il genere, prima con le sole misure infrarosse; con GeoColour, di
           // giorno, si rifa' con lo spessore ottico e la tessitura visibile.
+          campo.epoca = forma.slot.epoca;
           classificaNubi(campo, null, null, null);
           // Questo e' il primo frame vero: viene caricato nella GPU prima di
           // qualunque lavoro opzionale. Cosi' una canvas GeoColour lenta o a
@@ -9771,7 +9918,7 @@
               var giorno = luceDelGiorno(campo, pelle.slot.epoca);
               componiCopertura(campo, luce, giorno);
               var luminanza = luminanzaDellaNube(pixelPelle, misuraPelle, campo);
-              if (!campo.rdtTerminato) {
+              if (!campo.rdtTerminato || !campo.diagnosticaTerminata) {
                 campo.otticaMorfologia = { luce: luce, giorno: giorno, luminanza: luminanza };
               }
               classificaNubi(campo, luce, giorno, luminanza);
