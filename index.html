@@ -8201,6 +8201,10 @@
           var rilievoIr = Math.max(0, cimaIr[k] - ambienteIr[k]);
           var provaTermica = lisciaFra(0.4, 1.3, rilievoIr) * lisciaFra(0.25, 0.7, cumuli);
           var provaRdt = rdt ? rdt[k] * lisciaFra(0.15, 0.75, rilievoIr) : 0;
+          // RDT individua una cella convettiva; un nucleo radar intenso
+          // nello stesso punto ne conferma la colonna anche se la sommita'
+          // infrarossa e' ormai un altopiano liscio sotto l'incudine.
+          var provaRdtRadar = rdt && rovescio ? rdt[k] * rovescio[k] : 0;
           // Radar forte + scarica osservata nello STESSO slot distinguono
           // un temporale sotto l'incudine da un fronte alto freddo. L'uno
           // senza l'altro non puo' creare dal nulla una colonna convettiva.
@@ -8211,7 +8215,8 @@
           var sostegnoTipo = campo.tipoValido
             ? 1 + 0.15 * (campo.tipoSpesso[k] - 0.5) * campo.tipoValido[k] * g : 1;
           var nucleoTermico = lisciaFra(PROFONDA_MIN_KM, PROFONDA_MIN_KM + 1.5, T)
-            * lisciaFra(0.62, 0.86, tau[k]) * Math.max(provaTermica, provaRdt);
+            * lisciaFra(0.62, 0.86, tau[k])
+            * Math.max(provaTermica, provaRdt, provaRdtRadar);
           var nucleoElettrico = lisciaFra(5.5, 8.5, T)
             * lisciaFra(0.46, 0.76, tau[k]) * provaMultisensore;
           prova[k] = alto * Math.max(nucleoTermico, nucleoElettrico)
@@ -8828,12 +8833,13 @@
         "  float stratocumulo = granuli * (1.0 - smoothstep(2.7, 4.1, cimaKm));",
         "  float cupole = smoothstep(0.25, 0.7, cumulo) * (1.0 - granuli)",
         "    * (1.0 - veloLiscio) * (1.0 - incudine) * (1.0 - fibra);",
+        "  float profiloTorre = smoothstep(0.08, 0.5, torre);",
         "  float bolla = max(max(cupole, 0.78 * altocumulo),",
-        "    max(0.55 * stratocumulo, torre)) * (1.0 - 0.82 * incudine);",
+        "    max(0.55 * stratocumulo, profiloTorre)) * (1.0 - 0.82 * incudine);",
         "  float baseKm = min(liscia.b * uScalaKm, cimaKm - 0.2);",
         // La base scende soltanto sotto il nucleo convettivo riconosciuto;
         // il raccordo progressivo non produce un cilindro o una parete.
-        "  baseKm = mix(baseKm, min(1.0, baseKm), 0.9 * smoothstep(0.08, 0.85, torre));",
+        "  baseKm = mix(baseKm, min(1.0, baseKm), 0.96 * profiloTorre);",
         // Uno strato spesso e continuo deve estinguere luce anche al centro:
         // il rumore ne scava solo i bordi. Il cirro resta attraversabile.
         "  gDensita = liscia.a * mix(0.8, 1.35, materia);",
@@ -8873,6 +8879,14 @@
         // orizzontale per il cirro, in direzione ovest-est (il verso
         // dominante del vento in quota: una scelta dichiarata).
         "  vec3 q = vec3(p.xy * uFormaPasso.x, altKm * uFormaPasso.y) + vec3(uSemenza * 0.013, 0.0, 0.0);",
+        // La texture si ripete ogni 16 km. Una deformazione continua a scale
+        // geografiche non commensurabili cambia ogni ripetizione, senza
+        // giunture o forme incollate uguali in regioni diverse.
+        "  vec2 varia = vec2(sin(q.x * 1.13 + q.y * 0.71 + q.z * 0.29),",
+        "    sin(q.y * 1.37 - q.x * 0.63 + q.z * 0.19));",
+        "  q.xy += 0.34 * varia + 0.15 * vec2(sin(q.y * 2.09 - q.x * 0.47),",
+        "    sin(q.x * 1.73 + q.y * 0.31));",
+        "  q.z += 0.16 * sin(q.x * 0.83 + q.y * 0.53);",
         // Stirata solo per i cirri veri: l'incudine, fibrosa a meta', con
         // le bolle allungate e i buchi in mezzo si copriva di trattini scuri.
         // Un cirro isolato resta filamentoso; il cirrostrato, pur essendo
@@ -8884,6 +8898,14 @@
         "  q.xy *= 1.0 + 0.8 * altocumulo;",
         "  float lodF = max(0.0, lodGrezzo + log2(uTexelCampo * uFormaPasso.x * uLatoForma));",
         "  vec4 sf = textureLod(uForma, q, lodF);",
+        // Solo dentro i nuclei temporaleschi una seconda lettura con scale
+        // indipendenti spezza anche la ripetizione delle grandi cupole.
+        // Non si raddoppia il costo dei banchi estesi o dei cirri.
+        "  if (profiloTorre > 0.2) {",
+        "    vec4 sfAltra = textureLod(uForma, q * vec3(0.73, 1.19, 0.81)",
+        "      + vec3(0.31, 0.63, 0.17), lodF);",
+        "    sf = mix(sf, sfAltra, 0.31 * profiloTorre);",
+        "  }",
         "  float fbm = sf.g * 0.625 + sf.b * 0.25 + sf.a * 0.125;",
         "  float forma = clamp(rimappa(sf.r, fbm - 1.0, 1.0, 0.0, 1.0), 0.0, 1.0);",
         // La texture 3D contiene Perlin-Worley sf.r e tre scale di Worley:
@@ -8897,15 +8919,19 @@
         "    0.62 * sf.b + 0.38 * sf.a), smoothstep(0.12, 0.7, h));",
         "  float formaCu = mix(0.9, smoothstep(0.22, 0.8,",
         "    0.75 * sf.g + 0.25 * sf.b), smoothstep(0.12, 0.84, h));",
-        "  float formaTorre = mix(0.93, smoothstep(0.2, 0.78,",
-        "    0.7 * sf.g + 0.3 * sf.b), smoothstep(0.36, 0.93, h));",
+        // Il Cb non e' una colonna con la stessa sezione a ogni quota:
+        // collo piu' stretto, rigonfiamenti a cavolfiore e cima irregolare
+        // che si salda al tetto dell'incudine osservata dal satellite.
+        "  float rigonfio = 0.07 * sin(altKm * 2.3 + sf.b * 4.0 + uSemenza);",
+        "  float formaTorre = mix(0.91, 0.13 + 0.87 * smoothstep(0.2, 0.76,",
+        "    0.72 * sf.g + 0.28 * sf.b + rigonfio), smoothstep(0.14, 0.65, h));",
         "  forma = mix(formaStrato, formaSc, stratocumulo);",
         "  forma = mix(forma, formaAc, altocumulo);",
         "  forma = mix(forma, formaCu, cupole);",
         "  forma = mix(forma, 0.55 + 0.45 * sf.r, fibra * (1.0 - veloLiscio));",
         "  forma = mix(forma, 0.86 + 0.14 * sf.r, 0.85 * veloLiscio);",
-        "  forma = mix(forma, 0.84 + 0.16 * sf.r, 0.88 * incudine * (1.0 - torre));",
-        "  forma = mix(forma, formaTorre, torre);",
+        "  forma = mix(forma, 0.78 + 0.22 * sf.r, 0.92 * incudine * (1.0 - profiloTorre));",
+        "  forma = mix(forma, formaTorre, profiloTorre);",
         // Se il satellite vede cielo fra i cumuli, la forma ne segue i vuoti.
         // In una copertura compatta non si scavano buchi inventati; una
         // incudine o un nembostrato conserva la propria impronta osservata.
@@ -8918,11 +8944,15 @@
         // stacca dalle vicine. Prima la copertura era la stessa a ogni quota:
         // cime piatte, un lenzuolo con le bolle sopra.
         "  float copQuota = cop * mix(1.0, 1.0 - 0.72 * smoothstep(0.15, 1.0, h), bolla);",
+        "  float collo = smoothstep(0.1, 0.35, h) * (1.0 - smoothstep(0.6, 0.83, h));",
+        "  copQuota *= 1.0 - 0.36 * profiloTorre * collo;",
         "  float d = clamp(rimappa(forma, 1.0 - copQuota, 1.0, 0.0, 1.0), 0.0, 1.0) * cop;",
         "  if (d <= 0.002 || leggera) return d;",
         // L'erosione fine. Da lontano il dettaglio non si vede e si spegne:
         // letto sotto il pixel diventerebbe solo grana.
         "  vec3 qd = vec3(p.xy * uDettaglioPasso.x, altKm * uDettaglioPasso.y);",
+        "  qd.xy += 0.35 * varia + 0.2 * vec2(sin(qd.y * 0.93 + q.x * 0.31),",
+        "    sin(qd.x * 0.77 - q.y * 0.27));",
         "  float lodD = max(0.0, lodGrezzo + log2(uTexelCampo * uDettaglioPasso.x * uLatoDettaglio));",
         "  vec3 sd = textureLod(uDettaglio, qd, lodD).rgb;",
         "  float dfbm = sd.r * 0.625 + sd.g * 0.25 + sd.b * 0.125;",

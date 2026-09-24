@@ -2271,6 +2271,29 @@ console.log("nubi in volume: spessore continuo, niente grana, niente coni, nient
     "una cella RDT con cima uniforme inventa una torre: " + rdtSenzaPicco.genere);
   assert.ok(rdtSenzaPicco.base > 5,
     "la nube alta senza nucleo convettivo scende artificiosamente al suolo");
+  {
+    // Una cima fredda gia' spianata nell'IR puo' ancora avere una colonna
+    // osservata con DUE indizi indipendenti: cella RDT e rovescio radar.
+    const W = 512, H = 200, N = W * H, cx = 256, cy = 100;
+    const nucleo = (conRdt) => {
+      const c = { larghezza: W, altezza: H, quota: new Float32Array(N).fill(12),
+        quotaIr: new Float32Array(N).fill(12), copertura: new Float32Array(N).fill(1),
+        cancello: new Float32Array(N).fill(1), opacita: new Float32Array(N).fill(1),
+        celle: new Float32Array(N), ecoRadar: new Float32Array(N) };
+      for (let y = cy - 4; y <= cy + 4; y++) for (let x = cx - 4; x <= cx + 4; x++) {
+        if (Math.hypot(x - cx, y - cy) > 4) continue;
+        const k = y * W + x;
+        c.celle[k] = conRdt ? 1 : 0;
+        c.ecoRadar[k] = 54;
+      }
+      m.classificaGriglia(c, null, new Float32Array(N), null);
+      return c.chi[cy * W + cx];
+    };
+    assert.ok(nucleo(true) > 0.2,
+      "una cella RDT con rovescio radar confermato resta un blocco alto senza torre");
+    assert.ok(nucleo(false) < 0.01,
+      "un rovescio radar isolato inventa un cumulonembo sotto un fronte liscio");
+  }
   // CONVEZIONE PROFONDA senza RDT: un sistema alto, freddo, opaco e con la
   // cima ribollente e un rilievo termico coerente ha un nucleo profondo e
   // l'incudine attorno. Un fronte altrettanto alto ma liscio no.
@@ -2389,8 +2412,16 @@ console.log("nubi in volume: spessore continuo, niente grana, niente coni, nient
     "l'altocumulo non usa elementi piu' piccoli dello stratocumulo");
   assert.match(frammento, /forma = mix\(forma, formaCu, cupole\);/,
     "il cumulo perde le cupole isolate");
-  assert.match(frammento, /forma = mix\(forma, formaTorre, torre\);/,
+  assert.match(frammento, /forma = mix\(forma, formaTorre, profiloTorre\);/,
     "il nucleo del cumulonembo perde la torre distinta dall'incudine");
+  assert.match(frammento, /copQuota \*= 1\.0 - 0\.36 \* profiloTorre \* collo;/,
+    "la colonna del cumulonembo torna un blocco con la stessa larghezza a ogni altezza");
+  assert.match(frammento, /q\.xy \+= 0\.34 \* varia/,
+    "la texture periodica della nube torna identica in ogni regione");
+  assert.match(frammento, /sfAltra = textureLod\(uForma, q \* vec3\(0\.73, 1\.19, 0\.81\)/,
+    "le grandi cupole temporalesche riusano sempre la stessa forma periodica");
+  assert.match(frammento, /qd\.xy \+= 0\.35 \* varia/,
+    "il dettaglio fine torna a ripetersi uguale ogni pochi chilometri");
   assert.match(frammento, /cimaKm = mix\(cimaKm, tettoIncudine, 0\.88 \* incudine/,
     "l'incudine e' tornata una successione di cupole da cumulo");
 }
