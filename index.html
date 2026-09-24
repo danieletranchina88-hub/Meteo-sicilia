@@ -8775,12 +8775,13 @@
         // per gli strati, a cupole per i cumuli, lama traslucida per il
         // cirro, torre fino all'incudine per il cumulonembo.
         //
-        // LA SCULTURA, come nelle nubi volumetriche moderne: la copertura
-        // osservata e' la soglia sotto cui il rumore di Worley viene tagliato
-        // (rimappatura). Dove il satellite vede nube piena resta tutta; sui
-        // bordi e dove e' rada restano solo le bolle piu' grosse, e la nube
-        // si sfrangia a cavolfiore. Poi un Worley piu' fine erode i bordi:
-        // sfilacciato in basso, ribollente in alto, come i cumuli veri.
+        // Copertura e sommità restano ancorate ai prodotti satellitari.
+        // Il genere determina il rilievo superficiale e la base plausibile:
+        // strati continui, lobi bassi Sc, elementi più fini Ac, cupole Cu,
+        // torre piena Cb raccordata all'incudine. Il rumore non scava il cuore.
+        // Riferimenti morfologici: Atlante internazionale delle nubi WMO,
+        // https://cloudatlas.wmo.int/en/cumulonimbus-cb.html
+        // https://cloudatlas.wmo.int/en/stratocumulus-sc.html
         "float rimappa(float v, float a, float b, float c, float d) {",
         "  return c + (v - a) / max(1e-4, b - a) * (d - c);",
         "}",
@@ -8792,26 +8793,25 @@
         // campo e il rumore, che e' piu' fine del campo, va letto piu' fine.
         // Prima si partiva dal valore gia' limitato, e da vicino le bolle si
         // leggevano tre volte piu' sfocate del pixel -- spianate.
+        "float rilievoSuperficie(float spessKm, float tettoR, float loboSc, float loboAc,",
+        "    float loboCu, float stratocumulo, float altocumulo, float cupole,",
+        "    float incudine, float profiloTorre, float copertura) {",
+        "  float rilievoKm = min(0.10, spessKm * 0.12) * (1.0 - tettoR);",
+        "  rilievoKm = mix(rilievoKm, min(0.85, spessKm * 0.55) * (1.0 - loboSc), stratocumulo);",
+        "  rilievoKm = mix(rilievoKm, min(0.55, spessKm * 0.60) * (1.0 - loboAc), altocumulo);",
+        "  float bordoCu = 1.0 - sqrt(smoothstep(0.03, 0.85, copertura));",
+        "  rilievoKm = mix(rilievoKm, spessKm * (0.48 * (1.0 - loboCu) + 0.38 * bordoCu), cupole);",
+        "  rilievoKm = mix(rilievoKm, min(0.18, spessKm * 0.15) * (1.0 - tettoR), incudine);",
+        "  rilievoKm = mix(rilievoKm, min(0.65, spessKm * 0.12) * (1.0 - loboCu), profiloTorre);",
+        "  return rilievoKm;",
+        "}",
+        "",
         "float densita(vec3 p, float lodGrezzo, bool leggera, out float altKm, out float cimaKm,",
         "              out float copertura, out float spessKm) {",
         "  float lodFine = max(0.0, lodGrezzo);",
         "  altKm = 0.0; cimaKm = 0.0; copertura = 0.0; spessKm = 0.0; gDensita = 1.0; gAltezza = 0.0;",
         "  vec2 uv = uvDi(p.xy);",
         "  if (fuoriDominio(uv)) return 0.0;",
-        // I FIANCHI NON SONO MURI. La copertura del satellite e' una mappa
-        // piana: letta uguale a ogni quota, il fianco di una nube diventava
-        // una parete verticale che ripeteva la stessa trama dal basso
-        // all'alto, a tende rigate. Da vicino la lettura si sposta di poco
-        // (fino a 1,5 km) secondo un rumore che cambia con la quota: il
-        // fianco si gonfia e rientra come in una nube vera. Da lontano non
-        // si vede e non si paga.
-        "  if (lodGrezzo < 2.5) {",
-        "    float altW = p.z * uCircKm * cosLatDa(p.y) / uEsagerazione;",
-        "    vec3 qw = vec3(p.xy * uDettaglioPasso.x * 0.35, altW * uDettaglioPasso.y * 0.35);",
-        "    vec2 spinta = textureLod(uDettaglio, qw + vec3(0.37, 0.61, 0.11), max(0.0, lodGrezzo + 1.0)).rg - 0.5;",
-        "    float kmSpinta = 1.5 * (1.0 - smoothstep(1.0, 2.5, lodGrezzo));",
-        "    uv += spinta * kmSpinta / (uCircKm * cosLatDa(p.y)) / vec2(uDominio.z - uDominio.x, uDominio.w - uDominio.y);",
-        "  }",
         "  float lodLiscio = max(uGrana, lodFine);",
         "  vec4 liscia = textureLod(uCampo, uv, lodLiscio);",
         "  vec4 fine = textureLod(uCampo, uv, lodFine);",
@@ -8824,144 +8824,84 @@
         "  float fibra = genere.g, torre = genere.b, materia = genere.a;",
         "  float cumulo = max(genere.r, torre);",
         "  cimaKm = mix(liscia.r, fine.r, 0.35) * uScalaKm;",
-        // Forme distinte a parita' di quota: Ac a piccoli elementi, Sc a
-        // grandi lobi bassi, Cu a cupole isolate, Cb a torre e incudine.
-        // I pesi vengono dalla tessitura e dai prodotti satellitari; la
-        // transizione tra celle contigue resta continua.
         "  float altocumulo = granuli * smoothstep(2.7, 4.1, cimaKm)",
         "    * (1.0 - smoothstep(6.0, 7.0, cimaKm));",
         "  float stratocumulo = granuli * (1.0 - smoothstep(2.7, 4.1, cimaKm));",
         "  float cupole = smoothstep(0.25, 0.7, cumulo) * (1.0 - granuli)",
         "    * (1.0 - veloLiscio) * (1.0 - incudine) * (1.0 - fibra);",
         "  float profiloTorre = smoothstep(0.08, 0.5, torre);",
-        "  float bolla = max(max(cupole, 0.78 * altocumulo),",
-        "    max(0.55 * stratocumulo, profiloTorre)) * (1.0 - 0.82 * incudine);",
+        "  float cirro = smoothstep(0.55, 0.9, fibra) * (1.0 - 0.7 * veloLiscio);",
         "  float baseKm = min(liscia.b * uScalaKm, cimaKm - 0.2);",
-        // La base scende soltanto sotto il nucleo convettivo riconosciuto;
-        // il raccordo progressivo non produce un cilindro o una parete.
-        "  baseKm = mix(baseKm, min(1.0, baseKm), 0.96 * profiloTorre);",
-        // Uno strato spesso e continuo deve estinguere luce anche al centro:
-        // il rumore ne scava solo i bordi. Il cirro resta attraversabile.
         "  gDensita = liscia.a * mix(0.8, 1.35, materia);",
         "  if (cimaKm < 0.24) return 0.0;",
         "  float cosLat = cosLatDa(p.y);",
         "  altKm = p.z * uCircKm * cosLat / uEsagerazione;",
-        "  float cupola = sqrt(smoothstep(0.0, 0.5, liscia.g));",
-        "  float cella = sqrt(smoothstep(0.02, 0.8, copertura));",
-        "  float cimaStrato = mix(mix(0.8, 1.0, cupola), mix(0.94, 1.0, cupola), veloLiscio);",
-        "  float cimaCumulo = cupola * mix(0.45, 1.0, cella);",
-        "  float cimaOsservata = cimaKm;",
-        "  cimaKm = baseKm + (cimaKm - baseKm) * mix(cimaStrato, cimaCumulo, bolla);",
-        // Una cima convettiva osservata resta una cupola. Attorno, la massa
-        // ghiacciata si apre in un tetto quasi orizzontale: la quota massima
-        // resta quella CTH e il bordo segue la copertura satellitare.
-        "  float tettoIncudine = baseKm + (cimaOsservata - baseKm) * mix(0.90, 1.0, cupola);",
-        "  cimaKm = mix(cimaKm, tettoIncudine, 0.88 * incudine * (1.0 - torre));",
-        "  spessKm = cimaKm - baseKm;",
-        "  if (altKm < baseKm || altKm > cimaKm) return 0.0;",
-        "  float h = (altKm - baseKm) / max(0.12, cimaKm - baseKm);",
-        "  gAltezza = h;",
-        // Il profilo verticale per genere: base netta (il livello di
-        // condensazione) per strati e cumuli, sfumata per il cirro; cima
-        // netta per lo strato, arrotondata per il cumulo.
-        // Base sfumata solo per i veli davvero fibrosi (i cirri, che lasciano
-        // cadere cristalli); l'incudine, fibrosa a meta', ha la base netta:
-        // sfumata, vista di sbieco dal basso, era un velo quasi trasparente
-        // lungo chilometri, e si riempiva di puntini.
-        "  float baseSfumata = max(mix(0.06, 0.35, smoothstep(0.55, 0.9, fibra)),",
-        "    0.25 * pioggiaEstesa);",
-        "  float sotto = smoothstep(0.0, baseSfumata, h);",
-        "  float sopraStrato = 1.0 - smoothstep(mix(0.86, 0.45, fibra), 1.0, h);",
-        "  float sopraCumulo = 1.0 - smoothstep(0.5, 1.0, h);",
-        "  float cop = copertura * sotto * mix(sopraStrato, sopraCumulo, bolla);",
-        "  if (cop < 0.004) return 0.0;",
-        // La forma: Perlin-Worley rimappato sulle bolle di Worley. Stirata in
-        // orizzontale per il cirro, in direzione ovest-est (il verso
-        // dominante del vento in quota: una scelta dichiarata).
-        "  vec3 q = vec3(p.xy * uFormaPasso.x, altKm * uFormaPasso.y) + vec3(uSemenza * 0.013, 0.0, 0.0);",
-        // La texture si ripete ogni 16 km. Una deformazione continua a scale
-        // geografiche non commensurabili cambia ogni ripetizione, senza
-        // giunture o forme incollate uguali in regioni diverse.
-        "  vec2 varia = vec2(sin(q.x * 1.13 + q.y * 0.71 + q.z * 0.29),",
-        "    sin(q.y * 1.37 - q.x * 0.63 + q.z * 0.19));",
-        "  q.xy += 0.34 * varia + 0.15 * vec2(sin(q.y * 2.09 - q.x * 0.47),",
-        "    sin(q.x * 1.73 + q.y * 0.31));",
-        "  q.z += 0.16 * sin(q.x * 0.83 + q.y * 0.53);",
-        // Stirata solo per i cirri veri: l'incudine, fibrosa a meta', con
-        // le bolle allungate e i buchi in mezzo si copriva di trattini scuri.
-        // Un cirro isolato resta filamentoso; il cirrostrato, pur essendo
-        // fatto di ghiaccio, forma un velo continuo e non una fila di ciuffi.
-        "  float cirro = smoothstep(0.55, 0.9, fibra) * (1.0 - 0.7 * veloLiscio);",
-        "  q = mix(q, vec3(q.x * 0.35, q.y * 1.7, q.z), cirro);",
-        // Gli elementi Ac sono piu' fini delle masse Sc: la scala cambia
-        // solo nella scultura, mai nella maschera satellitare.
-        "  q.xy *= 1.0 + 0.8 * altocumulo;",
+        "  if (altKm < min(baseKm, 1.0) || altKm > cimaKm) return 0.0;",
+        "  // Coordinate affini FISSE: si mescolano i valori, mai le coordinate",
+        "  // assolute con il peso locale del genere (causava strisce e anelli).",
+        "  vec3 q = vec3(p.xy * uFormaPasso.x, altKm * uFormaPasso.y)",
+        "    + vec3(uSemenza * 0.013, 0.0, 0.0);",
         "  float lodF = max(0.0, lodGrezzo + log2(uTexelCampo * uFormaPasso.x * uLatoForma));",
+        "  vec2 ruotata = mat2(0.8, -0.6, 0.6, 0.8) * q.xy * 1.371;",
         "  vec4 sf = textureLod(uForma, q, lodF);",
-        // Solo dentro i nuclei temporaleschi una seconda lettura con scale
-        // indipendenti spezza anche la ripetizione delle grandi cupole.
-        // Non si raddoppia il costo dei banchi estesi o dei cirri.
-        "  if (profiloTorre > 0.2) {",
-        "    vec4 sfAltra = textureLod(uForma, q * vec3(0.73, 1.19, 0.81)",
-        "      + vec3(0.31, 0.63, 0.17), lodF);",
-        "    sf = mix(sf, sfAltra, 0.31 * profiloTorre);",
+        "  // Rigonfiamenti soltanto sul fianco del nucleo: spostano la superficie",
+        "  // di raccordo, senza erodere la colonna centrale fino alla CTH.",
+        "  float fianco = (1.0 - smoothstep(0.45, 0.8, torre)) * smoothstep(0.02, 0.12, torre);",
+        "  float torreScolpita = clamp(torre + fianco * (0.40 * (sf.g - 0.38) + 0.18 * (sf.b - 0.38)), 0.0, 1.0);",
+        "  baseKm = mix(baseKm, min(1.0, baseKm), 0.96 * smoothstep(0.015, 0.65, torreScolpita));",
+        "  spessKm = cimaKm - baseKm;",
+        "  if (altKm < baseKm) return 0.0;",
+        "  // Un rilievo orizzontale continuo mantiene i lobi collegati alla base.",
+        "  // Due scale non commensurabili evitano copie della stessa piastrella.",
+        "  vec4 tettoA = textureLod(uForma, vec3(q.xy, 0.37), lodF);",
+        "  vec4 tettoB = textureLod(uForma, vec3(ruotata + vec2(0.31, 0.63), 0.71), lodF + 0.45);",
+        "  vec4 tetto = mix(tettoA, tettoB, 0.32);",
+        "  float loboSc = smoothstep(0.16, 0.72, 0.82 * tetto.g + 0.18 * tetto.b);",
+        "  float loboAc = smoothstep(0.16, 0.68, 0.62 * tetto.b + 0.38 * tetto.a);",
+        "  float loboCu = smoothstep(0.14, 0.76, 0.76 * tetto.g + 0.24 * tetto.b);",
+        "  // Rilievo in CHILOMETRI, limitato allo strato superficiale: il vecchio",
+        "  // profilo normalizzato erodeva oltre mezza torre sotto una CTH di 12 km.",
+        "  float rilievoKm = rilievoSuperficie(spessKm, tetto.r, loboSc, loboAc,",
+        "    loboCu, stratocumulo, altocumulo, cupole, incudine, profiloTorre, copertura);",
+        "  // La parte marginale si assottiglia: niente pareti verticali intorno",
+        "  // al tetto. La copertura osservata continua a delimitare l'intera nube.",
+        "  float margine = 1.0 - smoothstep(0.03, 0.85, copertura);",
+        "  float bordoKm = min(0.9, spessKm * 0.42) * margine * (1.0 - cirro);",
+        "  rilievoKm += bordoKm;",
+        "  baseKm += bordoKm * 0.7;",
+        "  cimaKm -= rilievoKm;",
+        "  spessKm = cimaKm - baseKm;",
+        "  if (altKm > cimaKm) return 0.0;",
+        "  float h = (altKm - baseKm) / max(0.12, spessKm);",
+        "  gAltezza = h;",
+        "  float sfumaBaseKm = min(spessKm * 0.22, mix(0.12, 0.45, max(cirro, pioggiaEstesa)));",
+        "  float sfumaCimaKm = min(spessKm * 0.22, mix(0.16, 0.38, cirro));",
+        "  float sotto = smoothstep(0.0, sfumaBaseKm, altKm - baseKm);",
+        "  float sopra = smoothstep(0.0, sfumaCimaKm, cimaKm - altKm);",
+        "  // Il rumore 3D modula la materia, non sottrae il nucleo opaco osservato.",
+        "",
+        "  float corpo = 0.72 + 0.28 * sf.r;",
+        "  float cop = copertura * sotto * sopra;",
+        "  float d = cop * corpo;",
+        "  if (cirro > 0.01) {",
+        "    vec4 filamenti = textureLod(uForma, vec3(q.x * 0.35, q.y * 1.7, q.z), lodF + 0.7);",
+        "    float formaCirro = 0.55 + 0.45 * filamenti.r;",
+        "    float profiloCirro = smoothstep(0.0, 0.35, h) * (1.0 - smoothstep(0.45, 1.0, h));",
+        "    float copCirro = copertura * profiloCirro;",
+        "    float dCirro = clamp(rimappa(formaCirro, 1.0 - copCirro, 1.0, 0.0, 1.0), 0.0, 1.0) * copCirro;",
+        "    d = mix(d, dCirro, cirro);",
         "  }",
-        "  float fbm = sf.g * 0.625 + sf.b * 0.25 + sf.a * 0.125;",
-        "  float forma = clamp(rimappa(sf.r, fbm - 1.0, 1.0, 0.0, 1.0), 0.0, 1.0);",
-        // La texture 3D contiene Perlin-Worley sf.r e tre scale di Worley:
-        // sf.g circa 4 km, sf.b 2 km, sf.a 1 km, prima dell'ingrosso.
-        // Le basi restano piene dove CLM vede un banco; in alto i piccoli
-        // elementi Ac si separano e i Cu formano torri a cavolfiore.
-        "  float formaStrato = mix(0.78, 0.91, materia) + 0.09 * sf.r;",
-        "  float formaSc = mix(0.88, 0.32 + 0.68 * smoothstep(0.24, 0.78,",
-        "    0.82 * sf.g + 0.18 * sf.b), smoothstep(0.12, 0.88, h));",
-        "  float formaAc = mix(0.85, 0.17 + 0.83 * smoothstep(0.27, 0.7,",
-        "    0.62 * sf.b + 0.38 * sf.a), smoothstep(0.12, 0.7, h));",
-        "  float formaCu = mix(0.9, smoothstep(0.22, 0.8,",
-        "    0.75 * sf.g + 0.25 * sf.b), smoothstep(0.12, 0.84, h));",
-        // Il Cb non e' una colonna con la stessa sezione a ogni quota:
-        // collo piu' stretto, rigonfiamenti a cavolfiore e cima irregolare
-        // che si salda al tetto dell'incudine osservata dal satellite.
-        "  float rigonfio = 0.07 * sin(altKm * 2.3 + sf.b * 4.0 + uSemenza);",
-        "  float formaTorre = mix(0.91, 0.13 + 0.87 * smoothstep(0.2, 0.76,",
-        "    0.72 * sf.g + 0.28 * sf.b + rigonfio), smoothstep(0.14, 0.65, h));",
-        "  forma = mix(formaStrato, formaSc, stratocumulo);",
-        "  forma = mix(forma, formaAc, altocumulo);",
-        "  forma = mix(forma, formaCu, cupole);",
-        "  forma = mix(forma, 0.55 + 0.45 * sf.r, fibra * (1.0 - veloLiscio));",
-        "  forma = mix(forma, 0.86 + 0.14 * sf.r, 0.85 * veloLiscio);",
-        "  forma = mix(forma, 0.78 + 0.22 * sf.r, 0.92 * incudine * (1.0 - profiloTorre));",
-        "  forma = mix(forma, formaTorre, profiloTorre);",
-        // Se il satellite vede cielo fra i cumuli, la forma ne segue i vuoti.
-        // In una copertura compatta non si scavano buchi inventati; una
-        // incudine o un nembostrato conserva la propria impronta osservata.
-        "  float separati = smoothstep(0.5, 0.82, sf.r * 0.55 + fbm * 0.45);",
-        "  float separazione = smoothstep(0.6, 0.95, cupole)",
-        "    * (1.0 - smoothstep(0.65, 0.93, copertura)) * (1.0 - torre);",
-        "  forma = mix(forma, separati, separazione);",
-        // IL GRADIENTE IN QUOTA (Schneider, Nubis): nei cumuli la nube si
-        // restringe salendo, e ogni cella finisce in una cupola tonda che si
-        // stacca dalle vicine. Prima la copertura era la stessa a ogni quota:
-        // cime piatte, un lenzuolo con le bolle sopra.
-        "  float copQuota = cop * mix(1.0, 1.0 - 0.72 * smoothstep(0.15, 1.0, h), bolla);",
-        "  float collo = smoothstep(0.1, 0.35, h) * (1.0 - smoothstep(0.6, 0.83, h));",
-        "  copQuota *= 1.0 - 0.36 * profiloTorre * collo;",
-        "  float d = clamp(rimappa(forma, 1.0 - copQuota, 1.0, 0.0, 1.0), 0.0, 1.0) * cop;",
         "  if (d <= 0.002 || leggera) return d;",
-        // L'erosione fine. Da lontano il dettaglio non si vede e si spegne:
-        // letto sotto il pixel diventerebbe solo grana.
+        "  // Erosione solo nella pelle; l'interno rimane connesso fino alla sommità.",
         "  vec3 qd = vec3(p.xy * uDettaglioPasso.x, altKm * uDettaglioPasso.y);",
-        "  qd.xy += 0.35 * varia + 0.2 * vec2(sin(qd.y * 0.93 + q.x * 0.31),",
-        "    sin(qd.x * 0.77 - q.y * 0.27));",
         "  float lodD = max(0.0, lodGrezzo + log2(uTexelCampo * uDettaglioPasso.x * uLatoDettaglio));",
-        "  vec3 sd = textureLod(uDettaglio, qd, lodD).rgb;",
+        "  vec3 sd = textureLod(uDettaglio, qd + vec3(0.17, 0.43, 0.29), lodD).rgb;",
         "  float dfbm = sd.r * 0.625 + sd.g * 0.25 + sd.b * 0.125;",
-        "  float modula = mix(1.0 - dfbm, dfbm, clamp(h * 4.0, 0.0, 1.0));",
-        // I veli e le incudini non hanno bolle: le macchie di Worley, viste
-        // dal basso, diventavano un manto di leopardo. Li' l'erosione e' lieve.
-        "  float erosione = modula * mix(0.1, 0.45, bolla) * (1.0 - 0.7 * fibra) * (1.0 - smoothstep(1.5, 4.0, lodD));",
-        "  erosione *= 1.0 - 0.72 * veloLiscio;",
-        "  return clamp(rimappa(d, erosione, 1.0, 0.0, 1.0), 0.0, 1.0);",
+        "  float pelle = 1.0 - smoothstep(0.0, 0.45, min(altKm - baseKm, cimaKm - altKm));",
+        "  pelle = max(pelle, 1.0 - smoothstep(0.15, 0.8, copertura));",
+        "  float erosione = (1.0 - dfbm) * 0.18 * pelle * (1.0 - 0.75 * veloLiscio)",
+        "    * (1.0 - smoothstep(1.5, 4.0, lodD));",
+        "  return d * (1.0 - erosione);",
         "}",
         "",
         // LA LUCE DEL SOLE, cercata davvero. Da ogni punto della nube si

@@ -2103,7 +2103,8 @@ assert.equal(schermoAlto.width, schermoBasso.width,
   assert.match(frammento, /float intreccio\(vec2 f\)/, "manca lo scarto a gradiente interlacciato");
   // PUNTE: la cima calava in proporzione alla copertura e ogni cella era un cono.
   assert.doesNotMatch(frammento, /scemare/, "la cima torna a scendere a cono verso il bordo");
-  assert.match(frammento, /float cupola = sqrt\(/, "il bordo della nube non e' piu' una cupola");
+  // La forma delle cupole e la continuita del nucleo sono verificate
+  // numericamente in test_map_3d.js (anche su GPU con --gpu).
   // ANELLI: senza bisezione i campioni cadevano a scatti rispetto al bordo.
   assert.match(frammento, /for \(int k = 0; k < 5; k\+\+\)/, "manca la bisezione all'ingresso nella nube");
   // La sagoma viene dal campo a piena risoluzione, non dal rumore.
@@ -2406,24 +2407,10 @@ console.log("nubi in volume: spessore continuo, niente grana, niente coni, nient
     "lo shader non distingue l'incudine dalla pioggia stratiforme");
   assert.match(frammento, /float granuli = meteo\.b, veloLiscio = meteo\.a;/,
     "altocumuli, stratocumuli e veli non hanno una forma distinta");
-  assert.match(frammento, /float formaSc = mix\([\s\S]*?sf\.g \+ 0\.18 \* sf\.b\)/,
-    "allo stratocumulo manca la scala larga dei lobi");
-  assert.match(frammento, /float formaAc = mix\([\s\S]*?sf\.b \+ 0\.38 \* sf\.a\)/,
-    "l'altocumulo non usa elementi piu' piccoli dello stratocumulo");
-  assert.match(frammento, /forma = mix\(forma, formaCu, cupole\);/,
-    "il cumulo perde le cupole isolate");
-  assert.match(frammento, /forma = mix\(forma, formaTorre, profiloTorre\);/,
-    "il nucleo del cumulonembo perde la torre distinta dall'incudine");
-  assert.match(frammento, /copQuota \*= 1\.0 - 0\.36 \* profiloTorre \* collo;/,
-    "la colonna del cumulonembo torna un blocco con la stessa larghezza a ogni altezza");
-  assert.match(frammento, /q\.xy \+= 0\.34 \* varia/,
-    "la texture periodica della nube torna identica in ogni regione");
-  assert.match(frammento, /sfAltra = textureLod\(uForma, q \* vec3\(0\.73, 1\.19, 0\.81\)/,
-    "le grandi cupole temporalesche riusano sempre la stessa forma periodica");
-  assert.match(frammento, /qd\.xy \+= 0\.35 \* varia/,
-    "il dettaglio fine torna a ripetersi uguale ogni pochi chilometri");
-  assert.match(frammento, /cimaKm = mix\(cimaKm, tettoIncudine, 0\.88 \* incudine/,
-    "l'incudine e' tornata una successione di cupole da cumulo");
+  // Le precedenti asserzioni su collo, copQuota e deformazione delle
+  // coordinate imponevano proprio le formule responsabili dei crateri.
+  // Il test del volume verifica ora limiti fisici e immagini del vero shader.
+
 }
 {
   // Il realismo: luce cercata verso il sole, scultura di Worley letta al
@@ -2471,8 +2458,7 @@ console.log("nubi in volume: spessore continuo, niente grana, niente coni, nient
     "il passo dentro la nube non segue piu' la scala della scultura: torna la grana sui fianchi");
   assert.match(frammento, /bool fascia = copertura > 0\.03/,
     "fuori dalla nube, nella sua fascia di quota, si torna al passo largo: puntinatura sull'orlo");
-  assert.match(frammento, /uv \+= spinta \* kmSpinta/,
-    "la copertura si legge di nuovo uguale a ogni quota: i fianchi tornano muri a tende");
+
 }
 {
   // Il lampo nelle nubi: colpi di ritorno, canale esteso, ombra della nube.
@@ -2504,3 +2490,163 @@ console.log("nubi in volume: spessore continuo, niente grana, niente coni, nient
   assert.match(frammento, /IL CANALE SOTTO LA NUBE/, "manca il canale visibile fra la base e il suolo");
 }
 console.log("nubi in volume: maschera CLM, quota CTH, opacita', generi, sabbia, suolo sotto le nubi, luce e scultura, fianchi, lampi");
+
+// Physical cloud-volume regression and optional software-GPU visual checks.
+{
+// Default: numeric tests of the scalar GLSL surface function, no dependencies.
+// node scripts/tests/test_map_3d.js --gpu [--shader /path/to/before.glsl]
+// Additional real shader renders and density sections via EGL/Mesa, NumPy, PIL.
+// --gpu is mandatory during cloud shader reviews; images go to a temp folder.
+const assert = require("node:assert/strict");
+const fs = require("node:fs"), path = require("node:path"), vm = require("node:vm");
+const os = require("node:os"), {execFileSync} = require("node:child_process");
+const root = path.resolve(__dirname, "../..");
+const html = fs.readFileSync(path.join(root, "index.html"), "utf8");
+function shader(name) {
+  const start = html.indexOf("var " + name + " = [");
+  assert.ok(start >= 0);
+  const end = html.indexOf('].join("\\n");', start) + 13;
+  return vm.runInNewContext(html.slice(start, end) + "\n" + name);
+}
+const fragment = shader("FRAMMENTO");
+const scalar = fragment.match(/float rilievoSuperficie\([\s\S]*?\n\}/);
+assert.ok(scalar, "missing bounded cloud surface relief");
+const ctx = {
+  min: Math.min, max: Math.max, sqrt: Math.sqrt,
+  mix: (a,b,t) => a+(b-a)*t,
+  smoothstep: (a,b,v) => {const t=Math.max(0,Math.min(1,(v-a)/(b-a)));return t*t*(3-2*t);}
+};
+vm.createContext(ctx);
+vm.runInContext(scalar[0].replace(/^float /,"function ").replace(/\bfloat\s+(\w+)(?=\s*[,)]|\s*,?\s*\n)/g,"$1").replace(/\bfloat\s+/g,"let "),ctx);
+// Every possible lobe amplitude must leave a deep observed core within 650 m
+// of CTH. Noise must not remove a fraction of the whole 12 km column again.
+for (const depth of [.25,1,3,8,12,16]) {
+  for (let n=0;n<=100;n++) {
+    const v=n/100;
+    const d=ctx.rilievoSuperficie(depth,v,v,v,v,.5,.5,.5,.8,1,1);
+    assert.ok(d>=0 && d<=Math.min(.65,depth*.12)+1e-9, "Cb core loses measured top");
+    const sc=ctx.rilievoSuperficie(depth,v,v,v,v,1,0,0,0,0,1);
+    const ac=ctx.rilievoSuperficie(depth,v,v,v,v,0,1,0,0,0,1);
+    const as=ctx.rilievoSuperficie(depth,v,v,v,v,0,0,0,0,0,1);
+    assert.ok(sc<=Math.min(.85,depth*.55)+1e-9 && sc>=0, "Sc surface excavates layer");
+    assert.ok(ac<=Math.min(.55,depth*.6)+1e-9 && ac>=0, "Ac surface excavates layer");
+    assert.ok(as<=.1+1e-9 && as>=0, "As no longer a smooth sheet");
+  }
+}
+console.log("Cloud surface numeric checks: OK");
+const GPU_QA = String.raw`import ctypes as c, math, sys, time, os
+from ctypes.util import find_library
+import numpy as np
+from PIL import Image,ImageDraw
+E=c.CDLL(find_library('EGL')); G=c.CDLL(find_library('GL')); P=c.c_void_p; I=c.c_int; U=c.c_uint; F=c.c_float
+E.eglGetProcAddress.argtypes=[c.c_char_p]; E.eglGetProcAddress.restype=P
+p=E.eglGetProcAddress(b'eglGetPlatformDisplayEXT'); dpy=c.CFUNCTYPE(P,U,P,P)(p)(0x31DD,None,None)
+E.eglInitialize.argtypes=[P,P,P]; assert E.eglInitialize(dpy,None,None)
+E.eglBindAPI(0x30A2); config=P();count=I()
+E.eglChooseConfig.argtypes=[P,P,P,I,P];assert E.eglChooseConfig(dpy,(I*5)(0x3033,1,0x3040,8,0x3038),c.byref(config),1,c.byref(count)) and count.value
+E.eglCreateContext.argtypes=[P,P,P,P];E.eglCreateContext.restype=P
+ctx=E.eglCreateContext(dpy,config,None,(I*5)(0x3098,4,0x30FB,3,0x3038))
+E.eglMakeCurrent.argtypes=[P,P,P,P];assert E.eglMakeCurrent(dpy,None,None,ctx)
+def gl(name,args,ret=None):
+ f=getattr(G,'gl'+name);f.argtypes=args;f.restype=ret;return f
+CreateShader=gl('CreateShader',[U],U);ShaderSource=gl('ShaderSource',[U,I,P,P]);CompileShader=gl('CompileShader',[U]);GetShaderiv=gl('GetShaderiv',[U,U,P]);GetShaderInfoLog=gl('GetShaderInfoLog',[U,I,P,P])
+def shader(src,typ):
+ s=CreateShader(typ);buf=c.c_char_p(src.encode());ShaderSource(s,1,c.byref(buf),None);CompileShader(s);ok=I();GetShaderiv(s,0x8B81,c.byref(ok));log=c.create_string_buffer(16000);GetShaderInfoLog(s,len(log),None,log);assert ok.value,log.value.decode();return s
+CreateProgram=gl('CreateProgram',[],U);AttachShader=gl('AttachShader',[U,U]);LinkProgram=gl('LinkProgram',[U]);UseProgram=gl('UseProgram',[U]);GetProgramiv=gl('GetProgramiv',[U,U,P]);GetProgramInfoLog=gl('GetProgramInfoLog',[U,I,P,P]);BindAttribLocation=gl('BindAttribLocation',[U,U,c.c_char_p])
+GetUniformLocation=gl('GetUniformLocation',[U,c.c_char_p],I);Uniform1f=gl('Uniform1f',[I,F]);Uniform1i=gl('Uniform1i',[I,I]);Uniform2f=gl('Uniform2f',[I,F,F]);Uniform3f=gl('Uniform3f',[I,F,F,F]);Uniform4f=gl('Uniform4f',[I,F,F,F,F]);UniformMatrix4fv=gl('UniformMatrix4fv',[I,I,c.c_ubyte,P])
+GenTextures=gl('GenTextures',[I,P]);BindTexture=gl('BindTexture',[U,U]);ActiveTexture=gl('ActiveTexture',[U]);TexParameteri=gl('TexParameteri',[U,U,I]);TexImage2D=gl('TexImage2D',[U,I,I,I,I,I,U,U,P]);TexImage3D=gl('TexImage3D',[U,I,I,I,I,I,I,U,U,P]);GenerateMipmap=gl('GenerateMipmap',[U])
+GenFramebuffers=gl('GenFramebuffers',[I,P]);BindFramebuffer=gl('BindFramebuffer',[U,U]);FramebufferTexture2D=gl('FramebufferTexture2D',[U,U,U,U,I]);CheckFramebufferStatus=gl('CheckFramebufferStatus',[U],U)
+GenVertexArrays=gl('GenVertexArrays',[I,P]);BindVertexArray=gl('BindVertexArray',[U]);GenBuffers=gl('GenBuffers',[I,P]);BindBuffer=gl('BindBuffer',[U,U]);BufferData=gl('BufferData',[U,c.c_ssize_t,P,U]);VertexAttribPointer=gl('VertexAttribPointer',[U,I,U,c.c_ubyte,I,P]);EnableVertexAttribArray=gl('EnableVertexAttribArray',[U]);Viewport=gl('Viewport',[I,I,I,I]);DrawArrays=gl('DrawArrays',[U,I,I]);ReadPixels=gl('ReadPixels',[I,I,I,I,U,U,P]);GetError=gl('GetError',[],U)
+def tex(arr,unit,dim=2,mip=True):
+ a=np.ascontiguousarray(arr);t=U();GenTextures(1,c.byref(t));target=0x806F if dim==3 else 0x0DE1;ActiveTexture(0x84C0+unit);BindTexture(target,t.value)
+ for k,v in [(0x2801,0x2703 if mip else 0x2601),(0x2800,0x2601),(0x2802,0x2901 if dim==3 else 0x812F),(0x2803,0x2901 if dim==3 else 0x812F)]:TexParameteri(target,k,v)
+ if dim==3:TexParameteri(target,0x8072,0x2901)
+ typ=0x1406 if a.dtype==np.float32 else 0x1401; internal=0x8814 if a.dtype==np.float32 else 0x8058
+ if dim==3:TexImage3D(target,0,internal,a.shape[2],a.shape[1],a.shape[0],0,0x1908,typ,a.ctypes.data)
+ else:TexImage2D(target,0,internal,a.shape[1],a.shape[0],0,0x1908,typ,a.ctypes.data)
+ if mip:GenerateMipmap(target)
+ return t
+W,H=320,240
+out=tex(np.zeros((H,W,4),np.float32),7,mip=False);fbo=U();GenFramebuffers(1,c.byref(fbo));BindFramebuffer(0x8D40,fbo.value);FramebufferTexture2D(0x8D40,0x8CE0,0x0DE1,out.value,0);assert CheckFramebufferStatus(0x8D40)==0x8CD5
+vao=U();GenVertexArrays(1,c.byref(vao));BindVertexArray(vao.value);vbo=U();GenBuffers(1,c.byref(vbo));BindBuffer(0x8892,vbo.value);vertices=np.array([-1,-1,3,-1,-1,3],np.float32);BufferData(0x8892,vertices.nbytes,vertices.ctypes.data,0x88E4);VertexAttribPointer(0,2,0x1406,0,0,None);EnableVertexAttribArray(0)
+tex(np.fromfile('/tmp/cloud_form.raw',np.uint8).reshape(48,48,48,4),3,3);tex(np.fromfile('/tmp/cloud_detail.raw',np.uint8).reshape(32,32,32,4),4,3)
+source=open(sys.argv[1]).read();prefix=sys.argv[2];mode=sys.argv[3] if len(sys.argv)>3 else 'render'
+if mode=='section':
+ source=source[:source.index('void main()')]+'''void main(){
+ vec3 p=vec3(0.5+vNdc.x*20.0/uCircKm,0.5,(vNdc.y+1.0)*7.0*uEsagerazione/uCircKm);
+ float a,c,o,s;float d=densita(p,-6.0,false,a,c,o,s);
+ colorePixel=vec4(d,gDensita,gAltezza,1.0);
+ }'''
+program=CreateProgram();AttachShader(program,shader(open('/tmp/cloud_VERTICE.glsl').read(),0x8B31));AttachShader(program,shader(source,0x8B30));BindAttribLocation(program,0,b'aPos');LinkProgram(program);ok=I();GetProgramiv(program,0x8B82,c.byref(ok));log=c.create_string_buffer(16000);GetProgramInfoLog(program,len(log),None,log);assert ok.value,log.value.decode();UseProgram(program)
+def uf(n,*v):
+ loc=GetUniformLocation(program,n.encode());[None,Uniform1f,Uniform2f,Uniform3f,Uniform4f][len(v)](loc,*v)
+def ui(n,v):Uniform1i(GetUniformLocation(program,n.encode()),v)
+for n,v in [('uCampo',0),('uGeneri',1),('uMorfologia',2),('uForma',3),('uDettaglio',4),('uPassiLuce',4),('uQuantiLampi',0)]:ui(n,v)
+unit=1/40075;esag=float(os.environ.get('CLOUD_QA_EXAGGERATION','1.6'))
+for n,v in dict(uScalaKm=16,uCircKm=40075,uEsagerazione=esag,uSigma=4,uFaseG=.58,uForzaSole=1,uZMax=14*esag*unit,uPassoFine=.25*esag*unit,uPassoMax=unit,uPixelAngolo=.00005,uTexelCampo=40*unit/128,uSemenza=1,uGrana=0,uLatoForma=48,uLatoDettaglio=32).items():uf(n,v)
+uf('uFormaPasso',40075/16,esag/16);uf('uDettaglioPasso',40075/4.5,esag/4.5);uf('uDominio',.5-20*unit,.5-20*unit,.5+20*unit,.5+20*unit);uf('uSole',.5,-.4,.768);uf('uAmbiente',.31,.41,.58);uf('uAmbienteSuolo',.22,.21,.2);uf('uColoreSole',1,.96,.9)
+x,y=np.meshgrid(np.linspace(-20,20,128),np.linspace(-20,20,128));r=np.hypot(x,y)
+def smooth(a,b,v):
+ z=np.clip((v-a)/(b-a),0,1);return z*z*(3-2*z)
+scenes=['Cb','Sc','Ac','As','Cu','Ci'] if mode=='render' else ['Cb','Sc','Ac','As','Cu']
+canvas=Image.new('RGB',(W*3,(H+25)*((len(scenes)+2)//3)),(18,30,44));draw=ImageDraw.Draw(canvas)
+for i,kind in enumerate(scenes):
+ start=time.time();field=np.zeros((128,128,4),np.float32);genres=field.copy();morph=field.copy();cover=1-smooth(16,19,r);base=1;top=3;density=.85;genres[:,:,3]=.9
+ if kind=='Cb':
+  top=11.5+.8*np.exp(-(r/5)**2);base=8.8;core=np.exp(-(r/5.0)**2);genres[:,:,0]=.45;genres[:,:,1]=.18*(1-core);genres[:,:,2]=core;morph[:,:,0]=(1-core)*.9
+ elif kind=='Sc':
+  top=2.5+.6*smooth(-15,15,x);base=.9;morph[:,:,2]=.95;genres[:,:,0]=.25
+ elif kind=='Ac':top=4.7;base=3.5;morph[:,:,2]=.95;genres[:,:,0]=.3
+ elif kind=='As':top=5.5;base=3.5;morph[:,:,3]=1
+ elif kind=='Cu':
+  cover=np.zeros_like(r)
+  for cx,cy,rad in [(-8,-3,4),(2,2,5),(11,-5,3),(-3,-11,3)]:cover=np.maximum(cover,1-smooth(rad*.35,rad,np.hypot(x-cx,y-cy)))
+  top=4;base=1;genres[:,:,0]=1
+ elif kind=='Ci':top=10;base=8.7;genres[:,:,1]=1;genres[:,:,3]=.1;density=.3;cover*=.6
+ field[:,:,0]=top/16;field[:,:,1]=cover;field[:,:,2]=base/16;field[:,:,3]=density
+ tex(field,0);tex(np.round(genres*255).astype(np.uint8),1);tex(np.round(morph*255).astype(np.uint8),2)
+ theta=math.radians(20 if kind=='Cb' else 55);right=np.array([1,0,0]);up=np.array([0,-math.sin(theta),math.cos(theta)]);forward=np.array([0,-math.cos(theta),-math.sin(theta)]);mat=np.eye(4,dtype=np.float32);mat[:3,0]=right*24*unit;mat[:3,1]=up*18*unit;mat[:3,2]=forward*70*unit;mat[:3,3]=[.5,.5,(6 if kind=='Cb' else 3)*esag*unit];UniformMatrix4fv(GetUniformLocation(program,b'uInversa'),1,0,np.ascontiguousarray(mat.T).ctypes.data)
+ Viewport(0,0,W,H);DrawArrays(4,0,3);pixels=np.zeros((H,W,4),np.float32);ReadPixels(0,0,W,H,0x1908,0x1406,pixels.ctypes.data);assert GetError()==0
+ pixels=pixels[::-1];np.save(f'{prefix}_{kind}_{mode}.npy',pixels)
+ if mode=='render':rgb=pixels[:,:,:3]+(1-pixels[:,:,3:4])*np.array([.11,.24,.36])
+ else:rgb=np.repeat(pixels[:,:,:1],3,axis=2)
+ im=Image.fromarray(np.uint8(np.clip(rgb,0,1)*255));im.save(f'{prefix}_{kind}_{mode}.png');canvas.paste(im,((i%3)*W,(i//3)*(H+25)+25));draw.text(((i%3)*W+10,(i//3)*(H+25)+6),kind,fill='white');print(kind,mode,round(time.time()-start,2),'s',flush=True)
+canvas.save(f'{prefix}_{mode}.png')
+if mode=='section':
+ z=(1-(np.arange(H)+.5)/H)*14;xx=((np.arange(W)+.5)/W*2-1)*20
+ cb=np.load(f'{prefix}_Cb_section.npy')[:,:,0]
+ core=cb[np.ix_((z>2)&(z<10.8),abs(xx)<2)]
+ assert core.min()>.35, f'Cb hollow core: minimum density {core.min():.3f}'
+ roof=((cb>.05)*z[:,None]).max(axis=0)
+ assert roof[abs(xx)<2].min()>11.3, f'Cb top lost below measured CTH: {roof[abs(xx)<2].min():.2f} km'
+ # A connected core, a narrower middle and a broad upper anvil.
+ widths=[]
+ for height in [2,6,10]:widths.append(np.count_nonzero(cb[np.argmin(abs(z-height))]>.1))
+ assert widths[2]>widths[1]*1.4 and widths[1]>20, f'Cb shaft/anvil topology: {widths}'
+ sc=np.load(f'{prefix}_Sc_section.npy')[:,:,0];roofSc=((sc>.05)*z[:,None]).max(axis=0)
+ rough=np.abs(np.diff(roofSc[(xx>0)&(xx<12)],2)).mean()
+ assert rough<.07, f'Sc stretched high-frequency stripes at class transition: {rough:.3f}'
+ ac=np.load(f'{prefix}_Ac_section.npy')[:,:,0];roofAc=((ac>.05)*z[:,None]).max(axis=0)
+ plain=np.load(f'{prefix}_As_section.npy')[:,:,0];roofAs=((plain>.05)*z[:,None]).max(axis=0)
+ assert roofAc[abs(xx)<12].std()>roofAs[abs(xx)<12].std()*3, 'Ac indistinguishable from smooth As'
+ assert np.all(cb[:,abs(xx)>19.5]<.001), 'Cloud outside the observed coverage'
+ print(f'GPU physical checks OK: core density {core.min():.3f}; Cb cap {roof[abs(xx)<2].min():.2f} km; Sc roughness {rough:.3f} km',flush=True)
+
+`;
+if (process.argv.includes("--gpu")) {
+  const dir=fs.mkdtempSync(path.join(os.tmpdir(),"meteo-cloud-gpu-"));
+  fs.writeFileSync(path.join(dir,"cloud_VERTICE.glsl"),shader("VERTICE"));
+  const override=process.argv.indexOf("--shader");
+  fs.writeFileSync(path.join(dir,"cloud_FRAMMENTO.glsl"),override>=0 ? fs.readFileSync(process.argv[override+1]) : fragment);
+  const noise={Math,Float32Array,Uint8Array,limita:(v,a,b)=>Math.max(a,Math.min(b,v))};vm.createContext(noise);
+  vm.runInContext(html.slice(html.indexOf("function casuale3"),html.indexOf("var VERTICE")),noise);
+  fs.writeFileSync(path.join(dir,"cloud_form.raw"),noise.rumoreDellaForma(48));
+  fs.writeFileSync(path.join(dir,"cloud_detail.raw"),noise.rumoreDelDettaglio(32));
+  const program=path.join(dir,"render.py");fs.writeFileSync(program,GPU_QA.replaceAll("/tmp/",dir+"/"));
+  const python=process.env.CLOUD_QA_PYTHON || "python3";
+  for (const mode of ["render","section"]) execFileSync(python,[program,path.join(dir,"cloud_FRAMMENTO.glsl"),path.join(dir,"cloud"),mode],{stdio:"inherit",env:{...process.env,EGL_PLATFORM:"surfaceless"}});
+  execFileSync(python,[program,path.join(dir,"cloud_FRAMMENTO.glsl"),path.join(dir,"mobile"),"section"],{stdio:"inherit",env:{...process.env,EGL_PLATFORM:"surfaceless",CLOUD_QA_EXAGGERATION:"3.2"}});
+  console.log("GPU images and density arrays:",dir);
+} else console.log("GPU render checks: run with --gpu before publishing shader changes");
+
+}
