@@ -2169,7 +2169,7 @@ console.log("nubi in volume: spessore continuo, niente grana, niente coni, nient
   vm.createContext(contesto);
   vm.runInContext("this.m = (function () {" + corpo + ";return { mascheraDaClm, quoteDaCth,"
     + " campoMisurato, componiCopertura, dettaglioDaGeoColour, tessituraDelCampo, CTH_SCALA,"
-    + " QUOTA_SCALA_KM, classificaNubi, GENERI };})();", contesto);
+    + " QUOTA_SCALA_KM, classificaNubi, classificaGriglia, GENERI };})();", contesto);
   const m = contesto.m;
   const immagine = (w, h, colore) => {
     const px = new Uint8Array(w * h * 4);
@@ -2249,11 +2249,21 @@ console.log("nubi in volume: spessore continuo, niente grana, niente coni, nient
     // Solo una cima convettiva osservata puo' collegare l'incudine alla base.
     const base = c.chi[centro] > 0.5 ? Math.min(1, c.base[centro]) : c.base[centro];
     return { base, genere: m.GENERI[c.classe[kc]], cima: c.quota[centro],
-      incudine: c.incudine[centro], pioggiaNube: c.pioggiaNube[centro] };
+      incudine: c.incudine[centro], pioggiaNube: c.pioggiaNube[centro],
+      granuli: c.granuli[centro], veloLiscio: c.veloLiscio[centro] };
   };
   const cirro = scena(11, 3, false, false);
   assert.equal(cirro.genere, "Cirro", "un velo alto e caldo all'infrarosso non e' riconosciuto come cirro: " + cirro.genere);
   assert.ok(cirro.base > 8.5, "il cirro non sta piu' in quota: base " + cirro.base.toFixed(1) + " km");
+  const cirrostrato = scena(11, 11, false, false);
+  assert.ok(cirrostrato.veloLiscio > cirro.veloLiscio + 0.08,
+    "il cirrostrato spesso non diventa un velo piu' disteso del cirro");
+  const altocumulo = scena(4.6, 4.6, false, true);
+  const altostrato = scena(4.6, 4.6, false, false);
+  assert.ok(altocumulo.granuli > altostrato.granuli + 0.08,
+    "gli elementi dell'altocumulo non si distinguono dal banco dell'altostrato");
+  assert.ok(altostrato.veloLiscio > altocumulo.veloLiscio + 0.08,
+    "l'altostrato non conserva una cima piu' distesa dell'altocumulo");
   const rdtSenzaPicco = scena(12, 12, true, false);
   assert.notEqual(rdtSenzaPicco.genere, "Cumulonembo",
     "una cella RDT con cima uniforme inventa una torre: " + rdtSenzaPicco.genere);
@@ -2312,10 +2322,29 @@ console.log("nubi in volume: spessore continuo, niente grana, niente coni, nient
   const strato = scena(1.4, 1.2, false, false);
   assert.equal(strato.genere, "Stratocumulo", "uno strato basso liscio di notte non e' uno stratocumulo: " + strato.genere);
   assert.ok(strato.base < 0.8, "la nube bassa liscia non sta bassa: base " + strato.base.toFixed(1) + " km");
+  assert.ok(strato.granuli > 0.1, "lo stratocumulo basso perde i suoi lobi arrotondati");
+  {
+    // A parita' di quota, il prodotto notturno Fog / Low Clouds distingue
+    // un velo di Stratus da un banco di elementi arrotondati.
+    const st = { larghezza: w, altezza: h,
+      quota: new Float32Array(quanti).fill(1.4),
+      quotaIr: new Float32Array(quanti).fill(1.4),
+      copertura: new Float32Array(quanti).fill(1),
+      cancello: new Float32Array(quanti).fill(1),
+      opacita: new Float32Array(quanti).fill(1),
+      basseValide: new Float32Array(quanti).fill(1),
+      basseAcqua: new Float32Array(quanti).fill(1) };
+    m.classificaGriglia(st, null, new Float32Array(quanti), null);
+    assert.equal(m.GENERI[st.classe[10 * w + 20]], "Strato",
+      "il banco basso e uniforme confermato dal prodotto notturno non e' Stratus");
+    assert.ok(st.veloLiscio[10 * w + 20] > strato.veloLiscio + 0.15,
+      "lo Stratus non ha la base/cima piu' uniforme dello Stratocumulus");
+  }
   const cumulo = scena(1.8, 1.8, false, true);
   assert.equal(cumulo.genere, "Cumulo", "una nube bassa a cima irregolare non e' un cumulo: " + cumulo.genere);
   assert.ok(Math.abs(cumulo.base - 1.0) < 0.25, "il cumulo non ha la base al livello di condensazione: "
     + cumulo.base.toFixed(2) + " km");
+  assert.ok(cumulo.granuli < strato.granuli, "il cumulo isolato diventa un banco di stratocumuli");
 
   // Sabbia e nube in GeoColour: la sabbia del Sahara e' luminosa ma arancione.
   const pelle = { data: new Uint8Array([162, 137, 111, 255, 200, 200, 204, 255]) };
@@ -2348,6 +2377,8 @@ console.log("nubi in volume: spessore continuo, niente grana, niente coni, nient
     "lo shader non legge piu' il genere della nube");
   assert.match(frammento, /float incudine = meteo\.r, pioggiaEstesa = meteo\.g;/,
     "lo shader non distingue l'incudine dalla pioggia stratiforme");
+  assert.match(frammento, /float granuli = meteo\.b, veloLiscio = meteo\.a;/,
+    "altocumuli, stratocumuli e veli non hanno una forma distinta");
   assert.match(frammento, /cimaKm = mix\(cimaKm, tettoIncudine, 0\.88 \* incudine/,
     "l'incudine e' tornata una successione di cupole da cumulo");
 }

@@ -13,8 +13,13 @@ un sensore opzionale, la sua evidenza vale zero e non viene simulata.
 | --- | --- | --- |
 | Cumulonembo | Cima fredda e irregolare con nucleo locale; RDT oppure rovescio radar e scariche concordi lo sostengono | Torre a cupole con base bassa nel nucleo; attorno, sommità quasi piatta e ampia incudine ghiacciata limitata alla copertura osservata |
 | Nembostrato | Banco continuo e otticamente spesso, sostenuto da precipitazione diffusa nel radar | Manto ampio, sommità poco scolpita e base sfumata dalla precipitazione; senza radar non si inventano veli di pioggia |
-| Cirro e cirrostrato | Cima alta e velo otticamente sottile | Filamenti o velo in quota, bassa densità; non si estendono in colonne fino al suolo |
-| Cumulo e stratocumulo | Tessitura irregolare visibile nell'IR e, di giorno, nel VIS | Cupole e lobi alla quota di condensazione stimata; celle distribuite nel banco per lo stratocumulo |
+| Cirro | Cima alta e otticamente sottile, elementi separati | Filamenti sottili in quota e struttura più aperta; nessuna colonna fino al suolo |
+| Cirrostrato | Banco alto sottile e più continuo | Velo di ghiaccio disteso, poco rilievo, traslucido |
+| Altocumulo | Cime a quota media con tessitura irregolare | Piccoli lobi arrotondati in banchi, scala più fine dello stratocumulo |
+| Altostrato | Copertura media estesa, tessitura più uniforme | Lastra medio-alta continua e morbida, meno lobi dei cumuli |
+| Cumulo | Cella bassa isolata con cima irregolare | Base alla quota di condensazione stimata e cupole verticali distinte |
+| Stratocumulo | Banco basso con elementi tondeggianti | Lobi ampi e ravvicinati sopra una base bassa condivisa |
+| Strato | Banco basso uniforme sostenuto anche dal prodotto notturno | Velo piatto con base abbastanza uniforme, poca scultura |
 
 La quota massima di una incudine non supera la cima stimata da CTH. Il rumore
 volumetrico scolpisce i contorni a scala inferiore a quella del satellite,
@@ -26,6 +31,10 @@ Riferimenti morfologici: [Cumulonimbus](https://cloudatlas.wmo.int/definition-cu
 [incus](https://cloudatlas.wmo.int/clouds-supplementary-features-incus.html),
 [Nimbostratus](https://cloudatlas.wmo.int/definition-nimbostratus-ns.html),
 [Cirrus](https://cloudatlas.wmo.int/clouds-genera-cirrus.html),
+[Cirrostratus](https://cloudatlas.wmo.int/en/definition-cirrostratus-cs.html),
+[Altocumulus](https://cloudatlas.wmo.int/en/clouds-genera-altocumulus.html),
+[Altostratus](https://cloudatlas.wmo.int/clouds-genera-altostratus.html),
 [Stratocumulus](https://cloudatlas.wmo.int/en/stratocumulus-sc.html),
+[Stratus](https://cloudatlas.wmo.int/en/clouds-genera-stratus.html),
 [Cumulus congestus](https://cloudatlas.wmo.int/en/species-cumulus-congestus-cu-con.html)
 e [rilevazione delle cime che superano l'incudine](https://cwg.eumetsat.int/overshooting-top-and-enhanced-v-detections/).

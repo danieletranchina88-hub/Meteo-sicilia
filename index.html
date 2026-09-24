@@ -8120,6 +8120,8 @@
         campo.materia = su(ridotto.materia);
         campo.incudine = su(ridotto.incudine);
         campo.pioggiaNube = su(ridotto.pioggiaNube);
+        campo.granuli = su(ridotto.granuli);
+        campo.veloLiscio = su(ridotto.veloLiscio);
         campo.classe = ridotto.classe;
         campo.fiduciaGenere = ridotto.fiduciaGenere;
         campo.radarNube = ridotto.ecoRadar;
@@ -8297,6 +8299,7 @@
         // Due caratteri morfologici distinti: la distesa ghiacciata attorno
         // al nucleo convettivo e la base sfumata dalla pioggia stratiforme.
         var pioggiaNube = new Float32Array(n);
+        var granuli = new Float32Array(n), veloLiscio = new Float32Array(n);
         var classe = new Uint8Array(n), fiduciaGenere = new Uint8Array(n);
         var pesi = new Float32Array(GENERI.length);
         for (k = 0; k < n; k++) {
@@ -8346,6 +8349,18 @@
           pesi[8] = basso3 * convettivo * (1.2 + 0.55 * (1 - banco));
           pesi[9] = basso3 * (0.6 + 0.6 * banco) * (1 - 0.55 * convettivo) * (1 - 0.6 * fog);
           pesi[10] = basso3 * (0.1 + 1.8 * fog) * (1 - 0.75 * convettivo);
+          // L'Atlante WMO distingue elementi arrotondati (Ac e Sc) dai
+          // banchi uniformi (Cs, As e St). I rapporti fra i pesi dello
+          // STESSO piano restano continui: non appare un muro al confine
+          // fra due etichette e non nasce copertura oltre la maschera CLM.
+          var medioTotale = Math.max(0.001, pesi[5] + pesi[6] + pesi[7]);
+          var bassoTotale = Math.max(0.001, pesi[8] + pesi[9] + pesi[10]);
+          var altoTotale = Math.max(0.001, pesi[1] + pesi[2] + pesi[3] + pesi[4]);
+          granuli[k] = limita((medio3 * pesi[5] / medioTotale
+            + basso3 * pesi[9] / bassoTotale) * (1 - x) * (1 - incudine[k]), 0, 1);
+          veloLiscio[k] = limita((alto3 * pesi[2] / altoTotale
+            + medio3 * pesi[6] / medioTotale
+            + basso3 * pesi[10] / bassoTotale) * (1 - x) * (1 - incudine[k]), 0, 1);
           var somma = 0, migliore = 0, seconda = 0, indice = 0;
           for (var j = 1; j < pesi.length; j++) {
             var p = pesi[j]; somma += p;
@@ -8371,6 +8386,7 @@
         campo.fibra = fibra; campo.chi = chi; campo.classe = classe;
         campo.fiduciaGenere = fiduciaGenere; campo.materia = materia; campo.tau = tau;
         campo.incudine = incudine; campo.pioggiaNube = pioggiaNube;
+        campo.granuli = granuli; campo.veloLiscio = veloLiscio;
         return campo;
       }
 
@@ -8490,14 +8506,16 @@
         return dati;
       }
 
-      // La RG8 aggiunge solo due byte per pixel: separa l'incudine dal
-      // cirro e la pioggia diffusa dal cumulo, senza alterare la quota CTH.
+      // Una RGBA8 distingue incudine, pioggia, elementi arrotondati e veli
+      // continui: quattro caratteri graduati, senza alterare la quota CTH.
       function tessituraMorfologia(campo) {
         var quanti = campo.larghezza * campo.altezza;
-        var dati = new Uint8Array(quanti * 2);
+        var dati = new Uint8Array(quanti * 4);
         for (var k = 0; k < quanti; k++) {
-          dati[k * 2] = Math.round(limita(campo.incudine ? campo.incudine[k] : 0, 0, 1) * 255);
-          dati[k * 2 + 1] = Math.round(limita(campo.pioggiaNube ? campo.pioggiaNube[k] : 0, 0, 1) * 255);
+          dati[k * 4] = Math.round(limita(campo.incudine ? campo.incudine[k] : 0, 0, 1) * 255);
+          dati[k * 4 + 1] = Math.round(limita(campo.pioggiaNube ? campo.pioggiaNube[k] : 0, 0, 1) * 255);
+          dati[k * 4 + 2] = Math.round(limita(campo.granuli ? campo.granuli[k] : 0, 0, 1) * 255);
+          dati[k * 4 + 3] = Math.round(limita(campo.veloLiscio ? campo.veloLiscio[k] : 0, 0, 1) * 255);
         }
         return dati;
       }
@@ -8790,14 +8808,18 @@
         "  copertura = fine.g;",
         "  if (max(copertura, liscia.g) < 0.012) return 0.0;",
         "  vec4 genere = textureLod(uGeneri, uv, lodLiscio);",
-        "  vec2 meteo = textureLod(uMorfologia, uv, lodLiscio).rg;",
+        "  vec4 meteo = textureLod(uMorfologia, uv, lodLiscio);",
         "  float incudine = meteo.r, pioggiaEstesa = meteo.g;",
+        "  float granuli = meteo.b, veloLiscio = meteo.a;",
         "  float fibra = genere.g, torre = genere.b, materia = genere.a;",
         "  float cumulo = max(genere.r, torre);",
         // Solo le nubi con tessitura convettiva osservata hanno grandi lobi.
         // Il minimo di 0,55 scolpiva anche nembostrati e strati come colline.
-        "  float bolla = mix(0.08, 1.0, cumulo) * (1.0 - 0.9 * smoothstep(0.2, 0.85, fibra))",
-        "    * (1.0 - 0.92 * incudine);",
+        // Altocumuli e stratocumuli hanno lobi arrotondati, ma piu' bassi
+        // delle cupole isolate di un cumulo; i veli restano lisci.
+        "  float bolla = mix(0.06, 1.0, max(cumulo, 0.45 * granuli))",
+        "    * (1.0 - 0.9 * smoothstep(0.2, 0.85, fibra))",
+        "    * (1.0 - 0.92 * incudine) * (1.0 - 0.78 * veloLiscio);",
         "  cimaKm = mix(liscia.r, fine.r, 0.35) * uScalaKm;",
         "  float baseKm = min(liscia.b * uScalaKm, cimaKm - 0.2);",
         // La base scende soltanto sotto il nucleo convettivo riconosciuto;
@@ -8811,7 +8833,7 @@
         "  altKm = p.z * uCircKm * cosLat / uEsagerazione;",
         "  float cupola = sqrt(smoothstep(0.0, 0.5, liscia.g));",
         "  float cella = sqrt(smoothstep(0.02, 0.8, copertura));",
-        "  float cimaStrato = mix(0.8, 1.0, cupola);",
+        "  float cimaStrato = mix(mix(0.8, 1.0, cupola), mix(0.94, 1.0, cupola), veloLiscio);",
         "  float cimaCumulo = cupola * mix(0.45, 1.0, cella);",
         "  float cimaOsservata = cimaKm;",
         "  cimaKm = baseKm + (cimaKm - baseKm) * mix(cimaStrato, cimaCumulo, bolla);",
@@ -8844,8 +8866,14 @@
         "  vec3 q = vec3(p.xy * uFormaPasso.x, altKm * uFormaPasso.y) + vec3(uSemenza * 0.013, 0.0, 0.0);",
         // Stirata solo per i cirri veri: l'incudine, fibrosa a meta', con
         // le bolle allungate e i buchi in mezzo si copriva di trattini scuri.
-        "  float cirro = smoothstep(0.55, 0.9, fibra);",
+        // Un cirro isolato resta filamentoso; il cirrostrato, pur essendo
+        // fatto di ghiaccio, forma un velo continuo e non una fila di ciuffi.
+        "  float cirro = smoothstep(0.55, 0.9, fibra) * (1.0 - 0.7 * veloLiscio);",
         "  q = mix(q, vec3(q.x * 0.35, q.y * 1.7, q.z), cirro);",
+        // Gli elementi Ac sono piu' fini delle masse Sc: la scala cambia
+        // solo nella scultura, mai nella maschera satellitare.
+        "  float granulazioneAlta = granuli * smoothstep(3.0, 5.0, cimaKm);",
+        "  q.xy *= 1.0 + 0.38 * granulazioneAlta;",
         "  float lodF = max(0.0, lodGrezzo + log2(uTexelCampo * uFormaPasso.x * uLatoForma));",
         "  vec4 sf = textureLod(uForma, q, lodF);",
         "  float fbm = sf.g * 0.625 + sf.b * 0.25 + sf.a * 0.125;",
@@ -8854,6 +8882,7 @@
         "  float liscia2 = sf.r;",
         "  forma = mix(mix(0.76, 0.93, materia) + mix(0.24, 0.07, materia) * forma, forma, bolla);",
         "  forma = mix(forma, 0.55 + 0.45 * liscia2, fibra);",
+        "  forma = mix(forma, 0.80 + 0.20 * liscia2, 0.75 * veloLiscio);",
         "  forma = mix(forma, 0.72 + 0.28 * liscia2, 0.72 * incudine);",
         // Se il satellite vede cielo fra i cumuli, la forma ne segue i vuoti.
         // In una copertura compatta non si scavano buchi inventati; una
@@ -8879,6 +8908,7 @@
         // I veli e le incudini non hanno bolle: le macchie di Worley, viste
         // dal basso, diventavano un manto di leopardo. Li' l'erosione e' lieve.
         "  float erosione = modula * mix(0.1, 0.45, bolla) * (1.0 - 0.7 * fibra) * (1.0 - smoothstep(1.5, 4.0, lodD));",
+        "  erosione *= 1.0 - 0.72 * veloLiscio;",
         "  return clamp(rimappa(d, erosione, 1.0, 0.0, 1.0), 0.0, 1.0);",
         "}",
         "",
@@ -9345,8 +9375,8 @@
           gl.RGBA, gl.UNSIGNED_BYTE, tessituraDeiGeneri(campo));
         gl.generateMipmap(gl.TEXTURE_2D);
         gl.bindTexture(gl.TEXTURE_2D, this.texMorfologia);
-        gl.texImage2D(gl.TEXTURE_2D, 0, gl.RG8, campo.larghezza, campo.altezza, 0,
-          gl.RG, gl.UNSIGNED_BYTE, tessituraMorfologia(campo));
+        gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA8, campo.larghezza, campo.altezza, 0,
+          gl.RGBA, gl.UNSIGNED_BYTE, tessituraMorfologia(campo));
         gl.generateMipmap(gl.TEXTURE_2D);
         // Il tetto del volume e' la cima piu' alta della scena, non il
         // fondoscala: sopra non c'e' niente da attraversare, e ogni
