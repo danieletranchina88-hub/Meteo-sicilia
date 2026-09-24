@@ -2264,6 +2264,8 @@ console.log("nubi in volume: spessore continuo, niente grana, niente coni, nient
     "gli elementi dell'altocumulo non si distinguono dal banco dell'altostrato");
   assert.ok(altostrato.veloLiscio > altocumulo.veloLiscio + 0.08,
     "l'altostrato non conserva una cima piu' distesa dell'altocumulo");
+  assert.ok(altocumulo.granuli > 0.7 && altostrato.veloLiscio > 0.7,
+    "a parita' di quota i segnali di forma restano troppo deboli per distinguere Ac e As nel volume");
   const rdtSenzaPicco = scena(12, 12, true, false);
   assert.notEqual(rdtSenzaPicco.genere, "Cumulonembo",
     "una cella RDT con cima uniforme inventa una torre: " + rdtSenzaPicco.genere);
@@ -2345,6 +2347,8 @@ console.log("nubi in volume: spessore continuo, niente grana, niente coni, nient
   assert.ok(Math.abs(cumulo.base - 1.0) < 0.25, "il cumulo non ha la base al livello di condensazione: "
     + cumulo.base.toFixed(2) + " km");
   assert.ok(cumulo.granuli < strato.granuli, "il cumulo isolato diventa un banco di stratocumuli");
+  assert.ok(strato.granuli > 0.7 && cumulo.granuli < 0.35,
+    "il banco basso e il cumulo isolato tornano a ricevere la stessa scultura");
 
   // Sabbia e nube in GeoColour: la sabbia del Sahara e' luminosa ma arancione.
   const pelle = { data: new Uint8Array([162, 137, 111, 255, 200, 200, 204, 255]) };
@@ -2379,6 +2383,14 @@ console.log("nubi in volume: spessore continuo, niente grana, niente coni, nient
     "lo shader non distingue l'incudine dalla pioggia stratiforme");
   assert.match(frammento, /float granuli = meteo\.b, veloLiscio = meteo\.a;/,
     "altocumuli, stratocumuli e veli non hanno una forma distinta");
+  assert.match(frammento, /float formaSc = mix\([\s\S]*?sf\.g \+ 0\.18 \* sf\.b\)/,
+    "allo stratocumulo manca la scala larga dei lobi");
+  assert.match(frammento, /float formaAc = mix\([\s\S]*?sf\.b \+ 0\.38 \* sf\.a\)/,
+    "l'altocumulo non usa elementi piu' piccoli dello stratocumulo");
+  assert.match(frammento, /forma = mix\(forma, formaCu, cupole\);/,
+    "il cumulo perde le cupole isolate");
+  assert.match(frammento, /forma = mix\(forma, formaTorre, torre\);/,
+    "il nucleo del cumulonembo perde la torre distinta dall'incudine");
   assert.match(frammento, /cimaKm = mix\(cimaKm, tettoIncudine, 0\.88 \* incudine/,
     "l'incudine e' tornata una successione di cupole da cumulo");
 }

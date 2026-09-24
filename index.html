@@ -8349,18 +8349,23 @@
           pesi[8] = basso3 * convettivo * (1.2 + 0.55 * (1 - banco));
           pesi[9] = basso3 * (0.6 + 0.6 * banco) * (1 - 0.55 * convettivo) * (1 - 0.6 * fog);
           pesi[10] = basso3 * (0.1 + 1.8 * fog) * (1 - 0.75 * convettivo);
-          // L'Atlante WMO distingue elementi arrotondati (Ac e Sc) dai
-          // banchi uniformi (Cs, As e St). I rapporti fra i pesi dello
-          // STESSO piano restano continui: non appare un muro al confine
-          // fra due etichette e non nasce copertura oltre la maschera CLM.
-          var medioTotale = Math.max(0.001, pesi[5] + pesi[6] + pesi[7]);
-          var bassoTotale = Math.max(0.001, pesi[8] + pesi[9] + pesi[10]);
-          var altoTotale = Math.max(0.001, pesi[1] + pesi[2] + pesi[3] + pesi[4]);
-          granuli[k] = limita((medio3 * pesi[5] / medioTotale
-            + basso3 * pesi[9] / bassoTotale) * (1 - x) * (1 - incudine[k]), 0, 1);
-          veloLiscio[k] = limita((alto3 * pesi[2] / altoTotale
-            + medio3 * pesi[6] / medioTotale
-            + basso3 * pesi[10] / bassoTotale) * (1 - x) * (1 - incudine[k]), 0, 1);
+          // Le masse arrotondate dell'Atlante WMO (Ac, Sc) e i veli lisci
+          // (Cs, As, St) devono prevalere anche nella forma, non soltanto
+          // nell'etichetta. Il quadrato dei pesi rafforza l'indizio osservato
+          // senza creare un salto fra i generi o inventare copertura CLM.
+          var q1 = pesi[1] * pesi[1], q2 = pesi[2] * pesi[2],
+            q3 = pesi[3] * pesi[3], q4 = pesi[4] * pesi[4],
+            q5 = pesi[5] * pesi[5], q6 = pesi[6] * pesi[6],
+            q7 = pesi[7] * pesi[7], q8 = pesi[8] * pesi[8],
+            q9 = pesi[9] * pesi[9], q10 = pesi[10] * pesi[10];
+          var medioTotale = Math.max(0.001, q5 + q6 + q7);
+          var bassoTotale = Math.max(0.001, q8 + q9 + q10);
+          var altoTotale = Math.max(0.001, q1 + q2 + q3 + q4);
+          granuli[k] = limita((medio3 * q5 / medioTotale
+            + basso3 * q9 / bassoTotale) * (1 - x) * (1 - incudine[k]), 0, 1);
+          veloLiscio[k] = limita((alto3 * q2 / altoTotale
+            + medio3 * q6 / medioTotale
+            + basso3 * q10 / bassoTotale) * (1 - x) * (1 - incudine[k]), 0, 1);
           var somma = 0, migliore = 0, seconda = 0, indice = 0;
           for (var j = 1; j < pesi.length; j++) {
             var p = pesi[j]; somma += p;
@@ -8813,14 +8818,18 @@
         "  float granuli = meteo.b, veloLiscio = meteo.a;",
         "  float fibra = genere.g, torre = genere.b, materia = genere.a;",
         "  float cumulo = max(genere.r, torre);",
-        // Solo le nubi con tessitura convettiva osservata hanno grandi lobi.
-        // Il minimo di 0,55 scolpiva anche nembostrati e strati come colline.
-        // Altocumuli e stratocumuli hanno lobi arrotondati, ma piu' bassi
-        // delle cupole isolate di un cumulo; i veli restano lisci.
-        "  float bolla = mix(0.06, 1.0, max(cumulo, 0.45 * granuli))",
-        "    * (1.0 - 0.9 * smoothstep(0.2, 0.85, fibra))",
-        "    * (1.0 - 0.92 * incudine) * (1.0 - 0.78 * veloLiscio);",
         "  cimaKm = mix(liscia.r, fine.r, 0.35) * uScalaKm;",
+        // Forme distinte a parita' di quota: Ac a piccoli elementi, Sc a
+        // grandi lobi bassi, Cu a cupole isolate, Cb a torre e incudine.
+        // I pesi vengono dalla tessitura e dai prodotti satellitari; la
+        // transizione tra celle contigue resta continua.
+        "  float altocumulo = granuli * smoothstep(2.7, 4.1, cimaKm)",
+        "    * (1.0 - smoothstep(6.0, 7.0, cimaKm));",
+        "  float stratocumulo = granuli * (1.0 - smoothstep(2.7, 4.1, cimaKm));",
+        "  float cupole = smoothstep(0.25, 0.7, cumulo) * (1.0 - granuli)",
+        "    * (1.0 - veloLiscio) * (1.0 - incudine) * (1.0 - fibra);",
+        "  float bolla = max(max(cupole, 0.78 * altocumulo),",
+        "    max(0.55 * stratocumulo, torre)) * (1.0 - 0.82 * incudine);",
         "  float baseKm = min(liscia.b * uScalaKm, cimaKm - 0.2);",
         // La base scende soltanto sotto il nucleo convettivo riconosciuto;
         // il raccordo progressivo non produce un cilindro o una parete.
@@ -8872,23 +8881,36 @@
         "  q = mix(q, vec3(q.x * 0.35, q.y * 1.7, q.z), cirro);",
         // Gli elementi Ac sono piu' fini delle masse Sc: la scala cambia
         // solo nella scultura, mai nella maschera satellitare.
-        "  float granulazioneAlta = granuli * smoothstep(3.0, 5.0, cimaKm);",
-        "  q.xy *= 1.0 + 0.38 * granulazioneAlta;",
+        "  q.xy *= 1.0 + 0.8 * altocumulo;",
         "  float lodF = max(0.0, lodGrezzo + log2(uTexelCampo * uFormaPasso.x * uLatoForma));",
         "  vec4 sf = textureLod(uForma, q, lodF);",
         "  float fbm = sf.g * 0.625 + sf.b * 0.25 + sf.a * 0.125;",
         "  float forma = clamp(rimappa(sf.r, fbm - 1.0, 1.0, 0.0, 1.0), 0.0, 1.0);",
-        // Gli strati sono lisci: la forma quasi non li scolpisce.
-        "  float liscia2 = sf.r;",
-        "  forma = mix(mix(0.76, 0.93, materia) + mix(0.24, 0.07, materia) * forma, forma, bolla);",
-        "  forma = mix(forma, 0.55 + 0.45 * liscia2, fibra);",
-        "  forma = mix(forma, 0.80 + 0.20 * liscia2, 0.75 * veloLiscio);",
-        "  forma = mix(forma, 0.72 + 0.28 * liscia2, 0.72 * incudine);",
+        // La texture 3D contiene Perlin-Worley sf.r e tre scale di Worley:
+        // sf.g circa 4 km, sf.b 2 km, sf.a 1 km, prima dell'ingrosso.
+        // Le basi restano piene dove CLM vede un banco; in alto i piccoli
+        // elementi Ac si separano e i Cu formano torri a cavolfiore.
+        "  float formaStrato = mix(0.78, 0.91, materia) + 0.09 * sf.r;",
+        "  float formaSc = mix(0.88, 0.32 + 0.68 * smoothstep(0.24, 0.78,",
+        "    0.82 * sf.g + 0.18 * sf.b), smoothstep(0.12, 0.88, h));",
+        "  float formaAc = mix(0.85, 0.17 + 0.83 * smoothstep(0.27, 0.7,",
+        "    0.62 * sf.b + 0.38 * sf.a), smoothstep(0.12, 0.7, h));",
+        "  float formaCu = mix(0.9, smoothstep(0.22, 0.8,",
+        "    0.75 * sf.g + 0.25 * sf.b), smoothstep(0.12, 0.84, h));",
+        "  float formaTorre = mix(0.93, smoothstep(0.2, 0.78,",
+        "    0.7 * sf.g + 0.3 * sf.b), smoothstep(0.36, 0.93, h));",
+        "  forma = mix(formaStrato, formaSc, stratocumulo);",
+        "  forma = mix(forma, formaAc, altocumulo);",
+        "  forma = mix(forma, formaCu, cupole);",
+        "  forma = mix(forma, 0.55 + 0.45 * sf.r, fibra * (1.0 - veloLiscio));",
+        "  forma = mix(forma, 0.86 + 0.14 * sf.r, 0.85 * veloLiscio);",
+        "  forma = mix(forma, 0.84 + 0.16 * sf.r, 0.88 * incudine * (1.0 - torre));",
+        "  forma = mix(forma, formaTorre, torre);",
         // Se il satellite vede cielo fra i cumuli, la forma ne segue i vuoti.
         // In una copertura compatta non si scavano buchi inventati; una
         // incudine o un nembostrato conserva la propria impronta osservata.
         "  float separati = smoothstep(0.5, 0.82, sf.r * 0.55 + fbm * 0.45);",
-        "  float separazione = smoothstep(0.55, 0.95, bolla)",
+        "  float separazione = smoothstep(0.6, 0.95, cupole)",
         "    * (1.0 - smoothstep(0.65, 0.93, copertura)) * (1.0 - torre);",
         "  forma = mix(forma, separati, separazione);",
         // IL GRADIENTE IN QUOTA (Schneider, Nubis): nei cumuli la nube si
