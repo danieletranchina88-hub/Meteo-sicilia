@@ -2248,7 +2248,8 @@ console.log("nubi in volume: spessore continuo, niente grana, niente coni, nient
     const centro = 10 * w + 20, kc = 5 * c.classeMisura.larghezza + 10;
     // Solo una cima convettiva osservata puo' collegare l'incudine alla base.
     const base = c.chi[centro] > 0.5 ? Math.min(1, c.base[centro]) : c.base[centro];
-    return { base, genere: m.GENERI[c.classe[kc]], cima: c.quota[centro] };
+    return { base, genere: m.GENERI[c.classe[kc]], cima: c.quota[centro],
+      incudine: c.incudine[centro], pioggiaNube: c.pioggiaNube[centro] };
   };
   const cirro = scena(11, 3, false, false);
   assert.equal(cirro.genere, "Cirro", "un velo alto e caldo all'infrarosso non e' riconosciuto come cirro: " + cirro.genere);
@@ -2277,7 +2278,8 @@ console.log("nubi in volume: spessore continuo, niente grana, niente coni, nient
       m.classificaNubi(c, null, null, null);
       const conta = new Array(11).fill(0);
       for (const v of c.classe) conta[v]++;
-      return { conta, torreCentro: c.chi[200 * W + 512], torreLontano: c.chi[200 * W + 40] };
+      return { conta, torreCentro: c.chi[200 * W + 512], torreLontano: c.chi[200 * W + 40],
+        incudineVicino: c.incudine[200 * W + 520] };
     };
     const temporale = sistema(true), fronte = sistema(false);
     const cb = m.GENERI.indexOf("Cumulonembo"), incudine = m.GENERI.indexOf("Incudine");
@@ -2285,8 +2287,27 @@ console.log("nubi in volume: spessore continuo, niente grana, niente coni, nient
       "la cima piu' fredda di un sistema convettivo non diventa un nucleo: " + temporale.torreCentro.toFixed(2));
     assert.ok(temporale.conta[incudine] > temporale.conta[cb],
       "attorno alla torre non c'e' l'incudine: il temporale torna un altopiano pieno");
+    assert.ok(temporale.incudineVicino > fronte.incudineVicino + 0.1,
+      "il tetto dell'incudine non segue il sistema convettivo osservato");
     assert.equal(fronte.conta[cb] + fronte.conta[incudine], 0,
       "un fronte alto e liscio diventa un cumulonembo: le torri in fila lungo i fronti");
+  }
+  {
+    // Un banco medio compatto con eco radar esteso sfuma la base; un'eco
+    // assente non deve generare pioggia dal solo colore della nube.
+    const W = 320, H = 120, N = W * H;
+    const banco = (conPioggia) => {
+      const c = { larghezza: W, altezza: H, quota: new Float32Array(N).fill(5.5),
+        copertura: new Float32Array(N).fill(1) };
+      const tutto = new Float32Array(N).fill(1);
+      m.campoMisurato(c, tutto, { quota: new Float32Array(N).fill(5.5), valida: tutto },
+        { larghezza: W, altezza: H });
+      if (conPioggia) c.ecoRadar = new Float32Array(Math.round(W / 2) * Math.round(H / 2)).fill(32);
+      m.classificaNubi(c, null, null, null);
+      return c.pioggiaNube[60 * W + 160];
+    };
+    assert.equal(banco(false), 0, "il banco senza radar inventa precipitazioni");
+    assert.ok(banco(true) > 0.08, "l'eco radar estesa non sfuma la base del nembostrato");
   }
   const strato = scena(1.4, 1.2, false, false);
   assert.equal(strato.genere, "Stratocumulo", "uno strato basso liscio di notte non e' uno stratocumulo: " + strato.genere);
@@ -2325,6 +2346,10 @@ console.log("nubi in volume: spessore continuo, niente grana, niente coni, nient
     "la base della nube torna a essere la cima meno uno spessore: le montagne");
   assert.match(frammento, /vec4 genere = textureLod\(uGeneri, uv, lodLiscio\);/,
     "lo shader non legge piu' il genere della nube");
+  assert.match(frammento, /float incudine = meteo\.r, pioggiaEstesa = meteo\.g;/,
+    "lo shader non distingue l'incudine dalla pioggia stratiforme");
+  assert.match(frammento, /cimaKm = mix\(cimaKm, tettoIncudine, 0\.88 \* incudine/,
+    "l'incudine e' tornata una successione di cupole da cumulo");
 }
 {
   // Il realismo: luce cercata verso il sole, scultura di Worley letta al

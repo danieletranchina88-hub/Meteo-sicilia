@@ -8118,6 +8118,8 @@
         campo.kappa = su(ridotto.kappa); campo.fibra = su(ridotto.fibra);
         campo.chi = su(ridotto.chi); campo.tau = su(ridotto.tau);
         campo.materia = su(ridotto.materia);
+        campo.incudine = su(ridotto.incudine);
+        campo.pioggiaNube = su(ridotto.pioggiaNube);
         campo.classe = ridotto.classe;
         campo.fiduciaGenere = ridotto.fiduciaGenere;
         campo.radarNube = ridotto.ecoRadar;
@@ -8292,6 +8294,9 @@
         base = sfocaPesata(base, cancello, w, h, Math.max(1, Math.round(BASE_DISTESA_KM / kmpx)));
         for (k = 0; k < n; k++) base[k] = limita(base[k], propria[k] - 0.8, propria[k] + 0.8);
         var densita = new Float32Array(n), materia = new Float32Array(n);
+        // Due caratteri morfologici distinti: la distesa ghiacciata attorno
+        // al nucleo convettivo e la base sfumata dalla pioggia stratiforme.
+        var pioggiaNube = new Float32Array(n);
         var classe = new Uint8Array(n), fiduciaGenere = new Uint8Array(n);
         var pesi = new Float32Array(GENERI.length);
         for (k = 0; k < n; k++) {
@@ -8325,6 +8330,8 @@
             ? campo.basseValide[k] * campo.basseAcqua[k] * (1 - (giorno ? giorno[k] : 0)) : 0;
           var diffusa = pioggia && pioggiaDiffusa
             ? pioggia[k] * lisciaFra(0.2, 0.62, pioggiaDiffusa[k]) * banco : 0;
+          pioggiaNube[k] = diffusa * lisciaFra(0.45, 0.78, t3)
+            * (1 - x) * (1 - incudine[k]) * (1 - 0.7 * convettivo);
           var temporale = rovescio && elettrica ? rovescio[k] * elettrica[k] : 0;
           pesi[1] = alto3 * (0.15 + 1.6 * sottile3 + 0.5 * fibra[k]) * (1 - 0.8 * incudine[k]);
           pesi[2] = alto3 * (0.3 + 1.25 * (1 - sottile3)) * (1 - 0.8 * incudine[k]);
@@ -8363,6 +8370,7 @@
         campo.base = base; campo.densita = densita; campo.kappa = kappa;
         campo.fibra = fibra; campo.chi = chi; campo.classe = classe;
         campo.fiduciaGenere = fiduciaGenere; campo.materia = materia; campo.tau = tau;
+        campo.incudine = incudine; campo.pioggiaNube = pioggiaNube;
         return campo;
       }
 
@@ -8478,6 +8486,18 @@
           dati[k * 4 + 1] = Math.round(limita(campo.fibra ? campo.fibra[k] : 0, 0, 1) * 255);
           dati[k * 4 + 2] = Math.round(limita(campo.chi ? campo.chi[k] : 0, 0, 1) * 255);
           dati[k * 4 + 3] = Math.round(limita(campo.materia ? campo.materia[k] : 0.5, 0, 1) * 255);
+        }
+        return dati;
+      }
+
+      // La RG8 aggiunge solo due byte per pixel: separa l'incudine dal
+      // cirro e la pioggia diffusa dal cumulo, senza alterare la quota CTH.
+      function tessituraMorfologia(campo) {
+        var quanti = campo.larghezza * campo.altezza;
+        var dati = new Uint8Array(quanti * 2);
+        for (var k = 0; k < quanti; k++) {
+          dati[k * 2] = Math.round(limita(campo.incudine ? campo.incudine[k] : 0, 0, 1) * 255);
+          dati[k * 2 + 1] = Math.round(limita(campo.pioggiaNube ? campo.pioggiaNube[k] : 0, 0, 1) * 255);
         }
         return dati;
       }
@@ -8644,6 +8664,7 @@
         "uniform vec4 uDominio;",        // x0, yNord, x1, ySud  (mercatore unitario)
         "uniform sampler2D uCampo;",
         "uniform sampler2D uGeneri;",
+        "uniform sampler2D uMorfologia;",
         "uniform sampler3D uForma;",       // Perlin-Worley e Worley: la scultura
         "uniform sampler3D uDettaglio;",   // Worley fine: l'erosione dei bordi
         "uniform vec2 uFormaPasso;",       // x: celle per unita' Mercatore, y: per km in verticale
@@ -8769,11 +8790,14 @@
         "  copertura = fine.g;",
         "  if (max(copertura, liscia.g) < 0.012) return 0.0;",
         "  vec4 genere = textureLod(uGeneri, uv, lodLiscio);",
+        "  vec2 meteo = textureLod(uMorfologia, uv, lodLiscio).rg;",
+        "  float incudine = meteo.r, pioggiaEstesa = meteo.g;",
         "  float fibra = genere.g, torre = genere.b, materia = genere.a;",
         "  float cumulo = max(genere.r, torre);",
         // Solo le nubi con tessitura convettiva osservata hanno grandi lobi.
         // Il minimo di 0,55 scolpiva anche nembostrati e strati come colline.
-        "  float bolla = mix(0.08, 1.0, cumulo) * (1.0 - 0.9 * smoothstep(0.2, 0.85, fibra));",
+        "  float bolla = mix(0.08, 1.0, cumulo) * (1.0 - 0.9 * smoothstep(0.2, 0.85, fibra))",
+        "    * (1.0 - 0.92 * incudine);",
         "  cimaKm = mix(liscia.r, fine.r, 0.35) * uScalaKm;",
         "  float baseKm = min(liscia.b * uScalaKm, cimaKm - 0.2);",
         // La base scende soltanto sotto il nucleo convettivo riconosciuto;
@@ -8789,7 +8813,13 @@
         "  float cella = sqrt(smoothstep(0.02, 0.8, copertura));",
         "  float cimaStrato = mix(0.8, 1.0, cupola);",
         "  float cimaCumulo = cupola * mix(0.45, 1.0, cella);",
+        "  float cimaOsservata = cimaKm;",
         "  cimaKm = baseKm + (cimaKm - baseKm) * mix(cimaStrato, cimaCumulo, bolla);",
+        // Una cima convettiva osservata resta una cupola. Attorno, la massa
+        // ghiacciata si apre in un tetto quasi orizzontale: la quota massima
+        // resta quella CTH e il bordo segue la copertura satellitare.
+        "  float tettoIncudine = baseKm + (cimaOsservata - baseKm) * mix(0.90, 1.0, cupola);",
+        "  cimaKm = mix(cimaKm, tettoIncudine, 0.88 * incudine * (1.0 - torre));",
         "  spessKm = cimaKm - baseKm;",
         "  if (altKm < baseKm || altKm > cimaKm) return 0.0;",
         "  float h = (altKm - baseKm) / max(0.12, cimaKm - baseKm);",
@@ -8801,7 +8831,9 @@
         // cadere cristalli); l'incudine, fibrosa a meta', ha la base netta:
         // sfumata, vista di sbieco dal basso, era un velo quasi trasparente
         // lungo chilometri, e si riempiva di puntini.
-        "  float sotto = smoothstep(0.0, mix(0.06, 0.35, smoothstep(0.55, 0.9, fibra)), h);",
+        "  float baseSfumata = max(mix(0.06, 0.35, smoothstep(0.55, 0.9, fibra)),",
+        "    0.25 * pioggiaEstesa);",
+        "  float sotto = smoothstep(0.0, baseSfumata, h);",
         "  float sopraStrato = 1.0 - smoothstep(mix(0.86, 0.45, fibra), 1.0, h);",
         "  float sopraCumulo = 1.0 - smoothstep(0.5, 1.0, h);",
         "  float cop = copertura * sotto * mix(sopraStrato, sopraCumulo, bolla);",
@@ -8822,6 +8854,7 @@
         "  float liscia2 = sf.r;",
         "  forma = mix(mix(0.76, 0.93, materia) + mix(0.24, 0.07, materia) * forma, forma, bolla);",
         "  forma = mix(forma, 0.55 + 0.45 * liscia2, fibra);",
+        "  forma = mix(forma, 0.72 + 0.28 * liscia2, 0.72 * incudine);",
         // Se il satellite vede cielo fra i cumuli, la forma ne segue i vuoti.
         // In una copertura compatta non si scavano buchi inventati; una
         // incudine o un nembostrato conserva la propria impronta osservata.
@@ -9274,7 +9307,8 @@
 
         this.texCampo = gl.createTexture();
         this.texGeneri = gl.createTexture();
-        [this.texCampo, this.texGeneri].forEach(function (tex) {
+        this.texMorfologia = gl.createTexture();
+        [this.texCampo, this.texGeneri, this.texMorfologia].forEach(function (tex) {
           gl.bindTexture(gl.TEXTURE_2D, tex);
           gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR_MIPMAP_LINEAR);
           gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
@@ -9309,6 +9343,10 @@
         gl.bindTexture(gl.TEXTURE_2D, this.texGeneri);
         gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA8, campo.larghezza, campo.altezza, 0,
           gl.RGBA, gl.UNSIGNED_BYTE, tessituraDeiGeneri(campo));
+        gl.generateMipmap(gl.TEXTURE_2D);
+        gl.bindTexture(gl.TEXTURE_2D, this.texMorfologia);
+        gl.texImage2D(gl.TEXTURE_2D, 0, gl.RG8, campo.larghezza, campo.altezza, 0,
+          gl.RG, gl.UNSIGNED_BYTE, tessituraMorfologia(campo));
         gl.generateMipmap(gl.TEXTURE_2D);
         // Il tetto del volume e' la cima piu' alta della scena, non il
         // fondoscala: sopra non c'e' niente da attraversare, e ogni
@@ -9566,6 +9604,9 @@
         gl.activeTexture(gl.TEXTURE2);
         gl.bindTexture(gl.TEXTURE_2D, this.texGeneri);
         gl.uniform1i(u("uGeneri"), 2);
+        gl.activeTexture(gl.TEXTURE4);
+        gl.bindTexture(gl.TEXTURE_2D, this.texMorfologia);
+        gl.uniform1i(u("uMorfologia"), 4);
 
         gl.disable(gl.DEPTH_TEST);
         gl.disable(gl.CULL_FACE);
