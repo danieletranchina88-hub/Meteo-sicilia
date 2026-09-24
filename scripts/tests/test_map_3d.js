@@ -2285,6 +2285,30 @@ console.log("nubi in volume: spessore continuo, niente grana, niente coni, nient
     assert.equal(fronte.conta[cb] + fronte.conta[incudine], 0,
       "un fronte alto e liscio diventa un cumulonembo: le torri in fila lungo i fronti");
   }
+  // LA TORRE HA LA FORMA DELLA SUA CIMA FREDDA. Allargata a disco, ogni
+  // cumulonembo usciva dall'alto come un tondo perfetto di cavolfiore. Una
+  // cima fredda lunga e stretta, alla risoluzione del campo vero, deve dare
+  // una torre lunga e stretta.
+  {
+    const W = 2048, H = 800, N = W * H;
+    const c = { larghezza: W, altezza: H, quota: new Float32Array(N), copertura: new Float32Array(N).fill(1) };
+    for (let k = 0; k < N; k++) {
+      const x = k % W, y = Math.floor(k / W);
+      const caso = Math.abs(Math.sin(x * 12.9898 + y * 78.233) * 43758.5453) % 1;
+      const lunga = Math.abs(y - 400) < 3 && Math.abs(x - 1024) < 14;
+      c.quota[k] = 11.5 + caso * 1.2 - 0.6 + (lunga ? 1.5 : 0);
+    }
+    const tutto = new Float32Array(N).fill(1);
+    m.campoMisurato(c, tutto, { quota: new Float32Array(N).fill(12), valida: tutto }, { larghezza: W, altezza: H });
+    m.classificaNubi(c, null, null, null);
+    let lungo = 0, largo = 0;
+    for (let d = -30; d <= 30; d++) {
+      if (c.chi[400 * W + 1024 + d] > 0.5) lungo++;
+      if (c.chi[(400 + d) * W + 1024] > 0.5) largo++;
+    }
+    assert.ok(lungo > 0 && lungo > largo * 1.3,
+      "la torre non segue la sua cima fredda: " + lungo + " pixel in lungo, " + largo + " in largo (un disco)");
+  }
   const strato = scena(1.4, 1.2, false, false);
   assert.equal(strato.genere, "Stratocumulo", "uno strato basso liscio di notte non e' uno stratocumulo: " + strato.genere);
   assert.ok(strato.base < 0.8, "la nube bassa liscia non sta bassa: base " + strato.base.toFixed(1) + " km");
@@ -2335,7 +2359,7 @@ console.log("nubi in volume: spessore continuo, niente grana, niente coni, nient
     "il rumore della forma torna a partire dal livello gia' limitato: da vicino le bolle si spianano");
   assert.match(frammento, /float lodD = max\(0\.0, lodGrezzo \+ log2\(/,
     "il rumore del dettaglio torna a partire dal livello gia' limitato: l'erosione si spegne da vicino");
-  assert.match(frammento, /uColoreFoschia/, "manca la foschia con la distanza");
+  assert.match(frammento, /colore = mix\(colore, uColoreFoschia, foschia\);/, "manca la foschia con la distanza");
   const vm = require("node:vm");
   const contesto = { Math, Float32Array };
   vm.createContext(contesto);
@@ -2440,4 +2464,26 @@ console.log("nubi in volume: spessore continuo, niente grana, niente coni, nient
   const secco = scena(11, true, 0, false);
   assert.notEqual(secco.genere, "Cumulonembo", "una cima alta e ribollente senza pioggia ne' fulmini e' ancora un cumulonembo");
 }
-console.log("nubi in volume: maschera CLM, quota CTH, opacita', generi, sabbia, suolo sotto le nubi, luce e scultura, fianchi, lampi, prove di pioggia e fulmini");
+{
+  // LE FORME VERE: il rilievo e il colore delle cime vengono dall'immagine.
+  const vm = require("node:vm");
+  const contesto = { Math, Float32Array };
+  vm.createContext(contesto);
+  vm.runInContext("var DOMINIO = { ovest: -14, est: 40 }; var RILIEVO_DINTORNI_KM = 9;"
+    + implementazione("limita") + implementazione("sfoca") + implementazione("ricampiona")
+    + implementazione("kmPerPixelDi") + implementazione("aspettoDaGeoColour"), contesto);
+  const w = 2048, h = 200, px = new Uint8ClampedArray(w * h * 4);  // circa 2 km per pixel, come il campo
+  for (let k = 0; k < w * h; k++) {
+    const x = k % w, y = Math.floor(k / w), cupola = Math.hypot(x - 200, y - 100) < 3;
+    const v = cupola ? 250 : 200;  // la cima che sfonda e' piu' chiara dell'incudine
+    px.set([v, v, v, 255], k * 4);
+  }
+  const a = contesto.aspettoDaGeoColour({ data: px }, { larghezza: w, altezza: h }, { larghezza: w, altezza: h });
+  assert.ok(a.rilievo[100 * w + 200] > 0.8, "la cupola chiara dell'immagine non diventa rilievo della cima");
+  assert.ok(Math.abs(a.rilievo[100 * w + 100]) < 0.05, "l'incudine uniforme non e' piatta");
+  assert.equal(Math.round(a.rgb[0][100 * w + 100]), 200, "il colore vero della nube non arriva al volume");
+  const frammento = html.slice(html.indexOf("var FRAMMENTO = ["), html.indexOf("var STESURA = ["));
+  assert.match(frammento, /cimaKm \+= rilievo \*/, "la cima non segue piu' il rilievo dell'immagine");
+  assert.match(frammento, /vec3 vero = textureLod\(uAspetto/, "dall'alto la nube non prende piu' il colore vero");
+}
+console.log("nubi in volume: maschera CLM, quota CTH, opacita', generi, sabbia, suolo sotto le nubi, luce e scultura, fianchi, lampi, prove di pioggia e fulmini, forme vere");

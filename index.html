@@ -8133,6 +8133,7 @@
       var PIOGGIA_DIFFUSA_MM = 0.5;
       var PIOGGIA_DIFFUSA_KM = 25;
       var TORRE_RAGGIO_KM = 11;
+      var TORRE_SCARTO_KM = 1.5;
       // Sopra i dieci chilometri: le cime frontali d'autunno alle nostre
       // latitudini arrivano a otto-nove, i cumulonembi sfondano la tropopausa.
       var PROFONDA_MIN_KM = 9.8;
@@ -8279,6 +8280,26 @@
         }
         var raggioTorre = Math.max(1, Math.round(TORRE_RAGGIO_KM / kmpx));
         var torreArea = sfoca(massimoScorrevole(picco, w, h, raggioTorre), w, h, Math.max(1, Math.round(raggioTorre / 2)));
+        // La torre ha la forma della sua cima fredda, non di un cerchio.
+        // Allargata a disco, ogni cumulonembo usciva come un tondo perfetto
+        // di cavolfiore appoggiato sull'incudine, che nessun satellite ha
+        // mai visto. La cima che sfonda e' la zona che nell'infrarosso sta
+        // entro un chilometro e mezzo dalla piu' fredda dei dintorni (i
+        // metodi di riconoscimento delle cime che sfondano usano lo stesso
+        // scarto rispetto all'incudine attorno): lunga, storta o doppia che
+        // sia, il bordo della torre segue quella sagoma. Il cuore resta
+        // torre anche dove e' piu' tiepido: la cima che sfonda e' larga pochi
+        // chilometri, la corrente ascendente sotto e' piu' larga. Su una
+        // griglia grossolana (il telefono, o un campo ridotto) la torre e'
+        // larga uno o due pixel e non ha una sagoma da seguire: li' resta
+        // com'e'.
+        var massimoTorre = massimoScorrevole(quotaIr, w, h, raggioTorre);
+        var freddoTorre = new Float32Array(n);
+        var formaTorre = lisciaFra(1.5, 3, raggioTorre);
+        for (var kf = 0; kf < n; kf++) {
+          freddoTorre[kf] = 1 - formaTorre * (1 - lisciaFra(-TORRE_SCARTO_KM, -0.4, quotaIr[kf] - massimoTorre[kf]));
+        }
+        freddoTorre = sfoca(freddoTorre, w, h, 1);
         var tau = new Float32Array(n), kappa = new Float32Array(n), chi = new Float32Array(n);
         var fibra = new Float32Array(n), base = new Float32Array(n), incudine = new Float32Array(n);
         var prova = new Float32Array(n), freddoOpaco = new Float32Array(n);
@@ -8371,6 +8392,8 @@
           var profondo = Math.max(prova[k], sistema[k] * freddoOpaco[k], sistemaDiretto[k] * freddoIncudine[k]);
           profondoArr[k] = profondo;
           var torreQui = sistemaDiretto[k] > 0.3 ? Math.max(torreDiretta[k], torreArea[k] * 0.5) : torreArea[k];
+          var nucleoTorre = lisciaFra(0.9, 1.0, torreQui);
+          torreQui *= nucleoTorre + (1 - nucleoTorre) * (0.25 + 0.75 * freddoTorre[k]);
           chi[k] = torreQui * profondo;
           // Il cumulo congesto: una torre anche lui, senza incudine.
           chi[k] = Math.max(chi[k], rovescio[k] * (1 - profondo));
@@ -8575,6 +8598,54 @@
         return dati;
       }
 
+      // L'ASPETTO VERO DELLE CIME. Le forme che il satellite vede dall'alto --
+      // la cupola della cima che sfonda l'incudine, le onde concentriche
+      // attorno, i grappoli di torri di un campo di cumuli, i rulli di uno
+      // stratocumulo -- sono gia' nell'immagine, a uno-due chilometri. Prima
+      // il volume le buttava via e le rifaceva col rumore; adesso si usano.
+      // RGB: il colore GeoColour di giorno (la nube come la vede il sensore,
+      // con le sue ombre vere). A: il RILIEVO, cioe' quanto ogni punto e'
+      // piu' chiaro (di giorno) o piu' freddo (di notte, infrarosso) dei suoi
+      // dintorni entro RILIEVO_DINTORNI_KM: la cupola che sfonda e' piu'
+      // chiara e piu' fredda di quello che le sta attorno. 128 = piatto.
+      var RILIEVO_DINTORNI_KM = 9;
+      function rilievoDaInfrarosso(campo) {
+        var w = campo.larghezza, h = campo.altezza, q = campo.quotaIr || campo.quota;
+        var r = Math.max(1, Math.round(RILIEVO_DINTORNI_KM / kmPerPixelDi(campo)));
+        var liscia = sfoca(q, w, h, r), fuori = new Float32Array(w * h);
+        // Un chilometro piu' in alto dei dintorni vale tutta la scala.
+        for (var k = 0; k < w * h; k++) fuori[k] = limita((q[k] - liscia[k]) / 1.0, -1, 1);
+        return fuori;
+      }
+      function aspettoDaGeoColour(pixelPelle, misuraPelle, campo) {
+        var w = campo.larghezza, h = campo.altezza, d = pixelPelle.data;
+        var pw = misuraPelle.larghezza, ph = misuraPelle.altezza, n = pw * ph;
+        var canali = [new Float32Array(n), new Float32Array(n), new Float32Array(n)];
+        var luce = new Float32Array(n);
+        for (var k = 0, i = 0; k < n; k++, i += 4) {
+          canali[0][k] = d[i]; canali[1][k] = d[i + 1]; canali[2][k] = d[i + 2];
+          luce[k] = (d[i] * 0.2126 + d[i + 1] * 0.7152 + d[i + 2] * 0.0722) / 255;
+        }
+        var rgb = canali.map(function (c) { return ricampiona(c, pw, ph, w, h); });
+        var l = ricampiona(luce, pw, ph, w, h);
+        var r = Math.max(1, Math.round(RILIEVO_DINTORNI_KM / kmPerPixelDi(campo)));
+        var liscia = sfoca(l, w, h, r), rilievo = new Float32Array(w * h);
+        // Un decimo di luminosita' in piu' dei dintorni vale tutta la scala.
+        for (var k2 = 0; k2 < w * h; k2++) rilievo[k2] = limita((l[k2] - liscia[k2]) / 0.1, -1, 1);
+        return { rgb: rgb, rilievo: rilievo };
+      }
+      function tessituraDellAspetto(campo) {
+        var n = campo.larghezza * campo.altezza, dati = new Uint8Array(n * 4);
+        var a = campo.aspetto, ril = a ? a.rilievo : campo.rilievoIr;
+        for (var k = 0; k < n; k++) {
+          dati[k * 4] = a ? Math.round(a.rgb[0][k]) : 255;
+          dati[k * 4 + 1] = a ? Math.round(a.rgb[1][k]) : 255;
+          dati[k * 4 + 2] = a ? Math.round(a.rgb[2][k]) : 255;
+          dati[k * 4 + 3] = Math.round(128 + 127 * (ril ? ril[k] : 0));
+        }
+        return dati;
+      }
+
       // La piramide della texture, calcolata qui: una texture in mezza
       // precisione non e' disegnabile ovunque, e generateMipmap su un
       // telefono senza EXT_color_buffer_float fallirebbe. Media 2x2, la
@@ -8737,6 +8808,8 @@
         "uniform vec4 uDominio;",        // x0, yNord, x1, ySud  (mercatore unitario)
         "uniform sampler2D uCampo;",
         "uniform sampler2D uGeneri;",
+        "uniform sampler2D uAspetto;",     // rgb colore vero, a rilievo vero delle cime
+        "uniform float uColoreVero;",
         "uniform sampler3D uForma;",       // Perlin-Worley e Worley: la scultura
         "uniform sampler3D uDettaglio;",   // Worley fine: l'erosione dei bordi
         "uniform vec2 uFormaPasso;",       // x: celle per unita' Mercatore, y: per km in verticale
@@ -8877,6 +8950,14 @@
         "  if (cimaKm < 0.24) return 0.0;",
         "  float cosLat = cosLatDa(p.y);",
         "  altKm = p.z * uCircKm * cosLat / uEsagerazione;",
+        // IL RILIEVO VERO: dove l'immagine mostra la cima piu' chiara (di
+        // giorno) o piu' fredda (di notte) dei dintorni, la cima sale; dove
+        // e' piu' scura, scende. Cupole che sfondano, onde sull'incudine,
+        // grappoli di torri: la forma e' quella fotografata. Quanto sale
+        // dipende dal genere: molto nei cumuli e nelle torri, poco negli
+        // strati, un poco nei veli e nelle incudini.
+        "  float rilievo = textureLod(uAspetto, uv, lodFine).a * 2.0 - 1.0;",
+        "  cimaKm += rilievo * (0.3 + 1.3 * cumulo + 0.45 * fibra);",
         "  float cupola = sqrt(smoothstep(0.0, 0.5, liscia.g));",
         "  float cella = sqrt(smoothstep(0.02, 0.8, copertura));",
         "  float cimaStrato = mix(0.8, 1.0, cupola);",
@@ -8912,14 +8993,19 @@
         "  float forma = clamp(rimappa(sf.r, fbm - 1.0, 1.0, 0.0, 1.0), 0.0, 1.0);",
         // Gli strati sono lisci: la forma quasi non li scolpisce.
         "  float liscia2 = sf.r;",
-        "  forma = mix(0.8 + 0.2 * forma, forma, bolla);",
+        // Il rumore scolpisce solo sotto la scala che il satellite risolve:
+        // sopra, la forma e' quella vera, e un rumore forte la copriva di un
+        // motivo a leopardo tutto uguale.
+        "  forma = mix(0.8 + 0.2 * forma, forma, bolla * 0.7);",
         "  forma = mix(forma, 0.55 + 0.45 * liscia2, fibra);",
         // Il campo di cumuli e' fatto di nubi SEPARATE con il cielo in mezzo,
         // anche dove il satellite, a due chilometri per pixel, vede tutto
         // coperto: fra le bolle piu' grosse si apre il vuoto (circa un quinto
         // dello spazio, misurato sulla texture).
         "  float separati = smoothstep(0.5, 0.82, sf.r * 0.55 + fbm * 0.45);",
-        "  forma = mix(forma, separati, smoothstep(0.6, 1.0, bolla));",
+        // Non la torre del cumulonembo: e' una massa sola, e aperta in bolle
+        // separate dall'alto sembrava un cerchio di fiocchi sull'incudine.
+        "  forma = mix(forma, separati, smoothstep(0.6, 1.0, bolla) * (1.0 - smoothstep(0.35, 0.6, torre)));",
         // IL GRADIENTE IN QUOTA (Schneider, Nubis): nei cumuli la nube si
         // restringe salendo, e ogni cella finisce in una cupola tonda che si
         // stacca dalle vicine. Prima la copertura era la stessa a ogni quota:
@@ -8936,7 +9022,7 @@
         "  float modula = mix(1.0 - dfbm, dfbm, clamp(h * 4.0, 0.0, 1.0));",
         // I veli e le incudini non hanno bolle: le macchie di Worley, viste
         // dal basso, diventavano un manto di leopardo. Li' l'erosione e' lieve.
-        "  float erosione = modula * mix(0.1, 0.45, bolla) * (1.0 - 0.7 * fibra) * (1.0 - smoothstep(1.5, 4.0, lodD));",
+        "  float erosione = modula * mix(0.1, 0.36, bolla) * (1.0 - 0.7 * fibra) * (1.0 - smoothstep(1.5, 4.0, lodD));",
         "  return clamp(rimappa(d, erosione, 1.0, 0.0, 1.0), 0.0, 1.0);",
         "}",
         "",
@@ -9232,6 +9318,27 @@
         "      prima = dopo;",
         "    }",
         "  }",
+        // IL COLORE VERO. Guardando dall'alto la nube deve essere quella della
+        // fotografia: si prende il colore GeoColour nel punto in cui il raggio
+        // entra nella nube, tanto piu' quanto piu' si guarda in verticale.
+        // Di sbieco resta la luce calcolata, che la fotografia dall'alto non
+        // puo' dare. Solo dove l'immagine mostra nube (chiara), non suolo.
+        "  if (uColoreVero > 0.01 && tPrimo > 0.0) {",
+        "    vec3 pp = origine + direzione * tPrimo;",
+        "    float lodP = max(0.0, log2(max(1e-12, tPrimo * uPixelAngolo) / uTexelCampo));",
+        "    vec3 vero = textureLod(uAspetto, uvDi(pp.xy), lodP).rgb;",
+        "    float nube = smoothstep(0.28, 0.5, dot(vero, vec3(0.2126, 0.7152, 0.0722)));",
+        "    float dallAlto = smoothstep(0.25, 0.85, -direzioneVera.z);",
+        "    colore = mix(colore, min(vec3(1.0), vero * 1.06), uColoreVero * dallAlto * nube * 0.75);",
+        "  }",
+        // LA FOSCHIA: l'aria fra chi guarda e la nube non e' vuota. Con la
+        // distanza la nube si stempera nell'azzurro dell'orizzonte. (Era
+        // sparita per errore insieme al vecchio canale dei lampi.)
+        "  if (tPrimo > 0.0) {",
+        "    float distanzaKm = tPrimo * uCircKm * cosLatDa(origine.y);",
+        "    float foschia = (1.0 - exp(-distanzaKm / uFoschiaKm)) * uFoschiaForza;",
+        "    colore = mix(colore, uColoreFoschia, foschia);",
+        "  }",
         "  colorePixel = vec4(colore * alfa + canale, max(alfa, canaleAlfa));",
         "}"
       ].join("\n");
@@ -9367,7 +9474,8 @@
 
         this.texCampo = gl.createTexture();
         this.texGeneri = gl.createTexture();
-        [this.texCampo, this.texGeneri].forEach(function (tex) {
+        this.texAspetto = gl.createTexture();
+        [this.texCampo, this.texGeneri, this.texAspetto].forEach(function (tex) {
           gl.bindTexture(gl.TEXTURE_2D, tex);
           gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR_MIPMAP_LINEAR);
           gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
@@ -9409,6 +9517,10 @@
         gl.bindTexture(gl.TEXTURE_2D, this.texGeneri);
         gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA8, campo.larghezza, campo.altezza, 0,
           gl.RGBA, gl.UNSIGNED_BYTE, tessituraDeiGeneri(campo));
+        gl.generateMipmap(gl.TEXTURE_2D);
+        gl.bindTexture(gl.TEXTURE_2D, this.texAspetto);
+        gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA8, campo.larghezza, campo.altezza, 0,
+          gl.RGBA, gl.UNSIGNED_BYTE, tessituraDellAspetto(campo));
         gl.generateMipmap(gl.TEXTURE_2D);
         // Il tetto del volume e' la cima piu' alta della scena, non il
         // fondoscala: sopra non c'e' niente da attraversare, e ogni
@@ -9666,6 +9778,14 @@
         gl.activeTexture(gl.TEXTURE2);
         gl.bindTexture(gl.TEXTURE_2D, this.texGeneri);
         gl.uniform1i(u("uGeneri"), 2);
+        gl.activeTexture(gl.TEXTURE4);
+        gl.bindTexture(gl.TEXTURE_2D, this.texAspetto);
+        gl.uniform1i(u("uAspetto"), 4);
+        // Il colore vero si usa solo se l'immagine e' di giorno E se il sole
+        // della scena e' alto: allora luce calcolata e luce fotografata
+        // dicono la stessa cosa.
+        var colorePelle = this.campo && this.campo.aspetto && this.campo.aspettoGiorno > 0.5 ? 1 : 0;
+        gl.uniform1f(u("uColoreVero"), colorePelle * forzaSole);
 
         gl.disable(gl.DEPTH_TEST);
         gl.disable(gl.CULL_FACE);
@@ -10041,6 +10161,7 @@
           // Il genere, prima con le sole misure infrarosse; con GeoColour, di
           // giorno, si rifa' con lo spessore ottico e la tessitura visibile.
           classificaNubi(campo, null, null, null);
+          campo.rilievoIr = rilievoDaInfrarosso(campo);
           // Questo e' il primo frame vero: viene caricato nella GPU prima di
           // qualunque lavoro opzionale. Cosi' una canvas GeoColour lenta o a
           // corto di memoria non puo' piu' cancellare anche le nubi IR.
@@ -10080,6 +10201,15 @@
             if (campo.misurato) {
               var luce = dettaglioDaGeoColour(pixelPelle, misuraPelle, campo);
               var giorno = luceDelGiorno(campo, pelle.slot.epoca);
+              // Di giorno la forma delle cime la da' l'immagine visibile;
+              // prima che superficieSenzaNubi ne tolga le nubi.
+              campo.aspetto = aspettoDaGeoColour(pixelPelle, misuraPelle, campo);
+              var giornoVero = 0;
+              for (var kg = 0; kg < giorno.length; kg += 97) giornoVero += giorno[kg];
+              campo.aspettoGiorno = giornoVero / Math.ceil(giorno.length / 97);
+              // Di notte l'immagine e' infrarossa: il rilievo resta quello
+              // dell'infrarosso, piu' fine e piu' diretto.
+              if (campo.aspettoGiorno < 0.5) campo.aspetto.rilievo = campo.rilievoIr || campo.aspetto.rilievo;
               componiCopertura(campo, luce, giorno);
               classificaNubi(campo, luce, giorno, luminanzaDellaNube(pixelPelle, misuraPelle, campo));
             } else {
