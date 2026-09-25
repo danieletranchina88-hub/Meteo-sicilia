@@ -38,3 +38,60 @@ Riferimenti morfologici: [Cumulonimbus](https://cloudatlas.wmo.int/definition-cu
 [Stratus](https://cloudatlas.wmo.int/en/clouds-genera-stratus.html),
 [Cumulus congestus](https://cloudatlas.wmo.int/en/species-cumulus-congestus-cu-con.html)
 e [rilevazione delle cime che superano l'incudine](https://cwg.eumetsat.int/overshooting-top-and-enhanced-v-detections/).
+
+## Fusione con ICON-2I
+
+Il comando **Nubi 3D · satellite + ICON-2I** usa il motore descritto sopra
+(maschera CLM, CTH, IR e GeoColour MTG, Cloud Type/Phase/Fog, RDT, radar,
+Lightning Imager, lampi Blitzortung, timeline satellitare) e vi aggiunge
+l'ambiente termodinamico di ICON-2I. Il satellite resta l'autorità su
+presenza, sagoma e cima; il modello è solo un modificatore dell'ambiente.
+
+**Dal run al browser.** `process_data.py` scrive in `data_weather/cloud_env/`
+una piastrella per ora di validità (prime 36 ore del run, circa 10 km di
+passo): LCL di Lawrence sopra l'orografia, T2m, gradiente medio T2m–T500,
+CAPE (massimo di blocco) e orografia, più `index.json`. Al deploy
+`scripts/merge_cloud_environment.py` conserva le ore passate dei run
+precedenti (48 ore), così la timeline satellitare mantiene l'ambiente anche
+subito dopo un nuovo run. Il browser prende le due ore che racchiudono il
+fotogramma che si sta guardando e interpola linearmente; se l'ora più vicina
+dista più di 3 ore, o il punto è fuori dal dominio ICON-2I (bordo sfumato su
+60 km), il motore torna alle stime dal solo satellite e lo dichiara.
+
+**La texture del volume** è una sola RGBA:
+
+| Canale | Contenuto |
+| --- | --- |
+| R | Cima: Cloud Top Height; dove manca, IR 10,5 µm invertito sul profilo termico ICON-2I (oltre la tropopausa di 12 km, 7 K per km di sfondamento) |
+| G | Copertura/densità osservata: CLM, dettaglio IR, luminosità GeoColour |
+| B | Base del genere: LCL ICON-2I per cumuli, cumulonembi, strati e nembostrati; quote dichiarate per nubi medie e alte |
+| A | Convezione: corrente potenziale 0,45·√(2·CAPE) / 40 m/s, massimo su 25 km |
+
+La densità ottica del genere è in `uGeneri.a`; la base delle torri (l'LCL)
+in una piccola texture a parte, perché il nucleo di un cumulonembo scende
+fino alla condensazione anche sotto l'incudine.
+
+**Cosa cambia con il modello.**
+- La base dei cumuli e delle torri è l'LCL sopra il rilievo, non 1 km fisso:
+  sulle Alpi le basi salgono, in aria umida scendono.
+- La cima IR, dove il CTH non è valido, è una quota fisica invece di una
+  scala di grigio locale; il confronto con il CTH misura l'opacità dei veli.
+- Il CAPE sostiene i cumuli bassi e medi (fino a metà strada verso il
+  cumulo) e la prova di convezione profonda, e abbassa fino a 1,5 km la
+  quota minima di una torre; in aria stabile la prova di una torre pesa
+  meno. Non crea mai da solo né una nube né un cumulonembo.
+- Nello shader il canale A gonfia le cupole e fa mordere più a fondo il
+  Worley del dettaglio solo su cumuli e fianchi delle torri: cavolfiori in
+  aria instabile, strati laminari invariati, nucleo della torre pieno.
+
+Illuminazione (Beer-Lambert verso il sole, termine polvere, doppio lobo di
+Henyey-Greenstein, diffusione multipla) e lampi restano quelli del motore:
+le scariche Blitzortung accendono la nube osservata in diretta. Toccando una
+nube si leggono genere, cima, base (con l'origine: CTH, IR su profilo
+ICON-2I, LCL ICON-2I o stima) e CAPE.
+
+Verifiche: `scripts/tests/test_cloud_environment.py` (piastrelle, fusione
+temporale, conservazione delle ore passate), `scripts/tests/test_nubi_icon.js`
+(lettura della piastrella Python nel browser, cima fisica, basi, CAPE,
+texture) e `node scripts/tests/test_map_3d.js --gpu` (sezioni di densità dei
+generi su GPU, anche con e senza CAPE).

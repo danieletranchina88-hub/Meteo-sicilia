@@ -19,6 +19,7 @@ from front_analysis_v12 import FrontalAnalysisV12
 # Add meteo_analysis imports
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 from meteo_analysis.core.icon_fields import IconRunFields
+from meteo_analysis.clouds.environment import CloudEnvironmentWriter
 from meteo_analysis.hazards.storms import (
     bowen_ratio,
     coarsen,
@@ -1714,6 +1715,9 @@ def process_data():
     synoptic_errors = []
     meteogram_archive = None
     station_forecast_archive = None
+    # L'ambiente ICON-2I delle nubi 3D (base, gradiente, CAPE, orografia):
+    # una piastrella per ora, interpolata dal browser all'istante satellitare.
+    cloud_environment = None
     icon_front_analyzer = prepare_icon_front_analyzer(
         run_dt, source_inventory=source_inventory, raw_archive=raw_archive
     )
@@ -2303,6 +2307,23 @@ def process_data():
                         end="",
                         flush=True,
                     )
+
+                # Nubi 3D: il modello non decide dove sono le nubi, ne
+                # descrive l'ambiente. Un errore qui non tocca la previsione.
+                if icon_hazard_fields is not None and cape_ml is not None:
+                    try:
+                        if cloud_environment is None:
+                            cloud_environment = CloudEnvironmentWriter(run_dt, lat, lon)
+                        cloud_environment.add(
+                            step_hours,
+                            temp_c,
+                            icon_hazard_fields.field("td_2m", step_hours, lat, lon),
+                            cape_ml,
+                            t500_k=icon_hazard_fields.field("t500", step_hours, lat, lon),
+                            hsurf_m=icon_hazard_fields.field("hsurf", step_hours, lat, lon),
+                        )
+                    except Exception as cloud_env_error:
+                        print(f" cloudenv-{step_hours}h:{cloud_env_error}", end="", flush=True)
 
                 previous = bulletin_history.get(step_hours - 3, {})
                 bulletin_inputs = build_bulletin_inputs(
@@ -2897,6 +2918,16 @@ def process_data():
                 )
 
         write_observations(TEMP_DIR, observations)
+
+        if cloud_environment is not None and cloud_environment.hours:
+            try:
+                cloud_environment.write(os.path.join(TEMP_DIR, "cloud_env"))
+                print(
+                    f"   Ambiente nubi 3D: {len(cloud_environment.hours)} ore.",
+                    flush=True,
+                )
+            except Exception as cloud_env_error:
+                print(f"   Ambiente nubi 3D non salvato: {cloud_env_error}", flush=True)
 
         # The manifest is written last so every published product can be
         # checksummed.  Raw GRIBs are described truthfully as non-retained;

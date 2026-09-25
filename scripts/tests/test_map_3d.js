@@ -2581,14 +2581,14 @@ program=CreateProgram();AttachShader(program,shader(open('/tmp/cloud_VERTICE.gls
 def uf(n,*v):
  loc=GetUniformLocation(program,n.encode());[None,Uniform1f,Uniform2f,Uniform3f,Uniform4f][len(v)](loc,*v)
 def ui(n,v):Uniform1i(GetUniformLocation(program,n.encode()),v)
-for n,v in [('uCampo',0),('uGeneri',1),('uMorfologia',2),('uForma',3),('uDettaglio',4),('uPassiLuce',4),('uQuantiLampi',0)]:ui(n,v)
+for n,v in [('uCampo',0),('uGeneri',1),('uMorfologia',2),('uForma',3),('uDettaglio',4),('uBaseTorre',5),('uPassiLuce',4),('uQuantiLampi',0)]:ui(n,v)
 unit=1/40075;esag=float(os.environ.get('CLOUD_QA_EXAGGERATION','1.6'))
 for n,v in dict(uScalaKm=16,uCircKm=40075,uEsagerazione=esag,uSigma=4,uFaseG=.58,uForzaSole=1,uZMax=14*esag*unit,uPassoFine=.25*esag*unit,uPassoMax=unit,uPixelAngolo=.00005,uTexelCampo=40*unit/128,uSemenza=1,uGrana=0,uLatoForma=48,uLatoDettaglio=32).items():uf(n,v)
 uf('uFormaPasso',40075/16,esag/16);uf('uDettaglioPasso',40075/4.5,esag/4.5);uf('uDominio',.5-20*unit,.5-20*unit,.5+20*unit,.5+20*unit);uf('uSole',.5,-.4,.768);uf('uAmbiente',.31,.41,.58);uf('uAmbienteSuolo',.22,.21,.2);uf('uColoreSole',1,.96,.9)
 x,y=np.meshgrid(np.linspace(-20,20,128),np.linspace(-20,20,128));r=np.hypot(x,y)
 def smooth(a,b,v):
  z=np.clip((v-a)/(b-a),0,1);return z*z*(3-2*z)
-scenes=['Cb','Sc','Ac','As','Cu','Ci'] if mode=='render' else ['Cb','Sc','Ac','As','Cu']
+scenes=['Cb','Sc','Ac','As','Cu','Ci'] if mode=='render' else ['Cb','Sc','Ac','As','Cu','Cu0']
 canvas=Image.new('RGB',(W*3,(H+25)*((len(scenes)+2)//3)),(18,30,44));draw=ImageDraw.Draw(canvas)
 for i,kind in enumerate(scenes):
  start=time.time();field=np.zeros((128,128,4),np.float32);genres=field.copy();morph=field.copy();cover=1-smooth(16,19,r);base=1;top=3;density=.85;genres[:,:,3]=.9
@@ -2598,13 +2598,18 @@ for i,kind in enumerate(scenes):
   top=2.5+.6*smooth(-15,15,x);base=.9;morph[:,:,2]=.95;genres[:,:,0]=.25
  elif kind=='Ac':top=4.7;base=3.5;morph[:,:,2]=.95;genres[:,:,0]=.3
  elif kind=='As':top=5.5;base=3.5;morph[:,:,3]=1
- elif kind=='Cu':
+ elif kind in ('Cu','Cu0'):
   cover=np.zeros_like(r)
   for cx,cy,rad in [(-8,-3,4),(2,2,5),(11,-5,3),(-3,-11,3)]:cover=np.maximum(cover,1-smooth(rad*.35,rad,np.hypot(x-cx,y-cy)))
   top=4;base=1;genres[:,:,0]=1
  elif kind=='Ci':top=10;base=8.7;genres[:,:,1]=1;genres[:,:,3]=.1;density=.3;cover*=.6
- field[:,:,0]=top/16;field[:,:,1]=cover;field[:,:,2]=base/16;field[:,:,3]=density
+ # A = convezione ICON-2I (CAPE): torre e cumuli in aria instabile; Cu0 e' lo
+ # stesso cumulo senza CAPE. La densita' del genere sta in uGeneri.a.
+ conv={'Cb':.8,'Cu':.7}.get(kind,0.)
+ field[:,:,0]=top/16;field[:,:,1]=cover;field[:,:,2]=base/16;field[:,:,3]=conv
+ genres[:,:,3]=density*(.8+.55*genres[:,:,3])/1.35
  tex(field,0);tex(np.round(genres*255).astype(np.uint8),1);tex(np.round(morph*255).astype(np.uint8),2)
+ lcl=np.zeros((128,128,4),np.uint8);lcl[:,:,0]=round(255/16);lcl[:,:,3]=255;tex(lcl,5)
  theta=math.radians(20 if kind=='Cb' else 55);right=np.array([1,0,0]);up=np.array([0,-math.sin(theta),math.cos(theta)]);forward=np.array([0,-math.cos(theta),-math.sin(theta)]);mat=np.eye(4,dtype=np.float32);mat[:3,0]=right*24*unit;mat[:3,1]=up*18*unit;mat[:3,2]=forward*70*unit;mat[:3,3]=[.5,.5,(6 if kind=='Cb' else 3)*esag*unit];UniformMatrix4fv(GetUniformLocation(program,b'uInversa'),1,0,np.ascontiguousarray(mat.T).ctypes.data)
  Viewport(0,0,W,H);DrawArrays(4,0,3);pixels=np.zeros((H,W,4),np.float32);ReadPixels(0,0,W,H,0x1908,0x1406,pixels.ctypes.data);assert GetError()==0
  pixels=pixels[::-1];np.save(f'{prefix}_{kind}_{mode}.npy',pixels)
@@ -2629,6 +2634,11 @@ if mode=='section':
  ac=np.load(f'{prefix}_Ac_section.npy')[:,:,0];roofAc=((ac>.05)*z[:,None]).max(axis=0)
  plain=np.load(f'{prefix}_As_section.npy')[:,:,0];roofAs=((plain>.05)*z[:,None]).max(axis=0)
  assert roofAc[abs(xx)<12].std()>roofAs[abs(xx)<12].std()*3, 'Ac indistinguishable from smooth As'
+ # Il CAPE scolpisce: lo stesso cumulo in aria instabile ha piu' massa erosa
+ # nella pelle (cavolfiori) ma resta una nube, non sparisce.
+ cu=np.load(f'{prefix}_Cu_section.npy')[:,:,0];cu0=np.load(f'{prefix}_Cu0_section.npy')[:,:,0]
+ assert (cu>.05).sum()>(cu0>.05).sum()*0.5, 'CAPE erodes the cumulus away'
+ assert np.abs(cu-cu0).sum()>0.02*(cu0>.05).sum(), 'CAPE has no effect on cumulus sculpture'
  assert np.all(cb[:,abs(xx)>19.5]<.001), 'Cloud outside the observed coverage'
  print(f'GPU physical checks OK: core density {core.min():.3f}; Cb cap {roof[abs(xx)<2].min():.2f} km; Sc roughness {rough:.3f} km',flush=True)
 

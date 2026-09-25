@@ -2330,7 +2330,7 @@
           </button>
           <button class="sat-layer" type="button" data-toggle="volume" aria-pressed="false">
             <svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M3 16c2-4 5-6 9-6s7 2 9 6"></path><path d="M13 3l-3 6h4l-3 6"></path></svg>
-            <span><b>Nubi in volume</b><small>maschera e quota cime EUMETSAT · luce solare · flash Blitz</small></span>
+            <span><b>Nubi 3D · satellite + ICON-2I</b><small>generi e cime EUMETSAT · basi e CAPE ICON-2I · luce solare · lampi Blitz</small></span>
           </button>
           <p id="lightning-physics-key" hidden></p>
           <details id="lightning-alerts" class="sat-alerts" hidden>
@@ -7075,7 +7075,7 @@
       // Un livello satellitare in piu', non una pagina in piu': lo stesso
       // satellite del sito, ma le nubi ricostruite come VOLUME vero e
       // attraversate da un ray marcher WebGL invece che disegnate piatte.
-      // Si accende con il pulsante "Nubi in volume" nel pannello satellite e
+      // Si accende con il pulsante "Nubi 3D · satellite + ICON-2I" nel pannello satellite e
       // resta un livello osservato come gli altri -- si spegne da solo
       // lasciando la vista satellite, come radar e fulmini.
       //
@@ -7601,6 +7601,281 @@
           + (senzaTempo ? "" : "&time=" + slot.iso);
       }
 
+      // --- l'ambiente ICON-2I ------------------------------------------------
+      // Le nubi 3D fondono il satellite con il modello. Il satellite resta
+      // l'autorita' su DOVE c'e' nube, sulla sagoma e sulla cima; ICON-2I,
+      // portato all'istante esatto del fotogramma, dice il resto dell'ambiente:
+      //  - a che quota l'aria del suolo condensa (LCL): la base di cumuli,
+      //    cumulonembi, strati e nembostrati, sopra l'orografia vera;
+      //  - quanto e' fredda l'aria a ogni quota (T2m e gradiente fino a 500
+      //    hPa): la temperatura di brillanza IR diventa una quota fisica;
+      //  - quanto violenta puo' essere la convezione (CAPE): sostiene i
+      //    cumuli e le torri osservati, mai li crea da solo, e decide quanto
+      //    il rumore scolpisce i cavolfiori.
+      // Una piastrella per ora di validita' (scripts: process_data.py,
+      // meteo_analysis/clouds/environment.py); fra due ore si interpola. Senza
+      // ICON (fuori dominio, run troppo lontano) tutto torna com'era: le
+      // costanti dichiarate qui sotto e nella classificazione dei generi.
+      var AMBIENTE_URL = "data_weather/cloud_env/";
+      // La stessa regola del backend (temporal_blend): si interpola fra due
+      // ore distanti al massimo tre ore, altrimenti si usa la piu' vicina
+      // entro tre ore; oltre, il satellite fa da solo.
+      var AMBIENTE_INTERVALLO_MAX_H = 3;
+      var AMBIENTE_DISTANZA_MAX_H = 3;
+      // Sul bordo del dominio ICON-2I il peso del modello sfuma a zero in
+      // questa distanza: niente gradino fra nubi con e senza ambiente.
+      var AMBIENTE_BORDO_KM = 60;
+      // Corrente potenziale 0,45*sqrt(2*CAPE), la stessa della sezione
+      // temporali; 40 m/s (supercella mediterranea) vale 1.
+      var EFFICIENZA_PARTICELLA = 0.45;
+      var CORRENTE_RIFERIMENTO_MS = 40;
+      // Il CAPE si prende al massimo su 25 km: la cella osservata e la stessa
+      // cella nel modello non stanno mai nello stesso pixel.
+      var CAPE_VICINATO_KM = 25;
+      // IR 10,5 um EUMETView: conteggio -> temperatura di brillanza, dalla
+      // legenda ufficiale dello stile mtg_fd_ir105_hrfi_style_02 (lineare in
+      // temperatura fra tre ancore). Il grigio dello stile predefinito e' il
+      // conteggio rovesciato: 1 -> #fefefe, 255 -> #010101.
+      var IR_ANCORE = [[1, -73], [111, -32], [255, 30]];
+      // Sopra la tropopausa la temperatura smette di scendere: il freddo in
+      // piu' e' una torre che sfonda, circa 7 K per km (Griffin et al. 2016).
+      var TROPOPAUSA_KM = 12;
+      var SFONDAMENTO_K_PER_KM = 7;
+
+      var ambienteIndice = null, ambienteIndiceEpoca = 0;
+      var ambientePiastrelle = {}, ambienteOrdine = [];
+
+      function indiceAmbiente() {
+        var adesso = Date.now();
+        if (ambienteIndice && adesso - ambienteIndiceEpoca < 10 * 60 * 1000) return ambienteIndice;
+        ambienteIndiceEpoca = adesso;
+        ambienteIndice = fetch(AMBIENTE_URL + "index.json?t=" + Math.floor(adesso / 600000))
+          .then(function (r) { return r.ok ? r.json() : null; })
+          .catch(function () { return null; });
+        return ambienteIndice;
+      }
+
+      function leggiPiastrella(buffer) {
+        var v = new DataView(buffer);
+        if (v.getUint8(0) !== 78 || v.getUint8(1) !== 85 || v.getUint8(2) !== 66 || v.getUint8(3) !== 65) {
+          throw new Error("piastrella ambiente non riconosciuta");
+        }
+        var quanti = v.getUint8(5), nx = v.getUint16(6, true), ny = v.getUint16(8, true);
+        var fuori = {
+          nx: nx, ny: ny,
+          sud: v.getFloat32(10, true), nord: v.getFloat32(14, true),
+          ovest: v.getFloat32(18, true), est: v.getFloat32(22, true),
+          campi: {}
+        };
+        var pos = 26, specifiche = [];
+        for (var i = 0; i < quanti; i++) {
+          var nome = "";
+          for (var c = 0; c < 8; c++) {
+            var b = v.getUint8(pos + c);
+            if (b) nome += String.fromCharCode(b);
+          }
+          specifiche.push([nome, v.getFloat32(pos + 8, true), v.getFloat32(pos + 12, true)]);
+          pos += 16;
+        }
+        specifiche.forEach(function (s) {
+          var arr = new Float32Array(nx * ny);
+          for (var k = 0; k < nx * ny; k++) {
+            var codice = v.getInt16(pos + 2 * k, true);
+            arr[k] = codice === -32768 ? NaN : codice * s[1] + s[2];
+          }
+          fuori.campi[s[0]] = arr;
+          pos += 2 * nx * ny;
+        });
+        return fuori;
+      }
+
+      function piastrellaAmbiente(file) {
+        if (!ambientePiastrelle[file]) {
+          ambientePiastrelle[file] = fetchDecompressedResponse(AMBIENTE_URL + file)
+            .then(function (r) { return r.arrayBuffer(); })
+            .then(leggiPiastrella)
+            .catch(function () { delete ambientePiastrelle[file]; return null; });
+          ambienteOrdine.push(file);
+          // Scorrendo la timeline bastano poche ore in memoria.
+          while (ambienteOrdine.length > 8) delete ambientePiastrelle[ambienteOrdine.shift()];
+        }
+        return ambientePiastrelle[file];
+      }
+
+      // Le ore che racchiudono l'istante e il peso della seconda.
+      function mescolaOreAmbiente(ore, epoca) {
+        var voci = (ore || []).map(function (o) {
+          return { t: Date.parse(o.valid), file: o.file, run: o.run };
+        }).filter(function (o) { return Number.isFinite(o.t); })
+          .sort(function (a, b) { return a.t - b.t; });
+        if (!voci.length) return null;
+        var prima = null, dopo = null;
+        voci.forEach(function (o) {
+          if (o.t <= epoca) prima = o;
+          if (o.t >= epoca && !dopo) dopo = o;
+        });
+        var ora = 3600000;
+        if (prima && dopo) {
+          var arco = (dopo.t - prima.t) / ora;
+          if (arco === 0) return { prima: prima, dopo: prima, peso: 0, distanza: 0, modo: "esatto" };
+          if (arco <= AMBIENTE_INTERVALLO_MAX_H) {
+            var peso = (epoca - prima.t) / (dopo.t - prima.t);
+            return { prima: prima, dopo: dopo, peso: peso,
+              distanza: Math.min(peso, 1 - peso) * arco, modo: "interpolato" };
+          }
+        }
+        var vicina = [prima, dopo].filter(Boolean).sort(function (a, b) {
+          return Math.abs(a.t - epoca) - Math.abs(b.t - epoca);
+        })[0];
+        var distanza = Math.abs(vicina.t - epoca) / ora;
+        if (distanza > AMBIENTE_DISTANZA_MAX_H) return null;
+        return { prima: vicina, dopo: vicina, peso: 0, distanza: distanza, modo: "vicino" };
+      }
+
+      // L'ambiente all'istante del fotogramma, o null: mai un errore, il
+      // volume dal solo satellite resta sempre possibile.
+      function ambienteAllIstante(epoca) {
+        return indiceAmbiente().then(function (indice) {
+          var scelta = indice && mescolaOreAmbiente(indice.hours, epoca);
+          if (!scelta) return null;
+          return Promise.all([piastrellaAmbiente(scelta.prima.file),
+            scelta.dopo === scelta.prima ? null : piastrellaAmbiente(scelta.dopo.file)])
+            .then(function (p) {
+              var a = p[0], b = p[1] || p[0];
+              if (!a) return null;
+              // Due ore su griglie diverse (run con dominio cambiato): vale
+              // l'ora piu' vicina, senza mescolare punti che non coincidono.
+              if (!b || b.nx !== a.nx || b.ny !== a.ny || b.sud !== a.sud || b.ovest !== a.ovest) {
+                var voce = b && scelta.peso >= 0.5 ? scelta.dopo : scelta.prima;
+                a = b = voce === scelta.dopo ? b : a;
+                scelta = { prima: voce, dopo: voce, peso: 0, modo: "vicino",
+                  distanza: Math.abs(voce.t - epoca) / 3600000 };
+              }
+              var campi = {};
+              Object.keys(a.campi).forEach(function (nome) {
+                var x = a.campi[nome], y = b.campi[nome] || x, z = new Float32Array(x.length);
+                for (var k = 0; k < x.length; k++) {
+                  var m = x[k] + (y[k] - x[k]) * scelta.peso;
+                  z[k] = Number.isFinite(m) ? m : (Number.isFinite(x[k]) ? x[k] : y[k]);
+                }
+                campi[nome] = z;
+              });
+              return { nx: a.nx, ny: a.ny, sud: a.sud, nord: a.nord, ovest: a.ovest, est: a.est,
+                campi: campi, modo: scelta.modo, peso: scelta.peso, distanza: scelta.distanza,
+                run: scelta.peso < 0.5 ? scelta.prima.run : scelta.dopo.run };
+            });
+        }).catch(function () { return null; });
+      }
+
+      // L'ambiente sulla griglia del campo (Mercatore, riga 0 = nord).
+      // Restituisce le quote in km, la convezione 0-1 e il peso del modello
+      // (1 dentro il dominio ICON-2I, sfumato a zero sul bordo).
+      function ambienteSulCampo(amb, w, h) {
+        var nx = amb.nx, ny = amb.ny, n = w * h;
+        var passoLat = (amb.nord - amb.sud) / Math.max(1, ny - 1);
+        var passoLon = (amb.est - amb.ovest) / Math.max(1, nx - 1);
+        var cellaKm = passoLat * 111.32;
+        // La corrente potenziale, allargata sul vicinato prima di ricampionare.
+        var corrente = new Float32Array(nx * ny);
+        for (var k = 0; k < nx * ny; k++) {
+          var cape = amb.campi.cape ? amb.campi.cape[k] : 0;
+          corrente[k] = limita(EFFICIENZA_PARTICELLA * Math.sqrt(2 * Math.max(0, cape || 0))
+            / CORRENTE_RIFERIMENTO_MS, 0, 1);
+        }
+        corrente = massimoScorrevole(corrente, nx, ny, Math.max(1, Math.round(CAPE_VICINATO_KM / cellaKm)));
+        var r = riquadroMercatore();
+        var fuori = {
+          lcl: new Float32Array(n), t2m: new Float32Array(n), gradiente: new Float32Array(n),
+          suolo: new Float32Array(n), convezione: new Float32Array(n), disponibile: new Float32Array(n)
+        };
+        var campione = function (arr, i0, j0, ti, tj, ripiego) {
+          var a = arr[i0 * nx + j0], b = arr[i0 * nx + j0 + 1];
+          var c = arr[(i0 + 1) * nx + j0], d = arr[(i0 + 1) * nx + j0 + 1];
+          var v = (a * (1 - tj) + b * tj) * (1 - ti) + (c * (1 - tj) + d * tj) * ti;
+          if (Number.isFinite(v)) return v;
+          var vicino = [a, b, c, d].filter(Number.isFinite);
+          return vicino.length ? vicino[0] : ripiego;
+        };
+        for (var y = 0; y < h; y++) {
+          var my = r.nord - (y + 0.5) / h * (r.nord - r.sud);
+          var lat = (2 * Math.atan(Math.exp(my / RAGGIO_TERRA)) - Math.PI / 2) * 180 / Math.PI;
+          var fi = (lat - amb.sud) / passoLat;
+          var dentroLat = fi >= 0 && fi <= ny - 1;
+          var i0 = limita(Math.floor(fi), 0, ny - 2), ti = limita(fi - i0, 0, 1);
+          var bordoLat = Math.min(lat - amb.sud, amb.nord - lat) * 111.32;
+          for (var x = 0; x < w; x++) {
+            var q = y * w + x;
+            var lon = DOMINIO.ovest + (x + 0.5) / w * (DOMINIO.est - DOMINIO.ovest);
+            var fj = (lon - amb.ovest) / passoLon;
+            if (!dentroLat || fj < 0 || fj > nx - 1) {
+              fuori.lcl[q] = BASE_CUMULO_KM;
+              fuori.t2m[q] = NaN;
+              continue;
+            }
+            var j0 = limita(Math.floor(fj), 0, nx - 2), tj = limita(fj - j0, 0, 1);
+            var bordoLon = Math.min(lon - amb.ovest, amb.est - lon) * 111.32 * Math.cos(lat * Math.PI / 180);
+            fuori.disponibile[q] = lisciaFra(0, AMBIENTE_BORDO_KM, Math.min(bordoLat, bordoLon));
+            fuori.suolo[q] = Math.max(0, campione(amb.campi.hsurf, i0, j0, ti, tj, 0) / 1000);
+            fuori.lcl[q] = campione(amb.campi.lcl, i0, j0, ti, tj, 1000) / 1000;
+            fuori.t2m[q] = campione(amb.campi.t2m, i0, j0, ti, tj, NaN);
+            fuori.gradiente[q] = campione(amb.campi.lapse, i0, j0, ti, tj, 6.5);
+            fuori.convezione[q] = campione(corrente, i0, j0, ti, tj, 0);
+            if (!Number.isFinite(fuori.t2m[q])) fuori.disponibile[q] = 0;
+          }
+        }
+        fuori.modo = amb.modo; fuori.run = amb.run; fuori.distanza = amb.distanza;
+        return fuori;
+      }
+
+      // Conteggio IR dal grigio del WMS, e da li' la temperatura di brillanza.
+      function brillanzaDaGrigio(grigio) {
+        var conteggio = limita(1 + (254 - grigio) * 254 / 253, 1, 255);
+        for (var i = 1; i < IR_ANCORE.length; i++) {
+          if (conteggio <= IR_ANCORE[i][0] || i === IR_ANCORE.length - 1) {
+            var a = IR_ANCORE[i - 1], b = IR_ANCORE[i];
+            return a[1] + (b[1] - a[1]) * (conteggio - a[0]) / (b[0] - a[0]) + 273.15;
+          }
+        }
+        return NaN;
+      }
+
+      // La quota a cui l'ambiente ICON-2I e' freddo quanto la cima: sotto la
+      // tropopausa si risale il gradiente del modello, oltre si conta lo
+      // sfondamento. Un velo semitrasparente sembra piu' caldo della sua cima:
+      // la quota esce bassa, ed e' proprio cio' che poi misura l'opacita'
+      // confrontandola con il Cloud Top Height.
+      function cimaFisica(bt, t2m, gradiente, suoloKm) {
+        var g = Math.max(1, gradiente);
+        var tTropo = t2m - g * Math.max(TROPOPAUSA_KM - suoloKm, 0);
+        var z = bt >= tTropo
+          ? suoloKm + (t2m - bt) / g
+          : TROPOPAUSA_KM + (tTropo - bt) / SFONDAMENTO_K_PER_KM;
+        return limita(z, 0, QUOTA_SCALA_KM);
+      }
+
+      // La quota IR fisica sostituisce la scala locale di grigio dove ICON-2I
+      // c'e': stessa sagoma e stessa presenza, ma cime in chilometri veri.
+      function applicaQuotaFisica(campo, pixel) {
+        var amb = campo.ambiente;
+        if (!amb) return campo;
+        var w = campo.larghezza, h = campo.altezza, n = w * h;
+        var fisica = new Float32Array(n), peso = new Float32Array(n);
+        for (var k = 0, i = 0; k < n; k++, i += 4) {
+          if (pixel[i + 3] < 128 || !(amb.disponibile[k] > 0)) continue;
+          var grigio = pixel[i] * 0.2126 + pixel[i + 1] * 0.7152 + pixel[i + 2] * 0.0722;
+          fisica[k] = cimaFisica(brillanzaDaGrigio(grigio), amb.t2m[k], amb.gradiente[k], amb.suolo[k]);
+          peso[k] = amb.disponibile[k];
+        }
+        fisica = sfoca(mediana3(fisica, w, h), w, h, SFOCATURA_GRADINI_PX);
+        for (k = 0; k < n; k++) {
+          if (campo.copertura[k] > 0.01 && peso[k] > 0) {
+            campo.quota[k] += (fisica[k] - campo.quota[k]) * peso[k];
+          }
+        }
+        campo.quotaFisica = true;
+        return campo;
+      }
+
       // --- il campo: quota della sommita', copertura, spessore ---------------
       // Da un'immagine in grigio escono i tre numeri che descrivono la colonna
       // d'aria sopra ogni punto. Due sono misurati, il terzo e' una regola.
@@ -8104,6 +8379,13 @@
               diagnostica.larghezza, diagnostica.altezza, w2, h2);
           });
         }
+        if (campo.ambiente) {
+          // L'ambiente ICON-2I e' liscio: si dimezza come gli altri caratteri.
+          ridotto.lcl = giu(campo.ambiente.lcl);
+          ridotto.suolo = giu(campo.ambiente.suolo);
+          ridotto.convezione = giu(campo.ambiente.convezione);
+          ridotto.disponibile = giu(campo.ambiente.disponibile);
+        }
         // Radar e Lightning Imager sono gia' sulla griglia dimezzata;
         // non ricampionare gli echi fino a perdere il nucleo del rovescio.
         if (campo.ecoRadar && campo.ecoRadar.length === w2 * h2) ridotto.ecoRadar = campo.ecoRadar;
@@ -8122,6 +8404,7 @@
         campo.pioggiaNube = su(ridotto.pioggiaNube);
         campo.granuli = su(ridotto.granuli);
         campo.veloLiscio = su(ridotto.veloLiscio);
+        campo.baseTorre = su(Float32Array.from(ridotto.baseTorre));
         campo.classe = ridotto.classe;
         campo.fiduciaGenere = ridotto.fiduciaGenere;
         campo.radarNube = ridotto.ecoRadar;
@@ -8170,6 +8453,31 @@
         var tau = new Float32Array(n), kappa = new Float32Array(n), chi = new Float32Array(n);
         var fibra = new Float32Array(n), base = new Float32Array(n), incudine = new Float32Array(n);
         var prova = new Float32Array(n), freddoOpaco = new Float32Array(n);
+        // LE BASI DAL MODELLO. Senza ICON-2I restano le quote tipiche
+        // dichiarate; con ICON-2I la base di cumuli e cumulonembi e' l'LCL
+        // sopra l'orografia, quella di strati e nembostrati l'LCL limitato
+        // agli strati bassi -- nubi che nascono dall'aria umida del suolo. Il
+        // peso sfuma sul bordo del dominio del modello. La convezione e' la
+        // corrente potenziale del CAPE, 0-1.
+        var baseCumulo = new Float64Array(n).fill(BASE_CUMULO_KM);
+        var baseStrato = new Float64Array(n).fill(BASE_STRATO_KM);
+        var baseNembo = new Float64Array(n).fill(BASE_NEMBO_KM);
+        var basePavimento = new Float64Array(n).fill(0.2);
+        var convezione = new Float64Array(n), modello = new Float64Array(n);
+        if (campo.lcl && campo.disponibile) {
+          for (var a = 0; a < n; a++) {
+            var dm = campo.disponibile[a];
+            if (!(dm > 0)) continue;
+            var suolo = Math.max(0, campo.suolo ? campo.suolo[a] : 0);
+            var lcl = limita(campo.lcl[a], suolo + 0.15, suolo + 4.0);
+            modello[a] = dm;
+            convezione[a] = dm * (campo.convezione ? campo.convezione[a] : 0);
+            baseCumulo[a] = BASE_CUMULO_KM + (lcl - BASE_CUMULO_KM) * dm;
+            baseStrato[a] = BASE_STRATO_KM + (limita(lcl, suolo + 0.1, suolo + 0.9) - BASE_STRATO_KM) * dm;
+            baseNembo[a] = BASE_NEMBO_KM + (limita(lcl, suolo + 0.3, suolo + 2.0) - BASE_NEMBO_KM) * dm;
+            basePavimento[a] = Math.max(0.2, (suolo + 0.1) * dm);
+          }
+        }
         for (var k = 0; k < n; k++) {
           var T = cima[k], g = giorno ? giorno[k] : 0;
           var alto = lisciaFra(PIANO_ALTO_KM - 1, PIANO_ALTO_KM + 0.5, T);
@@ -8192,6 +8500,10 @@
             // strato/nebbia che con una sequenza di cupole convettive.
             cumuli *= 1 - 0.35 * campo.basseAcqua[k] * campo.basseValide[k] * (1 - g);
           }
+          // Aria instabile: una nube bassa o media ha piu' probabilita' di
+          // essere a cumulo. Il CAPE rafforza la tessitura osservata, non la
+          // sostituisce: meta' della strada verso il cumulo, al massimo.
+          if (convezione[k] > 0) cumuli += (1 - cumuli) * 0.4 * convezione[k] * (1 - alto);
           kappa[k] = cumuli;
           // Convezione profonda: alta, fredda, opaca E con la cima ribollente
           // (le cime che sfondano rendono irregolare l'infrarosso). Senza
@@ -8214,15 +8526,20 @@
           // non basta mai da sola a creare una torre nell'incudine o nel fronte.
           var sostegnoTipo = campo.tipoValido
             ? 1 + 0.15 * (campo.tipoSpesso[k] - 0.5) * campo.tipoValido[k] * g : 1;
-          var nucleoTermico = lisciaFra(PROFONDA_MIN_KM, PROFONDA_MIN_KM + 1.5, T)
+          // Con molto CAPE un cumulonembo puo' fermarsi piu' in basso (aria
+          // fredda, tropopausa bassa); senza CAPE la sua prova pesa meno: un
+          // fronte alto e freddo in aria stabile non e' una torre.
+          var profondaMin = PROFONDA_MIN_KM - 1.5 * convezione[k];
+          var sostegnoCape = modello[k] > 0 ? 1 + modello[k] * (0.45 * convezione[k] - 0.15) : 1;
+          var nucleoTermico = lisciaFra(profondaMin, profondaMin + 1.5, T)
             * lisciaFra(0.62, 0.86, tau[k])
             * Math.max(provaTermica, provaRdt, provaRdtRadar);
           var nucleoElettrico = lisciaFra(5.5, 8.5, T)
             * lisciaFra(0.46, 0.76, tau[k]) * provaMultisensore;
           prova[k] = alto * Math.max(nucleoTermico, nucleoElettrico)
-            * lisciaFra(0.25, 0.7, cancello[k]) * sostegnoTipo;
+            * lisciaFra(0.25, 0.7, cancello[k]) * sostegnoTipo * sostegnoCape;
           freddoOpaco[k] = alto * Math.max(
-            lisciaFra(PROFONDA_MIN_KM - 1, PROFONDA_MIN_KM + 0.5, T)
+            lisciaFra(profondaMin - 1, profondaMin + 0.5, T)
               * lisciaFra(0.6, 0.8, tau[k]),
             lisciaFra(5.5, 8.5, T) * provaMultisensore);
           chi[k] = 0;
@@ -8268,7 +8585,7 @@
           var t = tau[k], c = kappa[k];
           // La base sale al livello di condensazione appena la nube e' a
           // cumulo: la stessa soglia che le da' il nome.
-          var baseBassa = BASE_STRATO_KM + (BASE_CUMULO_KM - BASE_STRATO_KM) * lisciaFra(0.2, 0.6, c);
+          var baseBassa = baseStrato[k] + (baseCumulo[k] - baseStrato[k]) * lisciaFra(0.2, 0.6, c);
           if (campo.basseValide) {
             // L'aqua del prodotto notturno favorisce una base stratiforme
             // bassa, soltanto dove il Cloud Top Height e' gia' basso.
@@ -8279,7 +8596,7 @@
           var nembo = Math.max(lisciaFra(0.75, 0.95, t),
             pioggia && pioggiaDiffusa
               ? pioggia[k] * lisciaFra(0.26, 0.65, pioggiaDiffusa[k]) * 0.85 : 0) * (1 - c);
-          baseMedia += (BASE_NEMBO_KM - baseMedia) * nembo;
+          baseMedia += (baseNembo[k] - baseMedia) * nembo;
           var baseAlta = Math.max(BASE_ALTA_MIN_KM,
             T2 - (SPESSORE_CIRRO_KM + (SPESSORE_CIRROSTRATO_KM - SPESSORE_CIRRO_KM) * t));
           baseAlta += (Math.max(BASE_ALTA_MIN_KM, T2 - SPESSORE_INCUDINE_KM) - baseAlta) * incudine[k];
@@ -8289,7 +8606,7 @@
           if (pioggia && pioggiaDiffusa) {
             var pioggiaEstesa = pioggia[k] * lisciaFra(0.2, 0.62, pioggiaDiffusa[k])
               * lisciaFra(0.45, 0.75, t) * (1 - incudine[k]) * (1 - chi[k]);
-            baseAlta += (BASE_NEMBO_KM - baseAlta) * 0.82 * pioggiaEstesa;
+            baseAlta += (baseNembo[k] - baseAlta) * 0.82 * pioggiaEstesa;
           }
           base[k] = basso * baseBassa + medio * baseMedia + alto2 * baseAlta;
         }
@@ -8317,10 +8634,10 @@
           // Il cumulo che cresce -- congesto -- parte dal basso anche se la
           // cima e' a quota media; il cumulonembo parte dal basso sempre.
           var congesto = c3 * lisciaFra(0.6, 0.9, t3) * (1 - lisciaFra(PIANO_ALTO_KM - 1, PIANO_ALTO_KM + 0.5, T3));
-          b += (BASE_CUMULO_KM - b) * congesto * 0.9;
+          b += (baseCumulo[k] - b) * congesto * 0.9;
           // La base dell'incudine resta in quota; solo il nucleo osservato
           // collega la cima al livello basso, con raccordo morbido nello shader.
-          base[k] = limita(b, 0.2, Math.max(0.2, T3 - 0.25));
+          base[k] = limita(b, basePavimento[k], Math.max(basePavimento[k], T3 - 0.25));
           densita[k] = 0.22 + 0.78 * t3;
           if (cancello[k] < 0.15 || T3 < 0.2) { classe[k] = 0; continue; }
           // Pesi di compatibilita', NON probabilita' calibrate: il satellite
@@ -8397,6 +8714,9 @@
         campo.fiduciaGenere = fiduciaGenere; campo.materia = materia; campo.tau = tau;
         campo.incudine = incudine; campo.pioggiaNube = pioggiaNube;
         campo.granuli = granuli; campo.veloLiscio = veloLiscio;
+        // La base della torre: dove c'e' il nucleo convettivo lo shader
+        // collega la colonna fino a questa quota (l'LCL, o 1 km senza ICON).
+        campo.baseTorre = baseCumulo;
         return campo;
       }
 
@@ -8483,11 +8803,15 @@
       // cupole uscivano rigate come un legno tagliato. Mezza precisione basta
       // e avanza: una decina di metri al massimo.
       //
-      // R la cima, G la copertura, B la BASE, A la densita' del genere. La
-      // base non e' piu' la cima meno uno spessore: e' la quota a cui il
-      // genere di nube si forma. E' questo che fa galleggiare uno strato e
-      // stare in quota un cirro, invece di attaccare ogni nube a terra come
-      // una montagna.
+      // LA TEXTURE DELLA FUSIONE, RGBA:
+      //   R la cima     (Cloud Top Height; IR 10,5 um sul profilo ICON-2I)
+      //   G la copertura/densita' osservata (maschera CLM, IR, GeoColour)
+      //   B la BASE     (la quota a cui il genere si forma: LCL ICON-2I per
+      //                  cumuli, torri, strati e nembostrati)
+      //   A la CONVEZIONE (corrente potenziale dal CAPE ICON-2I, 0-1)
+      // La base non e' la cima meno uno spessore: e' questo che fa galleggiare
+      // uno strato e stare in quota un cirro, invece di attaccare ogni nube a
+      // terra come una montagna. La densita' del genere sta in uGeneri.a.
       function tessituraDelCampo(campo) {
         var quanti = campo.larghezza * campo.altezza;
         var dati = new Float32Array(quanti * 4);
@@ -8497,13 +8821,14 @@
           dati[k * 4] = limita(cima / QUOTA_SCALA_KM, 0, 1);
           dati[k * 4 + 1] = limita(campo.copertura[k], 0, 1);
           dati[k * 4 + 2] = limita(Math.min(base, cima) / QUOTA_SCALA_KM, 0, 1);
-          dati[k * 4 + 3] = campo.densita ? campo.densita[k] : 1;
+          dati[k * 4 + 3] = campo.ambiente ? campo.ambiente.convezione[k] * campo.ambiente.disponibile[k] : 0;
         }
         return dati;
       }
 
-      // R convettivo, G fibroso, B nucleo profondo, A massa interna del banco.
-      // Una sola texture RGBA8 in piu' del campo, senza campionamenti aggiunti.
+      // R convettivo, G fibroso, B nucleo profondo, A densita' ottica del
+      // genere (spessore ottico pesato sulla massa interna del banco), diviso
+      // DENSITA_GENERE_MAX per stare negli otto bit.
       function tessituraDeiGeneri(campo) {
         var quanti = campo.larghezza * campo.altezza;
         var dati = new Uint8Array(quanti * 4);
@@ -8511,7 +8836,23 @@
           dati[k * 4] = Math.round(limita(campo.kappa ? campo.kappa[k] : 0.5, 0, 1) * 255);
           dati[k * 4 + 1] = Math.round(limita(campo.fibra ? campo.fibra[k] : 0, 0, 1) * 255);
           dati[k * 4 + 2] = Math.round(limita(campo.chi ? campo.chi[k] : 0, 0, 1) * 255);
-          dati[k * 4 + 3] = Math.round(limita(campo.materia ? campo.materia[k] : 0.5, 0, 1) * 255);
+          var densitaGenere = (campo.densita ? campo.densita[k] : 1)
+            * (0.8 + 0.55 * (campo.materia ? campo.materia[k] : 0.5));
+          dati[k * 4 + 3] = Math.round(limita(densitaGenere / DENSITA_GENERE_MAX, 0, 1) * 255);
+        }
+        return dati;
+      }
+      var DENSITA_GENERE_MAX = 1.35;
+
+      // La base delle torri convettive, in km su QUOTA_SCALA_KM: l'LCL del
+      // modello dove c'e', un chilometro altrimenti.
+      function tessituraBaseTorre(campo) {
+        var quanti = campo.larghezza * campo.altezza;
+        var dati = new Uint8Array(quanti * 4);
+        for (var k = 0; k < quanti; k++) {
+          var b = campo.baseTorre ? campo.baseTorre[k] : BASE_CUMULO_KM;
+          dati[k * 4] = Math.round(limita(b / QUOTA_SCALA_KM, 0, 1) * 255);
+          dati[k * 4 + 3] = 255;
         }
         return dati;
       }
@@ -8693,6 +9034,7 @@
         "uniform sampler2D uCampo;",
         "uniform sampler2D uGeneri;",
         "uniform sampler2D uMorfologia;",
+        "uniform sampler2D uBaseTorre;",   // base delle torri: LCL ICON-2I (km / uScalaKm)
         "uniform sampler3D uForma;",       // Perlin-Worley e Worley: la scultura
         "uniform sampler3D uDettaglio;",   // Worley fine: l'erosione dei bordi
         "uniform vec2 uFormaPasso;",       // x: celle per unita' Mercatore, y: per km in verticale
@@ -8821,7 +9163,10 @@
         "  vec4 meteo = textureLod(uMorfologia, uv, lodLiscio);",
         "  float incudine = meteo.r, pioggiaEstesa = meteo.g;",
         "  float granuli = meteo.b, veloLiscio = meteo.a;",
-        "  float fibra = genere.g, torre = genere.b, materia = genere.a;",
+        "  float fibra = genere.g, torre = genere.b;",
+        "  // Il CAPE di ICON-2I (canale A) e la base delle sue torri (LCL).",
+        "  float convezione = liscia.a;",
+        "  float baseTorreKm = textureLod(uBaseTorre, uv, lodLiscio).r * uScalaKm;",
         "  float cumulo = max(genere.r, torre);",
         "  cimaKm = mix(liscia.r, fine.r, 0.35) * uScalaKm;",
         "  float altocumulo = granuli * smoothstep(2.7, 4.1, cimaKm)",
@@ -8832,11 +9177,11 @@
         "  float profiloTorre = smoothstep(0.08, 0.5, torre);",
         "  float cirro = smoothstep(0.55, 0.9, fibra) * (1.0 - 0.7 * veloLiscio);",
         "  float baseKm = min(liscia.b * uScalaKm, cimaKm - 0.2);",
-        "  gDensita = liscia.a * mix(0.8, 1.35, materia);",
+        "  gDensita = genere.a * 1.35;",   // DENSITA_GENERE_MAX
         "  if (cimaKm < 0.24) return 0.0;",
         "  float cosLat = cosLatDa(p.y);",
         "  altKm = p.z * uCircKm * cosLat / uEsagerazione;",
-        "  if (altKm < min(baseKm, 1.0) || altKm > cimaKm) return 0.0;",
+        "  if (altKm < min(baseKm, baseTorreKm) || altKm > cimaKm) return 0.0;",
         "  // Coordinate affini FISSE: si mescolano i valori, mai le coordinate",
         "  // assolute con il peso locale del genere (causava strisce e anelli).",
         "  vec3 q = vec3(p.xy * uFormaPasso.x, altKm * uFormaPasso.y)",
@@ -8848,7 +9193,7 @@
         "  // di raccordo, senza erodere la colonna centrale fino alla CTH.",
         "  float fianco = (1.0 - smoothstep(0.45, 0.8, torre)) * smoothstep(0.02, 0.12, torre);",
         "  float torreScolpita = clamp(torre + fianco * (0.40 * (sf.g - 0.38) + 0.18 * (sf.b - 0.38)), 0.0, 1.0);",
-        "  baseKm = mix(baseKm, min(1.0, baseKm), 0.96 * smoothstep(0.015, 0.65, torreScolpita));",
+        "  baseKm = mix(baseKm, min(baseTorreKm, baseKm), 0.96 * smoothstep(0.015, 0.65, torreScolpita));",
         "  spessKm = cimaKm - baseKm;",
         "  if (altKm < baseKm) return 0.0;",
         "  // Un rilievo orizzontale continuo mantiene i lobi collegati alla base.",
@@ -8863,6 +9208,13 @@
         "  // profilo normalizzato erodeva oltre mezza torre sotto una CTH di 12 km.",
         "  float rilievoKm = rilievoSuperficie(spessKm, tetto.r, loboSc, loboAc,",
         "    loboCu, stratocumulo, altocumulo, cupole, incudine, profiloTorre, copertura);",
+        "  // CAVOLFIORI DAL CAPE. Dove l'aria e' instabile le cupole di un cumulo",
+        "  // e il fianco di una torre si gonfiano di piu' e il Worley del",
+        "  // dettaglio morde piu' a fondo; negli strati (cupole e torre nulle)",
+        "  // il CAPE non tocca niente e la lastra resta laminare. Solo la pelle:",
+        "  // il nucleo della torre resta pieno fino alla cima misurata.",
+        "  float cavolfiore = convezione * max(cupole, 0.6 * profiloTorre);",
+        "  rilievoKm *= 1.0 + 0.6 * cavolfiore;",
         "  // La parte marginale si assottiglia: niente pareti verticali intorno",
         "  // al tetto. La copertura osservata continua a delimitare l'intera nube.",
         "  float margine = 1.0 - smoothstep(0.03, 0.85, copertura);",
@@ -8897,9 +9249,9 @@
         "  float lodD = max(0.0, lodGrezzo + log2(uTexelCampo * uDettaglioPasso.x * uLatoDettaglio));",
         "  vec3 sd = textureLod(uDettaglio, qd + vec3(0.17, 0.43, 0.29), lodD).rgb;",
         "  float dfbm = sd.r * 0.625 + sd.g * 0.25 + sd.b * 0.125;",
-        "  float pelle = 1.0 - smoothstep(0.0, 0.45, min(altKm - baseKm, cimaKm - altKm));",
+        "  float pelle = 1.0 - smoothstep(0.0, 0.45 + 0.5 * cavolfiore, min(altKm - baseKm, cimaKm - altKm));",
         "  pelle = max(pelle, 1.0 - smoothstep(0.15, 0.8, copertura));",
-        "  float erosione = (1.0 - dfbm) * 0.18 * pelle * (1.0 - 0.75 * veloLiscio)",
+        "  float erosione = (1.0 - dfbm) * 0.18 * (1.0 + 1.8 * cavolfiore) * pelle * (1.0 - 0.75 * veloLiscio)",
         "    * (1.0 - smoothstep(1.5, 4.0, lodD));",
         "  return d * (1.0 - erosione);",
         "}",
@@ -8939,7 +9291,8 @@
         "    float base = lontana.b * uScalaKm, cima = lontana.r * uScalaKm;",
         "    float dentro = smoothstep(base - 0.35, base + 0.4, altitudine)",
         "      * (1.0 - smoothstep(cima - 0.5, cima + 0.25, altitudine));",
-        "    somma += lontana.g * lontana.a * dentro * tratto * 0.55;",
+        "    float densitaLontana = textureLod(uGeneri, uv, max(2.0, lodGrezzo + 2.0)).a * 1.35;",
+        "    somma += lontana.g * densitaLontana * dentro * tratto * 0.55;",
         "  }",
         "  return somma;",
         "}",
@@ -9347,7 +9700,8 @@
         this.texCampo = gl.createTexture();
         this.texGeneri = gl.createTexture();
         this.texMorfologia = gl.createTexture();
-        [this.texCampo, this.texGeneri, this.texMorfologia].forEach(function (tex) {
+        this.texBaseTorre = gl.createTexture();
+        [this.texCampo, this.texGeneri, this.texMorfologia, this.texBaseTorre].forEach(function (tex) {
           gl.bindTexture(gl.TEXTURE_2D, tex);
           gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR_MIPMAP_LINEAR);
           gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
@@ -9386,6 +9740,10 @@
         gl.bindTexture(gl.TEXTURE_2D, this.texMorfologia);
         gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA8, campo.larghezza, campo.altezza, 0,
           gl.RGBA, gl.UNSIGNED_BYTE, tessituraMorfologia(campo));
+        gl.generateMipmap(gl.TEXTURE_2D);
+        gl.bindTexture(gl.TEXTURE_2D, this.texBaseTorre);
+        gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA8, campo.larghezza, campo.altezza, 0,
+          gl.RGBA, gl.UNSIGNED_BYTE, tessituraBaseTorre(campo));
         gl.generateMipmap(gl.TEXTURE_2D);
         // Il tetto del volume e' la cima piu' alta della scena, non il
         // fondoscala: sopra non c'e' niente da attraversare, e ogni
@@ -9646,6 +10004,9 @@
         gl.activeTexture(gl.TEXTURE4);
         gl.bindTexture(gl.TEXTURE_2D, this.texMorfologia);
         gl.uniform1i(u("uMorfologia"), 4);
+        gl.activeTexture(gl.TEXTURE5);
+        gl.bindTexture(gl.TEXTURE_2D, this.texBaseTorre);
+        gl.uniform1i(u("uBaseTorre"), 5);
 
         gl.disable(gl.DEPTH_TEST);
         gl.disable(gl.CULL_FACE);
@@ -10068,13 +10429,21 @@
         var promessaScariche = opzionale(function () {
           return scarica(STRATI.scariche, diagnosi, adesso, slotScena, true);
         });
+        // L'ambiente ICON-2I dello stesso istante, con un limite di attesa:
+        // un gh-pages lento non deve ritardare il primo fotogramma.
+        var promessaAmbiente = Promise.race([
+          ambienteAllIstante(slotScena),
+          new Promise(function (risolvi) { setTimeout(function () { risolvi(null); }, 6000); })
+        ]);
         Promise.all([
           scarica(STRATI.forma, misure.forma, adesso, slotScena),
           scarica(STRATI.maschera, misure.msg, adesso, slotMsg),
-          scarica(STRATI.cime, misure.msg, adesso, slotMsg)
+          scarica(STRATI.cime, misure.msg, adesso, slotMsg),
+          promessaAmbiente
         ]).then(function (arrivati) {
           if (!attiva || seriale !== scenaSeriale) return;
-          var campo = componi(arrivati[0], arrivati[1], arrivati[2], null, promessaPelle, misure, seriale);
+          var campo = componi(arrivati[0], arrivati[1], arrivati[2], null, promessaPelle, misure, seriale,
+            arrivati[3]);
           if (!campo) return;
           promessaCelle.then(function (celle) {
             campo.rdtTerminato = true;
@@ -10122,7 +10491,7 @@
           });
         }).catch(function () {
           if (attiva && seriale === scenaSeriale) {
-            toast("Nubi in volume: infrarosso non disponibile, resta visibile il satellite");
+            toast("Nubi 3D: infrarosso non disponibile, resta visibile il satellite");
           }
         });
       }
@@ -10222,21 +10591,35 @@
         return pixelPelle;
       }
 
-      function componi(forma, maschera, cime, celle, promessaPelle, misure, seriale) {
+      function componi(forma, maschera, cime, celle, promessaPelle, misure, seriale, ambiente) {
         var misuraForma = misure.forma, misuraPelle = misure.pelle, misuraMsg = misure.msg;
         if (!attiva || seriale !== scenaSeriale) return;
 
         if (!forma) {
           // Senza l'infrarosso non c'e' ne' quota ne' volume: e' la misura
           // da cui dipende tutto il resto. Non si inventa.
-          toast("Nubi in volume: infrarosso non disponibile per questo slot, riprova fra poco");
+          toast("Nubi 3D: infrarosso non disponibile per questo slot, riprova fra poco");
           return;
         }
 
         var campo;
         try {
           var pixelForma = leggiPixel(forma.immagine, misuraForma);
-          campo = campoDelleNubi(pixelForma.data, misuraForma.larghezza, misuraForma.altezza);
+          var ambienteCampo = null;
+          if (ambiente) {
+            try {
+              ambienteCampo = ambienteSulCampo(ambiente, misuraForma.larghezza, misuraForma.altezza);
+            } catch (errore) { ambienteCampo = null; }
+          }
+          var misuraIr = function () {
+            var c = campoDelleNubi(pixelForma.data, misuraForma.larghezza, misuraForma.altezza);
+            if (ambienteCampo) {
+              c.ambiente = ambienteCampo;
+              applicaQuotaFisica(c, pixelForma.data);
+            }
+            return c;
+          };
+          campo = misuraIr();
           if (maschera) {
             try {
               var quantiMsg = misuraMsg.larghezza * misuraMsg.altezza;
@@ -10247,7 +10630,7 @@
               campoMisurato(campo, clm, cth, misuraMsg);
               campo.conQuota = !!cime;
             } catch (errore) {
-              campo = campoDelleNubi(pixelForma.data, misuraForma.larghezza, misuraForma.altezza);
+              campo = misuraIr();
             }
           }
           // Senza la maschera si torna alla stima dal solo infrarosso, e le
@@ -10255,7 +10638,7 @@
           // CTH la forma delle cime e' misurata e non si tocca.
           if (!campo.misurato) {
             campo.quota = allargaCime(campo.quota, campo.larghezza, campo.altezza);
-            toast("Nubi in volume: maschera nubi EUMETSAT assente, ricostruzione dal solo infrarosso");
+            toast("Nubi 3D: maschera nubi EUMETSAT assente, ricostruzione dal solo infrarosso");
           }
           campo.rdt = celle ? celle.length : null;
           if (celle && celle.length) {
@@ -10271,9 +10654,10 @@
           volume.epoca = forma.slot.epoca;
           volume.lampi = [];
           volume.pubblicaCampo(campo);
+          avvisaAmbiente(campo.ambiente);
           nascondiNubePianaQuandoPronto();
         } catch (errore) {
-          toast("Nubi in volume: impossibile leggere l'infrarosso, resta visibile il satellite");
+          toast("Nubi 3D: impossibile leggere l'infrarosso, resta visibile il satellite");
           return;
         }
 
@@ -10288,12 +10672,28 @@
               completaScenaOttica(campo, pelle, misuraPelle, seriale);
             }).catch(function () {
               if (attiva && seriale === scenaSeriale) {
-                toast("Nubi in volume: GeoColour assente, resta la ricostruzione infrarossa");
+                toast("Nubi 3D: GeoColour assente, resta la ricostruzione infrarossa");
               }
             });
           }, 0);
         });
         return campo;
+      }
+
+      // Una riga sola quando la fonte delle basi cambia (scorrendo la timeline
+      // si puo' uscire dalle ore coperte da ICON-2I), mai a ogni fotogramma.
+      var ultimoStatoAmbiente = "";
+      function avvisaAmbiente(amb) {
+        var stato = amb ? "icon" : "stime";
+        if (stato === ultimoStatoAmbiente) return;
+        var primo = !ultimoStatoAmbiente;
+        ultimoStatoAmbiente = stato;
+        if (amb) {
+          if (!primo) toast("Nubi 3D: ambiente ICON-2I di nuovo disponibile (run "
+            + String(amb.run || "").slice(0, 13).replace("T", " ") + " UTC)");
+        } else {
+          toast("Nubi 3D: ambiente ICON-2I non disponibile per questo istante, basi e convezione stimate dal satellite");
+        }
       }
 
       function completaScenaOttica(campo, pelle, misuraPelle, seriale) {
@@ -10344,10 +10744,10 @@
             // La ricostruzione IR e' gia' pubblicata. GeoColour e superficie
             // sono un affinamento: se una GPU mobile e' a corto di memoria non
             // si torna piu' a una mappa vuota.
-            toast("Nubi in volume: dettaglio GeoColour ridotto su questo dispositivo");
+            toast("Nubi 3D: dettaglio GeoColour ridotto su questo dispositivo");
           }
         } else {
-          toast("Nubi in volume: GeoColour assente, restano le nubi rilevate dall'infrarosso");
+          toast("Nubi 3D: GeoColour assente, restano le nubi rilevate dall'infrarosso");
         }
         map.triggerRepaint();
       }
@@ -10495,7 +10895,10 @@
         var kc = limita(Math.floor(fy * m.altezza), 0, m.altezza - 1) * m.larghezza
           + limita(Math.floor(fx * m.larghezza), 0, m.larghezza - 1);
         var genere = GENERI[campo.classe[kc]];
-        var baseStimata = campo.chi && campo.chi[k] > 0.5 ? Math.min(1, campo.base[k]) : campo.base[k];
+        var baseTorre = campo.baseTorre ? campo.baseTorre[k] : 1;
+        var baseStimata = campo.chi && campo.chi[k] > 0.5 ? Math.min(baseTorre, campo.base[k]) : campo.base[k];
+        var amb = campo.ambiente;
+        var conModello = amb && amb.disponibile[k] > 0.5;
         if (!campo.classe[kc] || campo.copertura[k] < 0.05) return "Nessuna nube qui (maschera nubi EUMETSAT)";
         var misurata = campo.conQuotaMisurata && campo.conQuotaMisurata[
           limita(Math.floor(fy * campo.altezza), 0, campo.altezza - 1) * campo.larghezza + x] > 0.3;
@@ -10507,10 +10910,19 @@
           ? " · eco radar " + Math.round(campo.radarNube[kc]) + " dBZ" : "";
         var lampiQui = campo.scaricheNube && campo.scaricheNube[kc] > 0.2
           ? " · scariche rilevate" : "";
+        // La convezione torna in CAPE per leggerla: w = 0,45*sqrt(2*CAPE).
+        var correnteQui = conModello ? amb.convezione[k] * CORRENTE_RIFERIMENTO_MS : 0;
+        var capeQui = correnteQui / EFFICIENZA_PARTICELLA;
+        capeQui = capeQui * capeQui / 2;
+        var ambienteQui = conModello
+          ? " · ICON-2I: CAPE ~" + (Math.round(capeQui / 50) * 50) + " J/kg"
+          : "";
         return evidenza + genere + " · cima " + campo.quota[k].toFixed(1).replace(".", ",") + " km"
-          + (misurata ? " (misurata, CTH)" : " (stimata)")
-          + " · base ~" + baseStimata.toFixed(1).replace(".", ",") + " km (stimata)"
-          + ecoQui + lampiQui;
+          + (misurata ? " (misurata, CTH)" : (campo.quotaFisica && conModello ? " (IR su profilo ICON-2I)" : " (stimata)"))
+          + " · base ~" + baseStimata.toFixed(1).replace(".", ",") + " km"
+          + (conModello && /^(Cumulo|Cumulonembo|Stratocumulo|Strato|Nembostrato)$/.test(genere)
+            ? " (LCL ICON-2I)" : " (stimata)")
+          + ambienteQui + ecoQui + lampiQui;
       }
 
       var toccoRegistrato = false;
@@ -10559,7 +10971,7 @@
           // Il ray marcher usa texture 3D e sampler3D: servono davvero
           // WebGL2, non un'approssimazione. Meglio dirlo che mostrare una
           // pagina bianca o uno shader che non compila.
-          toast("Nubi in volume non disponibile su questo dispositivo (serve WebGL2)");
+          toast("Nubi 3D non disponibili su questo dispositivo (serve WebGL2)");
           return;
         }
         attiva = true;
@@ -10579,14 +10991,15 @@
         try {
           abilitaInclinazioneVolume(true);
         } catch (errore) {
-          console.error("Nubi in volume: inclinazione non applicata", errore);
+          console.error("Nubi 3D: inclinazione non applicata", errore);
         }
         blitzRetryDelay = 2000;
         blitzConnect();
         toast(
-          "Nubi in volume · genere di ogni nube da quota (CTH), spessore ottico e tessitura; "
-          + "cirri, strati e cumuli distinti; radar/RDT affinano la diagnosi. "
-          + "Tocca una nube per il suo genere. Basi stimate. "
+          "Nubi 3D · satellite EUMETSAT + ICON-2I: genere di ogni nube da quota (CTH), "
+          + "spessore ottico e tessitura; basi dal livello di condensazione e convezione "
+          + "dal CAPE del modello all'istante del satellite; radar/RDT affinano la diagnosi. "
+          + "Tocca una nube per il suo genere. "
           + "Le nubi si illuminano solo quando arriva una scarica Blitzortung."
         );
         costruisciScena();
@@ -12200,7 +12613,7 @@
         if (showLiveLightning) parti.push("fulmini in diretta");
         if (showLightning) parti.push("fulmini MTG");
         if (typeof showVolumeClouds !== "undefined" && showVolumeClouds) {
-          parti.push("nubi in volume");
+          parti.push("nubi 3D");
         }
         riga.textContent = parti.length
           ? parti.join(" · ")
@@ -14487,7 +14900,7 @@
             syncTerrainExaggeration(true);
           }
           // Il rilievo puo' essere acceso dall'alto, ma l'inclinazione della
-          // camera appartiene soltanto al comando Nubi in volume.
+          // camera appartiene soltanto al comando Nubi 3D.
           if (!showVolumeClouds) {
             if (map.dragRotate) map.dragRotate.disable();
             if (map.touchZoomRotate) map.touchZoomRotate.disableRotation();
@@ -14503,7 +14916,7 @@
           renderWeather();
           updateReliefShading();
           toast(showVolumeClouds
-            ? "Rilievo 3D attivo · inclinazione controllata da Nubi in volume"
+            ? "Rilievo 3D attivo · inclinazione controllata da Nubi 3D"
             : "Rilievo 3D attivo · vista zenitale");
         } else {
           stopParticles();

@@ -9,6 +9,7 @@ on:
       - main
     paths:
       - 'scripts/process_data.py'
+      - 'scripts/merge_cloud_environment.py'
       - 'scripts/archive_run.py'
       - 'scripts/import_icon2i_history.py'
       - 'scripts/collect_observations.py'
@@ -53,6 +54,7 @@ on:
       - main
     paths:
       - 'scripts/process_data.py'
+      - 'scripts/merge_cloud_environment.py'
       - 'scripts/archive_run.py'
       - 'scripts/import_icon2i_history.py'
       - 'scripts/collect_observations.py'
@@ -367,6 +369,8 @@ jobs:
           node scripts/tests/test_blitzortung.js
           node scripts/tests/test_lampo.js
           node scripts/tests/test_workflow.js
+          python scripts/tests/test_cloud_environment.py
+          node scripts/tests/test_nubi_icon.js
 
   build:
     needs: ambito
@@ -456,6 +460,8 @@ jobs:
           node scripts/tests/test_blitzortung.js
           node scripts/tests/test_lampo.js
           node scripts/tests/test_workflow.js
+          python scripts/tests/test_cloud_environment.py
+          node scripts/tests/test_nubi_icon.js
 
       - name: Run ICON-2I processor
         env:
@@ -497,6 +503,24 @@ jobs:
           path: data_weather/front_qc.json
           if-no-files-found: warn
           retention-days: 90
+
+      # La pubblicazione e' un commit orfano: le ore passate dell'ambiente
+      # nubi 3D dei run precedenti sparirebbero, e la timeline satellitare
+      # (fino a 6 ore indietro) resterebbe senza ICON-2I subito dopo ogni
+      # nuovo run. Si recuperano da gh-pages. Mai bloccante.
+      - name: Conserva le ore passate dell'ambiente nubi 3D
+        continue-on-error: true
+        timeout-minutes: 5
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          VECCHIO=$(mktemp -d)
+          if git clone -q --depth 1 --filter=blob:none --sparse --branch gh-pages \
+              "https://x-access-token:${GITHUB_TOKEN}@github.com/${{ github.repository }}.git" "$VECCHIO"; then
+            git -C "$VECCHIO" sparse-checkout set data_weather/cloud_env
+            python scripts/merge_cloud_environment.py \
+              --new data_weather/cloud_env --old "$VECCHIO/data_weather/cloud_env"
+          fi
 
       # Unica pubblicazione: commit orfano su gh-pages da un repository
       # temporaneo isolato. Nessuna storia accumulata (la dimensione resta
