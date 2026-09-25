@@ -9443,6 +9443,9 @@
         "  return mix(henyeyGreenstein(coseno, uFaseG), henyeyGreenstein(coseno, -0.25), 0.22) * 4.0 * PI;",
         "}",
         "",
+        "// Da cono a calotta sferica: v = 1 al centro della bolla, 0 al bordo.",
+        "float calotta(float v) { float r = 1.0 - clamp(v, 0.0, 1.0); return sqrt(max(0.0, 1.0 - r * r)); }",
+        "",
         "// La colonna letta dalla texture: la nube esiste solo fra base e cima.",
         "// Ritorna la densita' 0-1; in uscita l'altezza relativa e la convezione.",
         "float densita(vec3 p, float lodCampo, float lodRumore, bool leggera,",
@@ -9495,13 +9498,17 @@
         "  float cumuli = 1.0 - smoothstep(1.5, 3.5, lodRumore);",
         "  float lobi = 1.0 - smoothstep(1.5, 3.5, lodRumore + 2.0);",
         "  float rilievo = 0.0;",
+        "  // Profilo a calotta: il Worley da solo e' un cono, e stirato",
+        "  // dall'esagerazione diventava una lama. La calotta e' tonda e gonfia.",
         "  if (torri > 0.0) rilievo += 1.2 * torri * mix(0.4, 1.0, convettiva)",
-        "      * (textureLod(uWorley, vec3(qc * 0.37 + uSemenza.xy, 0.31), lodRumore - 1.4).r - 0.55);",
+        "      * (calotta(textureLod(uWorley, vec3(qc * 0.37 + uSemenza.xy, 0.31), lodRumore - 1.4).r) - 0.75);",
         "  if (cumuli > 0.0) rilievo += 0.6 * cumuli",
-        "      * (textureLod(uWorley, vec3(mat2(0.8, -0.6, 0.6, 0.8) * qc + uSemenza.yz, 0.67), lodRumore).r - 0.55);",
+        "      * (calotta(textureLod(uWorley, vec3(mat2(0.8, -0.6, 0.6, 0.8) * qc + uSemenza.yz, 0.67), lodRumore).r) - 0.75);",
         "  if (lobi > 0.0) rilievo += 0.12 * lobi",
-        "      * (textureLod(uWorley, vec3(mat2(0.6, 0.8, -0.8, 0.6) * qc * 4.07, 0.13), lodRumore + 2.0).g - 0.55);",
-        "  float cimaLocale = cimaKm + 2.0 * tipo * rilievo;",
+        "      * (calotta(textureLod(uWorley, vec3(mat2(0.6, 0.8, -0.8, 0.6) * qc * 4.07, 0.13), lodRumore + 2.0).g) - 0.75);",
+        "  // Sullo schermo la cupola e' alta circa meta' della sua larghezza a ogni",
+        "  // esagerazione: in chilometri veri si divide per l'esagerazione.",
+        "  float cimaLocale = cimaKm + 2.0 * tipo * rilievo * min(1.0, 2.2 / uEsagerazione);",
         "  if (altKm > cimaLocale) return 0.0;",
         "  float h = (altKm - baseKm) / max(0.05, cimaLocale - baseKm);",
         "  hRel = h;",
@@ -10033,7 +10040,19 @@
       StratoVolume.prototype.esagerazioneAlloZoom = function () {
         var zoom = this.mappa && this.mappa.getZoom ? this.mappa.getZoom() : ESAGERAZIONE_ZOOM_PIENO;
         var calo = Math.pow(2, -Math.max(0, zoom - ESAGERAZIONE_ZOOM_PIENO) * ESAGERAZIONE_CALO_PER_ZOOM);
-        return Math.max(ESAGERAZIONE_MINIMA, ESAGERAZIONE_INIZIALE * calo);
+        var esagerazione = Math.max(ESAGERAZIONE_MINIMA, ESAGERAZIONE_INIZIALE * calo);
+        // Mai con le cime esagerate sopra la camera: da molto vicino la camera
+        // finiva dentro la nube e si vedeva solo grigio.
+        try {
+          var camera = this.mappa.getFreeCameraOptions().position;
+          var quotaCameraKm = camera && camera.toAltitude ? camera.toAltitude() / 1000 : NaN;
+          if (quotaCameraKm > 0 && this.quotaMassimaKm > 0) {
+            esagerazione = Math.min(esagerazione, Math.max(1, 0.85 * quotaCameraKm / this.quotaMassimaKm));
+          }
+        } catch (errore) {
+          // Senza camera libera resta l'esagerazione dello zoom.
+        }
+        return esagerazione;
       };
 
       // La texture in cui si disegna il volume: al massimo QUALITA_VOLUME.pixel

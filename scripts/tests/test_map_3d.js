@@ -2507,9 +2507,10 @@ assert.match(fragment, /if \(altKm < baseKm \|\| altKm > cimaKm \+ margine\) ret
 assert.match(fragment, /if \(altKm > cimaLocale\) return 0\.0;/, "la cima non segue piu' le cupole");
 // Coerenza con lo zoom: le cupole frattali, la luce nella geometria che si
 // vede, l'ingresso nella nube a passi corti, l'esagerazione che cala poco.
-assert.match(fragment, /float cimaLocale = cimaKm \+ 2\.0 \* tipo \* rilievo;/, "mancano le cupole frattali della cima");
+assert.match(fragment, /float cimaLocale = cimaKm \+ 2\.0 \* tipo \* rilievo \* min\(1\.0, 2\.2 \/ uEsagerazione\);/, "mancano le cupole frattali della cima");
 assert.match(fragment, /vec3 verso = vec3\(uSole\.xy, uSole\.z\) \/ kmPerUnita;/,
   "le ombre non seguono piu' la geometria esagerata: da vicino spariscono");
+assert.match(fragment, /float calotta\(float v\)/, "le cupole tornano coni: lame da vicino");
 assert.match(fragment, /t = max\(tVicino, t - passoPrima\);/, "manca l'ingresso a passi corti: torna la brina");
 assert.match(html, /var ESAGERAZIONE_MINIMA = 2\.4;/, "l'esagerazione torna a spianare le nubi da vicino");
 assert.match(fragment, /float soglia = \(1\.0 - sqrt\(copertura\)\) \* 0\.65;/, "mancano i vuoti del Perlin");
@@ -2613,7 +2614,7 @@ if mode=='section':
  assert floor[abs(xx)<2].min()<1.6, f'Cb base far above the LCL: {floor[abs(xx)<2].min():.2f} km'
  assert np.all(cb[:,abs(xx)>19.5]<.001), 'Cloud outside the observed coverage'
  st=np.load(f'{prefix}_St_section.npy')[:,:,0]
- assert np.all(st[z>1.7]<.001) and np.all(st[z<.45]<.001), 'Stratus leaves its base-top band'
+ assert np.all(st[z>1.95]<.001) and np.all(st[z<.45]<.001), 'Stratus leaves its base-top band (cupole comprese)'
  # Il CAPE scolpisce: lo stesso cumulo in aria instabile e' eroso a cavolfiore
  # ma resta una nube.
  cu=np.load(f'{prefix}_Cu_section.npy')[:,:,0];cu0=np.load(f'{prefix}_Cu0_section.npy')[:,:,0]
