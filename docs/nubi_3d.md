@@ -128,8 +128,18 @@ appena fuori dalla maschera perche' i bordi non scendano a terra.
   sull'out-scattering; Henyey-Greenstein (g = 0,6) per il bordo d'argento;
   diffusione multipla contenuta; cielo schermato dalla nube sopra
   (occlusione) e base della colonna piu' scura della cupola; foschia.
-- **Dettaglio da vicino**: un'ottava di Worley a 1,5 km che si accende solo
-  quando e' piu' grande di un pixel.
+- **Cima frattale**: la cima del satellite (un valore ogni 1-2 km) e'
+  alzata e abbassata da cupole alte quanto larghe (torri 4 km / 1,2 km,
+  cumuli 1,5 km / 600 m, lobi 370 m / 120 m), piu' basse negli strati e
+  quasi nulle nei veli; ogni ottava si accende quando supera un paio di
+  pixel. Bordo superiore netto (120-350 m). Dove la nube e' densa i lobi
+  sono pieni e separati da vuoti.
+- **Coerenza con lo zoom**: le ombre si calcolano nella stessa geometria
+  esagerata che si vede; l'esagerazione cala poco da vicino (da zoom 7,5,
+  minimo 2,4); il raggio entra nella nube a passi quattro volte piu' corti,
+  cosi' la cima netta non diventa grana.
+- **Dettaglio da vicino**: ottave di Worley a 370 m e 90 m che si accendono
+  solo quando sono piu' grandi di un paio di pixel.
 - **Qualita'** (fissa, per dispositivo): desktop campo 2560 px, foto 3072,
   tela fino a 3,2 Mpx, 320 passi e 7 verso il sole; telefono campo 1200 px,
   tela 720 kpx, 176 passi e 5 verso il sole.
