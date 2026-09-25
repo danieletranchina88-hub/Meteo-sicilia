@@ -96,38 +96,42 @@ temporale, conservazione delle ore passate), `scripts/tests/test_nubi_icon.js`
 texture) e `node scripts/tests/test_map_3d.js --gpu` (sezioni di densità dei
 generi su GPU, anche con e senza CAPE).
 
-## Il volume: nubi piene, non superfici
+## Il volume: fusione satellite + ICON-2I nel ray marcher
 
-Il ray marcher non scolpisce piu' la cima come una superficie (che faceva
-sembrare le nubi montagne): ogni colonna osservata e' un volume pieno fra la
-base (canale B) e la cima (canale R), con quote lette a scala leggermente
-piu' grossa della sagoma ed estese fuori dalla maschera, cosi' i bordi non
-scendono a terra.
+Il volume disegnato e' quello del primo ray marcher della fusione. Per ogni
+istante della timeline il browser calcola una texture RGBA dal satellite
+di quello slot e dall'ambiente ICON-2I interpolato (`fusioneDelCampo` in
+index.html):
 
-- **Profilo verticale per genere**: base piatta e cupola per cumuli e torri;
-  lastra con cima e base morbide per strati e veli; base sfumata dalla
-  pioggia per il nembostrato; cima piatta e larga per l'incudine; fili nel
-  verso del vento per il cirro.
-- **Strutture**: celle da ~3 km per lo stratocumulo e da 1-1,5 km per
-  l'altocumulo, separate da solchi sopra una base comune; cupole a lobi per
-  i cumuli; fianco a cavolfiore per la torre del cumulonembo, con il nucleo
-  pieno fino alla cima misurata e la base alla condensazione (LCL ICON-2I).
-- **Rumore 3D**: Perlin a 48 km per i vuoti macroscopici dove la nube e'
-  otticamente sottile; Worley a 6 km sottratto per i bordi cumuliformi. Il
-  CAPE (canale A) varia il morso del Worley: cavolfiori estremi per la
-  convezione profonda, lamine per gli strati in aria stabile. Si scolpisce
-  la forma 0-1 e poi la si moltiplica per la densita' ottica del genere.
+| Canale | Contenuto |
+| --- | --- |
+| R | Cima: temperatura di brillanza IR 10,5 µm risalita sul profilo ICON-2I, z = zs + (T2m - BT)/Γ, con 7 K/km di sfondamento oltre 12 km |
+| G | Densita': albedo VIS 0,6 µm di giorno (scaricato per ogni slot), contrasto IR di notte |
+| B | Base: LCL ICON-2I sopra l'orografia, limitata dallo spessore massimo 0,8 + 4·G + 11·(convezione profonda) km |
+| A | Convezione: 0,45·√(2·CAPE)/40 m/s, massimo su 25 km |
+
+La maschera CLM resta l'autorita' su dove c'e' nube; R, B e A sono estesi
+appena fuori dalla maschera perche' i bordi non scendano a terra.
+
+- **Raggio confinato** fra la base B e la cima R, con passo che cresce con
+  la distanza.
+- **Rumore 3D in km visti** (verticale moltiplicato per l'esagerazione):
+  Perlin fBm a 48 km per i vuoti, Worley a tre ottave a 6 km sottratto per i
+  bordi cumuliformi. Il CAPE varia il morso del Worley: cavolfiori per la
+  convezione profonda, lamine per gli strati in aria stabile. Il Worley
+  scolpisce la forma 0-1 prima della densita', e le torri convettive dense
+  restano piene.
 - **Luce**: Beer-Lambert verso il sole; powder 1 - e^(-densita' x 2)
-  sull'out-scattering, spento guardando verso il sole; Henyey-Greenstein
-  a doppio lobo (g = 0,6 in avanti) per il bordo d'argento in controluce;
-  diffusione multipla in due ottave perche' il nucleo non diventi nero;
-  luce del cielo dall'alto e del suolo dal basso; foschia con la distanza.
-- I lampi Blitzortung accendono la nube dall'interno come prima.
-- Sotto le nubi resta la carta: la foto GeoColour della superficie e'
-  disattivata (`SUPERFICIE_FOTOGRAFICA` in index.html).
+  sull'out-scattering; Henyey-Greenstein (g = 0,6) per il bordo d'argento;
+  diffusione multipla, cielo, suolo e foschia.
+- **Lampi**: le scariche Blitzortung accendono la nube dall'interno e
+  disegnano il canale sotto la base.
+- **Timeline**: tornando indietro nel tempo si ricalcola la fusione con le
+  immagini e l'ambiente di quell'istante.
+- **Superficie**: sotto le nubi resta visibile la foto satellitare
+  GeoColour (`SUPERFICIE_FOTOGRAFICA = true` in index.html).
 
-Le verifiche GPU (`node scripts/tests/test_map_3d.js --gpu`) controllano
-nucleo pieno del cumulonembo, cima alla CTH, torre piu' stretta
-dell'incudine, stratocumulo senza strisce, altocumulo piu' strutturato
-dell'altostrato, nessuna nube fuori dalla copertura osservata, e l'effetto
-del CAPE sui cumuli.
+Le verifiche GPU (`node scripts/tests/test_map_3d.js --gpu`) controllano la
+torre del Cb piena con la cima alla CTH e la base all'LCL, lo strato nella
+sua fascia, l'effetto del CAPE sui cumuli e l'assenza di nube fuori dalla
+copertura osservata.
