@@ -2116,7 +2116,7 @@ assert.equal(schermoAlto.width, schermoBasso.width,
   assert.doesNotMatch(frammento, /texture\(uRumore, q \* 3\.7/,
     "e' tornata l'ottava fine del rumore, quella che faceva i puntini");
   // Il lampo deve poter schiarire anche una nube al sole.
-  assert.match(frammento, /colore = alfa \* \(1\.0 - exp\(-colore \/ max\(alfa, 1e-3\) \* 1\.15\)\);/,
+  assert.match(frammento, /colore = alfa \* \(1\.0 - exp\(-colore \/ max\(alfa, 1e-3\) \* 1\.05\)\);/,
     "manca la curva di risposta: il bordo d'argento torna a tagliare");
 }
 {
@@ -2475,7 +2475,7 @@ console.log("nubi in volume: spessore continuo, niente grana, niente coni, nient
     "la sorgente del lampo e' tornata un punto: deve essere il canale verticale");
   assert.match(frammento, /float s = clamp\(dot\(dKm, dr\), 0\.0, lung\);/,
     "mancano i rami orizzontali del canale dentro la nube");
-  assert.match(frammento, /tauL \+= densita\(mix\(p, qS, 0\.2 \+ 0\.3 \* float\(k\)\), lodCampo \+ 1\.0, lodRumore \+ 1\.0, true, h2, c2\);/,
+  assert.match(frammento, /tauL \+= densita\(mix\(p, qS, 0\.2 \+ 0\.3 \* float\(k\)\), lodCampo \+ 1\.0, lodRumore \+ 1\.0, true, h2, c2, f2\);/,
     "la luce del lampo non attraversa piu' la nube vera: il nucleo fitto non fa ombra");
   assert.match(frammento, /IL CANALE SOTTO LA NUBE/, "manca il canale visibile fra la base e il suolo");
 }
@@ -2505,7 +2505,15 @@ const fragment = shader("FRAMMENTO");
 assert.match(fragment, /if \(altKm < baseKm \|\| altKm > cimaKm\) return 0\.0;/,
   "il raggio non e' piu' confinato fra base e cima");
 assert.match(fragment, /float soglia = \(1\.0 - sqrt\(copertura\)\) \* 0\.65;/, "mancano i vuoti del Perlin");
-assert.match(fragment, /float morso = mix\(0\.14, 0\.9, convettiva\);/, "il CAPE non varia piu' il morso del Worley");
+assert.match(fragment, /float morso = mix\(0\.32, 0\.9, convettiva\);/, "il CAPE non varia piu' il morso del Worley");
+// Da vicino: il passo segue la fascia della colonna (niente trama a puntini
+// sui veli), il cielo e' schermato dalla nube sopra, le ombre dei primi
+// passi verso il sole vedono i lobi, e le lamine non fanno curve di livello.
+assert.match(fragment, /passo = min\(passo, max\(fine, \(fascia\.y - fascia\.x\) \/ salita \* 0\.25\)\);/,
+  "il passo non segue piu' lo spessore della colonna");
+assert.match(fragment, /float occlusione = exp\(-sopra \* uSigma \* 0\.5\);/, "manca l'occlusione del cielo");
+assert.match(fragment, /float\(i\), i > 1, h, c, f\)/, "le ombre non vedono piu' il dettaglio dei lobi");
+assert.match(fragment, /float lamina = mix\(1\.6, 1\.0, convettiva\);/, "le lamine tornano a curve di livello");
 assert.match(fragment, /float powder = 1\.0 - exp\(-estinzione \* 2\.0\);/, "manca il powder");
 assert.match(fragment, /float beer = exp\(-tauSole\);/, "manca Beer-Lambert verso il sole");
 assert.match(fragment, /float henyeyGreenstein\(float coseno, float g\)/, "manca Henyey-Greenstein");
@@ -2550,7 +2558,7 @@ source=open(sys.argv[1]).read();prefix=sys.argv[2];mode=sys.argv[3] if len(sys.a
 if mode=='section':
  source=source[:source.index('void main()')]+'''void main(){
  vec3 p=vec3(0.5+vNdc.x*20.0/uCircKm,0.5,(vNdc.y+1.0)*7.0*uEsagerazione/uCircKm);
- float h,c;float d=densita(p,0.0,0.0,false,h,c);
+ float h,c;vec2 f;float d=densita(p,0.0,0.0,false,h,c,f);
  colorePixel=vec4(d,h,c,1.0);
  }'''
 program=CreateProgram();AttachShader(program,shader(open('/tmp/cloud_VERTICE.glsl').read(),0x8B31));AttachShader(program,shader(source,0x8B30));BindAttribLocation(program,0,b'aPos');LinkProgram(program);ok=I();GetProgramiv(program,0x8B82,c.byref(ok));log=c.create_string_buffer(16000);GetProgramInfoLog(program,len(log),None,log);assert ok.value,log.value.decode();UseProgram(program)

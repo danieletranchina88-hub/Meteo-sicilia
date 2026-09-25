@@ -7118,10 +7118,10 @@
       // campionamenti: e' quello che decide se uno strato sottile viene
       // attraversato o scavalcato.
       var QUALITA_VOLUME = isMobile()
-        ? { forma: 1200, pelle: 1400, misura: 800, esagerazione: 3.2, passoKm: 0.30, pixel: 560000,
-            rumore: 48, passiLuce: 4, passi: 128 }
-        : { forma: 2048, pelle: 2048, misura: 1100, esagerazione: 3.5, passoKm: 0.22, pixel: 1900000,
-            rumore: 64, passiLuce: 6, passi: 224 };
+        ? { forma: 1200, pelle: 1400, misura: 800, esagerazione: 3.2, passoKm: 0.30, pixel: 720000,
+            rumore: 48, passiLuce: 5, passi: 176 }
+        : { forma: 2560, pelle: 3072, misura: 1100, esagerazione: 3.5, passoKm: 0.22, pixel: 3200000,
+            rumore: 64, passiLuce: 7, passi: 320 };
 
       // Due misure complementari dello stesso istante: l'IR stima la cima,
       // GeoColour recupera la copertura calda, bassa o otticamente sottile.
@@ -7398,27 +7398,37 @@
       // O(pixel x raggio).
       function sfoca(campo, larghezza, altezza, raggio) {
         if (raggio < 1) return campo.slice();
-        var mezzo = new Float32Array(larghezza * altezza);
-        var fuori = new Float32Array(larghezza * altezza);
+        var w = larghezza, h = altezza, ultimaX = w - 1, ultimaY = h - 1;
+        var mezzo = new Float32Array(w * h);
+        var fuori = new Float32Array(w * h);
         var finestra = 2 * raggio + 1;
-        var x, y, somma, i;
-        for (y = 0; y < altezza; y++) {
-          var riga = y * larghezza;
+        var x, y, somma, i, riga, a, b;
+        for (y = 0; y < h; y++) {
+          riga = y * w;
           somma = 0;
-          for (i = -raggio; i <= raggio; i++) somma += campo[riga + limita(i, 0, larghezza - 1)];
-          for (x = 0; x < larghezza; x++) {
+          for (i = -raggio; i <= raggio; i++) somma += campo[riga + (i < 0 ? 0 : i > ultimaX ? ultimaX : i)];
+          for (x = 0; x < w; x++) {
             mezzo[riga + x] = somma / finestra;
-            somma -= campo[riga + limita(x - raggio, 0, larghezza - 1)];
-            somma += campo[riga + limita(x + raggio + 1, 0, larghezza - 1)];
+            a = x - raggio; b = x + raggio + 1;
+            somma -= campo[riga + (a < 0 ? 0 : a)];
+            somma += campo[riga + (b > ultimaX ? ultimaX : b)];
           }
         }
-        for (x = 0; x < larghezza; x++) {
-          somma = 0;
-          for (i = -raggio; i <= raggio; i++) somma += mezzo[limita(i, 0, altezza - 1) * larghezza + x];
-          for (y = 0; y < altezza; y++) {
-            fuori[y * larghezza + x] = somma / finestra;
-            somma -= mezzo[limita(y - raggio, 0, altezza - 1) * larghezza + x];
-            somma += mezzo[limita(y + raggio + 1, 0, altezza - 1) * larghezza + x];
+        // Le colonne riga per riga, con una somma per colonna: stessa
+        // finestra scorrevole, ma la memoria si legge in ordine.
+        var somme = new Float64Array(w);
+        for (i = -raggio; i <= raggio; i++) {
+          riga = (i < 0 ? 0 : i > ultimaY ? ultimaY : i) * w;
+          for (x = 0; x < w; x++) somme[x] += mezzo[riga + x];
+        }
+        for (y = 0; y < h; y++) {
+          riga = y * w;
+          a = y - raggio; b = y + raggio + 1;
+          var sotto = (a < 0 ? 0 : a) * w, sopra = (b > ultimaY ? ultimaY : b) * w;
+          for (x = 0; x < w; x++) {
+            fuori[riga + x] = somme[x] / finestra;
+            somme[x] -= mezzo[sotto + x];
+            somme[x] += mezzo[sopra + x];
           }
         }
         return fuori;
@@ -8137,14 +8147,22 @@
       function ricampiona(campo, sw, sh, dw, dh) {
         if (sw === dw && sh === dh) return campo.slice();
         var fuori = new Float32Array(dw * dh);
+        // Le colonne di partenza e i pesi si calcolano una volta sola.
+        var colonna0 = new Int32Array(dw), colonna1 = new Int32Array(dw), pesoX = new Float32Array(dw);
+        for (var x = 0; x < dw; x++) {
+          var fx = limita((x + 0.5) * sw / dw - 0.5, 0, sw - 1);
+          colonna0[x] = Math.floor(fx);
+          colonna1[x] = Math.min(sw - 1, colonna0[x] + 1);
+          pesoX[x] = fx - colonna0[x];
+        }
         for (var y = 0; y < dh; y++) {
           var fy = limita((y + 0.5) * sh / dh - 0.5, 0, sh - 1);
-          var y0 = Math.floor(fy), y1 = Math.min(sh - 1, y0 + 1), ty = fy - y0;
-          for (var x = 0; x < dw; x++) {
-            var fx = limita((x + 0.5) * sw / dw - 0.5, 0, sw - 1);
-            var x0 = Math.floor(fx), x1 = Math.min(sw - 1, x0 + 1), tx = fx - x0;
-            fuori[y * dw + x] = (campo[y0 * sw + x0] * (1 - tx) + campo[y0 * sw + x1] * tx) * (1 - ty)
-              + (campo[y1 * sw + x0] * (1 - tx) + campo[y1 * sw + x1] * tx) * ty;
+          var y0 = Math.floor(fy), ty = fy - y0;
+          var r0 = y0 * sw, r1 = Math.min(sh - 1, y0 + 1) * sw, riga = y * dw;
+          for (x = 0; x < dw; x++) {
+            var x0 = colonna0[x], x1 = colonna1[x], tx = pesoX[x];
+            fuori[riga + x] = (campo[r0 + x0] * (1 - tx) + campo[r0 + x1] * tx) * (1 - ty)
+              + (campo[r1 + x0] * (1 - tx) + campo[r1 + x1] * tx) * ty;
           }
         }
         return fuori;
@@ -9428,8 +9446,8 @@
         "// La colonna letta dalla texture: la nube esiste solo fra base e cima.",
         "// Ritorna la densita' 0-1; in uscita l'altezza relativa e la convezione.",
         "float densita(vec3 p, float lodCampo, float lodRumore, bool leggera,",
-        "              out float hRel, out float conv) {",
-        "  hRel = 0.0; conv = 0.0;",
+        "              out float hRel, out float conv, out vec2 fascia) {",
+        "  hRel = 0.0; conv = 0.0; fascia = vec2(-1.0);",
         "  vec2 uv = vec2((p.x - uDominio.x) / (uDominio.z - uDominio.x),",
         "                 (p.y - uDominio.y) / (uDominio.w - uDominio.y));",
         "  if (uv.x < 0.0 || uv.y < 0.0 || uv.x > 1.0 || uv.y > 1.0) return 0.0;",
@@ -9446,6 +9464,7 @@
         "  campo.rba = mix(liscio.rba, campo.rba, 0.3);",
         "  float cimaKm = campo.r * uScalaKm;",
         "  float baseKm = campo.b * uScalaKm;",
+        "  fascia = vec2(baseKm, cimaKm);",
         "  // BOUNDING VOLUME: fuori dalla fascia base-cima il raggio non trova nulla.",
         "  if (altKm < baseKm || altKm > cimaKm) return 0.0;",
         "  // Il CAPE scolpisce a cavolfiore solo una nube che il satellite vede",
@@ -9466,7 +9485,7 @@
         "  // convezione una foresta di colonne. Negli strati la verticale e'",
         "  // compressa ancora: le strutture si allungano in orizzontale e restano",
         "  // lamine. Nella convezione la bolla resta tonda sullo schermo.",
-        "  float lamina = mix(4.0, 1.0, convettiva);",
+        "  float lamina = mix(1.6, 1.0, convettiva);",
         "  vec3 q = vec3(p.xy * kmPerUnita, altKm * uEsagerazione * lamina);",
         "",
         "  // PERLIN: i vuoti macroscopici. Dove la densita' osservata e' bassa solo",
@@ -9478,7 +9497,7 @@
         "  // Il periodo verticale e' un sesto di quello orizzontale: con lo stesso",
         "  // periodo il Perlin resterebbe costante lungo tutta la colonna e i vuoti",
         "  // diventerebbero pozzi verticali -- il cilindro estruso da evitare.",
-        "  vec3 qp = vec3(q.xy / uPerlinKm, q.z / (uPerlinKm / 6.0)) + uSemenza;",
+        "  vec3 qp = vec3(q.xy / uPerlinKm, q.z / (uPerlinKm / 3.0)) + uSemenza;",
         "  float perlin = textureLod(uPerlin, qp, lodRumore).r;",
         "  float soglia = (1.0 - sqrt(copertura)) * 0.65;",
         "  float forma = clamp(rimappa(perlin, soglia, 1.0, 0.0, 1.0), 0.0, 1.0);",
@@ -9499,9 +9518,16 @@
         "    lodRumore + 0.45).rgb;",
         "  vec3 w = mix(w1, w2, 0.4);",
         "  float worley = w.r * 0.625 + w.g * 0.25 + w.b * 0.125;",
+        "  // Da vicino un'ottava in piu', a 1,5 km: i lobi dentro i lobi. Da",
+        "  // lontano, sotto il pixel, non si legge e si spegne.",
+        "  float vicino = 1.0 - smoothstep(0.5, 2.0, lodRumore + 2.0);",
+        "  if (vicino > 0.0) {",
+        "    float fine = textureLod(uWorley, qw.yzx * 4.07 + 0.29, lodRumore + 2.0).r;",
+        "    worley = mix(worley, worley * 0.7 + fine * 0.3, vicino);",
+        "  }",
         "  // In basso ciuffi (Worley diritto), in alto cupole (rovesciato).",
         "  float dettaglio = mix(worley, 1.0 - worley, smoothstep(0.15, 0.6, h));",
-        "  float morso = mix(0.14, 0.9, convettiva);",
+        "  float morso = mix(0.32, 0.9, convettiva);",
         "  // Si scolpisce la FORMA (0-1) e solo dopo la si moltiplica per la",
         "  // densita': scavare la densita' gia' ridotta svuotava le colonne dense",
         "  // e lasciava anelli e fili al posto delle torri.",
@@ -9513,12 +9539,14 @@
         "float spessoreVersoSole(vec3 p, float lodCampo, float lodRumore) {",
         "  float kmPerUnita = uCircKm * cosLatDa(p.y);",
         "  vec3 verso = vec3(uSole.xy, uSole.z * uEsagerazione) / kmPerUnita;",
-        "  float tau = 0.0, fatto = 0.0, lung = 0.3;",
+        "  float tau = 0.0, fatto = 0.0, lung = 0.1;",
         "  for (int i = 0; i < 8; i++) {",
         "    if (i >= uPassiLuce) break;",
         "    vec3 q = p + verso * (fatto + 0.5 * lung);",
-        "    float h, c;",
-        "    tau += densita(q, lodCampo + 0.5 * float(i), lodRumore + 0.5 * float(i), true, h, c)",
+        "    float h, c; vec2 f;",
+        "    // I primi due passi con il dettaglio: sono le ombre dei lobi sui",
+        "    // lobi vicini, quelle che disegnano la forma da vicino.",
+        "    tau += densita(q, lodCampo + 0.5 * float(i), lodRumore + 0.5 * float(i), i > 1, h, c, f)",
         "      * uSigma * lung;",
         "    fatto += lung;",
         "    lung *= 2.0;",
@@ -9572,7 +9600,7 @@
         "  vec3 luce = vec3(0.0);",
         "  float trasmissione = 1.0;",
         "  float tPrimo = -1.0;",
-        "  for (int i = 0; i < 400; i++) {",
+        "  for (int i = 0; i < 512; i++) {",
         "    if (i >= uPassi || t > tLontano || trasmissione < 0.01) break;",
         "    // ...ma mai cosi' corto da non arrivare in fondo con i passi rimasti.",
         "    float passo = max(max(passoMin, t * crescita), (tLontano - t) / float(max(1, uPassi - i)));",
@@ -9581,8 +9609,23 @@
         "    float kmPerUnita = uCircKm * cosLatDa(p.y);",
         "    float lodRumore = max(0.0, log2(max(1e-12, t * uPixelAngolo) * kmPerUnita",
         "      * uLatoWorley / uWorleyKm));",
-        "    float h, conv;",
-        "    float d = densita(p, lodCampo, lodRumore, false, h, conv);",
+        "    float h, conv; vec2 fascia;",
+        "    float d = densita(p, lodCampo, lodRumore, false, h, conv, fascia);",
+        "    // IL PASSO SEGUE LA COLONNA: dentro la fascia base-cima almeno quattro",
+        "    // campioni nello spessore, sopra la fascia mai un salto che la",
+        "    // scavalchi. Un velo sottile attraversato da un solo passo diventava",
+        "    // una trama a puntini, un banco basso visto di taglio a strisce.",
+        "    float altP = p.z * kmPerUnita / uEsagerazione;",
+        "    float salita = abs(direzione.z) * kmPerUnita / uEsagerazione;",
+        "    if (fascia.y > fascia.x && salita > 1e-9) {",
+        "      float fine = passoMin * 0.25;",
+        "      if (altP >= fascia.x && altP <= fascia.y)",
+        "        passo = min(passo, max(fine, (fascia.y - fascia.x) / salita * 0.25));",
+        "      else if (altP > fascia.y && direzione.z < 0.0)",
+        "        passo = min(passo, max(fine, (altP - fascia.y) / salita + fine));",
+        "      else if (altP < fascia.x && direzione.z > 0.0)",
+        "        passo = min(passo, max(fine, (fascia.x - altP) / salita + fine));",
+        "    }",
         "    if (d > 0.001) {",
         "      if (tPrimo < 0.0) tPrimo = t;",
         "      float passoKm = length(vec3(direzione.xy, direzione.z / uEsagerazione)) * passo * kmPerUnita;",
@@ -9598,10 +9641,17 @@
         "      float direttaSole = beer * mix(1.0, 2.0 * powder, pesoPolvere);",
         "      // La diffusione multipla, in due ottave piu' morbide: e' cio' che",
         "      // impedisce al nucleo di diventare nero opaco.",
-        "      float multipla = 0.45 * exp(-tauSole * 0.25) + 0.2 * exp(-tauSole * 0.08);",
+        "      float multipla = 0.3 * exp(-tauSole * 0.3) + 0.1 * exp(-tauSole * 0.1);",
         "      vec3 sole = uColoreSole * uForzaSole * (direttaSole * fasePasso + multipla);",
+        "      // Il cielo arriva dall'alto: la nube sopra lo scherma. Un campione",
+        "      // mezzo chilometro piu' su da' l'occlusione, e la parte bassa della",
+        "      // colonna resta piu' scura della cupola.",
+        "      float hs, cs; vec2 fs;",
+        "      float sopra = densita(p + vec3(0.0, 0.0, 0.5 * uEsagerazione / kmPerUnita),",
+        "        lodCampo + 0.5, lodRumore + 0.5, true, hs, cs, fs);",
+        "      float occlusione = exp(-sopra * uSigma * 0.5);",
         "      vec3 ambiente = mix(uSuolo, uCielo, smoothstep(0.0, 1.0, h))",
-        "        * (0.55 + 0.45 * powder);",
+        "        * (0.35 + 0.65 * occlusione) * (0.3 + 0.7 * h) * (0.5 + 0.5 * powder);",
         "      // I LAMPI: una scarica Blitzortung accende la nube dall'interno. La",
         "      // sorgente e' il canale -- tronco verticale fino alla regione di",
         "      // carica e rami a ragno -- e la luce arriva attenuata dalla nube che",
@@ -9630,8 +9680,8 @@
         "        vec3 qS = vec3(sorgente.xy, sorgente.z * uEsagerazione / kmPerUnita);",
         "        float tauL = 0.0;",
         "        for (int k = 0; k < 3; k++) {",
-        "          float h2, c2;",
-        "          tauL += densita(mix(p, qS, 0.2 + 0.3 * float(k)), lodCampo + 1.0, lodRumore + 1.0, true, h2, c2);",
+        "          float h2, c2; vec2 f2;",
+        "          tauL += densita(mix(p, qS, 0.2 + 0.3 * float(k)), lodCampo + 1.0, lodRumore + 1.0, true, h2, c2, f2);",
         "        }",
         "        float camminoKm = length(vec3(dKm - (sorgente.xy - L.xy) * kmPerUnita, altKm - sorgente.z));",
         "        tauL *= uSigma * camminoKm / 3.0;",
@@ -9659,7 +9709,7 @@
         "    float velo = 1.0 - exp(-distanzaKm / 900.0);",
         "    colore = mix(luce, uFoschia * alfa, velo * 0.55);",
         "    // Esposizione morbida: il bordo d'argento satura senza tagliare.",
-        "    colore = alfa * (1.0 - exp(-colore / max(alfa, 1e-3) * 1.15));",
+        "    colore = alfa * (1.0 - exp(-colore / max(alfa, 1e-3) * 1.05));",
         "  }",
         "  // IL CANALE SOTTO LA NUBE: dalla base al suolo, dove Blitzortung ha",
         "  // misurato la scarica, il canale e' fuori dalla nube e si vede.",
@@ -10053,7 +10103,7 @@
         var tr = this.mappa && this.mappa.transform;
         var fov = (tr && (tr.fovInRadians || (tr.fov && tr.fov * Math.PI / 180))) || 0.6435;
         gl.uniform1f(u("uPixelAngolo"), 2 * Math.tan(fov / 2) / Math.max(1, altezzaPixel));
-        gl.uniform1f(u("uPassoKm"), 0.3);
+        gl.uniform1f(u("uPassoKm"), QUALITA_VOLUME.passoKm);
         gl.uniform1i(u("uPassi"), QUALITA_VOLUME.passi);
         gl.uniform1i(u("uPassiLuce"), QUALITA_VOLUME.passiLuce);
         gl.uniform1f(u("uSigma"), SIGMA_NUBI_3D);
