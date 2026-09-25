@@ -2332,10 +2332,6 @@
             <svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M3 16c2-4 5-6 9-6s7 2 9 6"></path><path d="M13 3l-3 6h4l-3 6"></path></svg>
             <span><b>Nubi in volume</b><small>maschera e quota cime EUMETSAT · luce solare · flash Blitz</small></span>
           </button>
-          <button class="sat-layer" type="button" data-toggle="volumefusion" aria-pressed="false">
-            <svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 17c1.5-3.5 4-5 7-5s5.5 1.5 7 5"></path><path d="M7 12c.5-3 2.5-5 5-5s4.5 2 5 5"></path><path d="M3 20h18"></path></svg>
-            <span><b>Nubi 3D · satellite + ICON-2I</b><small>cima IR e densità VIS EUMETSAT · base LCL e CAPE ICON-2I · ray marching</small></span>
-          </button>
           <p id="lightning-physics-key" hidden></p>
           <details id="lightning-alerts" class="sat-alerts" hidden>
             <summary>Avvisi scariche</summary>
@@ -2824,7 +2820,6 @@
     <script src="forecast-cache.js"></script>
     <script src="point_bulletin.js"></script>
     <script src="local_downscaling.js"></script>
-    <script src="nubi_fusione.js"></script>
     <script>
       function interpolateScale(anchors, value) {
         if (value <= anchors[0].v) return anchors[0];
@@ -5548,15 +5543,14 @@
         // Con le nubi in volume il cielo e' quello di una fotografia
         // dall'aereo: azzurro pieno in alto, schiarito verso un orizzonte
         // velato. La carta 3D resta con il suo cielo tenue.
-        const cieloNubi = nubi3DAttive();
-        const r = cieloNubi ? 64 : 174;
-        const g = cieloNubi ? 124 : 197;
-        const b = cieloNubi ? 204 : 222;
-        const horizonR = cieloNubi ? 184 : 218;
-        const horizonG = cieloNubi ? 208 : 229;
-        const horizonB = cieloNubi ? 236 : 238;
+        const r = showVolumeClouds ? 64 : 174;
+        const g = showVolumeClouds ? 124 : 197;
+        const b = showVolumeClouds ? 204 : 222;
+        const horizonR = showVolumeClouds ? 184 : 218;
+        const horizonG = showVolumeClouds ? 208 : 229;
+        const horizonB = showVolumeClouds ? 236 : 238;
         const root = document.documentElement;
-        const prospettiva = show3D || cieloNubi;
+        const prospettiva = show3D || showVolumeClouds;
         root.style.setProperty("--sky-top", "rgba(" + r + "," + g + "," + b + ",0.6)");
         root.style.setProperty("--sky-mid", "rgba(" + horizonR + "," + horizonG + "," + horizonB + ",0.22)");
 
@@ -6476,31 +6470,6 @@
       // e' proprio quello che la richiesta chiedeva -- di default resta
       // spento.
       let showVolumeClouds = false;
-      // Le nubi 3D cotte dal server (satellite + ICON-2I, nubi_fusione.js).
-      // Alternative al volume dal solo satellite: si accende l'una o l'altra.
-      let showFusedClouds = false;
-      const nubiFuse = window.NubiFusione ? new NubiFusione.Controllo() : null;
-      // La vista inclinata con il cielo fotografico appartiene a entrambe.
-      function nubi3DAttive() { return showVolumeClouds || showFusedClouds; }
-      // L'inclinazione delle nubi 3D fuse: la stessa del volume dal solo
-      // satellite, che pero' vive dentro il suo modulo.
-      function inclinaPerNubiFuse(visibile) {
-        if (!map) return;
-        if (map.dragRotate) map.dragRotate[visibile ? "enable" : "disable"]();
-        if (map.touchZoomRotate) map.touchZoomRotate[visibile ? "enableRotation" : "disableRotation"]();
-        if (map.touchPitch) map.touchPitch[visibile ? "enable" : "disable"]();
-        if (map.keyboard && map.keyboard.enableRotation) {
-          map.keyboard[visibile ? "enableRotation" : "disableRotation"]();
-        }
-        if (visibile) {
-          map.setMaxPitch(78);
-          map.easeTo({ pitch: isMobile() ? 48 : 56, bearing: map.getBearing(), duration: 720 });
-        } else {
-          map.easeTo({ pitch: 0, bearing: 0, duration: 620 });
-        }
-        updateSkyPalette();
-        updateHazeStrength();
-      }
 
       // Decodificatore LZW del flusso. Il dizionario parte dai caratteri
       // singoli e le voci nuove arrivano come code point >= 256: e' per
@@ -12233,9 +12202,6 @@
         if (typeof showVolumeClouds !== "undefined" && showVolumeClouds) {
           parti.push("nubi in volume");
         }
-        if (typeof showFusedClouds !== "undefined" && showFusedClouds) {
-          parti.push("nubi 3D satellite+ICON");
-        }
         riga.textContent = parti.length
           ? parti.join(" · ")
           : "nessun livello acceso · tocca per aprire";
@@ -12318,7 +12284,7 @@
       let hazeLevel = -1;
 
       function updateHazeStrength() {
-        const pitch = (show3D || nubi3DAttive()) && map && map.getPitch ? map.getPitch() : 0;
+        const pitch = (show3D || showVolumeClouds) && map && map.getPitch ? map.getPitch() : 0;
         const nativeSky = map && typeof map.setSky === "function";
         const fallbackScale = nativeSky ? 0 : 1;
         const level = Math.round(clamp((pitch - 12) / 48, 0, 1) * fallbackScale * 100) / 100;
@@ -12716,7 +12682,6 @@
           lightning: showLightning,
           livelightning: showLiveLightning,
           volume: showVolumeClouds,
-          volumefusion: showFusedClouds,
           strikesound: strikeSoundOn,
           strikehaptic: strikeHapticOn,
           fusion: showFusion,
@@ -13028,7 +12993,7 @@
       // nuovo farebbe uscire dalla vista al primo clic.
       const SATELLITE_TOGGLES = new Set([
         "satclouds", "satimage", "radar", "lightning", "livelightning",
-        "strikesound", "strikehaptic", "volume", "volumefusion"
+        "strikesound", "strikehaptic", "volume"
       ]);
 
       function setToggle(name) {
@@ -13156,40 +13121,9 @@
               + "spazio con circa 20 minuti di ritardo, non rilevamento a terra"
             );
           }
-        } else if (name === "volumefusion") {
-          if (!nubiFuse) {
-            toast("Nubi 3D satellite + ICON-2I non caricate");
-            return;
-          }
-          showFusedClouds = !showFusedClouds;
-          if (showFusedClouds) {
-            // Due ray marcher insieme costerebbero il doppio e disegnerebbero
-            // due volte le stesse nubi: si tiene quello appena scelto.
-            if (showVolumeClouds) {
-              showVolumeClouds = false;
-              NubiVolumetriche.disattiva();
-            }
-            nubiFuse.attiva(map, {
-              avviso: toast,
-              inclina: inclinaPerNubiFuse
-            }).then(function (ok) {
-              if (!ok && showFusedClouds) {
-                showFusedClouds = false;
-                updateSkyPalette();
-                updateHazeStrength();
-                updateLayerUi();
-              }
-            });
-          } else {
-            nubiFuse.disattiva({ inclina: inclinaPerNubiFuse });
-          }
         } else if (name === "volume") {
           showVolumeClouds = !showVolumeClouds;
           if (showVolumeClouds) {
-            if (showFusedClouds && nubiFuse) {
-              showFusedClouds = false;
-              nubiFuse.disattiva({ inclina: function () {} });
-            }
             NubiVolumetriche.attiva();
             // Se il dispositivo non ha WebGL2, attiva() lo dice con un
             // toast e non fa nient'altro: il comando torna spento, come se
@@ -14554,7 +14488,7 @@
           }
           // Il rilievo puo' essere acceso dall'alto, ma l'inclinazione della
           // camera appartiene soltanto al comando Nubi in volume.
-          if (!nubi3DAttive()) {
+          if (!showVolumeClouds) {
             if (map.dragRotate) map.dragRotate.disable();
             if (map.touchZoomRotate) map.touchZoomRotate.disableRotation();
             if (map.touchPitch) map.touchPitch.disable();
@@ -14568,8 +14502,8 @@
           // render della griglia.
           renderWeather();
           updateReliefShading();
-          toast(nubi3DAttive()
-            ? "Rilievo 3D attivo · inclinazione controllata dalle nubi 3D"
+          toast(showVolumeClouds
+            ? "Rilievo 3D attivo · inclinazione controllata da Nubi in volume"
             : "Rilievo 3D attivo · vista zenitale");
         } else {
           stopParticles();
@@ -14579,7 +14513,7 @@
             );
           }
           updateReliefShading();
-          if (!nubi3DAttive()) {
+          if (!showVolumeClouds) {
             if (map.dragRotate) map.dragRotate.disable();
             if (map.touchZoomRotate) map.touchZoomRotate.disableRotation();
             if (map.touchPitch) map.touchPitch.disable();
@@ -14592,7 +14526,7 @@
           // dell'utente a metà discesa, perciò controllo il pitch reale.
           terrain3DEaseCleanup = function () {
             if (show3D) return;
-            if (!nubi3DAttive() && map.getPitch() > 0.5) return;
+            if (!showVolumeClouds && map.getPitch() > 0.5) return;
             if (map.getTerrain()) map.setTerrain(null);
             currentTerrainExaggeration = 0;
             map.setMaxPitch(60);
@@ -14604,7 +14538,7 @@
             if (showParticles) startParticles();
           };
           map.on("moveend", terrain3DEaseCleanup);
-          if (nubi3DAttive()) terrain3DEaseCleanup();
+          if (showVolumeClouds) terrain3DEaseCleanup();
           else map.easeTo({ pitch: 0, bearing: 0, duration: 750 });
         }
       }
