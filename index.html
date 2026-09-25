@@ -7119,9 +7119,9 @@
       // attraversato o scavalcato.
       var QUALITA_VOLUME = isMobile()
         ? { forma: 1200, pelle: 1400, misura: 800, esagerazione: 3.2, passoKm: 0.30, pixel: 720000,
-            rumore: 48, passiLuce: 5, passi: 176 }
-        : { forma: 2560, pelle: 3072, misura: 1100, esagerazione: 3.5, passoKm: 0.22, pixel: 3200000,
-            rumore: 64, passiLuce: 7, passi: 320 };
+            rumore: 48, passiLuce: 5, passi: 176, qualita: 0, accumula: 0 }
+        : { forma: 2560, pelle: 3072, misura: 1100, esagerazione: 3.5, passoKm: 0.2, pixel: 4500000,
+            rumore: 64, passiLuce: 8, passi: 384, qualita: 1, accumula: 12 };
 
       // Due misure complementari dello stesso istante: l'IR stima la cima,
       // GeoColour recupera la copertura calda, bassa o otticamente sottile.
@@ -9398,6 +9398,8 @@
         "uniform float uPassoKm;       // salita verticale del raggio fra due campioni",
         "uniform int uPassi;",
         "uniform int uPassiLuce;",
+        "uniform float uQualita;       // 1 sul PC (tutto), 0 sul telefono (versione leggera)",
+        "uniform float uFotogramma;    // indice del fotogramma accumulato a mappa ferma",
         "uniform float uSigma;",
         "uniform float uFaseG;",
         "uniform vec3 uSole;           // verso il sole, spazio vero (x est, y sud, z su)",
@@ -9443,6 +9445,10 @@
         "  return mix(henyeyGreenstein(coseno, uFaseG), henyeyGreenstein(coseno, -0.25), 0.22) * 4.0 * PI;",
         "}",
         "",
+        "// Quanto il punto sta in una cavita' fra i lobi: la scrive densita' per",
+        "// il campione del raggio, la legge la luce del cielo.",
+        "float gCavita = 0.0;",
+        "",
         "// Da cono a calotta sferica: v = 1 al centro della bolla, 0 al bordo.",
         "float calotta(float v) { float r = 1.0 - clamp(v, 0.0, 1.0); return sqrt(max(0.0, 1.0 - r * r)); }",
         "",
@@ -9481,6 +9487,20 @@
         "  // raggio verso il sole passa per la stessa funzione.",
         "  float spessore = cimaKm - baseKm;",
         "  vec2 qc = p.xy * kmPerUnita / uWorleyKm;",
+        "  // L'INCUDINE. Dove la convezione e' profonda e la cima sta sopra i 7,5 km",
+        "  // la nube non e' una colonna piena fino al suolo: le torri salgono dove",
+        "  // il satellite vede la cima sporgere sopra i dintorni (overshooting top)",
+        "  // e in qualche cella di ~15 km; attorno c'e' l'incudine, una lastra",
+        "  // piatta e spessa 2-3 km appoggiata sulla tropopausa.",
+        "  float incudine = smoothstep(7.5, 10.0, cimaKm) * smoothstep(0.25, 0.6, convettiva);",
+        "  float torre = 1.0;",
+        "  if (incudine > 0.0) {",
+        "    float intorno = textureLod(uCampo, uv, lodCampo + 5.0).r * uScalaKm;",
+        "    float sporge = smoothstep(0.05, 0.5, cimaKm - intorno);",
+        "    float cella = smoothstep(0.62, 0.9, textureLod(uWorley, vec3(qc * 0.075 + uSemenza.yx, 0.83),",
+        "      lodRumore - 3.7).r);",
+        "    torre = max(sporge, cella);",
+        "  }",
         "  float varia = textureLod(uPerlin, vec3(qc * (uWorleyKm / uPerlinKm) * 2.3 + uSemenza.zx, 0.5),",
         "    max(0.0, lodRumore - 3.0)).r;",
         "  // Ogni cupola e' alta quanto e' larga, come un lobo vero: 1,2 km per le",
@@ -9490,7 +9510,7 @@
         "  // Le altezze sotto sono in chilometri VISTI: sullo schermo ogni cupola e'",
         "  // alta al massimo meta' della sua larghezza, a qualunque esagerazione.",
         "  float esag = max(uEsagerazione, 1.0);",
-        "  float margine = 0.75 * tipo / esag;",
+        "  float margine = 1.0 * tipo / esag;",
         "  fascia = vec2(baseKm, cimaKm + margine);",
         "  // BOUNDING VOLUME: fuori dalla fascia base-cima il raggio non trova nulla.",
         "  if (altKm < baseKm || altKm > cimaKm + margine) return 0.0;",
@@ -9505,10 +9525,17 @@
         "  // dall'esagerazione diventava una lama. La calotta e' tonda e gonfia.",
         "  if (torri > 0.0) rilievo += 2.0 * torri * mix(0.4, 1.0, convettiva)",
         "      * (calotta(textureLod(uWorley, vec3(qc * 0.37 + uSemenza.xy, 0.31), lodRumore - 1.4).r) - 0.75);",
-        "  if (cumuli > 0.0) rilievo += 0.75 * cumuli",
+        "  if (cumuli > 0.0) rilievo += 1.1 * cumuli",
         "      * (calotta(textureLod(uWorley, vec3(mat2(0.8, -0.6, 0.6, 0.8) * qc + uSemenza.yz, 0.67), lodRumore).r) - 0.75);",
-        "  if (lobi > 0.0) rilievo += 0.18 * lobi",
+        "  float grappoli = 1.0 - smoothstep(1.5, 3.5, lodRumore + 1.0);",
+        "  if (grappoli > 0.0) rilievo += 0.6 * grappoli",
+        "      * (calotta(textureLod(uWorley, vec3(mat2(0.96, 0.28, -0.28, 0.96) * qc * 2.03 + 0.37, 0.49),",
+        "        lodRumore + 1.0).r) - 0.75);",
+        "  if (lobi > 0.0) rilievo += 0.3 * lobi",
         "      * (calotta(textureLod(uWorley, vec3(mat2(0.6, 0.8, -0.8, 0.6) * qc * 4.07, 0.13), lodRumore + 2.0).g) - 0.75);",
+        "  // L'incudine ha la cima piatta; le torri tengono le cupole.",
+        "  rilievo *= mix(1.0, 0.25, incudine * (1.0 - torre));",
+        "  gCavita = clamp(-rilievo / 1.2, 0.0, 1.0);",
         "  // Da chilometri visti a chilometri veri: si divide per l'esagerazione.",
         "  float cimaLocale = cimaKm + tipo * rilievo / esag;",
         "  if (altKm > cimaLocale) return 0.0;",
@@ -9521,6 +9548,10 @@
         "  // su un terzo dello spessore (da vicino diventava un velo smagliato).",
         "  float tetto = 1.0 - smoothstep(cimaLocale - mix(0.35, 0.12, convettiva), cimaLocale, altKm);",
         "  float copertura = campo.g * fondo * tetto;",
+        "  // Sotto l'incudine, fuori dalle torri, l'aria e' libera.",
+        "  float lastraKm = mix(1.8, 3.0, varia);",
+        "  copertura *= 1.0 - incudine * (1.0 - torre)",
+        "    * (1.0 - smoothstep(cimaLocale - lastraKm - 0.6, cimaLocale - lastraKm, altKm));",
         "  if (copertura <= 0.0) return 0.0;",
         "",
         "  // Coordinate del rumore in km VISTI: la verticale e' moltiplicata per",
@@ -9656,12 +9687,17 @@
         "  // dove ne occupa uno. Un passo uniforme sull'intero raggio radente",
         "  // lasciava striature radiali davanti alla camera.",
         "  float crescita = 0.004;",
-        "  float scarto = intreccio(gl_FragCoord.xy);",
+        "  // A mappa ferma ogni fotogramma parte da uno scarto diverso (sequenza",
+        "  // aurea) e la media dei fotogrammi vale molti piu' passi.",
+        "  float scarto = fract(intreccio(gl_FragCoord.xy) + uFotogramma * 0.618034);",
         "  float t = tVicino + max(passoMin, tVicino * crescita) * scarto;",
         "",
         "  vec3 direzioneVera = normalize(vec3(direzione.xy, direzione.z / uEsagerazione));",
         "  float coseno = dot(direzioneVera, uSole);",
         "  float fasePasso = fase(coseno);",
+        "  // Le ottave della diffusione multipla diffondono sempre meno in avanti.",
+        "  float fase1 = mix(henyeyGreenstein(coseno, uFaseG * 0.5), henyeyGreenstein(coseno, -0.15), 0.2) * 4.0 * PI;",
+        "  float fase2 = mix(henyeyGreenstein(coseno, uFaseG * 0.25), henyeyGreenstein(coseno, -0.08), 0.2) * 4.0 * PI;",
         "  // L'effetto polvere scurisce i bordi rivolti al sole e accende le pieghe",
         "  // interne; guardando verso il sole non deve spegnere il bordo d'argento.",
         "  float pesoPolvere = 0.5 - 0.5 * coseno;",
@@ -9687,6 +9723,7 @@
         "      * uLatoWorley / uWorleyKm));",
         "    float h, conv; vec2 fascia;",
         "    float d = densita(p, lodCampo, lodRumore, false, h, conv, fascia);",
+        "    float cavita = gCavita;",
         "    // IL PASSO SEGUE LA COLONNA: dentro la fascia base-cima almeno quattro",
         "    // campioni nello spessore, sopra la fascia mai un salto che la",
         "    // scavalchi. Un velo sottile attraversato da un solo passo diventava",
@@ -9723,9 +9760,12 @@
         "      // noi: bassa sul velo esterno, piena nelle pieghe dentro la nube.",
         "      float powder = 1.0 - exp(-estinzione * 2.0);",
         "      float direttaSole = beer * mix(1.0, 2.0 * powder, pesoPolvere);",
-        "      // La diffusione multipla, in due ottave piu' morbide: e' cio' che",
-        "      // impedisce al nucleo di diventare nero opaco.",
-        "      float multipla = 0.3 * exp(-tauSole * 0.3) + 0.1 * exp(-tauSole * 0.1);",
+        "      // DIFFUSIONE MULTIPLA A OTTAVE (Wrenninge): la luce rimbalzata molte",
+        "      // volte attenua meno, diffonde meno in avanti e pesa meno. E' il",
+        "      // bagliore morbido dentro i cumuli e il grigio-azzurro, non nero,",
+        "      // delle facce in ombra. Sul telefono una sola ottava.",
+        "      float multipla = 0.3 * exp(-tauSole * 0.35) * fase1 * (0.5 + 0.5 * powder);",
+        "      if (uQualita > 0.5) multipla += 0.12 * exp(-tauSole * 0.12) * fase2;",
         "      vec3 sole = uColoreSole * uForzaSole * (direttaSole * fasePasso + multipla);",
         "      // Il cielo arriva dall'alto: la nube sopra lo scherma. Un campione",
         "      // mezzo chilometro piu' su da' l'occlusione, e la parte bassa della",
@@ -9734,8 +9774,11 @@
         "      float sopra = densita(p + vec3(0.0, 0.0, 0.5 * uEsagerazione / kmPerUnita),",
         "        lodCampo + 0.5, lodRumore + 0.5, true, hs, cs, fs);",
         "      float occlusione = exp(-sopra * uSigma * 0.5);",
-        "      vec3 ambiente = mix(uSuolo, uCielo, smoothstep(0.0, 1.0, h))",
-        "        * (0.35 + 0.65 * occlusione) * (0.3 + 0.7 * h) * (0.5 + 0.5 * powder);",
+        "      // Il cielo e' azzurro e arriva dall'alto: e' lui a tingere di blu le",
+        "      // ombre. Il suolo rimanda poca luce calda dal basso.",
+        "      vec3 ambiente = (uCielo * (0.35 + 0.65 * occlusione) * (0.35 + 0.65 * h)",
+        "        + uSuolo * 0.35 * (1.0 - h)) * (0.55 + 0.45 * powder) * 0.9",
+        "        * (1.0 - 0.45 * cavita);",
         "      // I LAMPI: una scarica Blitzortung accende la nube dall'interno. La",
         "      // sorgente e' il canale -- tronco verticale fino alla regione di",
         "      // carica e rami a ragno -- e la luce arriva attenuata dalla nube che",
@@ -9791,10 +9834,14 @@
         "  if (alfa >= 0.003) {",
         "    // Foschia: una nube a centinaia di chilometri si vela d'azzurro.",
         "    float distanzaKm = (tPrimo > 0.0 ? tPrimo : tVicino) * uCircKm * cosLat0;",
-        "    float velo = 1.0 - exp(-distanzaKm / 900.0);",
-        "    colore = mix(luce, uFoschia * alfa, velo * 0.55);",
-        "    // Esposizione morbida: il bordo d'argento satura senza tagliare.",
-        "    colore = alfa * (1.0 - exp(-colore / max(alfa, 1e-3) * 1.05));",
+        "    // Prospettiva aerea: le nubi lontane si velano d'azzurro e perdono",
+        "    // contrasto, come dall'aereo.",
+        "    float velo = 1.0 - exp(-distanzaKm / 420.0);",
+        "    colore = mix(luce, uFoschia * alfa, velo * 0.7);",
+        "    // Curva filmica (ACES): i bianchi al sole non bruciano, le ombre",
+        "    // restano morbide e colorate.",
+        "    vec3 x = colore / max(alfa, 1e-3) * 0.55;",
+        "    colore = alfa * clamp((x * (2.51 * x + 0.03)) / (x * (2.43 * x + 0.59) + 0.14), 0.0, 1.0);",
         "  }",
         "  // IL CANALE SOTTO LA NUBE: dalla base al suolo, dove Blitzortung ha",
         "  // misurato la scarica, il canale e' fuori dalla nube e si vede.",
@@ -9853,6 +9900,23 @@
         "    + texture(uVolume, uv + uTexel * vec2(0.5, -0.5))",
         "    + texture(uVolume, uv + uTexel * vec2(-0.5, 0.5))",
         "    + texture(uVolume, uv + uTexel * vec2(0.5, 0.5)));",
+        "}"
+      ].join("\n");
+
+      // L'accumulo a mappa ferma: la media mobile dei fotogrammi, ognuno con
+      // uno scarto diverso del raggio. Converge a un'immagine senza grana,
+      // come se ogni pixel avesse fatto dodici volte i passi.
+      var ACCUMULA = [
+        "#version 300 es",
+        "precision highp float;",
+        "in vec2 vNdc;",
+        "out vec4 colorePixel;",
+        "uniform sampler2D uPrima;",
+        "uniform sampler2D uNuovo;",
+        "uniform float uPeso;",
+        "void main() {",
+        "  vec2 uv = vNdc * 0.5 + 0.5;",
+        "  colorePixel = mix(texture(uPrima, uv), texture(uNuovo, uv), uPeso);",
         "}"
       ].join("\n");
 
@@ -9927,6 +9991,7 @@
         this.mappa = mappa;
         this.programma = collega(gl, FRAMMENTO);
         this.programmaStesura = collega(gl, STESURA);
+        this.programmaAccumula = QUALITA_VOLUME.accumula ? collega(gl, ACCUMULA) : null;
         this.buffer = gl.createBuffer();
         gl.bindBuffer(gl.ARRAY_BUFFER, this.buffer);
         // Un triangolo solo, piu' grande dello schermo: costa meno di due.
@@ -10025,6 +10090,7 @@
         // Piu' 2,9 km: le cupole che il rumore alza sopra la cima misurata.
         this.quotaMassimaKm = limita(massima + 2.9, 2, QUOTA_SCALA_KM + 2.9);
         this.campo = campo;
+        this.serieCampo = (this.serieCampo || 0) + 1;
         this.pronto = true;
       };
 
@@ -10107,8 +10173,77 @@
         gl.clearColor(0, 0, 0, 0);
         gl.clear(gl.COLOR_BUFFER_BIT);
         gl.disable(gl.BLEND);
+        this.accumulo = this.accumulo || { n: 0, firma: "" };
+        var fermo = !(this.mappa && this.mappa.isMoving && this.mappa.isMoving());
+        var matrice = this.matriceDi(argomenti);
+        var firma = matrice ? Array.prototype.slice.call(matrice).join(",") + "|" + this.serieCampo
+          + "|" + this.misuraVolume.larghezza + "x" + this.misuraVolume.altezza : "";
+        // Si ricomincia quando cambia la vista, il campo o ci sono lampi accesi
+        // (un lampo e' un istante: la media lo spalmerebbe).
+        var lampiAccesi = (this.lampi || []).some(function (l) { return l.intensita > 0.004; });
+        if (!fermo || firma !== this.accumulo.firma || lampiAccesi || !this.programmaAccumula) {
+          this.accumulo.n = 0;
+          this.accumulo.firma = firma;
+        }
         this.disegnatoInTela = this.disegnaVolume(gl, argomenti, this.misuraVolume.altezza);
+        this.texDaStendere = this.texVolume;
+        if (this.disegnatoInTela && this.programmaAccumula && fermo && !lampiAccesi
+            && this.preparaAccumulo(gl)) {
+          var n = this.accumulo.n;
+          var da = this.accumulo.indice, a = 1 - da;
+          gl.bindFramebuffer(gl.FRAMEBUFFER, this.fboAccumulo[a]);
+          gl.viewport(0, 0, this.misuraVolume.larghezza, this.misuraVolume.altezza);
+          gl.useProgram(this.programmaAccumula);
+          gl.bindVertexArray(this.vao);
+          gl.activeTexture(gl.TEXTURE0);
+          gl.bindTexture(gl.TEXTURE_2D, this.texAccumulo[da]);
+          gl.uniform1i(gl.getUniformLocation(this.programmaAccumula, "uPrima"), 0);
+          gl.activeTexture(gl.TEXTURE1);
+          gl.bindTexture(gl.TEXTURE_2D, this.texVolume);
+          gl.uniform1i(gl.getUniformLocation(this.programmaAccumula, "uNuovo"), 1);
+          gl.uniform1f(gl.getUniformLocation(this.programmaAccumula, "uPeso"), 1 / (n + 1));
+          gl.drawArrays(gl.TRIANGLES, 0, 3);
+          gl.bindVertexArray(null);
+          this.accumulo.indice = a;
+          this.accumulo.n = n + 1;
+          this.texDaStendere = this.texAccumulo[a];
+          if (this.accumulo.n < QUALITA_VOLUME.accumula && this.mappa) {
+            var mappa = this.mappa;
+            requestAnimationFrame(function () { mappa.triggerRepaint(); });
+          }
+        }
         gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+      };
+
+      // Due texture di accumulo che si passano il testimone; in mezza
+      // precisione dove la GPU lo consente, perche' la media di dodici
+      // fotogrammi a otto bit farebbe gradini nelle ombre.
+      StratoVolume.prototype.preparaAccumulo = function (gl) {
+        var lw = this.misuraVolume.larghezza, lh = this.misuraVolume.altezza;
+        if (this.texAccumulo && this.misuraAccumulo === lw + "x" + lh) return true;
+        var mezza = !!gl.getExtension("EXT_color_buffer_float");
+        this.texAccumulo = this.texAccumulo || [gl.createTexture(), gl.createTexture()];
+        this.fboAccumulo = this.fboAccumulo || [gl.createFramebuffer(), gl.createFramebuffer()];
+        for (var k = 0; k < 2; k++) {
+          gl.bindTexture(gl.TEXTURE_2D, this.texAccumulo[k]);
+          if (mezza) gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA16F, lw, lh, 0, gl.RGBA, gl.HALF_FLOAT, null);
+          else gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA8, lw, lh, 0, gl.RGBA, gl.UNSIGNED_BYTE, null);
+          gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
+          gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
+          gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+          gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+          gl.bindFramebuffer(gl.FRAMEBUFFER, this.fboAccumulo[k]);
+          gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, this.texAccumulo[k], 0);
+          if (gl.checkFramebufferStatus(gl.FRAMEBUFFER) !== gl.FRAMEBUFFER_COMPLETE) {
+            gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+            this.programmaAccumula = null;
+            return false;
+          }
+        }
+        this.misuraAccumulo = lw + "x" + lh;
+        this.accumulo.indice = 0;
+        this.accumulo.n = 0;
+        return true;
       };
 
       StratoVolume.prototype.render = function (gl, argomenti) {
@@ -10127,7 +10262,7 @@
           gl.useProgram(this.programmaStesura);
           gl.bindVertexArray(this.vao);
           gl.activeTexture(gl.TEXTURE0);
-          gl.bindTexture(gl.TEXTURE_2D, this.texVolume);
+          gl.bindTexture(gl.TEXTURE_2D, this.texDaStendere || this.texVolume);
           gl.uniform1i(gl.getUniformLocation(this.programmaStesura, "uVolume"), 0);
           gl.uniform2f(gl.getUniformLocation(this.programmaStesura, "uTexel"),
             1 / this.misuraVolume.larghezza, 1 / this.misuraVolume.altezza);
@@ -10204,6 +10339,8 @@
         gl.uniform1f(u("uPassoKm"), QUALITA_VOLUME.passoKm);
         gl.uniform1i(u("uPassi"), QUALITA_VOLUME.passi);
         gl.uniform1i(u("uPassiLuce"), QUALITA_VOLUME.passiLuce);
+        gl.uniform1f(u("uQualita"), QUALITA_VOLUME.qualita);
+        gl.uniform1f(u("uFotogramma"), this.accumulo ? this.accumulo.n : 0);
         gl.uniform1f(u("uSigma"), SIGMA_NUBI_3D);
         gl.uniform1f(u("uFaseG"), FASE_G);
         gl.uniform3fv(u("uSole"), new Float32Array(soleGL));

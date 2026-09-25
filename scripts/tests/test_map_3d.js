@@ -2116,7 +2116,7 @@ assert.equal(schermoAlto.width, schermoBasso.width,
   assert.doesNotMatch(frammento, /texture\(uRumore, q \* 3\.7/,
     "e' tornata l'ottava fine del rumore, quella che faceva i puntini");
   // Il lampo deve poter schiarire anche una nube al sole.
-  assert.match(frammento, /colore = alfa \* \(1\.0 - exp\(-colore \/ max\(alfa, 1e-3\) \* 1\.05\)\);/,
+  assert.match(frammento, /colore = alfa \* clamp\(\(x \* \(2\.51 \* x \+ 0\.03\)\) \/ \(x \* \(2\.43 \* x \+ 0\.59\) \+ 0\.14\), 0\.0, 1\.0\);/,
     "manca la curva di risposta: il bordo d'argento torna a tagliare");
 }
 {
@@ -2513,6 +2513,15 @@ assert.match(fragment, /vec3 verso = vec3\(uSole\.xy, uSole\.z\) \/ kmPerUnita;/
 assert.match(fragment, /float calotta\(float v\)/, "le cupole tornano coni: lame da vicino");
 assert.match(fragment, /t = max\(tVicino, t - passoPrima\);/, "manca l'ingresso a passi corti: torna la brina");
 assert.match(html, /var ESAGERAZIONE_MINIMA = 2\.4;/, "l'esagerazione torna a spianare le nubi da vicino");
+// Realismo: diffusione multipla a ottave, incudine dei cumulonembi, cavita'
+// fra i lobi, accumulo dei fotogrammi a mappa ferma solo sul PC.
+assert.match(fragment, /multipla \+= 0\.12 \* exp\(-tauSole \* 0\.12\) \* fase2;/, "manca la seconda ottava di diffusione multipla");
+assert.match(fragment, /float incudine = smoothstep\(7\.5, 10\.0, cimaKm\)/, "manca l'incudine dei cumulonembi");
+assert.match(fragment, /float scarto = fract\(intreccio\(gl_FragCoord\.xy\) \+ uFotogramma \* 0\.618034\);/,
+  "lo scarto del raggio non cambia piu' da un fotogramma all'altro: l'accumulo non converge");
+assert.match(html, /rumore: 48, passiLuce: 5, passi: 176, qualita: 0, accumula: 0 \}/, "il telefono deve restare leggero");
+assert.match(html, /qualita: 1, accumula: 12 \}/, "sul PC manca l'accumulo dei fotogrammi");
+assert.match(html, /var lampiAccesi = /, "l'accumulo spalmerebbe i lampi");
 assert.match(fragment, /float soglia = \(1\.0 - sqrt\(copertura\)\) \* 0\.65;/, "mancano i vuoti del Perlin");
 assert.match(fragment, /float morso = mix\(0\.32, 0\.9, convettiva\);/, "il CAPE non varia piu' il morso del Worley");
 // Da vicino: il passo segue la fascia della colonna (niente trama a puntini
