@@ -2507,12 +2507,13 @@ assert.match(fragment, /if \(altKm < baseKm \|\| altKm > cimaKm \+ sopra\) retur
   "il raggio non e' piu' confinato fra base e cima");
 // Il metodo dei giochi: forma Perlin-Worley x profilo del tipo di nube,
 // tagliata dalla copertura del satellite, erosa dal dettaglio.
-assert.match(fragment, /float forma = clamp\(rimappa\(f\.r, fbm \* uContrasto, 1\.0, 0\.0, 1\.0\), 0\.0, 1\.0\);/, "manca la forma Perlin-Worley");
+assert.match(fragment, /float forma = clamp\(rimappa\(f\.r, fbm \* uContrasto \* mix\(0\.35, 1\.0, cumuliforme\)/, "manca la forma Perlin-Worley");
 assert.match(fragment, /float profilo = mix\(strato, cumulo, cumuliforme\);/, "manca il profilo verticale del tipo di nube");
 assert.match(fragment, /float d = clamp\(rimappa\(base, 1\.0 - cop, 1\.0, 0\.0, 1\.0\), 0\.0, 1\.0\);/, "la copertura del satellite non taglia piu' la forma");
 assert.match(html, /var GENERA_FORMA = \[/, "manca il generatore della forma");
 assert.match(html, /function creaPannelloRegolazione\(\)/, "manca il pannello ?regola=1");
 assert.match(html, /if \(!REGOLA_ATTIVA\) return r;/, "i valori salvati devono valere solo con ?regola=1");
+assert.match(fragment, /vec3 qd = q \/ uDettaglioKm \+ \(f\.gba - 0\.5\) \* 6\.0;/, "il dettaglio torna a ripetersi a trama regolare");
 assert.doesNotMatch(fragment, /textureLod\(uWorley, q \/ uWorleyKm/, "l'erosione torna sul cubo 32^3 che mette le bolle in fila");
 assert.match(fragment, /vec3 verso = vec3\(uSole\.xy, uSole\.z\) \/ kmPerUnita;/,
   "le ombre non seguono piu' la geometria esagerata: da vicino spariscono");
@@ -2527,7 +2528,7 @@ assert.match(fragment, /fract\(sin\(dot\(gl_FragCoord\.xy \+ vec2\(17\.31, 41\.7
 assert.match(html, /rumore: 48, passiLuce: 5, passi: 176, qualita: 0, accumula: 0, latoForma: 64 \}/, "il telefono deve restare leggero");
 assert.match(html, /qualita: 1, accumula: 12, latoForma: 128 \}/, "sul PC manca l'accumulo dei fotogrammi");
 assert.match(html, /var lampiAccesi = /, "l'accumulo spalmerebbe i lampi");
-assert.match(fragment, /float morso = uErosione \* mix\(0\.5, 1\.2, convettiva\) \* \(1\.0 - smoothstep\(1\.5, 3\.5, lodDet\)\)/, "il CAPE non varia piu' il morso del Worley");
+assert.match(fragment, /float morso = uErosione \* mix\(0\.5, 1\.2, convettiva\) \* \(1\.0 - smoothstep\(1\.0, 2\.5, lodDet\)\)/, "il CAPE non varia piu' il morso del Worley");
 // Da vicino: il passo segue la fascia della colonna (niente trama a puntini
 // sui veli), il cielo e' schermato dalla nube sopra, le ombre dei primi
 // passi verso il sole vedono i lobi, e le lamine non fanno curve di livello.
@@ -2597,7 +2598,7 @@ def uf(n,*v):
  loc=GetUniformLocation(program,n.encode());[None,Uniform1f,Uniform2f,Uniform3f,Uniform4f][len(v)](loc,*v)
 def ui(n,v):Uniform1i(GetUniformLocation(program,n.encode()),v)
 for n,v in [('uCampo',0),('uPerlin',1),('uWorley',2),('uForma',3),('uPassiLuce',4),('uPassi',200),('uQuantiLampi',0)]:ui(n,v)
-for n,v in dict(uLatoForma=LF,uScalaFormaKm=24,uScalaMacroKm=96,uCopertura=.6,uContrasto=.8,uDettaglioKm=6,uStiraBolle=1,uForzaMacro=.4,uBaseDura=.75,uNucleo=.75,uPolvere=1,uMultipla=1,uFoschiaKm=420,uSoleForza=1,uIncudineKm=7.5,uCavita=.45,uErosione=.18,uRigonfio=1.15,uCavolfiore=.8,uOmbra=1,uAmbiente=.9,uEsposizione=.55,uQualita=1).items():uf(n,v)
+for n,v in dict(uLatoForma=LF,uScalaFormaKm=12,uScalaMacroKm=96,uCopertura=.5,uContrasto=1.2,uDettaglioKm=1.2,uStiraBolle=1,uForzaMacro=.4,uBaseDura=.75,uNucleo=.65,uPolvere=1.3,uMultipla=1,uFoschiaKm=420,uSoleForza=1,uIncudineKm=7.5,uCavita=.7,uErosione=.9,uRigonfio=1.15,uCavolfiore=.8,uOmbra=1.5,uAmbiente=.75,uEsposizione=.55,uQualita=1).items():uf(n,v)
 unit=1/40075;esag=float(os.environ.get('CLOUD_QA_EXAGGERATION','1.6'))
 for n,v in dict(uScalaKm=16,uCircKm=40075,uEsagerazione=esag,uSigma=3.6,uFaseG=.6,uForzaSole=1,uZMax=14*esag*unit,uPassoKm=.3,uPixelAngolo=.00005,uTexelCampo=40*unit/128,uPerlinKm=48,uWorleyKm=6,uLatoPerlin=64,uLatoWorley=32).items():uf(n,v)
 uf('uSemenza',.3,.6,.1);uf('uDominio',.5-20*unit,.5-20*unit,.5+20*unit,.5+20*unit);uf('uSole',.5,-.4,.768);uf('uCielo',.46,.58,.78);uf('uSuolo',.26,.25,.23);uf('uColoreSole',2.6,2.5,2.34);uf('uFoschia',.72,.81,.92)

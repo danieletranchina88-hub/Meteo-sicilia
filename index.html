@@ -7127,12 +7127,13 @@
       // nell'indirizzo compare un pannello per cambiarli dal vivo, e i valori
       // scelti restano in questo browser (solo con ?regola=1).
       var REGOLA_PREDEFINITA = {
-        scalaFormaKm: 24, scalaMacroKm: 96, copertura: 0.6, erosione: 0.18, rigonfio: 1.15,
-        cavolfiore: 0.8, ombra: 1.0, ambiente: 0.9, esposizione: 0.55, esagerazione: 0, contrasto: 0.8,
-        dettaglioKm: 6, stiraBolle: 1.0, forzaMacro: 0.4, baseDura: 0.75, nucleo: 0.75,
-        densita: 3.6, faseG: 0.6, polvere: 1.0, multipla: 1.0, foschiaKm: 420, sole: 1.0,
-        cavita: 0.45, incudineKm: 7.5, passi: 0, passiLuce: 0, accumula: 0
+        scalaFormaKm: 12, scalaMacroKm: 96, copertura: 0.5, erosione: 0.9, rigonfio: 1.15,
+        cavolfiore: 0.8, ombra: 1.5, ambiente: 0.75, esposizione: 0.55, esagerazione: 0, contrasto: 1.2,
+        dettaglioKm: 1.2, stiraBolle: 1.0, forzaMacro: 0.4, baseDura: 0.75, nucleo: 0.65,
+        densita: 3.6, faseG: 0.6, polvere: 1.3, multipla: 1.0, foschiaKm: 420, sole: 1.0,
+        cavita: 0.7, incudineKm: 7.5, passi: 0, passiLuce: 0, accumula: 0
       };
+
       var REGOLA_ATTIVA = typeof location !== "undefined" && /[?&]regola=1\b/.test(location.search || "");
       var REGOLA = (function () {
         var r = Object.assign({}, REGOLA_PREDEFINITA);
@@ -9570,7 +9571,9 @@
         "  float lodForma = lodRumore + log2((uWorleyKm / uLatoWorley) / (uScalaFormaKm / uLatoForma));",
         "  vec4 f = textureLod(uForma, q / uScalaFormaKm + uSemenza, lodForma);",
         "  float fbm = f.g * 0.8 + f.b * 0.2;",
-        "  float forma = clamp(rimappa(f.r, fbm * uContrasto, 1.0, 0.0, 1.0), 0.0, 1.0);",
+        "  // Gli strati sono poco scavati: contrasto basso e riempimento alto, e non",
+        "  // si bucano nella griglia della texture.",
+        "  float forma = clamp(rimappa(f.r, fbm * uContrasto * mix(0.35, 1.0, cumuliforme), 1.0, 0.0, 1.0), 0.0, 1.0);",
         "  // Gli ammassi: la stessa forma quattro volte piu' grande modula la",
         "  // copertura, e i cumuli si raccolgono in grandi cavolfiori.",
         "  float macro = textureLod(uForma, q / uScalaMacroKm + uSemenza.zxy,",
@@ -9582,9 +9585,11 @@
         "  // solo piu' trasparente (densita' ottica).",
         "  float gLiscia = textureLod(uCampo, uv, lodCampo + 2.0).g;",
         "  float bordo = smoothstep(0.0, 0.35, gLiscia);",
-        "  float cop = clamp(uCopertura * mix(0.75, 1.0, sqrt(campo.g)) * (1.0 + uForzaMacro * (macro - 0.5)) * bordo, 0.0, 1.0);",
+        "  float cop = clamp(mix(0.85, uCopertura, cumuliforme) * mix(0.75, 1.0, sqrt(campo.g)) * (1.0 + uForzaMacro * (macro - 0.5)) * bordo, 0.0, 1.0);",
         "  // Il cavolfiore sta sulla superficie: dentro la nube, dove profilo e",
         "  // copertura sono pieni, la forma conta meno e il nucleo resta denso.",
+        "  // Le torri convettive profonde e dense sono opache: piu' riempimento.",
+        "  cop = clamp(cop + 0.35 * convettiva * smoothstep(0.6, 0.9, campo.g) * (1.0 - smoothstep(0.45, 0.75, h)), 0.0, 1.0);",
         "  float base = profilo * mix(forma, 1.0, uNucleo * profilo * profilo);",
         "  gCavita = 1.0 - smoothstep(0.15, 0.6, base);",
         "  float d = clamp(rimappa(base, 1.0 - cop, 1.0, 0.0, 1.0), 0.0, 1.0);",
@@ -9597,12 +9602,18 @@
         "  // ripeteva ogni 6 km), ruotate su tre assi e a scale non multiple: le",
         "  // bolle del dettaglio non si mettono piu' in fila.",
         "  float lodDet = lodRumore + log2(uWorleyKm / uDettaglioKm);",
-        "  vec3 qd = q / uDettaglioKm;",
+        "  // DOMAIN WARPING: le coordinate del dettaglio sono spostate dalla forma",
+        "  // grande (che cambia su 12 km). Senza, la texture che si ripete ogni",
+        "  // pochi km disegnava una trama regolare, come un tessuto a righe.",
+        "  vec3 qd = q / uDettaglioKm + (f.gba - 0.5) * 6.0;",
         "  vec4 d1 = textureLod(uForma, vec3(0.8 * qd.x - 0.6 * qd.y, 0.6 * qd.x + 0.8 * qd.y, qd.z) * 0.25 + uSemenza.zxy, lodDet);",
         "  vec4 d2 = textureLod(uForma, vec3(qd.z * 0.37 + qd.x * 0.93, qd.y, qd.x * 0.37 - qd.z * 0.93) * 0.61 + 0.37, lodDet + 1.3);",
         "  float det = mix(d1.g * 0.7 + d1.b * 0.3, d2.b * 0.6 + d2.a * 0.4, 0.4);",
         "  det = mix(det, 1.0 - det, smoothstep(0.1, 0.5, h));",
-        "  float morso = uErosione * mix(0.5, 1.2, convettiva) * (1.0 - smoothstep(1.5, 3.5, lodDet));",
+        "  float morso = uErosione * mix(0.5, 1.2, convettiva) * (1.0 - smoothstep(1.0, 2.5, lodDet));",
+        "  // Solo la superficie si scava: dentro la nube (d alto) l'erosione si",
+        "  // spegne e il nucleo resta denso.",
+        "  morso *= 1.0 - smoothstep(0.75, 1.0, d);",
         "  d = clamp(rimappa(d, det * morso, 1.0, 0.0, 1.0), 0.0, 1.0);",
         "  return d * ottica;",
         "}",
