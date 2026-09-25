@@ -2036,10 +2036,14 @@ assert.equal(schermoAlto.width, schermoBasso.width,
 {
   const vm = require("node:vm");
   const sorgente = implementazione("updateSkyPalette");
-  for (const [show3D, showVolumeClouds] of [[true, false], [false, true], [true, true]]) {
+  for (const [show3D, showVolumeClouds, showFusedClouds] of [
+    [true, false, false], [false, true, false], [true, true, false], [false, false, true]]) {
     const dipinti = {};
     const contesto = {
       show3D, showVolumeClouds, synopticChart: false,
+      // Le due nubi 3D (dal solo satellite e fuse con ICON-2I) condividono
+      // cielo e inclinazione attraverso questo helper.
+      nubi3DAttive: () => showVolumeClouds || showFusedClouds,
       mapBackgroundColour: () => "rgb(0,0,0)",
       document: { documentElement: { style: { setProperty: () => {} } } },
       map: {
@@ -2052,7 +2056,8 @@ assert.equal(schermoAlto.width, schermoBasso.width,
     vm.runInContext(sorgente, contesto);
     assert.doesNotThrow(() => contesto.updateSkyPalette(),
       "updateSkyPalette si rompe a mappa inclinata (show3D=" + show3D
-      + ", showVolumeClouds=" + showVolumeClouds + "): le nubi in volume non partono");
+      + ", showVolumeClouds=" + showVolumeClouds + ", showFusedClouds=" + showFusedClouds
+      + "): le nubi in volume non partono");
     assert.ok(dipinti["background:background-color"],
       "a mappa inclinata lo sfondo non viene piu' colorato");
   }

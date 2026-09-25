@@ -9,6 +9,7 @@ on:
       - main
     paths:
       - 'scripts/process_data.py'
+      - 'scripts/bake_cloud_volume.py'
       - 'scripts/archive_run.py'
       - 'scripts/import_icon2i_history.py'
       - 'scripts/collect_observations.py'
@@ -43,6 +44,7 @@ on:
       - 'meteograms-ui.css'
       - 'point_bulletin.js'
       - 'local_downscaling.js'
+      - 'nubi_fusione.js'
       - 'scripts/build_local_downscaling.py'
       - 'requirements.txt'
       - '.github/workflows/update_meteo.yml'
@@ -53,6 +55,7 @@ on:
       - main
     paths:
       - 'scripts/process_data.py'
+      - 'scripts/bake_cloud_volume.py'
       - 'scripts/archive_run.py'
       - 'scripts/import_icon2i_history.py'
       - 'scripts/collect_observations.py'
@@ -87,6 +90,7 @@ on:
       - 'meteograms-ui.css'
       - 'point_bulletin.js'
       - 'local_downscaling.js'
+      - 'nubi_fusione.js'
       - 'scripts/build_local_downscaling.py'
       - 'requirements.txt'
       - '.github/workflows/update_meteo.yml'
@@ -126,7 +130,8 @@ jobs:
             const INTERFACCIA = new Set([
               'index.html', 'meteograms.html', 'radar.html',
               'forecast-cache.js', 'modern-ui.js', 'modern-ui.css',
-              'meteograms-ui.css', 'point_bulletin.js', 'local_downscaling.js'
+              'meteograms-ui.css', 'point_bulletin.js', 'local_downscaling.js',
+              'nubi_fusione.js'
             ]);
             function rapido(nome) {
               if (INTERFACCIA.has(nome)) return true;
@@ -233,7 +238,7 @@ jobs:
             const fs = require('fs');
             const percorsi = [
               'index.html', 'meteograms.html', 'radar.html',
-              'point_bulletin.js', 'local_downscaling.js',
+              'point_bulletin.js', 'local_downscaling.js', 'nubi_fusione.js',
               'forecast-cache.js', 'modern-ui.js', 'modern-ui.css',
               'meteograms-ui.css'
             ];
@@ -367,6 +372,8 @@ jobs:
           node scripts/tests/test_blitzortung.js
           node scripts/tests/test_lampo.js
           node scripts/tests/test_workflow.js
+          python scripts/tests/test_cloud_volume.py
+          node scripts/tests/test_nubi_fusione.js
 
   build:
     needs: ambito
@@ -456,6 +463,8 @@ jobs:
           node scripts/tests/test_blitzortung.js
           node scripts/tests/test_lampo.js
           node scripts/tests/test_workflow.js
+          python scripts/tests/test_cloud_volume.py
+          node scripts/tests/test_nubi_fusione.js
 
       - name: Run ICON-2I processor
         env:
@@ -471,6 +480,17 @@ jobs:
           ICON_ARCHIVE_S3_SESSION_TOKEN: ${{ secrets.ICON_ARCHIVE_S3_SESSION_TOKEN }}
           ICON_ARCHIVE_S3_PREFIX: ${{ secrets.ICON_ARCHIVE_S3_PREFIX }}
         run: python scripts/process_data.py
+
+      # Il primo volume delle nubi del run: la pubblicazione su gh-pages e'
+      # un commit orfano, e senza questo passo le nubi 3D sparirebbero fino
+      # alla prossima cottura del workflow dedicato. Non e' mai bloccante.
+      - name: Cuoce le nubi 3D (EUMETSAT + ICON-2I)
+        continue-on-error: true
+        timeout-minutes: 10
+        run: |
+          python scripts/bake_cloud_volume.py \
+            --environment data_weather/cloud_environment.npz \
+            --output-dir data_weather/live/clouds || true
 
       - name: Calcola downscaling locale da osservazioni e ICON
         run: python scripts/build_local_downscaling.py --data-dir data_weather
@@ -517,6 +537,7 @@ jobs:
           cp radar.html "$STAGE"/
           cp point_bulletin.js "$STAGE"/
           cp local_downscaling.js "$STAGE"/
+          cp nubi_fusione.js "$STAGE"/
           cp forecast-cache.js modern-ui.js modern-ui.css meteograms-ui.css "$STAGE"/
           touch "$STAGE"/.nojekyll
           cp -r data_weather "$STAGE"/data_weather
