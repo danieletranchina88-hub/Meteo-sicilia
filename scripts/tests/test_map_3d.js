@@ -2507,7 +2507,7 @@ assert.match(fragment, /if \(altKm < baseKm \|\| altKm > cimaKm \+ margine\) ret
 assert.match(fragment, /if \(altKm > cimaLocale\) return 0\.0;/, "la cima non segue piu' le cupole");
 // Coerenza con lo zoom: le cupole frattali, la luce nella geometria che si
 // vede, l'ingresso nella nube a passi corti, l'esagerazione che cala poco.
-assert.match(fragment, /float cimaLocale = cimaKm \+ 2\.0 \* tipo \* rilievo \* min\(1\.0, 2\.2 \/ uEsagerazione\);/, "mancano le cupole frattali della cima");
+assert.match(fragment, /float cimaLocale = cimaKm \+ tipo \* rilievo \/ esag;/, "mancano le cupole frattali della cima");
 assert.match(fragment, /vec3 verso = vec3\(uSole\.xy, uSole\.z\) \/ kmPerUnita;/,
   "le ombre non seguono piu' la geometria esagerata: da vicino spariscono");
 assert.match(fragment, /float calotta\(float v\)/, "le cupole tornano coni: lame da vicino");
