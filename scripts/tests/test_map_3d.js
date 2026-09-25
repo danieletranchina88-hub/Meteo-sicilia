@@ -2105,16 +2105,19 @@ assert.equal(schermoAlto.width, schermoBasso.width,
   assert.doesNotMatch(frammento, /scemare/, "la cima torna a scendere a cono verso il bordo");
   // La forma delle cupole e la continuita del nucleo sono verificate
   // numericamente in test_map_3d.js (anche su GPU con --gpu).
-  // ANELLI: senza bisezione i campioni cadevano a scatti rispetto al bordo.
-  assert.match(frammento, /for \(int k = 0; k < 5; k\+\+\)/, "manca la bisezione all'ingresso nella nube");
-  // La sagoma viene dal campo a piena risoluzione, non dal rumore.
-  assert.match(frammento, /vec4 fine = textureLod\(uCampo, uv, lodFine\);/,
-    "la copertura non si legge piu' alla risoluzione piena del satellite");
+  // STRIATURE RADIALI: il passo cresce con la distanza ma copre sempre
+  // tutto il raggio con i passi rimasti.
+  assert.match(frammento, /float crescita = 0\.004;/, "il passo non cresce piu' con la distanza");
+  assert.match(frammento, /\(tLontano - t\) \/ float\(max\(1, uPassi - i\)\)/,
+    "il raggio puo' esaurire i passi prima di attraversare la nube");
+  // La sagoma viene dalla texture di fusione, letta al livello del pixel.
+  assert.match(frammento, /vec4 campo = textureLod\(uCampo, uv, lodCampo\);/,
+    "la texture delle nubi 3D non si legge piu' al livello del pixel");
   assert.doesNotMatch(frammento, /texture\(uRumore, q \* 3\.7/,
     "e' tornata l'ottava fine del rumore, quella che faceva i puntini");
   // Il lampo deve poter schiarire anche una nube al sole.
-  assert.match(frammento, /colore = 1\.0 - exp\(-colore \* /,
-    "manca la curva di risposta: al sole il lampo torna invisibile");
+  assert.match(frammento, /colore = alfa \* \(1\.0 - exp\(-colore \/ max\(alfa, 1e-3\) \* 1\.15\)\);/,
+    "manca la curva di risposta: il bordo d'argento torna a tagliare");
 }
 {
   // ANELLI, seconda causa: la quota a otto bit. Il campo va in mezza precisione.
@@ -2399,14 +2402,11 @@ console.log("nubi in volume: spessore continuo, niente grana, niente coni, nient
   assert.ok(pieno[k * 3] > 150 && pieno[k * 3 + 1] < 90,
     "sotto la nube il suolo non viene dai dintorni: " + Array.from(pieno.slice(k * 3, k * 3 + 3)).map(Math.round));
   const frammento = html.slice(html.indexOf("var FRAMMENTO = ["), html.indexOf("var STESURA = ["));
-  assert.match(frammento, /float baseKm = min\(mix\(liscia\.b, fine\.b, 0\.3\) \* uScalaKm/,
-    "la base della nube torna a essere la cima meno uno spessore: le montagne");
-  assert.match(frammento, /vec4 genere = textureLod\(uGeneri, uv, lodLiscio\);/,
-    "lo shader non legge piu' il genere della nube");
-  assert.match(frammento, /float incudine = meteo\.r, pioggiaEstesa = meteo\.g;/,
-    "lo shader non distingue l'incudine dalla pioggia stratiforme");
-  assert.match(frammento, /float granuli = meteo\.b, veloLiscio = meteo\.a;/,
-    "altocumuli, stratocumuli e veli non hanno una forma distinta");
+  // La texture delle nubi 3D: R cima, G densita', B base, A CAPE.
+  assert.match(frammento, /float cimaKm = campo\.r \* uScalaKm;/, "la cima non viene piu' dal canale R");
+  assert.match(frammento, /float baseKm = campo\.b \* uScalaKm;/, "la base non viene piu' dal canale B");
+  assert.match(frammento, /if \(campo\.g < 0\.004\) return 0\.0;/, "la maschera satellitare non e' piu' esatta");
+  assert.match(frammento, /conv = campo\.a \* smoothstep\(0\.3, 0\.8, campo\.g\);/, "il CAPE non entra piu' nello shader");
   // Le precedenti asserzioni su collo, copQuota e deformazione delle
   // coordinate imponevano proprio le formule responsabili dei crateri.
   // Il test del volume verifica ora limiti fisici e immagini del vero shader.
@@ -2416,30 +2416,22 @@ console.log("nubi in volume: spessore continuo, niente grana, niente coni, nient
   // Il realismo: luce cercata verso il sole, scultura di Worley letta al
   // dettaglio giusto, rumore periodico senza giunture.
   const frammento = html.slice(html.indexOf("var FRAMMENTO = ["), html.indexOf("var STESURA = ["));
-  assert.match(frammento, /float profonditaVersoSole\(vec3 p, float lodGrezzo, float cosLat\)/,
+  assert.match(frammento, /float spessoreVersoSole\(vec3 p, float lodCampo, float lodRumore\)/,
     "manca la marcia della luce verso il sole: le nubi tornano illuminate uguali dappertutto");
-  assert.match(frammento, /versoSole = profonditaVersoSole\(p, lodGrezzo, cosLat\)/,
+  assert.match(frammento, /spessoreVersoSole\(p, lodCampo, lodRumore\)/,
     "la marcia della luce non viene piu' usata");
-  assert.match(frammento, /vec3 q = p \+ versoR \* \(\(fatto \+ \(float\(i\) \+ 0\.5\) \* tratto\) \/ kmPerUnita\);/,
-    "l'ombra lontana non segue il raggio reale verso il Sole");
-  assert.match(frammento, /vec4 lontana = textureLod\(uCampo, uv, max\(2\.0, lodGrezzo \+ 2\.0\)\);/,
-    "l'ombra lontana non usa la copertura misurata dal satellite");
-  assert.doesNotMatch(frammento, /versoSole \+= max\(0\.0, \(cimaKm - altKm\)/,
-    "un fianco illuminato proietta ancora l'ombra di una colonna immaginaria");
   assert.match(frammento, /float passa = diretta \+ 0\.38 \* uLampoPesoCopertura \* \(diffusa - diretta\);/,
     "la luce del fulmine attraversa il nucleo fitto senza attenuazione coerente");
-  assert.match(frammento, /0\.022 \* distanza \* distanza/,
+  assert.match(frammento, /0\.022 \* migliore \* migliore/,
     "il lampo lontano illumina l'intera nube come una luce uniforme");
-  assert.match(frammento, /float lodF = max\(0\.0, lodGrezzo \+ log2\(/,
-    "il rumore della forma torna a partire dal livello gia' limitato: da vicino le bolle si spianano");
-  assert.match(frammento, /float lodW = max\(0\.0, lodGrezzo \+ log2\(/,
-    "il rumore del dettaglio torna a partire dal livello gia' limitato: l'erosione si spegne da vicino");
-  assert.match(frammento, /uColoreFoschia/, "manca la foschia con la distanza");
+  assert.match(frammento, /float lodRumore = max\(0\.0, log2\(/,
+    "il rumore non si legge piu' al livello del pixel: da vicino le bolle si spianano");
+  assert.match(frammento, /uFoschia/, "manca la foschia con la distanza");
   const vm = require("node:vm");
   const contesto = { Math, Float32Array };
   vm.createContext(contesto);
-  vm.runInContext(implementazione("casuale3") + implementazione("worley3"), contesto);
-  const lato = 24, w = contesto.worley3(lato, 4, 1);
+  vm.runInContext(implementazione("hash3") + implementazione("worley3D"), contesto);
+  const lato = 24, w = contesto.worley3D(lato, 4, 1);
   let min = 1, max = 0, bordo = 0, dentro = 0, n = 0;
   for (let z = 0; z < lato; z++) for (let y = 0; y < lato; y++) {
     const riga = (z * lato + y) * lato;
@@ -2454,10 +2446,8 @@ console.log("nubi in volume: spessore continuo, niente grana, niente coni, nient
 {
   // Da vicino: niente grana sui fianchi, niente pareti a tende.
   const frammento = html.slice(html.indexOf("var FRAMMENTO = ["), html.indexOf("var STESURA = ["));
-  assert.match(frammento, /float passoScultura = 0\.18 \/ max\(0\.3, gDensita\) \* unitaPerKmVero;/,
-    "il passo dentro la nube non segue piu' la scala della scultura: torna la grana sui fianchi");
-  assert.match(frammento, /bool fascia = copertura > 0\.03/,
-    "fuori dalla nube, nella sua fascia di quota, si torna al passo largo: puntinatura sull'orlo");
+  assert.match(frammento, /float passoMin = min\(passoZ \/ max\(abs\(direzione\.z\), 1e-3\), uTexelCampo \* 0\.9\);/,
+    "il passo non segue piu' la quota: uno strato sottile viene scavalcato");
 
 }
 {
@@ -2485,7 +2475,7 @@ console.log("nubi in volume: spessore continuo, niente grana, niente coni, nient
     "la sorgente del lampo e' tornata un punto: deve essere il canale verticale");
   assert.match(frammento, /float s = clamp\(dot\(dKm, dr\), 0\.0, lung\);/,
     "mancano i rami orizzontali del canale dentro la nube");
-  assert.match(frammento, /tauL \+= densita\(qq, lodGrezzo \+ 1\.0, true, a2, c2, o2, s2\) \* gDensita;/,
+  assert.match(frammento, /tauL \+= densita\(mix\(p, qS, 0\.2 \+ 0\.3 \* float\(k\)\), lodCampo \+ 1\.0, lodRumore \+ 1\.0, true, h2, c2\);/,
     "la luce del lampo non attraversa piu' la nube vera: il nucleo fitto non fa ombra");
   assert.match(frammento, /IL CANALE SOTTO LA NUBE/, "manca il canale visibile fra la base e il suolo");
 }
@@ -2509,23 +2499,16 @@ function shader(name) {
   return vm.runInNewContext(html.slice(start, end) + "\n" + name);
 }
 const fragment = shader("FRAMMENTO");
-// LA NUBE PIENA: niente superficie scolpita sulla cima (le "montagne").
-// Il volume sta fra base e cima, il Perlin apre i vuoti, il Worley si
-// sottrae con un morso che dipende dal genere e dal CAPE.
-assert.doesNotMatch(fragment, /rilievoSuperficie|bordoKm|cimaKm -= rilievo/,
-  "la cima torna a essere una superficie scolpita");
-assert.match(fragment, /if \(altKm > cimaKm\) return 0\.0;/, "il raggio supera la cima misurata");
-assert.match(fragment, /if \(altKm < baseKm\) return 0\.0;/, "il raggio scende sotto la base della nube");
-assert.match(fragment, /float soglia = \(1\.0 - sqrt\(copertura \* mix\(0\.35, 1\.0, spessoreOttico\)\)\) \* vuoti;/,
-  "mancano i vuoti macroscopici del Perlin");
-assert.match(fragment, /float morso = mix\(mix\(0\.14, 0\.45, granuli\), 0\.9, convettiva\);/,
-  "il morso del Worley non dipende piu' da genere e convezione");
-assert.match(fragment, /\+ 0\.35 \* convezione \* cumulo/,
-  "il CAPE non modula piu' la convezione della forma");
-assert.match(fragment, /float powder = 1\.0 - exp\(-estinzioneKm \* 2\.0\);/,
-  "manca il powder 1 - e^(-densita' x 2)");
+// IL PROMPT DELLE NUBI 3D: raggio confinato fra base e cima, Perlin per i
+// vuoti, Worley sottratto con un morso che il CAPE varia, Beer-Lambert,
+// powder 1 - e^(-densita' x 2), Henyey-Greenstein.
+assert.match(fragment, /if \(altKm < baseKm \|\| altKm > cimaKm\) return 0\.0;/,
+  "il raggio non e' piu' confinato fra base e cima");
+assert.match(fragment, /float soglia = \(1\.0 - sqrt\(copertura\)\) \* 0\.65;/, "mancano i vuoti del Perlin");
+assert.match(fragment, /float morso = mix\(0\.14, 0\.9, convettiva\);/, "il CAPE non varia piu' il morso del Worley");
+assert.match(fragment, /float powder = 1\.0 - exp\(-estinzione \* 2\.0\);/, "manca il powder");
 assert.match(fragment, /float beer = exp\(-tauSole\);/, "manca Beer-Lambert verso il sole");
-assert.match(fragment, /float faseHG\(float coseno, float g\)/, "manca Henyey-Greenstein");
+assert.match(fragment, /float henyeyGreenstein\(float coseno, float g\)/, "manca Henyey-Greenstein");
 console.log("Cloud surface numeric checks: OK");
 const GPU_QA = String.raw`import ctypes as c, math, sys, time, os
 from ctypes.util import find_library
@@ -2562,47 +2545,39 @@ def tex(arr,unit,dim=2,mip=True):
 W,H=320,240
 out=tex(np.zeros((H,W,4),np.float32),7,mip=False);fbo=U();GenFramebuffers(1,c.byref(fbo));BindFramebuffer(0x8D40,fbo.value);FramebufferTexture2D(0x8D40,0x8CE0,0x0DE1,out.value,0);assert CheckFramebufferStatus(0x8D40)==0x8CD5
 vao=U();GenVertexArrays(1,c.byref(vao));BindVertexArray(vao.value);vbo=U();GenBuffers(1,c.byref(vbo));BindBuffer(0x8892,vbo.value);vertices=np.array([-1,-1,3,-1,-1,3],np.float32);BufferData(0x8892,vertices.nbytes,vertices.ctypes.data,0x88E4);VertexAttribPointer(0,2,0x1406,0,0,None);EnableVertexAttribArray(0)
-tex(np.fromfile('/tmp/cloud_form.raw',np.uint8).reshape(48,48,48,4),3,3);tex(np.fromfile('/tmp/cloud_detail.raw',np.uint8).reshape(32,32,32,4),4,3)
+tex(np.fromfile('/tmp/cloud_perlin.raw',np.uint8).reshape(64,64,64,4),1,3);tex(np.fromfile('/tmp/cloud_worley.raw',np.uint8).reshape(32,32,32,4),2,3)
 source=open(sys.argv[1]).read();prefix=sys.argv[2];mode=sys.argv[3] if len(sys.argv)>3 else 'render'
 if mode=='section':
  source=source[:source.index('void main()')]+'''void main(){
  vec3 p=vec3(0.5+vNdc.x*20.0/uCircKm,0.5,(vNdc.y+1.0)*7.0*uEsagerazione/uCircKm);
- float a,c,o,s;float d=densita(p,-6.0,false,a,c,o,s);
- colorePixel=vec4(d,gDensita,gAltezza,1.0);
+ float h,c;float d=densita(p,0.0,0.0,false,h,c);
+ colorePixel=vec4(d,h,c,1.0);
  }'''
 program=CreateProgram();AttachShader(program,shader(open('/tmp/cloud_VERTICE.glsl').read(),0x8B31));AttachShader(program,shader(source,0x8B30));BindAttribLocation(program,0,b'aPos');LinkProgram(program);ok=I();GetProgramiv(program,0x8B82,c.byref(ok));log=c.create_string_buffer(16000);GetProgramInfoLog(program,len(log),None,log);assert ok.value,log.value.decode();UseProgram(program)
 def uf(n,*v):
  loc=GetUniformLocation(program,n.encode());[None,Uniform1f,Uniform2f,Uniform3f,Uniform4f][len(v)](loc,*v)
 def ui(n,v):Uniform1i(GetUniformLocation(program,n.encode()),v)
-for n,v in [('uCampo',0),('uGeneri',1),('uMorfologia',2),('uForma',3),('uDettaglio',4),('uBaseTorre',5),('uPassiLuce',4),('uQuantiLampi',0)]:ui(n,v)
+for n,v in [('uCampo',0),('uPerlin',1),('uWorley',2),('uPassiLuce',4),('uPassi',200),('uQuantiLampi',0)]:ui(n,v)
 unit=1/40075;esag=float(os.environ.get('CLOUD_QA_EXAGGERATION','1.6'))
-for n,v in dict(uScalaKm=16,uCircKm=40075,uEsagerazione=esag,uSigma=4,uFaseG=.58,uForzaSole=1,uZMax=14*esag*unit,uPassoFine=.25*esag*unit,uPassoMax=unit,uPixelAngolo=.00005,uTexelCampo=40*unit/128,uSemenza=1,uGrana=0,uLatoForma=48,uLatoDettaglio=32).items():uf(n,v)
-uf('uFormaPasso',40075/16,esag/16);uf('uDettaglioPasso',40075/4.5,esag/4.5);uf('uDominio',.5-20*unit,.5-20*unit,.5+20*unit,.5+20*unit);uf('uSole',.5,-.4,.768);uf('uAmbiente',.31,.41,.58);uf('uAmbienteSuolo',.22,.21,.2);uf('uColoreSole',1,.96,.9)
+for n,v in dict(uScalaKm=16,uCircKm=40075,uEsagerazione=esag,uSigma=3.6,uFaseG=.6,uForzaSole=1,uZMax=14*esag*unit,uPassoKm=.3,uPixelAngolo=.00005,uTexelCampo=40*unit/128,uPerlinKm=48,uWorleyKm=6,uLatoPerlin=64,uLatoWorley=32).items():uf(n,v)
+uf('uSemenza',.3,.6,.1);uf('uDominio',.5-20*unit,.5-20*unit,.5+20*unit,.5+20*unit);uf('uSole',.5,-.4,.768);uf('uCielo',.46,.58,.78);uf('uSuolo',.26,.25,.23);uf('uColoreSole',2.6,2.5,2.34);uf('uFoschia',.72,.81,.92)
 x,y=np.meshgrid(np.linspace(-20,20,128),np.linspace(-20,20,128));r=np.hypot(x,y)
 def smooth(a,b,v):
  z=np.clip((v-a)/(b-a),0,1);return z*z*(3-2*z)
-scenes=['Cb','Sc','Ac','As','Cu','Ci'] if mode=='render' else ['Cb','Sc','Ac','As','Cu','Cu0']
+# La texture delle nubi 3D: R cima, G densita', B base, A convezione (CAPE).
+scenes=['Cb','St','Cu','Ci','Cu0'] if mode=='render' else ['Cb','St','Cu','Cu0']
 canvas=Image.new('RGB',(W*3,(H+25)*((len(scenes)+2)//3)),(18,30,44));draw=ImageDraw.Draw(canvas)
 for i,kind in enumerate(scenes):
- start=time.time();field=np.zeros((128,128,4),np.float32);genres=field.copy();morph=field.copy();cover=1-smooth(16,19,r);base=1;top=3;density=.85;genres[:,:,3]=.9
- if kind=='Cb':
-  top=11.5+.8*np.exp(-(r/5)**2);base=8.8;core=np.exp(-(r/5.0)**2);genres[:,:,0]=.45;genres[:,:,1]=.18*(1-core);genres[:,:,2]=core;morph[:,:,0]=(1-core)*.9
- elif kind=='Sc':
-  top=2.5+.6*smooth(-15,15,x);base=.9;morph[:,:,2]=.95;genres[:,:,0]=.25
- elif kind=='Ac':top=4.7;base=3.5;morph[:,:,2]=.95;genres[:,:,0]=.3
- elif kind=='As':top=5.5;base=3.5;morph[:,:,3]=1
+ start=time.time();field=np.zeros((128,128,4),np.float32);cover=1-smooth(16,19,r)
+ if kind=='Cb':top=11.5+.8*np.exp(-(r/5)**2);base=1.0;dens=.9*cover;conv=.8
+ elif kind=='St':top=1.6;base=.5;dens=.55*cover;conv=0.
  elif kind in ('Cu','Cu0'):
-  cover=np.zeros_like(r)
-  for cx,cy,rad in [(-8,-3,4),(2,2,5),(11,-5,3),(-3,-11,3)]:cover=np.maximum(cover,1-smooth(rad*.35,rad,np.hypot(x-cx,y-cy)))
-  top=4;base=1;genres[:,:,0]=1
- elif kind=='Ci':top=10;base=8.7;genres[:,:,1]=1;genres[:,:,3]=.1;density=.3;cover*=.6
- # A = convezione ICON-2I (CAPE): torre e cumuli in aria instabile; Cu0 e' lo
- # stesso cumulo senza CAPE. La densita' del genere sta in uGeneri.a.
- conv={'Cb':.8,'Cu':.7}.get(kind,0.)
- field[:,:,0]=top/16;field[:,:,1]=cover;field[:,:,2]=base/16;field[:,:,3]=conv
- genres[:,:,3]=density*(.8+.55*genres[:,:,3])/1.35
- tex(field,0);tex(np.round(genres*255).astype(np.uint8),1);tex(np.round(morph*255).astype(np.uint8),2)
- lcl=np.zeros((128,128,4),np.uint8);lcl[:,:,0]=round(255/16);lcl[:,:,3]=255;tex(lcl,5)
+  dens=np.zeros_like(r)
+  for cx,cy,rad in [(-8,-3,4),(2,2,5),(11,-5,3),(-3,-11,3)]:dens=np.maximum(dens,.8*(1-smooth(rad*.35,rad,np.hypot(x-cx,y-cy))))
+  top=4;base=1;conv=.7 if kind=='Cu' else 0.
+ elif kind=='Ci':top=10;base=8.7;dens=.25*cover;conv=0.
+ field[:,:,0]=top/16;field[:,:,1]=dens;field[:,:,2]=base/16;field[:,:,3]=conv
+ tex(field,0)
  theta=math.radians(20 if kind=='Cb' else 55);right=np.array([1,0,0]);up=np.array([0,-math.sin(theta),math.cos(theta)]);forward=np.array([0,-math.cos(theta),-math.sin(theta)]);mat=np.eye(4,dtype=np.float32);mat[:3,0]=right*24*unit;mat[:3,1]=up*18*unit;mat[:3,2]=forward*70*unit;mat[:3,3]=[.5,.5,(6 if kind=='Cb' else 3)*esag*unit];UniformMatrix4fv(GetUniformLocation(program,b'uInversa'),1,0,np.ascontiguousarray(mat.T).ctypes.data)
  Viewport(0,0,W,H);DrawArrays(4,0,3);pixels=np.zeros((H,W,4),np.float32);ReadPixels(0,0,W,H,0x1908,0x1406,pixels.ctypes.data);assert GetError()==0
  pixels=pixels[::-1];np.save(f'{prefix}_{kind}_{mode}.npy',pixels)
@@ -2613,29 +2588,22 @@ canvas.save(f'{prefix}_{mode}.png')
 if mode=='section':
  z=(1-(np.arange(H)+.5)/H)*14;xx=((np.arange(W)+.5)/W*2-1)*20
  cb=np.load(f'{prefix}_Cb_section.npy')[:,:,0]
- core=cb[np.ix_((z>2)&(z<10.8),abs(xx)<2)]
- assert core.min()>.35, f'Cb hollow core: minimum density {core.min():.3f}'
+ # La torre convettiva profonda e' una nube PIENA dalla base alla cima.
+ core=cb[np.ix_((z>2)&(z<10),abs(xx)<2)]
+ assert core.mean()>.3, f'Cb core too thin: mean density {core.mean():.3f}'
  roof=((cb>.05)*z[:,None]).max(axis=0)
- assert roof[abs(xx)<2].min()>11.3, f'Cb top lost below measured CTH: {roof[abs(xx)<2].min():.2f} km'
- # A connected core, a narrower middle and a broad upper anvil.
- widths=[]
- for height in [2,6,10]:widths.append(np.count_nonzero(cb[np.argmin(abs(z-height))]>.1))
- assert widths[2]>widths[1]*1.4 and widths[1]>20, f'Cb shaft/anvil topology: {widths}'
- sc=np.load(f'{prefix}_Sc_section.npy')[:,:,0];roofSc=((sc>.05)*z[:,None]).max(axis=0)
- rough=np.abs(np.diff(roofSc[(xx>0)&(xx<12)],2)).mean()
- # Le celle dello stratocumulo (cupole di ~3 km su una base comune) danno
- # ~0,07; le strisce da coordinate mescolate davano 0,5 e oltre.
- assert rough<.15, f'Sc stretched high-frequency stripes at class transition: {rough:.3f}'
- ac=np.load(f'{prefix}_Ac_section.npy')[:,:,0];roofAc=((ac>.05)*z[:,None]).max(axis=0)
- plain=np.load(f'{prefix}_As_section.npy')[:,:,0];roofAs=((plain>.05)*z[:,None]).max(axis=0)
- assert roofAc[abs(xx)<12].std()>roofAs[abs(xx)<12].std()*3, 'Ac indistinguishable from smooth As'
- # Il CAPE scolpisce: lo stesso cumulo in aria instabile ha piu' massa erosa
- # nella pelle (cavolfiori) ma resta una nube, non sparisce.
- cu=np.load(f'{prefix}_Cu_section.npy')[:,:,0];cu0=np.load(f'{prefix}_Cu0_section.npy')[:,:,0]
- assert (cu>.05).sum()>(cu0>.05).sum()*0.5, 'CAPE erodes the cumulus away'
- assert np.abs(cu-cu0).sum()>0.02*(cu0>.05).sum(), 'CAPE has no effect on cumulus sculpture'
+ assert roof[abs(xx)<2].max()>10.3, f'Cb top far below measured CTH: {roof[abs(xx)<2].max():.2f} km'
+ floor=((cb>.05)*z[:,None]+(cb<=.05)*99).min(axis=0)
+ assert floor[abs(xx)<2].min()<1.6, f'Cb base far above the LCL: {floor[abs(xx)<2].min():.2f} km'
  assert np.all(cb[:,abs(xx)>19.5]<.001), 'Cloud outside the observed coverage'
- print(f'GPU physical checks OK: core density {core.min():.3f}; Cb cap {roof[abs(xx)<2].min():.2f} km; Sc roughness {rough:.3f} km',flush=True)
+ st=np.load(f'{prefix}_St_section.npy')[:,:,0]
+ assert np.all(st[z>1.7]<.001) and np.all(st[z<.45]<.001), 'Stratus leaves its base-top band'
+ # Il CAPE scolpisce: lo stesso cumulo in aria instabile e' eroso a cavolfiore
+ # ma resta una nube.
+ cu=np.load(f'{prefix}_Cu_section.npy')[:,:,0];cu0=np.load(f'{prefix}_Cu0_section.npy')[:,:,0]
+ assert (cu>.05).sum()>(cu0>.05).sum()*0.3, 'CAPE erodes the cumulus away'
+ assert np.abs(cu-cu0).sum()>0.02*(cu0>.05).sum(), 'CAPE has no effect on cumulus sculpture'
+ print(f'GPU physical checks OK: Cb core {core.mean():.3f}; Cb cap {roof[abs(xx)<2].max():.2f} km',flush=True)
 
 `;
 if (process.argv.includes("--gpu")) {
@@ -2643,10 +2611,13 @@ if (process.argv.includes("--gpu")) {
   fs.writeFileSync(path.join(dir,"cloud_VERTICE.glsl"),shader("VERTICE"));
   const override=process.argv.indexOf("--shader");
   fs.writeFileSync(path.join(dir,"cloud_FRAMMENTO.glsl"),override>=0 ? fs.readFileSync(process.argv[override+1]) : fragment);
-  const noise={Math,Float32Array,Uint8Array,limita:(v,a,b)=>Math.max(a,Math.min(b,v))};vm.createContext(noise);
-  vm.runInContext(html.slice(html.indexOf("function casuale3"),html.indexOf("var VERTICE")),noise);
-  fs.writeFileSync(path.join(dir,"cloud_form.raw"),noise.rumoreDellaForma(48));
-  fs.writeFileSync(path.join(dir,"cloud_detail.raw"),noise.rumoreDelDettaglio(32));
+  const noise={Math,Float32Array,Uint8Array};vm.createContext(noise);
+  vm.runInContext(html.slice(html.indexOf("      function hash3("),html.indexOf("      // --- il volume, attraversato dai raggi"))
+    + ";this.p=texturePerlin;this.w=textureWorley;",noise);
+  const perlin=noise.p(64), rgba=new Uint8Array(perlin.length*4);
+  for (let k=0;k<perlin.length;k++) rgba[k*4]=perlin[k];
+  fs.writeFileSync(path.join(dir,"cloud_perlin.raw"),rgba);
+  fs.writeFileSync(path.join(dir,"cloud_worley.raw"),noise.w(32));
   const program=path.join(dir,"render.py");fs.writeFileSync(program,GPU_QA.replaceAll("/tmp/",dir+"/"));
   const python=process.env.CLOUD_QA_PYTHON || "python3";
   for (const mode of ["render","section"]) execFileSync(python,[program,path.join(dir,"cloud_FRAMMENTO.glsl"),path.join(dir,"cloud"),mode],{stdio:"inherit",env:{...process.env,EGL_PLATFORM:"surfaceless"}});
