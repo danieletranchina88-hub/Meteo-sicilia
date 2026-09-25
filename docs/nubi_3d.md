@@ -154,3 +154,20 @@ Le verifiche GPU (`node scripts/tests/test_map_3d.js --gpu`) controllano la
 torre del Cb piena con la cima alla CTH e la base all'LCL, lo strato nella
 sua fascia, l'effetto del CAPE sui cumuli e l'assenza di nube fuori dalla
 copertura osservata.
+
+## Realismo (PC) e versione leggera (telefono)
+
+- **Diffusione multipla a ottave** (Wrenninge): ogni ottava attenua meno e
+  diffonde meno in avanti; da' il bagliore dentro i cumuli e il
+  grigio-azzurro delle facce in ombra. Sul telefono una sola ottava.
+- **Cielo e suolo**: il cielo azzurro illumina dall'alto e tinge le ombre,
+  il suolo rimanda poca luce calda; le cavita' fra i lobi sono piu' scure.
+- **Prospettiva aerea** azzurra con la distanza e **curva filmica ACES**.
+- **Incudine**: con convezione profonda e cima sopra 7,5 km, fuori dalle
+  torri la nube e' una lastra di 2-3 km in quota; le torri stanno dove il
+  satellite vede la cima sporgere (overshooting top) e in celle di ~15 km.
+- **Accumulo a mappa ferma** (solo PC): 12 fotogrammi con scarto del raggio
+  diverso, media in mezza precisione; si ricomincia a ogni cambio di vista
+  o di campo e non si accumula durante un lampo.
+- **Qualita'**: PC 4,5 Mpx, 384 passi, 8 verso il sole; telefono 720 kpx,
+  176 passi, 5 verso il sole, niente accumulo.
