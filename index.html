@@ -7119,9 +7119,29 @@
       // attraversato o scavalcato.
       var QUALITA_VOLUME = isMobile()
         ? { forma: 1200, pelle: 1400, misura: 800, esagerazione: 3.2, passoKm: 0.30, pixel: 720000,
-            rumore: 48, passiLuce: 5, passi: 176, qualita: 0, accumula: 0 }
+            rumore: 48, passiLuce: 5, passi: 176, qualita: 0, accumula: 0, latoForma: 64 }
         : { forma: 2560, pelle: 3072, misura: 1100, esagerazione: 3.5, passoKm: 0.2, pixel: 4500000,
-            rumore: 64, passiLuce: 8, passi: 384, qualita: 1, accumula: 12 };
+            rumore: 64, passiLuce: 8, passi: 384, qualita: 1, accumula: 12, latoForma: 128 };
+
+      // I numeri dell'aspetto delle nubi. Sono quelli di tutti; con ?regola=1
+      // nell'indirizzo compare un pannello per cambiarli dal vivo, e i valori
+      // scelti restano in questo browser (solo con ?regola=1).
+      var REGOLA_PREDEFINITA = {
+        scalaFormaKm: 24, scalaMacroKm: 96, copertura: 0.6, erosione: 0.18, rigonfio: 1.15,
+        cavolfiore: 0.8, ombra: 1.0, ambiente: 0.9, esposizione: 0.55, esagerazione: 0, contrasto: 0.8
+      };
+      var REGOLA_ATTIVA = typeof location !== "undefined" && /[?&]regola=1\b/.test(location.search || "");
+      var REGOLA = (function () {
+        var r = Object.assign({}, REGOLA_PREDEFINITA);
+        if (!REGOLA_ATTIVA) return r;
+        try {
+          var salvata = JSON.parse(localStorage.getItem("nubi3d-regola") || "{}");
+          Object.keys(r).forEach(function (k) { if (typeof salvata[k] === "number") r[k] = salvata[k]; });
+        } catch (errore) {
+          // Senza memoria del browser si parte dai predefiniti.
+        }
+        return r;
+      })();
 
       // Due misure complementari dello stesso istante: l'IR stima la cima,
       // GeoColour recupera la copertura calda, bassa o otticamente sottile.
@@ -9399,6 +9419,18 @@
         "uniform int uPassi;",
         "uniform int uPassiLuce;",
         "uniform float uQualita;       // 1 sul PC (tutto), 0 sul telefono (versione leggera)",
+        "uniform sampler3D uForma;     // Perlin-Worley a nube: R forma, GBA Worley fBm a 3 scale",
+        "uniform float uLatoForma;",
+        "uniform float uScalaFormaKm;  // km visti coperti da una ripetizione della forma",
+        "uniform float uScalaMacroKm;  // gli ammassi: la stessa forma molto piu' grande",
+        "uniform float uCopertura;     // quanto la copertura del satellite riempie la forma",
+        "uniform float uErosione;      // quanto il dettaglio scava i bordi",
+        "uniform float uRigonfio;      // fin dove (in spessori) le bolle superano la cima",
+        "uniform float uCavolfiore;    // quanto le nubi spesse stabili diventano cumuliformi",
+        "uniform float uOmbra;         // moltiplica lo spessore ottico verso il sole",
+        "uniform float uAmbiente;      // luce del cielo",
+        "uniform float uEsposizione;",
+        "uniform float uContrasto;     // quanto il Worley scava la forma: bolle piu' staccate",
         "uniform float uFotogramma;    // indice del fotogramma accumulato a mappa ferma",
         "uniform float uSigma;",
         "uniform float uFaseG;",
@@ -9449,11 +9481,15 @@
         "// il campione del raggio, la legge la luce del cielo.",
         "float gCavita = 0.0;",
         "",
-        "// Da cono a calotta sferica: v = 1 al centro della bolla, 0 al bordo.",
-        "float calotta(float v) { float r = 1.0 - clamp(v, 0.0, 1.0); return sqrt(max(0.0, 1.0 - r * r)); }",
-        "",
         "// La colonna letta dalla texture: la nube esiste solo fra base e cima.",
         "// Ritorna la densita' 0-1; in uscita l'altezza relativa e la convezione.",
+        "//",
+        "// IL METODO DEI GIOCHI (Nubis, Horizon Zero Dawn; Flight Simulator):",
+        "// densita' = forma 3D x profilo verticale del tipo di nube, tagliata dalla",
+        "// copertura osservata, poi erosa ai bordi dal dettaglio. Il satellite dice",
+        "// DOVE (maschera, copertura G), A CHE QUOTA (cima R, base B) e QUANTO E'",
+        "// CONVETTIVA (A, CAPE); la forma Perlin-Worley da' i cavolfiori a tutte le",
+        "// scale, con bolle tonde e sovrapposte invece di colonne o creste.",
         "float densita(vec3 p, float lodCampo, float lodRumore, bool leggera,",
         "              out float hRel, out float conv, out vec2 fascia) {",
         "  hRel = 0.0; conv = 0.0; fascia = vec2(-1.0);",
@@ -9465,33 +9501,28 @@
         "  if (campo.g < 0.004) return 0.0;",
         "  float kmPerUnita = uCircKm * cosLatDa(p.y);",
         "  float altKm = p.z * kmPerUnita / uEsagerazione;",
-        "  // Due scale: la sagoma (G) alla risoluzione piena, le QUOTE un paio di",
-        "  // livelli piu' in su. Stirata dall'esagerazione, ogni colonna di un pixel",
-        "  // con la sua cima diventerebbe un ago; il server estende R e B fuori",
-        "  // dalla maschera, cosi' la media non trascina a terra le quote di bordo.",
+        "  // Le quote a scala un poco piu' grossa della sagoma: le colonne di un",
+        "  // pixel non diventano aghi; R e B sono estesi fuori dalla maschera.",
         "  vec4 liscio = textureLod(uCampo, uv, lodCampo + 1.5);",
         "  campo.rba = mix(liscio.rba, campo.rba, 0.3);",
         "  float cimaKm = campo.r * uScalaKm;",
         "  float baseKm = campo.b * uScalaKm;",
-        "  // Il CAPE scolpisce a cavolfiore solo una nube che il satellite vede",
-        "  // spessa: un velo sopra aria instabile resta un velo.",
+        "  float spessore = max(0.05, cimaKm - baseKm);",
+        "  // Il CAPE conta solo dove il satellite vede una nube spessa.",
         "  conv = campo.a * smoothstep(0.3, 0.8, campo.g);",
         "  float convettiva = smoothstep(0.05, 0.65, conv);",
-        "  // LE CUPOLE. Il satellite da' una cima per pixel (1-2 km): da vicino,",
-        "  // dentro pochi pixel, la cima sarebbe un piano e la nube una lastra",
-        "  // liscia. La cima vera e' frattale: cupole di 4 km (torri), 1,5 km",
-        "  // (cumuli), e avvicinandosi lobi di 370 m e di 90 m, ognuno acceso solo",
-        "  // quando e' piu' grande di un paio di pixel. L'altezza delle cupole cresce",
-        "  // con la convezione e lo spessore e varia con un Perlin, cosi' non si",
-        "  // ripete in file regolari. Le cupole valgono anche per le ombre: il",
-        "  // raggio verso il sole passa per la stessa funzione.",
-        "  float spessore = cimaKm - baseKm;",
+        "  // Le bolle possono sporgere oltre la cima misurata fino a uRigonfio.",
+        "  float sopra = (uRigonfio - 1.0) * spessore + 0.15;",
+        "  fascia = vec2(baseKm, cimaKm + sopra);",
+        "  // BOUNDING VOLUME: fuori dalla fascia base-cima il raggio non trova nulla.",
+        "  if (altKm < baseKm || altKm > cimaKm + sopra) return 0.0;",
+        "  float h = (altKm - baseKm) / spessore;",
+        "  hRel = clamp(h, 0.0, 1.0);",
         "  vec2 qc = p.xy * kmPerUnita / uWorleyKm;",
-        "  // L'INCUDINE. Dove la convezione e' profonda e la cima sta sopra i 7,5 km",
-        "  // la nube non e' una colonna piena fino al suolo: le torri salgono dove",
-        "  // il satellite vede la cima sporgere sopra i dintorni (overshooting top)",
-        "  // e in qualche cella di ~15 km; attorno c'e' l'incudine, una lastra",
-        "  // piatta e spessa 2-3 km appoggiata sulla tropopausa.",
+        "  // L'INCUDINE: con convezione profonda e cima sopra i 7,5 km, fuori dalle",
+        "  // torri la nube e' una lastra di 2-3 km sulla tropopausa. Le torri",
+        "  // stanno dove il satellite vede la cima sporgere (overshooting top) e in",
+        "  // qualche cella di ~15 km.",
         "  float incudine = smoothstep(7.5, 10.0, cimaKm) * smoothstep(0.25, 0.6, convettiva);",
         "  float torre = 1.0;",
         "  if (incudine > 0.0) {",
@@ -9501,130 +9532,59 @@
         "      lodRumore - 3.7).r);",
         "    torre = max(sporge, cella);",
         "  }",
-        "  float varia = textureLod(uPerlin, vec3(qc * (uWorleyKm / uPerlinKm) * 2.3 + uSemenza.zx, 0.5),",
-        "    max(0.0, lodRumore - 3.0)).r;",
-        "  // Ogni cupola e' alta quanto e' larga, come un lobo vero: 1,2 km per le",
-        "  // torri di 4 km, 600 m per i cumuli di 1,5 km, 200 m per i lobi di 370",
-        "  // m. Negli strati meta', nei veli sottili quasi niente.",
-        "  float tipo = mix(0.5, 1.0, convettiva) * clamp(spessore / 2.0, 0.2, 1.0) * (0.6 + 0.6 * varia);",
-        "  // Le altezze sotto sono in chilometri VISTI: sullo schermo ogni cupola e'",
-        "  // alta al massimo meta' della sua larghezza, a qualunque esagerazione.",
-        "  float esag = max(uEsagerazione, 1.0);",
-        "  float margine = 1.0 * tipo / esag;",
-        "  fascia = vec2(baseKm, cimaKm + margine);",
-        "  // BOUNDING VOLUME: fuori dalla fascia base-cima il raggio non trova nulla.",
-        "  if (altKm < baseKm || altKm > cimaKm + margine) return 0.0;",
-        "  // La texture di Worley vale 1 al centro della bolla: e' gia' una cupola.",
-        "  // Ogni ottava si accende solo quando le sue cupole superano un paio di",
-        "  // pixel: sotto il pixel le loro ombre diventerebbero una grana di brina.",
-        "  float torri = 1.0 - smoothstep(1.5, 3.5, lodRumore - 1.4);",
-        "  float cumuli = 1.0 - smoothstep(1.5, 3.5, lodRumore);",
-        "  float lobi = 1.0 - smoothstep(1.5, 3.5, lodRumore + 2.0);",
-        "  float rilievo = 0.0;",
-        "  // Profilo a calotta: il Worley da solo e' un cono, e stirato",
-        "  // dall'esagerazione diventava una lama. La calotta e' tonda e gonfia.",
-        "  if (torri > 0.0) rilievo += 2.0 * torri * mix(0.4, 1.0, convettiva)",
-        "      * (calotta(textureLod(uWorley, vec3(qc * 0.37 + uSemenza.xy, 0.31), lodRumore - 1.4).r) - 0.75);",
-        "  if (cumuli > 0.0) rilievo += 1.1 * cumuli",
-        "      * (calotta(textureLod(uWorley, vec3(mat2(0.8, -0.6, 0.6, 0.8) * qc + uSemenza.yz, 0.67), lodRumore).r) - 0.75);",
-        "  float grappoli = 1.0 - smoothstep(1.5, 3.5, lodRumore + 1.0);",
-        "  if (grappoli > 0.0) rilievo += 0.6 * grappoli",
-        "      * (calotta(textureLod(uWorley, vec3(mat2(0.96, 0.28, -0.28, 0.96) * qc * 2.03 + 0.37, 0.49),",
-        "        lodRumore + 1.0).r) - 0.75);",
-        "  if (lobi > 0.0) rilievo += 0.3 * lobi",
-        "      * (calotta(textureLod(uWorley, vec3(mat2(0.6, 0.8, -0.8, 0.6) * qc * 4.07, 0.13), lodRumore + 2.0).g) - 0.75);",
-        "  // L'incudine ha la cima piatta; le torri tengono le cupole.",
-        "  rilievo *= mix(1.0, 0.25, incudine * (1.0 - torre));",
-        "  gCavita = clamp(-rilievo / 1.2, 0.0, 1.0);",
-        "  // Da chilometri visti a chilometri veri: si divide per l'esagerazione.",
-        "  float cimaLocale = cimaKm + tipo * rilievo / esag;",
-        "  if (altKm > cimaLocale) return 0.0;",
-        "  float h = (altKm - baseKm) / max(0.05, cimaLocale - baseKm);",
-        "  hRel = h;",
-        "  // Il profilo della colonna: uno strato e' una lastra con base e cima",
-        "  // morbide; una nube convettiva ha base piatta e si stringe verso la cupola.",
-        "  float fondo = smoothstep(0.0, mix(0.18, 0.05, convettiva), h);",
-        "  // Il bordo di sopra e' netto: la nube finisce in 120-350 m, non sfuma",
-        "  // su un terzo dello spessore (da vicino diventava un velo smagliato).",
-        "  float tetto = 1.0 - smoothstep(cimaLocale - mix(0.35, 0.12, convettiva), cimaLocale, altKm);",
-        "  float copertura = campo.g * fondo * tetto;",
-        "  // Sotto l'incudine, fuori dalle torri, l'aria e' libera.",
-        "  float lastraKm = mix(1.8, 3.0, varia);",
-        "  copertura *= 1.0 - incudine * (1.0 - torre)",
-        "    * (1.0 - smoothstep(cimaLocale - lastraKm - 0.6, cimaLocale - lastraKm, altKm));",
-        "  if (copertura <= 0.0) return 0.0;",
-        "",
-        "  // Coordinate del rumore in km VISTI: la verticale e' moltiplicata per",
-        "  // l'esagerazione, altrimenti ogni bolla stirata diventerebbe un ago e la",
-        "  // convezione una foresta di colonne. Negli strati la verticale e'",
-        "  // compressa ancora: le strutture si allungano in orizzontale e restano",
-        "  // lamine. Nella convezione la bolla resta tonda sullo schermo.",
-        "  float lamina = mix(1.3, 1.0, convettiva);",
-        "  vec3 q = vec3(p.xy * kmPerUnita, altKm * uEsagerazione * lamina);",
-        "",
-        "  // PERLIN: i vuoti macroscopici. Dove la densita' osservata e' bassa solo",
-        "  // i massimi del Perlin sopravvivono e la nube si apre in banchi e varchi;",
-        "  // dove e' alta il Perlin modula la materia senza bucarla.",
-        "  // La soglia usa la radice della copertura e non scende mai sotto il 35%",
-        "  // del rumore: un velo sottile osservato dal satellite si apre in banchi",
-        "  // ma non sparisce -- la maschera resta del satellite.",
-        "  // Il periodo verticale e' un sesto di quello orizzontale: con lo stesso",
-        "  // periodo il Perlin resterebbe costante lungo tutta la colonna e i vuoti",
-        "  // diventerebbero pozzi verticali -- il cilindro estruso da evitare.",
-        "  vec3 qp = vec3(q.xy / uPerlinKm, q.z / (uPerlinKm / 5.0)) + uSemenza;",
-        "  float perlin = textureLod(uPerlin, qp, lodRumore).r;",
-        "  float soglia = (1.0 - sqrt(copertura)) * 0.65;",
-        "  float forma = clamp(rimappa(perlin, soglia, 1.0, 0.0, 1.0), 0.0, 1.0);",
-        "  // Una torre convettiva spessa e' piena: il Perlin non la svuota.",
-        "  forma = mix(forma, 1.0, 0.75 * convettiva * smoothstep(0.55, 0.9, campo.g));",
-        "  if (forma * copertura <= 0.0 || leggera) return forma * copertura;",
-        "",
-        "  // WORLEY SOTTRATTO: il bordo cumuliforme. Il Worley rovesciato vale 1 al",
-        "  // centro delle bolle e 0 fra le bolle: sottraendolo si scavano i solchi",
-        "  // fra i lobi. Il CAPE (canale A) decide quanto morde: con la convezione",
-        "  // profonda i solchi arrivano in profondita' e restano i cavolfiori;",
-        "  // negli strati sfrangia appena il bordo.",
-        "  // Due letture a scale non commensurabili e ruotate: una sola ripeteva il",
-        "  // cubo di rumore in file regolari di bolle.",
-        "  vec3 qw = q / uWorleyKm + uSemenza.zxy;",
-        "  vec3 w1 = textureLod(uWorley, qw, lodRumore).rgb;",
-        "  vec3 w2 = textureLod(uWorley, vec3(mat2(0.8, -0.6, 0.6, 0.8) * qw.xy * 1.37, qw.z * 1.37 + 0.41),",
-        "    lodRumore + 0.45).rgb;",
-        "  vec3 w = mix(w1, w2, 0.4);",
-        "  float worley = w.r * 0.625 + w.g * 0.25 + w.b * 0.125;",
-        "  // Da vicino un'ottava in piu', a 1,5 km: i lobi dentro i lobi. Da",
-        "  // lontano, sotto il pixel, non si legge e si spegne.",
-        "  // Ogni ottava si accende quando le sue celle superano un paio di pixel:",
-        "  // avvicinandosi il cavolfiore rivela lobi sempre piu' piccoli (370 m,",
-        "  // poi 90 m) invece di diventare una superficie liscia.",
-        "  float vicino = 1.0 - smoothstep(1.5, 3.5, lodRumore + 2.0);",
-        "  if (vicino > 0.0) {",
-        "    float fine = textureLod(uWorley, qw.yzx * 4.07 + 0.29, lodRumore + 2.0).r;",
-        "    worley = mix(worley, worley * 0.7 + fine * 0.3, vicino);",
-        "    float vicinissimo = 1.0 - smoothstep(1.5, 3.5, lodRumore + 4.0);",
-        "    if (vicinissimo > 0.0) {",
-        "      float finissimo = textureLod(uWorley, qw.zxy * 16.3 + 0.53, lodRumore + 4.0).g;",
-        "      worley = mix(worley, worley * 0.9 + finissimo * 0.1, vicinissimo);",
-        "    }",
+        "  // IL PROFILO VERTICALE del tipo di nube. Lo strato e' una lastra con base",
+        "  // e cima morbide; il cumulo ha la base piatta e si arrotonda salendo, e",
+        "  // solo le bolle piu' forti arrivano in cima: e' questo che fa il",
+        "  // cavolfiore. Le nubi convettive sono cumuli; anche le nubi spesse e dense",
+        "  // in aria stabile lo diventano in parte (uCavolfiore).",
+        "  float cumuliforme = max(convettiva,",
+        "    smoothstep(1.2, 4.0, spessore) * smoothstep(0.4, 0.8, campo.g) * uCavolfiore);",
+        "  float strato = smoothstep(0.0, 0.1, h) * (1.0 - smoothstep(0.7, uRigonfio, h));",
+        "  float cumulo = smoothstep(0.0, 0.05, h) * (1.0 - smoothstep(0.6, uRigonfio, h));",
+        "  float profilo = mix(strato, cumulo, cumuliforme);",
+        "  if (incudine > 0.0) {",
+        "    float lastra = clamp(2.4 / spessore, 0.12, 0.6);",
+        "    float piatta = smoothstep(1.0 - lastra - 0.08, 1.0 - lastra, h) * (1.0 - smoothstep(0.96, 1.06, h));",
+        "    // Le torri salgono piene fino alla cima e un poco oltre (overshooting top).",
+        "    float piena = smoothstep(0.0, 0.05, h) * (1.0 - smoothstep(0.88, uRigonfio, h));",
+        "    profilo = mix(profilo, mix(piatta, piena, torre), incudine);",
         "  }",
-        "  // In basso ciuffi (Worley diritto), in alto cupole (rovesciato).",
-        "  float dettaglio = mix(worley, 1.0 - worley, smoothstep(0.15, 0.6, h));",
-        "  float morso = mix(0.32, 0.9, convettiva);",
-        "  // Si scolpisce la FORMA (0-1) e solo dopo la si moltiplica per la",
-        "  // densita': scavare la densita' gia' ridotta svuotava le colonne dense",
-        "  // e lasciava anelli e fili al posto delle torri.",
-        "  float scolpita = clamp(rimappa(forma, dettaglio * morso, 1.0, 0.0, 1.0), 0.0, 1.0);",
-        "  // LOBI PIENI E VUOTI FRA I LOBI. Il morso da solo abbassava appena la",
-        "  // densita': una nube spessa restava un blocco traslucido uniforme e da",
-        "  // vicino, in prospettiva, diventava strisce. Dove il satellite vede una",
-        "  // nube densa la scultura si fa netta: lobi opachi, con una faccia al sole",
-        "  // e una in ombra, separati da vuoti. I veli sottili restano morbidi.",
-        "  // Solo dove i lobi sono piu' grandi di un paio di pixel: da lontano la",
-        "  // scultura netta sotto il pixel diventava una grana di brina.",
-        "  float netto = smoothstep(0.25, 0.7, campo.g) * mix(0.75, 1.0, convettiva)",
-        "    * (1.0 - smoothstep(0.5, 2.5, lodRumore));",
-        "  scolpita = mix(scolpita, smoothstep(0.1, 0.42, scolpita), netto);",
-        "  return scolpita * copertura;",
+        "  if (profilo <= 0.0) return 0.0;",
+        "  // LA FORMA: Perlin-Worley in km VISTI (la verticale esagerata), cosi' le",
+        "  // bolle restano tonde sullo schermo a ogni esagerazione.",
+        "  vec3 q = vec3(p.xy * kmPerUnita, altKm * max(uEsagerazione, 1.0));",
+        "  float lodForma = lodRumore + log2((uWorleyKm / uLatoWorley) / (uScalaFormaKm / uLatoForma));",
+        "  vec4 f = textureLod(uForma, q / uScalaFormaKm + uSemenza, lodForma);",
+        "  float fbm = f.g * 0.8 + f.b * 0.2;",
+        "  float forma = clamp(rimappa(f.r, fbm * uContrasto, 1.0, 0.0, 1.0), 0.0, 1.0);",
+        "  // Gli ammassi: la stessa forma quattro volte piu' grande modula la",
+        "  // copertura, e i cumuli si raccolgono in grandi cavolfiori.",
+        "  float macro = textureLod(uForma, q / uScalaMacroKm + uSemenza.zxy,",
+        "    lodForma - log2(uScalaMacroKm / uScalaFormaKm)).r;",
+        "  // La COPERTURA viene dalla maschera del satellite, sfumata su qualche",
+        "  // pixel: al bordo della nube la copertura cala e restano solo le bolle",
+        "  // piu' forti a meta' altezza, cosi' i fianchi si arrotondano invece di",
+        "  // essere pareti. Una nube sottile e' coperta quanto una spessa: sara'",
+        "  // solo piu' trasparente (densita' ottica).",
+        "  float gLiscia = textureLod(uCampo, uv, lodCampo + 2.0).g;",
+        "  float bordo = smoothstep(0.0, 0.35, gLiscia);",
+        "  float cop = clamp(uCopertura * mix(0.75, 1.0, sqrt(campo.g)) * (0.8 + 0.4 * macro) * bordo, 0.0, 1.0);",
+        "  // Il cavolfiore sta sulla superficie: dentro la nube, dove profilo e",
+        "  // copertura sono pieni, la forma conta meno e il nucleo resta denso.",
+        "  float base = profilo * mix(forma, 1.0, 0.75 * profilo * profilo);",
+        "  gCavita = 1.0 - smoothstep(0.15, 0.6, base);",
+        "  float d = clamp(rimappa(base, 1.0 - cop, 1.0, 0.0, 1.0), 0.0, 1.0);",
+        "  float ottica = mix(0.25, 1.0, campo.g);",
+        "  if (d <= 0.0 || leggera) return d * ottica;",
+        "  // L'EROSIONE: il Worley di dettaglio (1,5 km - 375 m) scava i bordi. In",
+        "  // basso ciuffi, in alto bolle (Worley rovesciato). Si spegne quando il",
+        "  // dettaglio e' sotto il pixel.",
+        "  vec3 w = textureLod(uWorley, q / uWorleyKm + uSemenza.zxy, lodRumore).rgb;",
+        "  float det = w.r * 0.625 + w.g * 0.25 + w.b * 0.125;",
+        "  det = mix(det, 1.0 - det, smoothstep(0.1, 0.5, h));",
+        "  float morso = uErosione * mix(0.5, 1.2, convettiva) * (1.0 - smoothstep(1.5, 3.5, lodRumore));",
+        "  d = clamp(rimappa(d, det * morso, 1.0, 0.0, 1.0), 0.0, 1.0);",
+        "  return d * ottica;",
         "}",
         "",
         "// BEER-LAMBERT verso il sole: da ogni campione si cammina verso il sole a",
@@ -9647,7 +9607,7 @@
         "    // ombra diventa grana)",
         "    tau += densita(q, lodCampo + 0.5 * float(i), lodRumore + 0.5 * float(i),",
         "      i > 1 || lodRumore > 1.5, h, c, f)",
-        "      * uSigma * lung;",
+        "      * uSigma * uOmbra * lung;",
         "    fatto += lung;",
         "    lung *= 2.0;",
         "  }",
@@ -9777,7 +9737,7 @@
         "      // Il cielo e' azzurro e arriva dall'alto: e' lui a tingere di blu le",
         "      // ombre. Il suolo rimanda poca luce calda dal basso.",
         "      vec3 ambiente = (uCielo * (0.35 + 0.65 * occlusione) * (0.35 + 0.65 * h)",
-        "        + uSuolo * 0.35 * (1.0 - h)) * (0.55 + 0.45 * powder) * 0.9",
+        "        + uSuolo * 0.35 * (1.0 - h)) * (0.55 + 0.45 * powder) * uAmbiente",
         "        * (1.0 - 0.45 * cavita);",
         "      // I LAMPI: una scarica Blitzortung accende la nube dall'interno. La",
         "      // sorgente e' il canale -- tronco verticale fino alla regione di",
@@ -9840,7 +9800,7 @@
         "    colore = mix(luce, uFoschia * alfa, velo * 0.7);",
         "    // Curva filmica (ACES): i bianchi al sole non bruciano, le ombre",
         "    // restano morbide e colorate.",
-        "    vec3 x = colore / max(alfa, 1e-3) * 0.55;",
+        "    vec3 x = colore / max(alfa, 1e-3) * uEsposizione;",
         "    colore = alfa * clamp((x * (2.51 * x + 0.03)) / (x * (2.43 * x + 0.59) + 0.14), 0.0, 1.0);",
         "  }",
         "  // IL CANALE SOTTO LA NUBE: dalla base al suolo, dove Blitzortung ha",
@@ -9900,6 +9860,58 @@
         "    + texture(uVolume, uv + uTexel * vec2(0.5, -0.5))",
         "    + texture(uVolume, uv + uTexel * vec2(-0.5, 0.5))",
         "    + texture(uVolume, uv + uTexel * vec2(0.5, 0.5)));",
+        "}"
+      ].join("\n");
+
+      // LA FORMA DELLE NUBI, generata una volta sulla GPU: un cubo di rumore
+      // ripetibile, disegnato strato per strato in una texture 3D. R e' il
+      // Perlin-Worley (Perlin fBm "gonfiato" da un Worley fBm: bolle tonde e
+      // sovrapposte), G, B e A tre Worley fBm sempre piu' fini. E' la texture
+      // di forma di Nubis (Horizon Zero Dawn).
+      var GENERA_FORMA = [
+        "#version 300 es",
+        "precision highp float;",
+        "in vec2 vNdc;",
+        "out vec4 colorePixel;",
+        "uniform float uStrato;",
+        "vec3 caso3(vec3 c) {",
+        "  vec3 h = vec3(dot(c, vec3(127.1, 311.7, 74.7)), dot(c, vec3(269.5, 183.3, 246.1)),",
+        "    dot(c, vec3(113.5, 271.9, 124.6)));",
+        "  return fract(sin(h) * 43758.5453);",
+        "}",
+        "float perlin(vec3 p, float per) {",
+        "  vec3 i = floor(p), f = fract(p);",
+        "  vec3 u = f * f * f * (f * (f * 6.0 - 15.0) + 10.0);",
+        "  float n[8];",
+        "  for (int k = 0; k < 8; k++) {",
+        "    vec3 o = vec3(float(k & 1), float((k >> 1) & 1), float((k >> 2) & 1));",
+        "    vec3 g = normalize(caso3(mod(i + o, per)) * 2.0 - 1.0 + 1e-4);",
+        "    n[k] = dot(g, f - o);",
+        "  }",
+        "  float x0 = mix(mix(n[0], n[1], u.x), mix(n[2], n[3], u.x), u.y);",
+        "  float x1 = mix(mix(n[4], n[5], u.x), mix(n[6], n[7], u.x), u.y);",
+        "  return mix(x0, x1, u.z);",
+        "}",
+        "float worley(vec3 p, float celle) {",
+        "  p *= celle;",
+        "  vec3 i = floor(p), f = fract(p);",
+        "  float d = 9.0;",
+        "  for (int z = -1; z <= 1; z++) for (int y = -1; y <= 1; y++) for (int x = -1; x <= 1; x++) {",
+        "    vec3 o = vec3(float(x), float(y), float(z));",
+        "    d = min(d, length(o + caso3(mod(i + o, celle) + 17.0) - f));",
+        "  }",
+        "  return 1.0 - clamp(d, 0.0, 1.0);",
+        "}",
+        "float worleyFbm(vec3 p, float celle) {",
+        "  return worley(p, celle) * 0.625 + worley(p, celle * 2.0) * 0.25 + worley(p, celle * 4.0) * 0.125;",
+        "}",
+        "void main() {",
+        "  vec3 p = vec3(vNdc * 0.5 + 0.5, uStrato);",
+        "  float pf = perlin(p * 4.0, 4.0) + perlin(p * 8.0, 8.0) * 0.5 + perlin(p * 16.0, 16.0) * 0.25;",
+        "  pf = clamp(pf * 0.6 + 0.5, 0.0, 1.0);",
+        "  float wf = worleyFbm(p, 4.0);",
+        "  float pw = clamp(wf + pf * (1.0 - wf) - 0.3, 0.0, 1.0) / 0.7;",
+        "  colorePixel = vec4(pw, worleyFbm(p, 8.0), worleyFbm(p, 16.0), worleyFbm(p, 32.0));",
         "}"
       ].join("\n");
 
@@ -9986,6 +9998,48 @@
         return programma;
       }
 
+      // La texture di forma disegnata strato per strato sulla GPU: 128^3 sul PC
+      // (qualche decina di millisecondi), 64^3 sul telefono.
+      function generaForma(gl, lato, vao) {
+        var programma = collega(gl, GENERA_FORMA);
+        var tex = gl.createTexture();
+        gl.bindTexture(gl.TEXTURE_3D, tex);
+        gl.texImage3D(gl.TEXTURE_3D, 0, gl.RGBA8, lato, lato, lato, 0, gl.RGBA, gl.UNSIGNED_BYTE, null);
+        gl.texParameteri(gl.TEXTURE_3D, gl.TEXTURE_MIN_FILTER, gl.LINEAR_MIPMAP_LINEAR);
+        gl.texParameteri(gl.TEXTURE_3D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
+        gl.texParameteri(gl.TEXTURE_3D, gl.TEXTURE_WRAP_S, gl.REPEAT);
+        gl.texParameteri(gl.TEXTURE_3D, gl.TEXTURE_WRAP_T, gl.REPEAT);
+        gl.texParameteri(gl.TEXTURE_3D, gl.TEXTURE_WRAP_R, gl.REPEAT);
+        var vista = gl.getParameter(gl.VIEWPORT);
+        var fbo = gl.createFramebuffer();
+        gl.bindFramebuffer(gl.FRAMEBUFFER, fbo);
+        // Lo stato lasciato da MapLibre non deve fermare il disegno: niente
+        // scarto delle facce, colori tutti scrivibili, niente stencil.
+        gl.disable(gl.BLEND);
+        gl.disable(gl.DEPTH_TEST);
+        gl.disable(gl.SCISSOR_TEST);
+        gl.disable(gl.STENCIL_TEST);
+        gl.disable(gl.CULL_FACE);
+        gl.colorMask(true, true, true, true);
+        gl.useProgram(programma);
+        gl.bindVertexArray(vao);
+        var strato = gl.getUniformLocation(programma, "uStrato");
+        for (var z = 0; z < lato; z++) {
+          gl.framebufferTextureLayer(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, tex, 0, z);
+          gl.viewport(0, 0, lato, lato);
+          gl.uniform1f(strato, (z + 0.5) / lato);
+          gl.drawArrays(gl.TRIANGLES, 0, 3);
+        }
+        gl.bindVertexArray(null);
+        gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+        gl.deleteFramebuffer(fbo);
+        gl.deleteProgram(programma);
+        gl.bindTexture(gl.TEXTURE_3D, tex);
+        gl.generateMipmap(gl.TEXTURE_3D);
+        gl.viewport(vista[0], vista[1], vista[2], vista[3]);
+        return tex;
+      }
+
       StratoVolume.prototype.onAdd = function (mappa, gl) {
         this.gl = gl;
         this.mappa = mappa;
@@ -10029,6 +10083,7 @@
         // (i bordi cumuliformi).
         this.texPerlin = carica3D(PERLIN_LATO, texturePerlin(PERLIN_LATO), true);
         this.texWorley = carica3D(WORLEY_LATO, textureWorley(WORLEY_LATO));
+        this.texForma = generaForma(gl, QUALITA_VOLUME.latoForma, this.vao);
 
         this.texCampo = gl.createTexture();
         this.texGeneri = gl.createTexture();
@@ -10109,6 +10164,7 @@
         var zoom = this.mappa && this.mappa.getZoom ? this.mappa.getZoom() : ESAGERAZIONE_ZOOM_PIENO;
         var calo = Math.pow(2, -Math.max(0, zoom - ESAGERAZIONE_ZOOM_PIENO) * ESAGERAZIONE_CALO_PER_ZOOM);
         var esagerazione = Math.max(ESAGERAZIONE_MINIMA, ESAGERAZIONE_INIZIALE * calo);
+        if (REGOLA.esagerazione > 0) esagerazione = REGOLA.esagerazione;
         // Mai con le cime esagerate sopra la camera: da molto vicino la camera
         // finiva dentro la nube e si vedeva solo grigio.
         try {
@@ -10177,7 +10233,8 @@
         var fermo = !(this.mappa && this.mappa.isMoving && this.mappa.isMoving());
         var matrice = this.matriceDi(argomenti);
         var firma = matrice ? Array.prototype.slice.call(matrice).join(",") + "|" + this.serieCampo
-          + "|" + this.misuraVolume.larghezza + "x" + this.misuraVolume.altezza : "";
+          + "|" + this.misuraVolume.larghezza + "x" + this.misuraVolume.altezza
+          + "|" + JSON.stringify(REGOLA) : "";
         // Si ricomincia quando cambia la vista, il campo o ci sono lampi accesi
         // (un lampo e' un istante: la media lo spalmerebbe).
         var lampiAccesi = (this.lampi || []).some(function (l) { return l.intensita > 0.004; });
@@ -10340,6 +10397,20 @@
         gl.uniform1i(u("uPassi"), QUALITA_VOLUME.passi);
         gl.uniform1i(u("uPassiLuce"), QUALITA_VOLUME.passiLuce);
         gl.uniform1f(u("uQualita"), QUALITA_VOLUME.qualita);
+        gl.uniform1f(u("uLatoForma"), QUALITA_VOLUME.latoForma);
+        gl.uniform1f(u("uScalaFormaKm"), REGOLA.scalaFormaKm);
+        gl.uniform1f(u("uScalaMacroKm"), REGOLA.scalaMacroKm);
+        gl.uniform1f(u("uCopertura"), REGOLA.copertura);
+        gl.uniform1f(u("uErosione"), REGOLA.erosione);
+        gl.uniform1f(u("uRigonfio"), REGOLA.rigonfio);
+        gl.uniform1f(u("uCavolfiore"), REGOLA.cavolfiore);
+        gl.uniform1f(u("uOmbra"), REGOLA.ombra);
+        gl.uniform1f(u("uAmbiente"), REGOLA.ambiente);
+        gl.uniform1f(u("uEsposizione"), REGOLA.esposizione);
+        gl.uniform1f(u("uContrasto"), REGOLA.contrasto);
+        gl.activeTexture(gl.TEXTURE3);
+        gl.bindTexture(gl.TEXTURE_3D, this.texForma);
+        gl.uniform1i(u("uForma"), 3);
         gl.uniform1f(u("uFotogramma"), this.accumulo ? this.accumulo.n : 0);
         gl.uniform1f(u("uSigma"), SIGMA_NUBI_3D);
         gl.uniform1f(u("uFaseG"), FASE_G);
@@ -11266,7 +11337,84 @@
       // ripeterlo a ogni clic sarebbe proprio il modo di scaldare un
       // telefono che la richiesta voleva evitare. Si spegne invece con
       // "volume.acceso = false", che il render() del livello legge e basta.
+      // IL PANNELLO DI REGOLAZIONE (?regola=1): cursori dal vivo sui numeri
+      // dell'aspetto. I valori restano nel browser; "Copia" li mette negli
+      // appunti per fissarli come predefiniti.
+      var CURSORI = [
+        ["scalaFormaKm", "Dimensione bolle (km)", 6, 60, 1],
+        ["scalaMacroKm", "Dimensione ammassi (km)", 30, 300, 5],
+        ["copertura", "Riempimento", 0.4, 1.2, 0.01],
+        ["contrasto", "Contrasto delle bolle", 0.3, 1.2, 0.01],
+        ["erosione", "Erosione bordi", 0, 0.9, 0.01],
+        ["rigonfio", "Bolle oltre la cima", 1.0, 1.6, 0.01],
+        ["cavolfiore", "Cavolfiore anche in aria stabile", 0, 1, 0.01],
+        ["ombra", "Forza delle ombre", 0.2, 3, 0.05],
+        ["ambiente", "Luce del cielo", 0.1, 2, 0.05],
+        ["esposizione", "Esposizione", 0.2, 1.5, 0.01],
+        ["esagerazione", "Esagerazione (0 = auto)", 0, 6, 0.1]
+      ];
+      var pannelloFatto = false;
+      function creaPannelloRegolazione() {
+        if (pannelloFatto || !REGOLA_ATTIVA || typeof document === "undefined") return;
+        pannelloFatto = true;
+        var box = document.createElement("div");
+        box.style.cssText = "position:fixed;left:12px;bottom:120px;z-index:9999;width:260px;padding:10px 12px;"
+          + "background:rgba(15,20,30,.88);color:#e8eef6;font:12px system-ui,sans-serif;border-radius:10px;"
+          + "box-shadow:0 4px 18px rgba(0,0,0,.4);max-height:70vh;overflow:auto";
+        var titolo = document.createElement("div");
+        titolo.textContent = "Regola nubi 3D";
+        titolo.style.cssText = "font-weight:700;margin-bottom:6px";
+        box.appendChild(titolo);
+        var aggiorna = function () {
+          try { localStorage.setItem("nubi3d-regola", JSON.stringify(REGOLA)); } catch (errore) { /* niente memoria */ }
+          if (typeof map !== "undefined" && map) map.triggerRepaint();
+        };
+        var campi = {};
+        CURSORI.forEach(function (c) {
+          var riga = document.createElement("label");
+          riga.style.cssText = "display:block;margin:6px 0";
+          var testo = document.createElement("div");
+          var cursore = document.createElement("input");
+          cursore.type = "range"; cursore.min = c[2]; cursore.max = c[3]; cursore.step = c[4];
+          cursore.value = REGOLA[c[0]];
+          cursore.style.width = "100%";
+          var scrivi = function () { testo.textContent = c[1] + ": " + REGOLA[c[0]]; };
+          cursore.addEventListener("input", function () {
+            REGOLA[c[0]] = parseFloat(cursore.value);
+            scrivi();
+            aggiorna();
+          });
+          scrivi();
+          campi[c[0]] = { cursore: cursore, scrivi: scrivi };
+          riga.appendChild(testo);
+          riga.appendChild(cursore);
+          box.appendChild(riga);
+        });
+        var bottoni = document.createElement("div");
+        bottoni.style.cssText = "display:flex;gap:6px;margin-top:8px";
+        var copia = document.createElement("button");
+        copia.textContent = "Copia valori";
+        copia.addEventListener("click", function () {
+          var testo = JSON.stringify(REGOLA);
+          if (navigator.clipboard) navigator.clipboard.writeText(testo);
+          copia.textContent = "Copiati";
+          setTimeout(function () { copia.textContent = "Copia valori"; }, 1500);
+        });
+        var predefiniti = document.createElement("button");
+        predefiniti.textContent = "Predefiniti";
+        predefiniti.addEventListener("click", function () {
+          Object.assign(REGOLA, REGOLA_PREDEFINITA);
+          Object.keys(campi).forEach(function (k) { campi[k].cursore.value = REGOLA[k]; campi[k].scrivi(); });
+          aggiorna();
+        });
+        bottoni.appendChild(copia);
+        bottoni.appendChild(predefiniti);
+        box.appendChild(bottoni);
+        document.body.appendChild(box);
+      }
+
       function assicuraStrato() {
+        creaPannelloRegolazione();
         if (!map.getLayer("volume-nubi")) {
           volume.id = "volume-nubi";
           map.addLayer(volume);

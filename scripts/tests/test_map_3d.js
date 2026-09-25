@@ -2502,15 +2502,18 @@ const fragment = shader("FRAMMENTO");
 // IL PROMPT DELLE NUBI 3D: raggio confinato fra base e cima, Perlin per i
 // vuoti, Worley sottratto con un morso che il CAPE varia, Beer-Lambert,
 // powder 1 - e^(-densita' x 2), Henyey-Greenstein.
-assert.match(fragment, /if \(altKm < baseKm \|\| altKm > cimaKm \+ margine\) return 0\.0;/,
+assert.match(fragment, /if \(altKm < baseKm \|\| altKm > cimaKm \+ sopra\) return 0\.0;/,
   "il raggio non e' piu' confinato fra base e cima");
-assert.match(fragment, /if \(altKm > cimaLocale\) return 0\.0;/, "la cima non segue piu' le cupole");
-// Coerenza con lo zoom: le cupole frattali, la luce nella geometria che si
-// vede, l'ingresso nella nube a passi corti, l'esagerazione che cala poco.
-assert.match(fragment, /float cimaLocale = cimaKm \+ tipo \* rilievo \/ esag;/, "mancano le cupole frattali della cima");
+// Il metodo dei giochi: forma Perlin-Worley x profilo del tipo di nube,
+// tagliata dalla copertura del satellite, erosa dal dettaglio.
+assert.match(fragment, /float forma = clamp\(rimappa\(f\.r, fbm \* uContrasto, 1\.0, 0\.0, 1\.0\), 0\.0, 1\.0\);/, "manca la forma Perlin-Worley");
+assert.match(fragment, /float profilo = mix\(strato, cumulo, cumuliforme\);/, "manca il profilo verticale del tipo di nube");
+assert.match(fragment, /float d = clamp\(rimappa\(base, 1\.0 - cop, 1\.0, 0\.0, 1\.0\), 0\.0, 1\.0\);/, "la copertura del satellite non taglia piu' la forma");
+assert.match(html, /var GENERA_FORMA = \[/, "manca il generatore della forma");
+assert.match(html, /function creaPannelloRegolazione\(\)/, "manca il pannello ?regola=1");
+assert.match(html, /if \(!REGOLA_ATTIVA\) return r;/, "i valori salvati devono valere solo con ?regola=1");
 assert.match(fragment, /vec3 verso = vec3\(uSole\.xy, uSole\.z\) \/ kmPerUnita;/,
   "le ombre non seguono piu' la geometria esagerata: da vicino spariscono");
-assert.match(fragment, /float calotta\(float v\)/, "le cupole tornano coni: lame da vicino");
 assert.match(fragment, /t = max\(tVicino, t - passoPrima\);/, "manca l'ingresso a passi corti: torna la brina");
 assert.match(html, /var ESAGERAZIONE_MINIMA = 2\.4;/, "l'esagerazione torna a spianare le nubi da vicino");
 // Realismo: diffusione multipla a ottave, incudine dei cumulonembi, cavita'
@@ -2519,11 +2522,10 @@ assert.match(fragment, /multipla \+= 0\.12 \* exp\(-tauSole \* 0\.12\) \* fase2;
 assert.match(fragment, /float incudine = smoothstep\(7\.5, 10\.0, cimaKm\)/, "manca l'incudine dei cumulonembi");
 assert.match(fragment, /float scarto = fract\(intreccio\(gl_FragCoord\.xy\) \+ uFotogramma \* 0\.618034\);/,
   "lo scarto del raggio non cambia piu' da un fotogramma all'altro: l'accumulo non converge");
-assert.match(html, /rumore: 48, passiLuce: 5, passi: 176, qualita: 0, accumula: 0 \}/, "il telefono deve restare leggero");
-assert.match(html, /qualita: 1, accumula: 12 \}/, "sul PC manca l'accumulo dei fotogrammi");
+assert.match(html, /rumore: 48, passiLuce: 5, passi: 176, qualita: 0, accumula: 0, latoForma: 64 \}/, "il telefono deve restare leggero");
+assert.match(html, /qualita: 1, accumula: 12, latoForma: 128 \}/, "sul PC manca l'accumulo dei fotogrammi");
 assert.match(html, /var lampiAccesi = /, "l'accumulo spalmerebbe i lampi");
-assert.match(fragment, /float soglia = \(1\.0 - sqrt\(copertura\)\) \* 0\.65;/, "mancano i vuoti del Perlin");
-assert.match(fragment, /float morso = mix\(0\.32, 0\.9, convettiva\);/, "il CAPE non varia piu' il morso del Worley");
+assert.match(fragment, /float morso = uErosione \* mix\(0\.5, 1\.2, convettiva\)/, "il CAPE non varia piu' il morso del Worley");
 // Da vicino: il passo segue la fascia della colonna (niente trama a puntini
 // sui veli), il cielo e' schermato dalla nube sopra, le ombre dei primi
 // passi verso il sole vedono i lobi, e le lamine non fanno curve di livello.
@@ -2531,7 +2533,6 @@ assert.match(fragment, /passo = min\(passo, max\(fine, \(fascia\.y - fascia\.x\)
   "il passo non segue piu' lo spessore della colonna");
 assert.match(fragment, /float occlusione = exp\(-sopra \* uSigma \* 0\.5\);/, "manca l'occlusione del cielo");
 assert.match(fragment, /i > 1 \|\| lodRumore > 1\.5, h, c, f\)/, "le ombre non vedono piu' il dettaglio dei lobi");
-assert.match(fragment, /float lamina = mix\(1\.3, 1\.0, convettiva\);/, "le lamine tornano a curve di livello");
 assert.match(fragment, /float powder = 1\.0 - exp\(-estinzione \* 2\.0\);/, "manca il powder");
 assert.match(fragment, /float beer = exp\(-tauSole\);/, "manca Beer-Lambert verso il sole");
 assert.match(fragment, /float henyeyGreenstein\(float coseno, float g\)/, "manca Henyey-Greenstein");
@@ -2572,6 +2573,16 @@ W,H=320,240
 out=tex(np.zeros((H,W,4),np.float32),7,mip=False);fbo=U();GenFramebuffers(1,c.byref(fbo));BindFramebuffer(0x8D40,fbo.value);FramebufferTexture2D(0x8D40,0x8CE0,0x0DE1,out.value,0);assert CheckFramebufferStatus(0x8D40)==0x8CD5
 vao=U();GenVertexArrays(1,c.byref(vao));BindVertexArray(vao.value);vbo=U();GenBuffers(1,c.byref(vbo));BindBuffer(0x8892,vbo.value);vertices=np.array([-1,-1,3,-1,-1,3],np.float32);BufferData(0x8892,vertices.nbytes,vertices.ctypes.data,0x88E4);VertexAttribPointer(0,2,0x1406,0,0,None);EnableVertexAttribArray(0)
 tex(np.fromfile('/tmp/cloud_perlin.raw',np.uint8).reshape(64,64,64,4),1,3);tex(np.fromfile('/tmp/cloud_worley.raw',np.uint8).reshape(32,32,32,4),2,3)
+# La forma Perlin-Worley si genera sulla GPU con lo stesso shader della pagina.
+FramebufferTextureLayer=gl('FramebufferTextureLayer',[U,U,U,I,I])
+gprog=CreateProgram();AttachShader(gprog,shader(open('/tmp/cloud_VERTICE.glsl').read(),0x8B31));AttachShader(gprog,shader(open('/tmp/cloud_GENERA.glsl').read(),0x8B30));BindAttribLocation(gprog,0,b'aPos');LinkProgram(gprog);UseProgram(gprog)
+LF=64;tforma=U();GenTextures(1,c.byref(tforma));ActiveTexture(0x84C0+3);BindTexture(0x806F,tforma.value)
+for k,v in [(0x2801,0x2703),(0x2800,0x2601),(0x2802,0x2901),(0x2803,0x2901),(0x8072,0x2901)]:TexParameteri(0x806F,k,v)
+TexImage3D(0x806F,0,0x8058,LF,LF,LF,0,0x1908,0x1401,None)
+gfbo=U();GenFramebuffers(1,c.byref(gfbo));BindFramebuffer(0x8D40,gfbo.value)
+for zz in range(LF):
+ FramebufferTextureLayer(0x8D40,0x8CE0,tforma.value,0,zz);Viewport(0,0,LF,LF);Uniform1f(GetUniformLocation(gprog,b'uStrato'),(zz+.5)/LF);DrawArrays(4,0,3)
+GenerateMipmap(0x806F);BindFramebuffer(0x8D40,fbo.value)
 source=open(sys.argv[1]).read();prefix=sys.argv[2];mode=sys.argv[3] if len(sys.argv)>3 else 'render'
 if mode=='section':
  source=source[:source.index('void main()')]+'''void main(){
@@ -2583,7 +2594,8 @@ program=CreateProgram();AttachShader(program,shader(open('/tmp/cloud_VERTICE.gls
 def uf(n,*v):
  loc=GetUniformLocation(program,n.encode());[None,Uniform1f,Uniform2f,Uniform3f,Uniform4f][len(v)](loc,*v)
 def ui(n,v):Uniform1i(GetUniformLocation(program,n.encode()),v)
-for n,v in [('uCampo',0),('uPerlin',1),('uWorley',2),('uPassiLuce',4),('uPassi',200),('uQuantiLampi',0)]:ui(n,v)
+for n,v in [('uCampo',0),('uPerlin',1),('uWorley',2),('uForma',3),('uPassiLuce',4),('uPassi',200),('uQuantiLampi',0)]:ui(n,v)
+for n,v in dict(uLatoForma=LF,uScalaFormaKm=24,uScalaMacroKm=96,uCopertura=.6,uContrasto=.8,uErosione=.18,uRigonfio=1.15,uCavolfiore=.8,uOmbra=1,uAmbiente=.9,uEsposizione=.55,uQualita=1).items():uf(n,v)
 unit=1/40075;esag=float(os.environ.get('CLOUD_QA_EXAGGERATION','1.6'))
 for n,v in dict(uScalaKm=16,uCircKm=40075,uEsagerazione=esag,uSigma=3.6,uFaseG=.6,uForzaSole=1,uZMax=14*esag*unit,uPassoKm=.3,uPixelAngolo=.00005,uTexelCampo=40*unit/128,uPerlinKm=48,uWorleyKm=6,uLatoPerlin=64,uLatoWorley=32).items():uf(n,v)
 uf('uSemenza',.3,.6,.1);uf('uDominio',.5-20*unit,.5-20*unit,.5+20*unit,.5+20*unit);uf('uSole',.5,-.4,.768);uf('uCielo',.46,.58,.78);uf('uSuolo',.26,.25,.23);uf('uColoreSole',2.6,2.5,2.34);uf('uFoschia',.72,.81,.92)
@@ -2635,6 +2647,7 @@ if mode=='section':
 if (process.argv.includes("--gpu")) {
   const dir=fs.mkdtempSync(path.join(os.tmpdir(),"meteo-cloud-gpu-"));
   fs.writeFileSync(path.join(dir,"cloud_VERTICE.glsl"),shader("VERTICE"));
+  fs.writeFileSync(path.join(dir,"cloud_GENERA.glsl"),shader("GENERA_FORMA"));
   const override=process.argv.indexOf("--shader");
   fs.writeFileSync(path.join(dir,"cloud_FRAMMENTO.glsl"),override>=0 ? fs.readFileSync(process.argv[override+1]) : fragment);
   const noise={Math,Float32Array,Uint8Array};vm.createContext(noise);
