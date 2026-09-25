@@ -7246,16 +7246,16 @@
       // resta sotto per non far sparire la luce diffusa dentro le nubi alte,
       // che l'esagerazione verticale allunga.
       var SIGMA_PER_KM = 4.0;
-      var FASE_G = 0.58;          // anisotropia di Henyey-Greenstein
+      var FASE_G = 0.6;           // anisotropia di Henyey-Greenstein (goccioline)
       // La luce del cielo, piu' debole del sole: troppo forte appiattiva il
       // contrasto fra la cima al sole e il fianco in ombra.
       // Azzurra: le ombre di una nube al sole non sono grigie, sono il cielo
       // che le illumina (le fotografie dall'aereo).
-      var AMBIENTE_GIORNO = [0.31, 0.41, 0.58];
+      var AMBIENTE_GIORNO = [0.44, 0.55, 0.74];
       var AMBIENTE_NOTTE = [0.13, 0.16, 0.23];
       // La luce che sale dal suolo e illumina la base delle nubi: grigio
       // caldo di giorno, quasi niente di notte.
-      var SUOLO_GIORNO = [0.22, 0.21, 0.20];
+      var SUOLO_GIORNO = [0.26, 0.25, 0.23];
       var SUOLO_NOTTE = [0.04, 0.045, 0.06];
       // La foschia: il colore dell'orizzonte e la distanza a cui l'aria ha
       // gia' velato di azzurro per meta' una nube (in chilometri veri).
@@ -8130,7 +8130,7 @@
           var misurata = fiducia > 0 ? quotaCth[k] : 0;
           var ripiego = Math.max(quotaIr[k], NUBE_SENZA_QUOTA_KM);
           var q = misurata * fiducia + ripiego * (1 - fiducia);
-          q += limita((quotaIr[k] - ampiaIr[k]) * 0.35, -0.8, 0.8) * fiducia;
+          q += limita((quotaIr[k] - ampiaIr[k]) * 0.6, -1.5, 1.5) * fiducia;
           quota[k] = cancello[k] > 0.02 ? Math.max(0, q) : 0;
           var alta = lisciaFra(5, 8, misurata) * fiducia;
           var rapporto = misurata > 0.5 ? ampiaIr[k] / misurata : 1;
@@ -8812,12 +8812,41 @@
       // La base non e' la cima meno uno spessore: e' questo che fa galleggiare
       // uno strato e stare in quota un cirro, invece di attaccare ogni nube a
       // terra come una montagna. La densita' del genere sta in uGeneri.a.
+      // Fuori dalla nube le quote non sono zero ma quelle delle nubi vicine
+      // (convoluzione normalizzata a raggi crescenti): lo shader legge le
+      // quote a scala piu' grossa della sagoma, e degli zeri trascinerebbero
+      // a terra cime e basi di bordo -- i pendii che facevano le montagne.
+      // La sagoma resta quella della copertura (G), che qui non si tocca.
+      function estendiFuori(valori, dentro, w, h) {
+        var n = w * h, pesati = new Float32Array(n), peso = new Float32Array(n);
+        var fuori = new Float32Array(valori), fatto = new Uint8Array(n);
+        for (var k = 0; k < n; k++) {
+          if (dentro[k]) { peso[k] = 1; pesati[k] = valori[k]; fatto[k] = 1; }
+        }
+        [2, 6, 18, 54].forEach(function (raggio) {
+          var sp = sfoca(peso, w, h, raggio), sv = sfoca(pesati, w, h, raggio);
+          for (var k = 0; k < n; k++) {
+            if (!fatto[k] && sp[k] > 1e-5) { fuori[k] = sv[k] / sp[k]; fatto[k] = 1; }
+          }
+        });
+        return fuori;
+      }
+
       function tessituraDelCampo(campo) {
         var quanti = campo.larghezza * campo.altezza;
         var dati = new Float32Array(quanti * 4);
+        var dentro = new Uint8Array(quanti);
+        var basi = new Float32Array(quanti);
+        for (var j = 0; j < quanti; j++) {
+          dentro[j] = campo.copertura[j] > 0.012 && campo.quota[j] > 0.24 ? 1 : 0;
+          basi[j] = campo.base ? campo.base[j]
+            : Math.max(0.2, campo.quota[j] - spessoreDellaNube(campo.quota[j], campo.copertura[j]));
+        }
+        var cime = estendiFuori(campo.quota, dentro, campo.larghezza, campo.altezza);
+        basi = estendiFuori(basi, dentro, campo.larghezza, campo.altezza);
         for (var k = 0; k < quanti; k++) {
-          var cima = campo.quota[k];
-          var base = campo.base ? campo.base[k] : Math.max(0.2, cima - spessoreDellaNube(cima, campo.copertura[k]));
+          var cima = cime[k];
+          var base = basi[k];
           dati[k * 4] = limita(cima / QUOTA_SCALA_KM, 0, 1);
           dati[k * 4 + 1] = limita(campo.copertura[k], 0, 1);
           dati[k * 4 + 2] = limita(Math.min(base, cima) / QUOTA_SCALA_KM, 0, 1);
@@ -9090,7 +9119,7 @@
         // si e' in pieno retro-scattering. I lobi sono due, uno avanti e uno
         // indietro.
         "float faseDoppia(float coseno, float g) {",
-        "  return mix(faseHG(coseno, g), faseHG(coseno, -0.25 * g - 0.08), 0.48)",
+        "  return mix(faseHG(coseno, g), faseHG(coseno, -0.25), 0.22)",
         "    * 4.0 * PIGRECO;",
         "}",
         "",
@@ -9130,24 +9159,24 @@
         "",
         "float gDensita = 1.0;",
         "float gAltezza = 0.0;",
-        // lodGrezzo e' il rapporto (in ottave) fra il pixel e il pixel del
-        // campo, SENZA il limite a zero: da vicino il pixel e' piu' piccolo del
-        // campo e il rumore, che e' piu' fine del campo, va letto piu' fine.
-        // Prima si partiva dal valore gia' limitato, e da vicino le bolle si
-        // leggevano tre volte piu' sfocate del pixel -- spianate.
-        "float rilievoSuperficie(float spessKm, float tettoR, float loboSc, float loboAc,",
-        "    float loboCu, float stratocumulo, float altocumulo, float cupole,",
-        "    float incudine, float profiloTorre, float copertura) {",
-        "  float rilievoKm = min(0.10, spessKm * 0.12) * (1.0 - tettoR);",
-        "  rilievoKm = mix(rilievoKm, min(0.85, spessKm * 0.55) * (1.0 - loboSc), stratocumulo);",
-        "  rilievoKm = mix(rilievoKm, min(0.55, spessKm * 0.60) * (1.0 - loboAc), altocumulo);",
-        "  float bordoCu = 1.0 - sqrt(smoothstep(0.03, 0.85, copertura));",
-        "  rilievoKm = mix(rilievoKm, spessKm * (0.48 * (1.0 - loboCu) + 0.38 * bordoCu), cupole);",
-        "  rilievoKm = mix(rilievoKm, min(0.18, spessKm * 0.15) * (1.0 - tettoR), incudine);",
-        "  rilievoKm = mix(rilievoKm, min(0.65, spessKm * 0.12) * (1.0 - loboCu), profiloTorre);",
-        "  return rilievoKm;",
-        "}",
-        "",
+        // LA NUBE PIENA. Ogni colonna osservata e' un volume fra la base (B)
+        // e la cima (R), non una superficie scolpita: la densita' riempie
+        // tutto lo spessore e il rumore procedurale 3D la scolpisce DENTRO e
+        // sui bordi, come nel ray marcher delle nubi 3D.
+        //  - Il profilo verticale viene dal genere: base piatta e cupola per
+        //    cumuli e torri, lastra con cima e base morbide per gli strati,
+        //    base sfumata dalla pioggia per il nembostrato, cima piatta e
+        //    larga per l'incudine, velo fibroso per il cirro.
+        //  - Un Perlin a grande scala apre i VUOTI macroscopici dove la
+        //    nube osservata e' otticamente sottile.
+        //  - Un Worley ad alta frequenza viene SOTTRATTO per i bordi
+        //    cumuliformi; il CAPE di ICON-2I (canale A) decide quanto morde:
+        //    cavolfiori estremi per la convezione profonda, strati laminari
+        //    dove l'aria e' stabile.
+        // Quote lette un livello e mezzo piu' in su della sagoma: stirata in
+        // verticale, una colonna di un pixel con la sua cima sarebbe un ago.
+        // Il server estende R e B fuori dalla maschera, cosi' la media non
+        // trascina a terra le quote di bordo: niente pendii da montagna.
         "float densita(vec3 p, float lodGrezzo, bool leggera, out float altKm, out float cimaKm,",
         "              out float copertura, out float spessKm) {",
         "  float lodFine = max(0.0, lodGrezzo);",
@@ -9155,105 +9184,130 @@
         "  vec2 uv = uvDi(p.xy);",
         "  if (fuoriDominio(uv)) return 0.0;",
         "  float lodLiscio = max(uGrana, lodFine);",
-        "  vec4 liscia = textureLod(uCampo, uv, lodLiscio);",
         "  vec4 fine = textureLod(uCampo, uv, lodFine);",
         "  copertura = fine.g;",
-        "  if (max(copertura, liscia.g) < 0.012) return 0.0;",
+        "  if (copertura < 0.004) return 0.0;",
+        "  vec4 liscia = textureLod(uCampo, uv, lodLiscio + 1.5);",
+        "  cimaKm = mix(liscia.r, fine.r, 0.3) * uScalaKm;",
+        "  if (cimaKm < 0.24) return 0.0;",
+        "  float kmPerUnita = uCircKm * cosLatDa(p.y);",
+        "  altKm = p.z * kmPerUnita / uEsagerazione;",
+        "  if (altKm > cimaKm) return 0.0;",
         "  vec4 genere = textureLod(uGeneri, uv, lodLiscio);",
         "  vec4 meteo = textureLod(uMorfologia, uv, lodLiscio);",
         "  float incudine = meteo.r, pioggiaEstesa = meteo.g;",
         "  float granuli = meteo.b, veloLiscio = meteo.a;",
         "  float fibra = genere.g, torre = genere.b;",
-        "  // Il CAPE di ICON-2I (canale A) e la base delle sue torri (LCL).",
-        "  float convezione = liscia.a;",
+        "  float convezione = mix(liscia.a, fine.a, 0.3);",
         "  float baseTorreKm = textureLod(uBaseTorre, uv, lodLiscio).r * uScalaKm;",
+        "  float baseKm = min(mix(liscia.b, fine.b, 0.3) * uScalaKm, cimaKm - 0.2);",
+        "  // Il genere, come pesi continui: niente bordi fra categorie.",
         "  float cumulo = max(genere.r, torre);",
-        "  cimaKm = mix(liscia.r, fine.r, 0.35) * uScalaKm;",
-        "  float altocumulo = granuli * smoothstep(2.7, 4.1, cimaKm)",
-        "    * (1.0 - smoothstep(6.0, 7.0, cimaKm));",
-        "  float stratocumulo = granuli * (1.0 - smoothstep(2.7, 4.1, cimaKm));",
-        "  float cupole = smoothstep(0.25, 0.7, cumulo) * (1.0 - granuli)",
-        "    * (1.0 - veloLiscio) * (1.0 - incudine) * (1.0 - fibra);",
-        "  float profiloTorre = smoothstep(0.08, 0.5, torre);",
-        "  float cirro = smoothstep(0.55, 0.9, fibra) * (1.0 - 0.7 * veloLiscio);",
-        "  float baseKm = min(liscia.b * uScalaKm, cimaKm - 0.2);",
-        "  gDensita = genere.a * 1.35;",   // DENSITA_GENERE_MAX
-        "  if (cimaKm < 0.24) return 0.0;",
-        "  float cosLat = cosLatDa(p.y);",
-        "  altKm = p.z * uCircKm * cosLat / uEsagerazione;",
-        "  if (altKm < min(baseKm, baseTorreKm) || altKm > cimaKm) return 0.0;",
-        "  // Coordinate affini FISSE: si mescolano i valori, mai le coordinate",
-        "  // assolute con il peso locale del genere (causava strisce e anelli).",
-        "  vec3 q = vec3(p.xy * uFormaPasso.x, altKm * uFormaPasso.y)",
-        "    + vec3(uSemenza * 0.013, 0.0, 0.0);",
-        "  float lodF = max(0.0, lodGrezzo + log2(uTexelCampo * uFormaPasso.x * uLatoForma));",
-        "  vec2 ruotata = mat2(0.8, -0.6, 0.6, 0.8) * q.xy * 1.371;",
-        "  vec4 sf = textureLod(uForma, q, lodF);",
-        "  // Rigonfiamenti soltanto sul fianco del nucleo: spostano la superficie",
-        "  // di raccordo, senza erodere la colonna centrale fino alla CTH.",
+        "  float altocumulo = granuli * smoothstep(2.7, 4.1, cimaKm) * (1.0 - smoothstep(6.0, 7.0, cimaKm));",
+        "  float cupole = smoothstep(0.25, 0.7, cumulo) * (1.0 - granuli) * (1.0 - veloLiscio)",
+        "    * (1.0 - incudine) * (1.0 - fibra);",
+        "  // Quanto la nube e' convettiva: il genere osservato, rinforzato dal",
+        "  // CAPE del modello; il CAPE da solo non fa di uno strato un cumulo.",
+        "  float convettiva = clamp(max(cupole * (0.55 + 0.45 * convezione), smoothstep(0.35, 0.75, torre))",
+        "    + 0.35 * convezione * cumulo, 0.0, 1.0);",
+        "  // Coordinate VISTE del rumore (km, verticale esagerata): la bolla",
+        "  // resta tonda sullo schermo; la lamina schiaccia il rumore degli",
+        "  // strati in orizzontale e lascia tonde le bolle dei cumuli.",
+        "  float lamina = mix(mix(2.2, 1.5, granuli), 1.0, convettiva);",
+        "  vec3 q = vec3(p.xy * kmPerUnita, altKm * uEsagerazione * lamina)",
+        "    + vec3(uSemenza * 1.7, uSemenza * 0.9, 0.0);",
+        "  float lodBase = lodGrezzo + log2(uTexelCampo * kmPerUnita * uLatoForma);",
+        "  // I LOBI: il Worley grande (celle da 4 km a 1 km su 16 km). Fanno le",
+        "  // cupole dei cumuli e il fianco gonfio della torre.",
+        "  vec4 lobiT = textureLod(uForma, q / 16.0 + vec3(0.41, 0.17, 0.53), max(0.0, lodBase - 4.0));",
+        "  float lobi = lobiT.g * 0.5 + lobiT.b * 0.3 + lobiT.a * 0.2;",
+        "  // La TORRE: nucleo pieno fino alla cima misurata, fianco a cavolfiore",
+        "  // gonfiato dai lobi (di piu' con il CAPE), base alla condensazione",
+        "  // (LCL ICON-2I) anche sotto l'incudine, con raccordo continuo.",
         "  float fianco = (1.0 - smoothstep(0.45, 0.8, torre)) * smoothstep(0.02, 0.12, torre);",
-        "  float torreScolpita = clamp(torre + fianco * (0.40 * (sf.g - 0.38) + 0.18 * (sf.b - 0.38)), 0.0, 1.0);",
-        "  baseKm = mix(baseKm, min(baseTorreKm, baseKm), 0.96 * smoothstep(0.015, 0.65, torreScolpita));",
-        "  spessKm = cimaKm - baseKm;",
+        "  float torreScolpita = clamp(torre + fianco * (0.5 + 0.3 * convezione) * (lobi - 0.42), 0.0, 1.0);",
+        "  float nucleo = smoothstep(0.35, 0.75, torreScolpita);",
+        "  baseKm = mix(baseKm, min(baseTorreKm, baseKm), smoothstep(0.08, 0.6, torreScolpita));",
         "  if (altKm < baseKm) return 0.0;",
-        "  // Un rilievo orizzontale continuo mantiene i lobi collegati alla base.",
-        "  // Due scale non commensurabili evitano copie della stessa piastrella.",
-        "  vec4 tettoA = textureLod(uForma, vec3(q.xy, 0.37), lodF);",
-        "  vec4 tettoB = textureLod(uForma, vec3(ruotata + vec2(0.31, 0.63), 0.71), lodF + 0.45);",
-        "  vec4 tetto = mix(tettoA, tettoB, 0.32);",
-        "  float loboSc = smoothstep(0.16, 0.72, 0.82 * tetto.g + 0.18 * tetto.b);",
-        "  float loboAc = smoothstep(0.16, 0.68, 0.62 * tetto.b + 0.38 * tetto.a);",
-        "  float loboCu = smoothstep(0.14, 0.76, 0.76 * tetto.g + 0.24 * tetto.b);",
-        "  // Rilievo in CHILOMETRI, limitato allo strato superficiale: il vecchio",
-        "  // profilo normalizzato erodeva oltre mezza torre sotto una CTH di 12 km.",
-        "  float rilievoKm = rilievoSuperficie(spessKm, tetto.r, loboSc, loboAc,",
-        "    loboCu, stratocumulo, altocumulo, cupole, incudine, profiloTorre, copertura);",
-        "  // CAVOLFIORI DAL CAPE. Dove l'aria e' instabile le cupole di un cumulo",
-        "  // e il fianco di una torre si gonfiano di piu' e il Worley del",
-        "  // dettaglio morde piu' a fondo; negli strati (cupole e torre nulle)",
-        "  // il CAPE non tocca niente e la lastra resta laminare. Solo la pelle:",
-        "  // il nucleo della torre resta pieno fino alla cima misurata.",
-        "  float cavolfiore = convezione * max(cupole, 0.6 * profiloTorre);",
-        "  rilievoKm *= 1.0 + 0.6 * cavolfiore;",
-        "  // La parte marginale si assottiglia: niente pareti verticali intorno",
-        "  // al tetto. La copertura osservata continua a delimitare l'intera nube.",
-        "  float margine = 1.0 - smoothstep(0.03, 0.85, copertura);",
-        "  float bordoKm = min(0.9, spessKm * 0.42) * margine * (1.0 - cirro);",
-        "  rilievoKm += bordoKm;",
-        "  baseKm += bordoKm * 0.7;",
-        "  cimaKm -= rilievoKm;",
         "  spessKm = cimaKm - baseKm;",
-        "  if (altKm > cimaKm) return 0.0;",
-        "  float h = (altKm - baseKm) / max(0.12, spessKm);",
+        "  float h = (altKm - baseKm) / max(0.05, spessKm);",
         "  gAltezza = h;",
-        "  float sfumaBaseKm = min(spessKm * 0.22, mix(0.12, 0.45, max(cirro, pioggiaEstesa)));",
-        "  float sfumaCimaKm = min(spessKm * 0.22, mix(0.16, 0.38, cirro));",
-        "  float sotto = smoothstep(0.0, sfumaBaseKm, altKm - baseKm);",
-        "  float sopra = smoothstep(0.0, sfumaCimaKm, cimaKm - altKm);",
-        "  // Il rumore 3D modula la materia, non sottrae il nucleo opaco osservato.",
-        "",
-        "  float corpo = 0.72 + 0.28 * sf.r;",
-        "  float cop = copertura * sotto * sopra;",
-        "  float d = cop * corpo;",
+        "  float cirro = smoothstep(0.55, 0.9, fibra) * (1.0 - 0.4 * veloLiscio) * (1.0 - nucleo);",
+        "  // PROFILO VERTICALE. Base piatta per le nubi che nascono dal suolo,",
+        "  // sfumata dove piove; lastra per gli strati; cima piatta e larga per",
+        "  // l'incudine, cupola per la cima della torre.",
+        "  float fondo = smoothstep(0.0, mix(0.16, 0.04, convettiva) + 0.25 * pioggiaEstesa, h);",
+        "  float tetto = 1.0 - smoothstep(0.72, 1.0, h);",
+        "  // CUPOLE DEI CUMULI: ogni lobo alza la propria cima, fra un lobo e",
+        "  // l'altro la nube si abbassa. Il CAPE fa i solchi piu' profondi.",
+        "  float cimaLobo = mix(mix(0.75, 0.45, convezione), 1.0, smoothstep(0.2, 0.75, lobi));",
+        "  float tettoCupole = 1.0 - smoothstep(cimaLobo - 0.3, cimaLobo, h);",
+        "  tetto = mix(tetto, tettoCupole, cupole * (1.0 - nucleo));",
+        "  // CELLE di stratocumulo (larghe) e altocumulo (piccole): cupole",
+        "  // separate da solchi sopra una base comune, anche dove il satellite,",
+        "  // a pochi km di pixel, vede il banco tutto pieno.",
+        "  // Un solo campione a coordinate FISSE (ruotato, 24 km): mescolare le",
+        "  // scale delle coordinate fra Sc e Ac stirava il rumore in strisce.",
+        "  // Canali diversi danno celle da 3 km (Sc) e da 1-1,5 km (Ac).",
+        "  vec2 qc = mat2(0.8, -0.6, 0.6, 0.8) * q.xy / 24.0;",
+        "  vec4 celleT = textureLod(uForma, vec3(qc, q.z / 5.0) + vec3(0.7, 0.3, 0.1), max(0.0, lodBase - log2(24.0)));",
+        "  float cellula = smoothstep(0.2, 0.8, mix(celleT.g * 0.3 + celleT.b * 0.7,",
+        "    celleT.b * 0.3 + celleT.a * 0.7, altocumulo));",
+        "  float cimaCella = mix(0.3, 1.0, cellula);",
+        "  float tettoCelle = 1.0 - smoothstep(cimaCella - 0.35, cimaCella, h);",
+        "  tetto = mix(tetto, tettoCelle, granuli * (1.0 - cupole));",
+        "  tetto = mix(tetto, 1.0 - smoothstep(0.86, 1.0, h), max(incudine, nucleo));",
+        "  float cop = copertura * fondo * tetto;",
+        "  // La densita' ottica del genere (uGeneri.a) fa da 'G' del volume:",
+        "  // quanto la nube e' piena e quanto facilmente si apre.",
+        "  float spessoreOttico = genere.a;",
+        "  gDensita = 1.35;",
+        "  float dens = cop * spessoreOttico;",
+        "  if (dens <= 0.0) return 0.0;",
+        "  // VUOTI MACROSCOPICI: Perlin-Worley a 48 km, riportato a 0-1. Solo i",
+        "  // massimi sopravvivono dove la nube e' otticamente sottile.",
+        "  float lodF = max(0.0, lodGrezzo + log2(uTexelCampo * kmPerUnita / 48.0 * uLatoForma));",
+        "  float perlin = textureLod(uForma, vec3(q.xy / 48.0, q.z / 8.0), lodF).r;",
+        "  perlin = clamp((perlin - 0.6) / 0.27, 0.0, 1.0);",
+        "  float vuoti = mix(0.65, 0.85, granuli) * (1.0 - 0.5 * veloLiscio) * (1.0 - nucleo)",
+        "    * (1.0 - 0.8 * incudine) * (1.0 - pioggiaEstesa);",
+        "  float soglia = (1.0 - sqrt(copertura * mix(0.35, 1.0, spessoreOttico))) * vuoti;",
+        "  // Una nube osservata piena resta piena: la forma non scende sotto 0,35;",
+        "  // i veli sono continui, il nucleo delle torri compatto.",
+        "  float forma = mix(0.35, 1.0, perlin);",
+        "  forma = mix(forma, 1.0, clamp(0.6 * veloLiscio + 0.8 * nucleo + 0.5 * incudine, 0.0, 1.0));",
+        "  forma = clamp(rimappa(forma, soglia, 1.0, 0.0, 1.0), 0.0, 1.0);",
+        "  // IL CIRRO: fili lunghi nel verso del vento in quota, ondulati.",
         "  if (cirro > 0.01) {",
-        "    vec4 filamenti = textureLod(uForma, vec3(q.x * 0.35, q.y * 1.7, q.z), lodF + 0.7);",
-        "    float formaCirro = 0.55 + 0.45 * filamenti.r;",
-        "    float profiloCirro = smoothstep(0.0, 0.35, h) * (1.0 - smoothstep(0.45, 1.0, h));",
-        "    float copCirro = copertura * profiloCirro;",
-        "    float dCirro = clamp(rimappa(formaCirro, 1.0 - copCirro, 1.0, 0.0, 1.0), 0.0, 1.0) * copCirro;",
-        "    d = mix(d, dCirro, cirro);",
+        "    vec4 filamenti = textureLod(uForma, vec3(q.x / 24.0 + 0.35 * perlin, q.y / 5.0 + 0.2 * perlin, q.z / 3.0), lodF + 0.5);",
+        "    float profiloCirro = smoothstep(0.0, 0.3, h) * (1.0 - smoothstep(0.5, 1.0, h));",
+        "    float fili = clamp(rimappa(0.35 + 0.65 * filamenti.r, 1.0 - copertura * profiloCirro, 1.0, 0.0, 1.0), 0.0, 1.0);",
+        "    forma = mix(forma, fili * profiloCirro / max(0.05, tetto * fondo) * mix(0.35, 1.0, spessoreOttico), cirro);",
         "  }",
-        "  if (d <= 0.002 || leggera) return d;",
-        "  // Erosione solo nella pelle; l'interno rimane connesso fino alla sommità.",
-        "  vec3 qd = vec3(p.xy * uDettaglioPasso.x, altKm * uDettaglioPasso.y);",
-        "  float lodD = max(0.0, lodGrezzo + log2(uTexelCampo * uDettaglioPasso.x * uLatoDettaglio));",
-        "  vec3 sd = textureLod(uDettaglio, qd + vec3(0.17, 0.43, 0.29), lodD).rgb;",
-        "  float dfbm = sd.r * 0.625 + sd.g * 0.25 + sd.b * 0.125;",
-        "  float pelle = 1.0 - smoothstep(0.0, 0.45 + 0.5 * cavolfiore, min(altKm - baseKm, cimaKm - altKm));",
-        "  pelle = max(pelle, 1.0 - smoothstep(0.15, 0.8, copertura));",
-        "  float erosione = (1.0 - dfbm) * 0.18 * (1.0 + 1.8 * cavolfiore) * pelle * (1.0 - 0.75 * veloLiscio)",
-        "    * (1.0 - smoothstep(1.5, 4.0, lodD));",
-        "  return d * (1.0 - erosione);",
+        "  if (forma * dens <= 0.002 || leggera) return forma * dens;",
+        "  // WORLEY SOTTRATTO: ribollire fine (1 km - 250 m), due letture non",
+        "  // commensurabili per non ripetere la trama. In basso ciuffi, in alto",
+        "  // cupole.",
+        "  vec3 qw = q / 6.0;",
+        "  float lodW = max(0.0, lodGrezzo + log2(uTexelCampo * kmPerUnita / 6.0 * uLatoDettaglio));",
+        "  vec3 w1 = textureLod(uDettaglio, qw + vec3(0.17, 0.43, 0.29), lodW).rgb;",
+        "  vec3 w2 = textureLod(uDettaglio, vec3(mat2(0.8, -0.6, 0.6, 0.8) * qw.xy * 1.37, qw.z * 1.37 + 0.41),",
+        "    lodW + 0.45).rgb;",
+        "  vec3 w = mix(w1, w2, 0.4);",
+        "  float worley = w.r * 0.625 + w.g * 0.25 + w.b * 0.125;",
+        "  float dettaglio = mix(worley, 1.0 - worley, smoothstep(0.15, 0.6, h));",
+        "  // Il MORSO: il CAPE (canale A) varia l'impatto del Worley. Strati",
+        "  // laminari appena sfrangiati, banchi a celle, cavolfiori estremi.",
+        "  float morso = mix(mix(0.14, 0.45, granuli), 0.9, convettiva);",
+        "  // I veli (As, Cs) restano continui ma non lisci come vetro: ondulazioni",
+        "  // e fiocchi sulla cima, come si vedono dall'aereo.",
+        "  morso = max(morso, 0.22 * veloLiscio);",
+        "  morso *= (1.0 - 0.2 * veloLiscio) * (1.0 - 0.8 * incudine) * (1.0 - 0.85 * nucleo);",
+        "  morso *= 1.0 - smoothstep(1.5, 4.0, lodW) * 0.6;",
+        "  // Si scolpisce la FORMA (0-1), poi la si moltiplica per la densita':",
+        "  // un cumulo piccolo e denso perde i solchi fra i lobi, non la massa.",
+        "  float scolpita = clamp(rimappa(forma, dettaglio * morso, 1.0, 0.0, 1.0), 0.0, 1.0);",
+        "  return scolpita * dens;",
         "}",
         "",
         // LA LUCE DEL SOLE, cercata davvero. Da ogni punto della nube si
@@ -9336,8 +9390,6 @@
         // nube invece che grigia, e fa passare luce anche dove il sole diretto
         // non arriva piu'.
         "  float fase0 = faseDoppia(coseno, uFaseG);",
-        "  float fase1 = faseDoppia(coseno, uFaseG * 0.5);",
-        "  float fase2 = faseDoppia(coseno, uFaseG * 0.25);",
         "",
         "  vec3 accumulo = vec3(0.0);",
         "  float trasmissione = 1.0;",
@@ -9418,19 +9470,25 @@
         "    float versoSole = 0.0;",
         "    if (uForzaSole > 0.01) versoSole = profonditaVersoSole(p, lodGrezzo, cosLat);",
         "    float tauSole = uSigma * versoSole;",
-        "    float luceSole = exp(-tauSole) * fase0",
-        "      + 0.55 * exp(-tauSole * 0.36) * fase1",
-        "      + 0.22 * exp(-tauSole * 0.12) * fase2;",
-        // Il termine 'polvere' (Schneider): dove la nube e' sottile la luce
-        // non ha avuto spazio per rimbalzare, e i bordi rivolti al sole sono
-        // piu' scuri del cuore -- e' cio' che fa sembrare soffice un cumulo.
-        "    float polvere = 1.0 - exp(-uSigma * densitaGenere * d * 2.0);",
-        // La luce del cielo arriva dall'alto, quella del suolo dal basso: la
-        // cima e' azzurrina, la base grigio-calda. Entrambe si spengono
-        // scendendo dentro una nube spessa.
-        "    float coperta = exp(-uSigma * densitaGenere * copertura * max(0.0, cimaKm - altKm) * 0.3);",
+        // BEER-LAMBERT verso il sole: la luce diretta che arriva qui.
+        "    float beer = exp(-tauSole);",
+        // POWDER: 1 - e^(-densita' x 2) sull'out-scattering. Basso sul velo
+        // esterno, pieno nelle pieghe interne: accende i bordi interni e,
+        // con la diffusione multipla, tiene il nucleo lontano dal nero.
+        // Guardando verso il sole si spegne, per lasciare il bordo d'argento.
+        "    float estinzioneKm = uSigma * densitaGenere * d;",
+        "    float powder = 1.0 - exp(-estinzioneKm * 2.0);",
+        "    float pesoPolvere = 0.5 - 0.5 * coseno;",
+        "    float direttaSole = beer * mix(1.0, 2.0 * powder, pesoPolvere);",
+        // HENYEY-GREENSTEIN a doppio lobo (fase0): in controluce il lobo in
+        // avanti delle goccioline accende il bordo della cella, il silver
+        // lining. Due ottave piu' morbide di diffusione multipla.
+        "    float luceSole = direttaSole * fase0",
+        "      + 0.45 * exp(-tauSole * 0.25) + 0.2 * exp(-tauSole * 0.08);",
+        // Il cielo illumina dall'alto, il suolo dal basso: cima azzurrina,
+        // base grigio-calda, pieghe interne rischiarate dal powder.
         "    vec3 ambiente = mix(uAmbienteSuolo, uAmbiente, smoothstep(0.0, 1.0, altezzaNube))",
-        "      * (0.45 + 0.55 * coperta) * (0.82 + 0.18 * exp(-tauSole * 0.12));",
+        "      * (0.55 + 0.45 * powder);",
         "",
         "    vec3 lampi = vec3(0.0);",
         "    for (int j = 0; j < 16; j++) {",
@@ -9490,7 +9548,7 @@
         "    }",
         "",
         "    vec3 luce = ALBEDO * (",
-        "        uForzaSole * uColoreSole * luceSole * mix(0.35, 1.0, polvere)",
+        "        2.6 * uForzaSole * uColoreSole * luceSole",
         "      + ambiente",
         "    ) + lampi * ALBEDO;",
         // Integrazione energeticamente corretta sul passo (Hillaire 2015):
@@ -9506,7 +9564,11 @@
         // bianco con il suo rilievo e lascia al lampo lo spazio per vedersi.
         "  float alfa = 1.0 - trasmissione;",
         "  vec3 colore = accumulo / max(alfa, 1e-4);",
-        "  colore = 1.0 - exp(-colore * 1.6);",
+        "  colore = 1.0 - exp(-colore * 1.15);",
+        "  if (tPrimo > 0.0) {",
+        "    float distanzaKm = (tPrimo - tVicino) * uCircKm * cosLatDa(origine.y) + 1.0;",
+        "    colore = mix(colore, uColoreFoschia, (1.0 - exp(-distanzaKm / uFoschiaKm)) * uFoschiaForza);",
+        "  }",
         // IL CANALE SOTTO LA NUBE. Dalla base della nube al suolo, dove
         // Blitzortung ha misurato la scarica, il canale e' fuori dalla nube e
         // si vede: una linea bianca spezzata in sei tratti, larga quanto
@@ -10024,7 +10086,10 @@
         var gradi = this.sole.elevazione * 180 / Math.PI;
         var forza = limita((gradi - SOLE_MINIMO_GRADI) / 14, 0, 1);
         forza = forza * forza * (3 - 2 * forza);
-        var neutra = limita((gradi + 1) / 24, 0, 1);
+        // Il sole basso scalda la luce ma non la tinge di rosa: con il
+        // rosso pieno il banco al tramonto usciva color mattone e perdeva il
+        // bianco delle cime e il grigio delle ombre che danno il volume.
+        var basso = 1 - limita(gradi / 25, 0, 1);
         return {
           azimut: this.sole.azimut,
           elevazione: this.sole.elevazione,
@@ -10032,8 +10097,8 @@
           vera: forza > 0,
           colore: [
             1.0,
-            0.48 + (0.96 - 0.48) * neutra,
-            0.27 + (0.90 - 0.27) * neutra
+            0.96 - 0.22 * basso,
+            0.90 - 0.42 * basso
           ]
         };
       };
@@ -10722,6 +10787,7 @@
             // Secondo upload: stessa scena, ora include anche nubi basse e
             // calde che il solo infrarosso non separa bene dal suolo.
             volume.pubblicaCampo(campo);
+            if (SUPERFICIE_FOTOGRAFICA) {
             superficieSenzaNubi(pixelPelle, misuraPelle, campo);
             var tela = document.createElement("canvas");
             tela.width = misuraPelle.larghezza; tela.height = misuraPelle.altezza;
@@ -10740,6 +10806,7 @@
                 "volume-nubi");
             }
             mostraSuperficie(true);
+            }
           } catch (errore) {
             // La ricostruzione IR e' gia' pubblicata. GeoColour e superficie
             // sono un affinamento: se una GPU mobile e' a corto di memoria non
@@ -10872,10 +10939,15 @@
         registraTocco();
       }
 
+      // La fotografia GeoColour stesa sotto le nubi. Spenta: le nubi 3D si
+      // leggono sulla carta, e al tramonto la foto scuriva tutta la scena.
+      // Basta metterla a true per riaverla, il calcolo resta pronto.
+      var SUPERFICIE_FOTOGRAFICA = false;
       function mostraSuperficie(visibile) {
         ["volume-superficie-strato"].forEach(function (id) {
           if (map.getLayer(id)) {
-            map.setLayoutProperty(id, "visibility", visibile ? "visible" : "none");
+            map.setLayoutProperty(id, "visibility",
+              visibile && SUPERFICIE_FOTOGRAFICA ? "visible" : "none");
           }
         });
       }
