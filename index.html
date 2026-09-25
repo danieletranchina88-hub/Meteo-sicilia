@@ -7128,7 +7128,10 @@
       // scelti restano in questo browser (solo con ?regola=1).
       var REGOLA_PREDEFINITA = {
         scalaFormaKm: 24, scalaMacroKm: 96, copertura: 0.6, erosione: 0.18, rigonfio: 1.15,
-        cavolfiore: 0.8, ombra: 1.0, ambiente: 0.9, esposizione: 0.55, esagerazione: 0, contrasto: 0.8
+        cavolfiore: 0.8, ombra: 1.0, ambiente: 0.9, esposizione: 0.55, esagerazione: 0, contrasto: 0.8,
+        dettaglioKm: 6, stiraBolle: 1.0, forzaMacro: 0.4, baseDura: 0.75, nucleo: 0.75,
+        densita: 3.6, faseG: 0.6, polvere: 1.0, multipla: 1.0, foschiaKm: 420, sole: 1.0,
+        cavita: 0.45, incudineKm: 7.5, passi: 0, passiLuce: 0, accumula: 0
       };
       var REGOLA_ATTIVA = typeof location !== "undefined" && /[?&]regola=1\b/.test(location.search || "");
       var REGOLA = (function () {
@@ -9431,6 +9434,17 @@
         "uniform float uAmbiente;      // luce del cielo",
         "uniform float uEsposizione;",
         "uniform float uContrasto;     // quanto il Worley scava la forma: bolle piu' staccate",
+        "uniform float uDettaglioKm;   // scala dell'erosione dei bordi",
+        "uniform float uStiraBolle;    // forma verticale delle bolle: <1 schiacciate, >1 alte",
+        "uniform float uForzaMacro;    // quanto gli ammassi modulano la copertura",
+        "uniform float uBaseDura;      // nitidezza della base piatta",
+        "uniform float uNucleo;        // quanto l'interno della nube resta pieno",
+        "uniform float uPolvere;       // effetto polvere (bordi scuri, pieghe chiare)",
+        "uniform float uMultipla;      // diffusione multipla (bagliore interno)",
+        "uniform float uFoschiaKm;     // distanza della foschia azzurra",
+        "uniform float uSoleForza;",
+        "uniform float uIncudineKm;    // quota oltre la quale compare l'incudine",
+        "uniform float uCavita;        // scurimento delle cavita' fra le bolle",
         "uniform float uFotogramma;    // indice del fotogramma accumulato a mappa ferma",
         "uniform float uSigma;",
         "uniform float uFaseG;",
@@ -9523,7 +9537,7 @@
         "  // torri la nube e' una lastra di 2-3 km sulla tropopausa. Le torri",
         "  // stanno dove il satellite vede la cima sporgere (overshooting top) e in",
         "  // qualche cella di ~15 km.",
-        "  float incudine = smoothstep(7.5, 10.0, cimaKm) * smoothstep(0.25, 0.6, convettiva);",
+        "  float incudine = smoothstep(uIncudineKm, uIncudineKm + 2.5, cimaKm) * smoothstep(0.25, 0.6, convettiva);",
         "  float torre = 1.0;",
         "  if (incudine > 0.0) {",
         "    float intorno = textureLod(uCampo, uv, lodCampo + 5.0).r * uScalaKm;",
@@ -9540,7 +9554,7 @@
         "  float cumuliforme = max(convettiva,",
         "    smoothstep(1.2, 4.0, spessore) * smoothstep(0.4, 0.8, campo.g) * uCavolfiore);",
         "  float strato = smoothstep(0.0, 0.1, h) * (1.0 - smoothstep(0.7, uRigonfio, h));",
-        "  float cumulo = smoothstep(0.0, 0.05, h) * (1.0 - smoothstep(0.6, uRigonfio, h));",
+        "  float cumulo = smoothstep(0.0, 0.2 * (1.0 - uBaseDura) + 0.01, h) * (1.0 - smoothstep(0.6, uRigonfio, h));",
         "  float profilo = mix(strato, cumulo, cumuliforme);",
         "  if (incudine > 0.0) {",
         "    float lastra = clamp(2.4 / spessore, 0.12, 0.6);",
@@ -9552,7 +9566,7 @@
         "  if (profilo <= 0.0) return 0.0;",
         "  // LA FORMA: Perlin-Worley in km VISTI (la verticale esagerata), cosi' le",
         "  // bolle restano tonde sullo schermo a ogni esagerazione.",
-        "  vec3 q = vec3(p.xy * kmPerUnita, altKm * max(uEsagerazione, 1.0));",
+        "  vec3 q = vec3(p.xy * kmPerUnita, altKm * max(uEsagerazione, 1.0) / max(uStiraBolle, 0.1));",
         "  float lodForma = lodRumore + log2((uWorleyKm / uLatoWorley) / (uScalaFormaKm / uLatoForma));",
         "  vec4 f = textureLod(uForma, q / uScalaFormaKm + uSemenza, lodForma);",
         "  float fbm = f.g * 0.8 + f.b * 0.2;",
@@ -9568,10 +9582,10 @@
         "  // solo piu' trasparente (densita' ottica).",
         "  float gLiscia = textureLod(uCampo, uv, lodCampo + 2.0).g;",
         "  float bordo = smoothstep(0.0, 0.35, gLiscia);",
-        "  float cop = clamp(uCopertura * mix(0.75, 1.0, sqrt(campo.g)) * (0.8 + 0.4 * macro) * bordo, 0.0, 1.0);",
+        "  float cop = clamp(uCopertura * mix(0.75, 1.0, sqrt(campo.g)) * (1.0 + uForzaMacro * (macro - 0.5)) * bordo, 0.0, 1.0);",
         "  // Il cavolfiore sta sulla superficie: dentro la nube, dove profilo e",
         "  // copertura sono pieni, la forma conta meno e il nucleo resta denso.",
-        "  float base = profilo * mix(forma, 1.0, 0.75 * profilo * profilo);",
+        "  float base = profilo * mix(forma, 1.0, uNucleo * profilo * profilo);",
         "  gCavita = 1.0 - smoothstep(0.15, 0.6, base);",
         "  float d = clamp(rimappa(base, 1.0 - cop, 1.0, 0.0, 1.0), 0.0, 1.0);",
         "  float ottica = mix(0.25, 1.0, campo.g);",
@@ -9579,10 +9593,16 @@
         "  // L'EROSIONE: il Worley di dettaglio (1,5 km - 375 m) scava i bordi. In",
         "  // basso ciuffi, in alto bolle (Worley rovesciato). Si spegne quando il",
         "  // dettaglio e' sotto il pixel.",
-        "  vec3 w = textureLod(uWorley, q / uWorleyKm + uSemenza.zxy, lodRumore).rgb;",
-        "  float det = w.r * 0.625 + w.g * 0.25 + w.b * 0.125;",
+        "  // Due letture della texture di forma (128^3, non il cubo di 32^3 che si",
+        "  // ripeteva ogni 6 km), ruotate su tre assi e a scale non multiple: le",
+        "  // bolle del dettaglio non si mettono piu' in fila.",
+        "  float lodDet = lodRumore + log2(uWorleyKm / uDettaglioKm);",
+        "  vec3 qd = q / uDettaglioKm;",
+        "  vec4 d1 = textureLod(uForma, vec3(0.8 * qd.x - 0.6 * qd.y, 0.6 * qd.x + 0.8 * qd.y, qd.z) * 0.25 + uSemenza.zxy, lodDet);",
+        "  vec4 d2 = textureLod(uForma, vec3(qd.z * 0.37 + qd.x * 0.93, qd.y, qd.x * 0.37 - qd.z * 0.93) * 0.61 + 0.37, lodDet + 1.3);",
+        "  float det = mix(d1.g * 0.7 + d1.b * 0.3, d2.b * 0.6 + d2.a * 0.4, 0.4);",
         "  det = mix(det, 1.0 - det, smoothstep(0.1, 0.5, h));",
-        "  float morso = uErosione * mix(0.5, 1.2, convettiva) * (1.0 - smoothstep(1.5, 3.5, lodRumore));",
+        "  float morso = uErosione * mix(0.5, 1.2, convettiva) * (1.0 - smoothstep(1.5, 3.5, lodDet));",
         "  d = clamp(rimappa(d, det * morso, 1.0, 0.0, 1.0), 0.0, 1.0);",
         "  return d * ottica;",
         "}",
@@ -9649,7 +9669,14 @@
         "  float crescita = 0.004;",
         "  // A mappa ferma ogni fotogramma parte da uno scarto diverso (sequenza",
         "  // aurea) e la media dei fotogrammi vale molti piu' passi.",
-        "  float scarto = fract(intreccio(gl_FragCoord.xy) + uFotogramma * 0.618034);",
+        "  // Scarto CASUALE per pixel e per fotogramma: il rumore a gradiente",
+        "  // intrecciato di prima ha una struttura a diagonali, e dove i passi non",
+        "  // bastavano disegnava righe parallele. Quello casuale l'accumulo lo media.",
+        "  // Solo dove i fotogrammi si accumulano (PC): sul telefono, senza media,",
+        "  // il casuale sarebbe grana e resta il gradiente intrecciato.",
+        "  float scarto = uQualita > 0.5",
+        "    ? fract(sin(dot(gl_FragCoord.xy + vec2(17.31, 41.73) * uFotogramma, vec2(12.9898, 78.233))) * 43758.5453)",
+        "    : intreccio(gl_FragCoord.xy);",
         "  float t = tVicino + max(passoMin, tVicino * crescita) * scarto;",
         "",
         "  vec3 direzioneVera = normalize(vec3(direzione.xy, direzione.z / uEsagerazione));",
@@ -9719,14 +9746,15 @@
         "      // gia' incontrato abbastanza goccioline da essere rimbalzata verso di",
         "      // noi: bassa sul velo esterno, piena nelle pieghe dentro la nube.",
         "      float powder = 1.0 - exp(-estinzione * 2.0);",
-        "      float direttaSole = beer * mix(1.0, 2.0 * powder, pesoPolvere);",
+        "      float direttaSole = beer * mix(1.0, 2.0 * powder, pesoPolvere * uPolvere);",
         "      // DIFFUSIONE MULTIPLA A OTTAVE (Wrenninge): la luce rimbalzata molte",
         "      // volte attenua meno, diffonde meno in avanti e pesa meno. E' il",
         "      // bagliore morbido dentro i cumuli e il grigio-azzurro, non nero,",
         "      // delle facce in ombra. Sul telefono una sola ottava.",
         "      float multipla = 0.3 * exp(-tauSole * 0.35) * fase1 * (0.5 + 0.5 * powder);",
         "      if (uQualita > 0.5) multipla += 0.12 * exp(-tauSole * 0.12) * fase2;",
-        "      vec3 sole = uColoreSole * uForzaSole * (direttaSole * fasePasso + multipla);",
+        "      multipla *= uMultipla;",
+        "      vec3 sole = uColoreSole * uForzaSole * uSoleForza * (direttaSole * fasePasso + multipla);",
         "      // Il cielo arriva dall'alto: la nube sopra lo scherma. Un campione",
         "      // mezzo chilometro piu' su da' l'occlusione, e la parte bassa della",
         "      // colonna resta piu' scura della cupola.",
@@ -9738,7 +9766,7 @@
         "      // ombre. Il suolo rimanda poca luce calda dal basso.",
         "      vec3 ambiente = (uCielo * (0.35 + 0.65 * occlusione) * (0.35 + 0.65 * h)",
         "        + uSuolo * 0.35 * (1.0 - h)) * (0.55 + 0.45 * powder) * uAmbiente",
-        "        * (1.0 - 0.45 * cavita);",
+        "        * (1.0 - uCavita * cavita);",
         "      // I LAMPI: una scarica Blitzortung accende la nube dall'interno. La",
         "      // sorgente e' il canale -- tronco verticale fino alla regione di",
         "      // carica e rami a ragno -- e la luce arriva attenuata dalla nube che",
@@ -9796,7 +9824,7 @@
         "    float distanzaKm = (tPrimo > 0.0 ? tPrimo : tVicino) * uCircKm * cosLat0;",
         "    // Prospettiva aerea: le nubi lontane si velano d'azzurro e perdono",
         "    // contrasto, come dall'aereo.",
-        "    float velo = 1.0 - exp(-distanzaKm / 420.0);",
+        "    float velo = 1.0 - exp(-distanzaKm / max(uFoschiaKm, 1.0));",
         "    colore = mix(luce, uFoschia * alfa, velo * 0.7);",
         "    // Curva filmica (ACES): i bianchi al sole non bruciano, le ombre",
         "    // restano morbide e colorate.",
@@ -10264,7 +10292,8 @@
           this.accumulo.indice = a;
           this.accumulo.n = n + 1;
           this.texDaStendere = this.texAccumulo[a];
-          if (this.accumulo.n < QUALITA_VOLUME.accumula && this.mappa) {
+          if (this.accumulo.n < (REGOLA.accumula > 0 ? Math.round(REGOLA.accumula) : QUALITA_VOLUME.accumula)
+              && this.mappa) {
             var mappa = this.mappa;
             requestAnimationFrame(function () { mappa.triggerRepaint(); });
           }
@@ -10394,8 +10423,8 @@
         var fov = (tr && (tr.fovInRadians || (tr.fov && tr.fov * Math.PI / 180))) || 0.6435;
         gl.uniform1f(u("uPixelAngolo"), 2 * Math.tan(fov / 2) / Math.max(1, altezzaPixel));
         gl.uniform1f(u("uPassoKm"), QUALITA_VOLUME.passoKm);
-        gl.uniform1i(u("uPassi"), QUALITA_VOLUME.passi);
-        gl.uniform1i(u("uPassiLuce"), QUALITA_VOLUME.passiLuce);
+        gl.uniform1i(u("uPassi"), REGOLA.passi > 0 ? Math.round(REGOLA.passi) : QUALITA_VOLUME.passi);
+        gl.uniform1i(u("uPassiLuce"), REGOLA.passiLuce > 0 ? Math.round(REGOLA.passiLuce) : QUALITA_VOLUME.passiLuce);
         gl.uniform1f(u("uQualita"), QUALITA_VOLUME.qualita);
         gl.uniform1f(u("uLatoForma"), QUALITA_VOLUME.latoForma);
         gl.uniform1f(u("uScalaFormaKm"), REGOLA.scalaFormaKm);
@@ -10408,12 +10437,23 @@
         gl.uniform1f(u("uAmbiente"), REGOLA.ambiente);
         gl.uniform1f(u("uEsposizione"), REGOLA.esposizione);
         gl.uniform1f(u("uContrasto"), REGOLA.contrasto);
+        gl.uniform1f(u("uDettaglioKm"), REGOLA.dettaglioKm);
+        gl.uniform1f(u("uStiraBolle"), REGOLA.stiraBolle);
+        gl.uniform1f(u("uForzaMacro"), REGOLA.forzaMacro);
+        gl.uniform1f(u("uBaseDura"), REGOLA.baseDura);
+        gl.uniform1f(u("uNucleo"), REGOLA.nucleo);
+        gl.uniform1f(u("uPolvere"), REGOLA.polvere);
+        gl.uniform1f(u("uMultipla"), REGOLA.multipla);
+        gl.uniform1f(u("uFoschiaKm"), REGOLA.foschiaKm);
+        gl.uniform1f(u("uSoleForza"), REGOLA.sole);
+        gl.uniform1f(u("uIncudineKm"), REGOLA.incudineKm);
+        gl.uniform1f(u("uCavita"), REGOLA.cavita);
         gl.activeTexture(gl.TEXTURE3);
         gl.bindTexture(gl.TEXTURE_3D, this.texForma);
         gl.uniform1i(u("uForma"), 3);
         gl.uniform1f(u("uFotogramma"), this.accumulo ? this.accumulo.n : 0);
-        gl.uniform1f(u("uSigma"), SIGMA_NUBI_3D);
-        gl.uniform1f(u("uFaseG"), FASE_G);
+        gl.uniform1f(u("uSigma"), REGOLA.densita);
+        gl.uniform1f(u("uFaseG"), REGOLA.faseG);
         gl.uniform3fv(u("uSole"), new Float32Array(soleGL));
         gl.uniform3fv(u("uColoreSole"), new Float32Array(
           [1.0, 0.96 - 0.22 * basso, 0.9 - 0.42 * basso].map(function (v) { return v * 2.6; })));
@@ -11340,76 +11380,142 @@
       // IL PANNELLO DI REGOLAZIONE (?regola=1): cursori dal vivo sui numeri
       // dell'aspetto. I valori restano nel browser; "Copia" li mette negli
       // appunti per fissarli come predefiniti.
+      // [chiave, etichetta, minimo, massimo, passo, gruppo]
       var CURSORI = [
-        ["scalaFormaKm", "Dimensione bolle (km)", 6, 60, 1],
-        ["scalaMacroKm", "Dimensione ammassi (km)", 30, 300, 5],
-        ["copertura", "Riempimento", 0.4, 1.2, 0.01],
-        ["contrasto", "Contrasto delle bolle", 0.3, 1.2, 0.01],
-        ["erosione", "Erosione bordi", 0, 0.9, 0.01],
-        ["rigonfio", "Bolle oltre la cima", 1.0, 1.6, 0.01],
-        ["cavolfiore", "Cavolfiore anche in aria stabile", 0, 1, 0.01],
-        ["ombra", "Forza delle ombre", 0.2, 3, 0.05],
-        ["ambiente", "Luce del cielo", 0.1, 2, 0.05],
-        ["esposizione", "Esposizione", 0.2, 1.5, 0.01],
-        ["esagerazione", "Esagerazione (0 = auto)", 0, 6, 0.1]
+        ["scalaFormaKm", "Dimensione bolle (km)", 4, 80, 0.5, "Forma"],
+        ["stiraBolle", "Bolle alte (>1) o schiacciate (<1)", 0.3, 3, 0.01, "Forma"],
+        ["contrasto", "Contrasto delle bolle", 0, 1.5, 0.01, "Forma"],
+        ["copertura", "Riempimento", 0.2, 1.3, 0.01, "Forma"],
+        ["nucleo", "Interno pieno", 0, 1, 0.01, "Forma"],
+        ["rigonfio", "Bolle oltre la cima", 1.0, 1.8, 0.01, "Forma"],
+        ["baseDura", "Base piatta e netta", 0, 1, 0.01, "Forma"],
+        ["cavolfiore", "Cavolfiore anche in aria stabile", 0, 1, 0.01, "Forma"],
+        ["scalaMacroKm", "Dimensione ammassi (km)", 20, 400, 5, "Ammassi"],
+        ["forzaMacro", "Forza degli ammassi", 0, 1.5, 0.01, "Ammassi"],
+        ["dettaglioKm", "Scala del dettaglio dei bordi (km)", 0.5, 20, 0.1, "Bordi"],
+        ["erosione", "Erosione bordi", 0, 1, 0.01, "Bordi"],
+        ["incudineKm", "Quota minima dell'incudine (km)", 5, 14, 0.1, "Cumulonembi"],
+        ["densita", "Densita' ottica", 0.5, 12, 0.1, "Luce"],
+        ["ombra", "Forza delle ombre", 0.1, 4, 0.05, "Luce"],
+        ["sole", "Forza del sole", 0.2, 3, 0.05, "Luce"],
+        ["ambiente", "Luce del cielo", 0, 2.5, 0.05, "Luce"],
+        ["cavita", "Scurimento delle cavita'", 0, 1, 0.01, "Luce"],
+        ["polvere", "Effetto polvere (bordi scuri)", 0, 2, 0.01, "Luce"],
+        ["multipla", "Bagliore interno (diffusione multipla)", 0, 3, 0.05, "Luce"],
+        ["faseG", "Bordo d'argento controsole", 0, 0.95, 0.01, "Luce"],
+        ["esposizione", "Esposizione", 0.1, 2, 0.01, "Luce"],
+        ["foschiaKm", "Distanza della foschia (km)", 50, 3000, 10, "Luce"],
+        ["esagerazione", "Esagerazione (0 = auto)", 0, 8, 0.1, "Vista"],
+        ["passi", "Passi del raggio (0 = auto)", 0, 512, 8, "Qualita'"],
+        ["passiLuce", "Passi verso il sole (0 = auto)", 0, 8, 1, "Qualita'"],
+        ["accumula", "Fotogrammi accumulati (0 = auto)", 0, 64, 1, "Qualita'"]
       ];
       var pannelloFatto = false;
       function creaPannelloRegolazione() {
         if (pannelloFatto || !REGOLA_ATTIVA || typeof document === "undefined") return;
         pannelloFatto = true;
         var box = document.createElement("div");
-        box.style.cssText = "position:fixed;left:12px;bottom:120px;z-index:9999;width:260px;padding:10px 12px;"
-          + "background:rgba(15,20,30,.88);color:#e8eef6;font:12px system-ui,sans-serif;border-radius:10px;"
-          + "box-shadow:0 4px 18px rgba(0,0,0,.4);max-height:70vh;overflow:auto";
-        var titolo = document.createElement("div");
+        box.style.cssText = "position:fixed;left:12px;bottom:110px;z-index:9999;width:300px;padding:10px 12px;"
+          + "background:rgba(15,20,30,.9);color:#e8eef6;font:12px system-ui,sans-serif;border-radius:10px;"
+          + "box-shadow:0 4px 18px rgba(0,0,0,.4);max-height:75vh;overflow:auto";
+        var testa = document.createElement("div");
+        testa.style.cssText = "display:flex;justify-content:space-between;align-items:center;margin-bottom:6px";
+        var titolo = document.createElement("b");
         titolo.textContent = "Regola nubi 3D";
-        titolo.style.cssText = "font-weight:700;margin-bottom:6px";
-        box.appendChild(titolo);
+        var riduci = document.createElement("button");
+        riduci.textContent = "\u2212";
+        testa.appendChild(titolo);
+        testa.appendChild(riduci);
+        box.appendChild(testa);
+        var corpo = document.createElement("div");
+        box.appendChild(corpo);
+        riduci.addEventListener("click", function () {
+          var nascosto = corpo.style.display === "none";
+          corpo.style.display = nascosto ? "" : "none";
+          riduci.textContent = nascosto ? "\u2212" : "+";
+        });
         var aggiorna = function () {
           try { localStorage.setItem("nubi3d-regola", JSON.stringify(REGOLA)); } catch (errore) { /* niente memoria */ }
           if (typeof map !== "undefined" && map) map.triggerRepaint();
         };
         var campi = {};
+        var gruppi = {};
         CURSORI.forEach(function (c) {
-          var riga = document.createElement("label");
-          riga.style.cssText = "display:block;margin:6px 0";
+          var nomeGruppo = c[5] || "Altro";
+          if (!gruppi[nomeGruppo]) {
+            var dettagli = document.createElement("details");
+            dettagli.open = nomeGruppo === "Forma";
+            dettagli.style.cssText = "margin:4px 0;border-top:1px solid rgba(255,255,255,.12);padding-top:4px";
+            var sommario = document.createElement("summary");
+            sommario.textContent = nomeGruppo;
+            sommario.style.cssText = "cursor:pointer;font-weight:600";
+            dettagli.appendChild(sommario);
+            corpo.appendChild(dettagli);
+            gruppi[nomeGruppo] = dettagli;
+          }
+          var riga = document.createElement("div");
+          riga.style.cssText = "margin:6px 0";
           var testo = document.createElement("div");
+          testo.textContent = c[1];
+          var linea = document.createElement("div");
+          linea.style.cssText = "display:flex;gap:6px;align-items:center";
           var cursore = document.createElement("input");
           cursore.type = "range"; cursore.min = c[2]; cursore.max = c[3]; cursore.step = c[4];
           cursore.value = REGOLA[c[0]];
-          cursore.style.width = "100%";
-          var scrivi = function () { testo.textContent = c[1] + ": " + REGOLA[c[0]]; };
-          cursore.addEventListener("input", function () {
-            REGOLA[c[0]] = parseFloat(cursore.value);
-            scrivi();
+          cursore.style.flex = "1";
+          var numero = document.createElement("input");
+          numero.type = "number"; numero.step = c[4]; numero.value = REGOLA[c[0]];
+          numero.style.cssText = "width:64px;background:#0b1220;color:#e8eef6;border:1px solid #334;border-radius:4px";
+          var imposta = function (v) {
+            if (!Number.isFinite(v)) return;
+            REGOLA[c[0]] = v;
+            cursore.value = v;
+            numero.value = v;
             aggiorna();
-          });
-          scrivi();
-          campi[c[0]] = { cursore: cursore, scrivi: scrivi };
+          };
+          cursore.addEventListener("input", function () { imposta(parseFloat(cursore.value)); });
+          numero.addEventListener("change", function () { imposta(parseFloat(numero.value)); });
+          campi[c[0]] = function () { cursore.value = REGOLA[c[0]]; numero.value = REGOLA[c[0]]; };
+          linea.appendChild(cursore);
+          linea.appendChild(numero);
           riga.appendChild(testo);
-          riga.appendChild(cursore);
-          box.appendChild(riga);
+          riga.appendChild(linea);
+          gruppi[nomeGruppo].appendChild(riga);
         });
+        var rinfresca = function () { Object.keys(campi).forEach(function (k) { campi[k](); }); aggiorna(); };
         var bottoni = document.createElement("div");
-        bottoni.style.cssText = "display:flex;gap:6px;margin-top:8px";
-        var copia = document.createElement("button");
-        copia.textContent = "Copia valori";
-        copia.addEventListener("click", function () {
+        bottoni.style.cssText = "display:flex;flex-wrap:wrap;gap:6px;margin-top:8px";
+        var bottone = function (etichetta, azione) {
+          var b = document.createElement("button");
+          b.textContent = etichetta;
+          b.addEventListener("click", function () { azione(b); });
+          bottoni.appendChild(b);
+        };
+        bottone("Copia valori", function (b) {
           var testo = JSON.stringify(REGOLA);
           if (navigator.clipboard) navigator.clipboard.writeText(testo);
-          copia.textContent = "Copiati";
-          setTimeout(function () { copia.textContent = "Copia valori"; }, 1500);
+          else window.prompt("Valori", testo);
+          b.textContent = "Copiati";
+          setTimeout(function () { b.textContent = "Copia valori"; }, 1500);
         });
-        var predefiniti = document.createElement("button");
-        predefiniti.textContent = "Predefiniti";
-        predefiniti.addEventListener("click", function () {
+        bottone("Incolla valori", function () {
+          var testo = window.prompt("Incolla i valori copiati");
+          if (!testo) return;
+          try {
+            var nuovi = JSON.parse(testo);
+            Object.keys(REGOLA_PREDEFINITA).forEach(function (k) {
+              if (typeof nuovi[k] === "number") REGOLA[k] = nuovi[k];
+            });
+            rinfresca();
+          } catch (errore) {
+            window.alert("Valori non validi");
+          }
+        });
+        bottone("Predefiniti", function () {
           Object.assign(REGOLA, REGOLA_PREDEFINITA);
-          Object.keys(campi).forEach(function (k) { campi[k].cursore.value = REGOLA[k]; campi[k].scrivi(); });
-          aggiorna();
+          rinfresca();
         });
-        bottoni.appendChild(copia);
-        bottoni.appendChild(predefiniti);
-        box.appendChild(bottoni);
+        corpo.appendChild(bottoni);
         document.body.appendChild(box);
       }
 

@@ -2097,9 +2097,10 @@ assert.equal(schermoAlto.width, schermoBasso.width,
 }
 {
   const frammento = html.slice(html.indexOf("var FRAMMENTO = ["), html.indexOf("var STESURA = ["));
-  // GRANA BIANCA: l'hash per pixel faceva partire ogni raggio a caso.
-  assert.doesNotMatch(frammento, /fract\(sin\(dot\(gl_FragCoord/,
-    "lo scarto dei raggi e' tornato un hash casuale: la grana bianca torna");
+  // GRANA BIANCA: l'hash per pixel faceva partire ogni raggio a caso. Resta
+  // solo dove i fotogrammi si accumulano (PC); sul telefono il gradiente.
+  assert.match(frammento, /float scarto = uQualita > 0\.5\n?[^;]*: intreccio\(gl_FragCoord\.xy\);/,
+    "lo scarto dei raggi e' tornato un hash casuale anche senza accumulo: la grana bianca torna");
   assert.match(frammento, /float intreccio\(vec2 f\)/, "manca lo scarto a gradiente interlacciato");
   // PUNTE: la cima calava in proporzione alla copertura e ogni cella era un cono.
   assert.doesNotMatch(frammento, /scemare/, "la cima torna a scendere a cono verso il bordo");
@@ -2512,6 +2513,7 @@ assert.match(fragment, /float d = clamp\(rimappa\(base, 1\.0 - cop, 1\.0, 0\.0, 
 assert.match(html, /var GENERA_FORMA = \[/, "manca il generatore della forma");
 assert.match(html, /function creaPannelloRegolazione\(\)/, "manca il pannello ?regola=1");
 assert.match(html, /if \(!REGOLA_ATTIVA\) return r;/, "i valori salvati devono valere solo con ?regola=1");
+assert.doesNotMatch(fragment, /textureLod\(uWorley, q \/ uWorleyKm/, "l'erosione torna sul cubo 32^3 che mette le bolle in fila");
 assert.match(fragment, /vec3 verso = vec3\(uSole\.xy, uSole\.z\) \/ kmPerUnita;/,
   "le ombre non seguono piu' la geometria esagerata: da vicino spariscono");
 assert.match(fragment, /t = max\(tVicino, t - passoPrima\);/, "manca l'ingresso a passi corti: torna la brina");
@@ -2519,13 +2521,13 @@ assert.match(html, /var ESAGERAZIONE_MINIMA = 2\.4;/, "l'esagerazione torna a sp
 // Realismo: diffusione multipla a ottave, incudine dei cumulonembi, cavita'
 // fra i lobi, accumulo dei fotogrammi a mappa ferma solo sul PC.
 assert.match(fragment, /multipla \+= 0\.12 \* exp\(-tauSole \* 0\.12\) \* fase2;/, "manca la seconda ottava di diffusione multipla");
-assert.match(fragment, /float incudine = smoothstep\(7\.5, 10\.0, cimaKm\)/, "manca l'incudine dei cumulonembi");
-assert.match(fragment, /float scarto = fract\(intreccio\(gl_FragCoord\.xy\) \+ uFotogramma \* 0\.618034\);/,
+assert.match(fragment, /float incudine = smoothstep\(uIncudineKm, uIncudineKm \+ 2\.5, cimaKm\)/, "manca l'incudine dei cumulonembi");
+assert.match(fragment, /fract\(sin\(dot\(gl_FragCoord\.xy \+ vec2\(17\.31, 41\.73\) \* uFotogramma/,
   "lo scarto del raggio non cambia piu' da un fotogramma all'altro: l'accumulo non converge");
 assert.match(html, /rumore: 48, passiLuce: 5, passi: 176, qualita: 0, accumula: 0, latoForma: 64 \}/, "il telefono deve restare leggero");
 assert.match(html, /qualita: 1, accumula: 12, latoForma: 128 \}/, "sul PC manca l'accumulo dei fotogrammi");
 assert.match(html, /var lampiAccesi = /, "l'accumulo spalmerebbe i lampi");
-assert.match(fragment, /float morso = uErosione \* mix\(0\.5, 1\.2, convettiva\)/, "il CAPE non varia piu' il morso del Worley");
+assert.match(fragment, /float morso = uErosione \* mix\(0\.5, 1\.2, convettiva\) \* \(1\.0 - smoothstep\(1\.5, 3\.5, lodDet\)\)/, "il CAPE non varia piu' il morso del Worley");
 // Da vicino: il passo segue la fascia della colonna (niente trama a puntini
 // sui veli), il cielo e' schermato dalla nube sopra, le ombre dei primi
 // passi verso il sole vedono i lobi, e le lamine non fanno curve di livello.
@@ -2595,7 +2597,7 @@ def uf(n,*v):
  loc=GetUniformLocation(program,n.encode());[None,Uniform1f,Uniform2f,Uniform3f,Uniform4f][len(v)](loc,*v)
 def ui(n,v):Uniform1i(GetUniformLocation(program,n.encode()),v)
 for n,v in [('uCampo',0),('uPerlin',1),('uWorley',2),('uForma',3),('uPassiLuce',4),('uPassi',200),('uQuantiLampi',0)]:ui(n,v)
-for n,v in dict(uLatoForma=LF,uScalaFormaKm=24,uScalaMacroKm=96,uCopertura=.6,uContrasto=.8,uErosione=.18,uRigonfio=1.15,uCavolfiore=.8,uOmbra=1,uAmbiente=.9,uEsposizione=.55,uQualita=1).items():uf(n,v)
+for n,v in dict(uLatoForma=LF,uScalaFormaKm=24,uScalaMacroKm=96,uCopertura=.6,uContrasto=.8,uDettaglioKm=6,uStiraBolle=1,uForzaMacro=.4,uBaseDura=.75,uNucleo=.75,uPolvere=1,uMultipla=1,uFoschiaKm=420,uSoleForza=1,uIncudineKm=7.5,uCavita=.45,uErosione=.18,uRigonfio=1.15,uCavolfiore=.8,uOmbra=1,uAmbiente=.9,uEsposizione=.55,uQualita=1).items():uf(n,v)
 unit=1/40075;esag=float(os.environ.get('CLOUD_QA_EXAGGERATION','1.6'))
 for n,v in dict(uScalaKm=16,uCircKm=40075,uEsagerazione=esag,uSigma=3.6,uFaseG=.6,uForzaSole=1,uZMax=14*esag*unit,uPassoKm=.3,uPixelAngolo=.00005,uTexelCampo=40*unit/128,uPerlinKm=48,uWorleyKm=6,uLatoPerlin=64,uLatoWorley=32).items():uf(n,v)
 uf('uSemenza',.3,.6,.1);uf('uDominio',.5-20*unit,.5-20*unit,.5+20*unit,.5+20*unit);uf('uSole',.5,-.4,.768);uf('uCielo',.46,.58,.78);uf('uSuolo',.26,.25,.23);uf('uColoreSole',2.6,2.5,2.34);uf('uFoschia',.72,.81,.92)
