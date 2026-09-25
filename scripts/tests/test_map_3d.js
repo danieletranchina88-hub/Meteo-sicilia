@@ -2424,7 +2424,7 @@ console.log("nubi in volume: spessore continuo, niente grana, niente coni, nient
     "la luce del fulmine attraversa il nucleo fitto senza attenuazione coerente");
   assert.match(frammento, /0\.022 \* migliore \* migliore/,
     "il lampo lontano illumina l'intera nube come una luce uniforme");
-  assert.match(frammento, /float lodRumore = max\(0\.0, log2\(/,
+  assert.match(frammento, /float lodRumore = max\(-6\.0, log2\(/,
     "il rumore non si legge piu' al livello del pixel: da vicino le bolle si spianano");
   assert.match(frammento, /uFoschia/, "manca la foschia con la distanza");
   const vm = require("node:vm");
@@ -2502,8 +2502,16 @@ const fragment = shader("FRAMMENTO");
 // IL PROMPT DELLE NUBI 3D: raggio confinato fra base e cima, Perlin per i
 // vuoti, Worley sottratto con un morso che il CAPE varia, Beer-Lambert,
 // powder 1 - e^(-densita' x 2), Henyey-Greenstein.
-assert.match(fragment, /if \(altKm < baseKm \|\| altKm > cimaKm\) return 0\.0;/,
+assert.match(fragment, /if \(altKm < baseKm \|\| altKm > cimaKm \+ margine\) return 0\.0;/,
   "il raggio non e' piu' confinato fra base e cima");
+assert.match(fragment, /if \(altKm > cimaLocale\) return 0\.0;/, "la cima non segue piu' le cupole");
+// Coerenza con lo zoom: le cupole frattali, la luce nella geometria che si
+// vede, l'ingresso nella nube a passi corti, l'esagerazione che cala poco.
+assert.match(fragment, /float cimaLocale = cimaKm \+ 2\.0 \* tipo \* rilievo;/, "mancano le cupole frattali della cima");
+assert.match(fragment, /vec3 verso = vec3\(uSole\.xy, uSole\.z\) \/ kmPerUnita;/,
+  "le ombre non seguono piu' la geometria esagerata: da vicino spariscono");
+assert.match(fragment, /t = max\(tVicino, t - passoPrima\);/, "manca l'ingresso a passi corti: torna la brina");
+assert.match(html, /var ESAGERAZIONE_MINIMA = 2\.4;/, "l'esagerazione torna a spianare le nubi da vicino");
 assert.match(fragment, /float soglia = \(1\.0 - sqrt\(copertura\)\) \* 0\.65;/, "mancano i vuoti del Perlin");
 assert.match(fragment, /float morso = mix\(0\.32, 0\.9, convettiva\);/, "il CAPE non varia piu' il morso del Worley");
 // Da vicino: il passo segue la fascia della colonna (niente trama a puntini
@@ -2512,8 +2520,8 @@ assert.match(fragment, /float morso = mix\(0\.32, 0\.9, convettiva\);/, "il CAPE
 assert.match(fragment, /passo = min\(passo, max\(fine, \(fascia\.y - fascia\.x\) \/ salita \* 0\.25\)\);/,
   "il passo non segue piu' lo spessore della colonna");
 assert.match(fragment, /float occlusione = exp\(-sopra \* uSigma \* 0\.5\);/, "manca l'occlusione del cielo");
-assert.match(fragment, /float\(i\), i > 1, h, c, f\)/, "le ombre non vedono piu' il dettaglio dei lobi");
-assert.match(fragment, /float lamina = mix\(1\.6, 1\.0, convettiva\);/, "le lamine tornano a curve di livello");
+assert.match(fragment, /i > 1 \|\| lodRumore > 1\.5, h, c, f\)/, "le ombre non vedono piu' il dettaglio dei lobi");
+assert.match(fragment, /float lamina = mix\(1\.3, 1\.0, convettiva\);/, "le lamine tornano a curve di livello");
 assert.match(fragment, /float powder = 1\.0 - exp\(-estinzione \* 2\.0\);/, "manca il powder");
 assert.match(fragment, /float beer = exp\(-tauSole\);/, "manca Beer-Lambert verso il sole");
 assert.match(fragment, /float henyeyGreenstein\(float coseno, float g\)/, "manca Henyey-Greenstein");
