@@ -114,16 +114,25 @@ La maschera CLM resta l'autorita' su dove c'e' nube; R, B e A sono estesi
 appena fuori dalla maschera perche' i bordi non scendano a terra.
 
 - **Raggio confinato** fra la base B e la cima R, con passo che cresce con
-  la distanza.
+  la distanza ma segue la fascia della colonna: almeno quattro campioni
+  nello spessore, mai un salto che la scavalchi (niente trama a puntini sui
+  veli sottili).
 - **Rumore 3D in km visti** (verticale moltiplicato per l'esagerazione):
   Perlin fBm a 48 km per i vuoti, Worley a tre ottave a 6 km sottratto per i
   bordi cumuliformi. Il CAPE varia il morso del Worley: cavolfiori per la
   convezione profonda, lamine per gli strati in aria stabile. Il Worley
   scolpisce la forma 0-1 prima della densita', e le torri convettive dense
   restano piene.
-- **Luce**: Beer-Lambert verso il sole; powder 1 - e^(-densita' x 2)
+- **Luce**: Beer-Lambert verso il sole, con il dettaglio del Worley nei
+  primi due passi (le ombre dei lobi sui lobi); powder 1 - e^(-densita' x 2)
   sull'out-scattering; Henyey-Greenstein (g = 0,6) per il bordo d'argento;
-  diffusione multipla, cielo, suolo e foschia.
+  diffusione multipla contenuta; cielo schermato dalla nube sopra
+  (occlusione) e base della colonna piu' scura della cupola; foschia.
+- **Dettaglio da vicino**: un'ottava di Worley a 1,5 km che si accende solo
+  quando e' piu' grande di un pixel.
+- **Qualita'** (fissa, per dispositivo): desktop campo 2560 px, foto 3072,
+  tela fino a 3,2 Mpx, 320 passi e 7 verso il sole; telefono campo 1200 px,
+  tela 720 kpx, 176 passi e 5 verso il sole.
 - **Lampi**: le scariche Blitzortung accendono la nube dall'interno e
   disegnano il canale sotto la base.
 - **Timeline**: tornando indietro nel tempo si ricalcola la fusione con le
