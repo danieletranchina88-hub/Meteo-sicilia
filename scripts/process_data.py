@@ -21,6 +21,8 @@ sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')
 from meteo_analysis.core.icon_fields import IconRunFields
 from meteo_analysis.clouds.environment import CloudEnvironmentWriter
 from meteo_analysis.clouds.environment import MAX_LEAD_HOURS as CLOUD_ENV_MAX_LEAD
+from meteo_analysis.clouds.icon_eu import COARSEN as ICON_EU_COARSEN
+from meteo_analysis.clouds.icon_eu import EU_DOMAIN as ICON_EU_DOMAIN
 from meteo_analysis.clouds.icon_eu import IconEuCloudProfile
 from meteo_analysis.hazards.storms import (
     bowen_ratio,
@@ -1791,7 +1793,10 @@ def process_data():
     # Facoltativa: senza, il volume resta quello del solo ICON-2I.
     icon_eu_clouds = None
     try:
-        icon_eu_clouds = IconEuCloudProfile((33.7, 48.9), (3.0, 22.0))
+        icon_eu_clouds = IconEuCloudProfile(
+            (ICON_EU_DOMAIN["south"], ICON_EU_DOMAIN["north"]),
+            (ICON_EU_DOMAIN["west"], ICON_EU_DOMAIN["east"]),
+            margin_deg=0.0, factor=ICON_EU_COARSEN)
         letti = icon_eu_clouds.download(run_dt, range(0, CLOUD_ENV_MAX_LEAD + 1))
         print(f"2d. ICON-EU (DWD): {letti} campi di copertura per livello"
               f" dal run {icon_eu_clouds.run}", flush=True)
@@ -2433,13 +2438,6 @@ def process_data():
                             "clcl": nube("clcl"), "clcm": nube("clcm"), "clch": nube("clch"),
                             "rain_con": tasso("rain_con"), "rain_gsp": tasso("rain_gsp"),
                         }
-                        if icon_eu_clouds is not None:
-                            try:
-                                valido = run_dt + timedelta(hours=step_hours)
-                                for livello, valori in icon_eu_clouds.levels_at(valido, lat, lon).items():
-                                    extras[f"c{livello}"] = valori
-                            except Exception as icon_eu_error:
-                                print(f" iconeu-{step_hours}h:{icon_eu_error}", end="", flush=True)
                         cloud_environment.add(
                             step_hours,
                             temp_c,
@@ -3049,6 +3047,15 @@ def process_data():
                 )
 
         write_observations(TEMP_DIR, observations)
+
+        # La copertura per livello di ICON-EU su tutta l'Europa del volume:
+        # una serie a parte (cloud_eu), stesso formato dell'ambiente.
+        if icon_eu_clouds is not None:
+            try:
+                indice_eu = icon_eu_clouds.write(os.path.join(TEMP_DIR, "cloud_eu"), run_dt)
+                print(f"   Nubi ICON-EU per livello: {len(indice_eu['hours'])} ore.", flush=True)
+            except Exception as icon_eu_error:
+                print(f"   Nubi ICON-EU non salvate: {icon_eu_error}", flush=True)
 
         if cloud_environment is not None and cloud_environment.hours:
             try:

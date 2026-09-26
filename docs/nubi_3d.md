@@ -299,8 +299,9 @@ i salti del vuoto e i pixel dimezzati.
 ## La struttura verticale dal modello (ICON-2I + ICON-EU)
 
 Il satellite vede la cima e la posizione, non la struttura verticale, e non
-vede sotto una coltre. Il volume ora si costruisce solo sul dominio di
-ICON-2I (3-22 E, 33,7-48,9 N): fuori resta il satellite 2D.
+vede sotto una coltre. Il volume copre il satellite dove c'e' ICON-EU
+(23,5 W - 42 E, 29,5 - 66 N); sull'Italia (dominio ICON-2I, 3-22 E,
+33,7-48,9 N) si aggiunge l'ambiente ICON-2I.
 
 Fonti verticali disponibili (verificate il 26/09/2026):
 
@@ -318,10 +319,11 @@ Cosa entra nella piastrella ambiente per ogni ora:
 - da ICON-2I: spessore della nube (particella pseudoadiabatica fino al
   livello di equilibrio con T a 700/500/250 hPa, o strato umido UR >= 75%),
   gradiente 700-500 hPa, UR media 850-500;
-- da ICON-EU: la frazione di nube CLC su 16 livelli (1000-200 hPa),
-  `c1000` ... `c200`, interpolata sulla griglia ICON-2I (circa 110 kB in più
-  per ora). Se il run DWD con la stessa ora non e' ancora uscito si usa il
-  precedente (ogni 3 ore).
+- da ICON-EU, in una serie a parte `data_weather/cloud_eu/` su tutta
+  l'Europa del volume: la frazione di nube CLC su 16 livelli (1000-200 hPa),
+  `c1000` ... `c200`, mediata 2x2 (0,125 gradi, circa 12 km; ~780 kB per
+  ora). Se il run DWD con la stessa ora non e' ancora uscito si usa il
+  precedente (ogni 3 ore); le ore passate si conservano come per l'ambiente.
 
 Nel browser:
 

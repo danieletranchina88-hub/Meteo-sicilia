@@ -7101,10 +7101,11 @@
       const NubiVolumetriche = (function () {
         "use strict";
 
-      // IL DOMINIO E' QUELLO DI ICON-2I: il volume si costruisce solo dove il
-      // modello da' la struttura verticale (spessore, stabilita', umidita',
-      // vento in quota). Fuori resta il satellite 2D, che copre l'Europa.
-      var DOMINIO = { ovest: 3.0, sud: 33.7, est: 22.0, nord: 48.9 };
+      // IL DOMINIO: dove il satellite MTG vede bene e ICON-EU (DWD) da' la
+      // struttura verticale delle nubi, livello per livello (ICON-EU copre
+      // 23,5 W - 62,5 E, 29,5 - 70,5 N). Sull'Italia si aggiunge ICON-2I
+      // (spessore, stabilita', LCL, CAPE, vento in quota).
+      var DOMINIO = { ovest: -23.5, sud: 29.5, est: 42.0, nord: 66.0 };
       var WMS = "https://view.eumetsat.int/geoserver/wms";
 
       // La qualita' e' fissa, non regolabile: niente sliders. Sul telefono
@@ -7690,17 +7691,20 @@
       var TROPOPAUSA_KM = 12;
       var SFONDAMENTO_K_PER_KM = 7;
 
-      var ambienteIndice = null, ambienteIndiceEpoca = 0;
+      // La copertura nuvolosa per livello di ICON-EU (DWD) su tutta l'Europa
+      // del volume: stessa struttura di piastrelle e indice.
+      var NUBI_EU_URL = "data_weather/cloud_eu/";
+      var ambienteIndici = {};
       var ambientePiastrelle = {}, ambienteOrdine = [];
 
-      function indiceAmbiente() {
-        var adesso = Date.now();
-        if (ambienteIndice && adesso - ambienteIndiceEpoca < 10 * 60 * 1000) return ambienteIndice;
-        ambienteIndiceEpoca = adesso;
-        ambienteIndice = fetch(AMBIENTE_URL + "index.json?t=" + Math.floor(adesso / 600000))
+      function indiceAmbiente(url) {
+        url = url || AMBIENTE_URL;
+        var adesso = Date.now(), voce = ambienteIndici[url];
+        if (voce && adesso - voce.epoca < 10 * 60 * 1000) return voce.promessa;
+        voce = ambienteIndici[url] = { epoca: adesso, promessa: fetch(url + "index.json?t=" + Math.floor(adesso / 600000))
           .then(function (r) { return r.ok ? r.json() : null; })
-          .catch(function () { return null; });
-        return ambienteIndice;
+          .catch(function () { return null; }) };
+        return voce.promessa;
       }
 
       function leggiPiastrella(buffer) {
@@ -7737,17 +7741,18 @@
         return fuori;
       }
 
-      function piastrellaAmbiente(file) {
-        if (!ambientePiastrelle[file]) {
-          ambientePiastrelle[file] = fetchDecompressedResponse(AMBIENTE_URL + file)
+      function piastrellaAmbiente(file, url) {
+        var chiave = (url || AMBIENTE_URL) + file;
+        if (!ambientePiastrelle[chiave]) {
+          ambientePiastrelle[chiave] = fetchDecompressedResponse(chiave)
             .then(function (r) { return r.arrayBuffer(); })
             .then(leggiPiastrella)
-            .catch(function () { delete ambientePiastrelle[file]; return null; });
-          ambienteOrdine.push(file);
+            .catch(function () { delete ambientePiastrelle[chiave]; return null; });
+          ambienteOrdine.push(chiave);
           // Scorrendo la timeline bastano poche ore in memoria.
-          while (ambienteOrdine.length > 8) delete ambientePiastrelle[ambienteOrdine.shift()];
+          while (ambienteOrdine.length > 12) delete ambientePiastrelle[ambienteOrdine.shift()];
         }
-        return ambientePiastrelle[file];
+        return ambientePiastrelle[chiave];
       }
 
       // Le ore che racchiudono l'istante e il peso della seconda.
@@ -7782,12 +7787,23 @@
 
       // L'ambiente all'istante del fotogramma, o null: mai un errore, il
       // volume dal solo satellite resta sempre possibile.
+      // ICON-2I (sull'Italia) e, accanto, la copertura per livello di ICON-EU
+      // (in Europa): senza ICON-2I resta ICON-EU da solo.
       function ambienteAllIstante(epoca) {
-        return indiceAmbiente().then(function (indice) {
+        return Promise.all([serieAllIstante(epoca, AMBIENTE_URL), serieAllIstante(epoca, NUBI_EU_URL)])
+          .then(function (d) {
+            var amb = d[0], eu = d[1];
+            if (amb) { amb.eu = eu; return amb; }
+            return eu ? { soloEU: true, eu: eu, modo: eu.modo, run: eu.run, distanza: eu.distanza } : null;
+          }).catch(function () { return null; });
+      }
+
+      function serieAllIstante(epoca, url) {
+        return indiceAmbiente(url).then(function (indice) {
           var scelta = indice && mescolaOreAmbiente(indice.hours, epoca);
           if (!scelta) return null;
-          return Promise.all([piastrellaAmbiente(scelta.prima.file),
-            scelta.dopo === scelta.prima ? null : piastrellaAmbiente(scelta.dopo.file)])
+          return Promise.all([piastrellaAmbiente(scelta.prima.file, url),
+            scelta.dopo === scelta.prima ? null : piastrellaAmbiente(scelta.dopo.file, url)])
             .then(function (p) {
               var a = p[0], b = p[1] || p[0];
               if (!a) return null;
@@ -7818,7 +7834,66 @@
       // L'ambiente sulla griglia del campo (Mercatore, riga 0 = nord).
       // Restituisce le quote in km, la convezione 0-1 e il peso del modello
       // (1 dentro il dominio ICON-2I, sfumato a zero sul bordo).
+      // Una piastrella qualsiasi sulla griglia del campo: i campi nominati,
+      // NaN fuori dalla piastrella.
+      function campiSulCampo(tile, nomi, w, h) {
+        var nx = tile.nx, ny = tile.ny, fuori = {};
+        nomi = nomi.filter(function (nome) { return tile.campi[nome]; });
+        nomi.forEach(function (nome) { fuori[nome] = new Float32Array(w * h).fill(NaN); });
+        if (!nomi.length) return fuori;
+        var passoLat = (tile.nord - tile.sud) / Math.max(1, ny - 1);
+        var passoLon = (tile.est - tile.ovest) / Math.max(1, nx - 1);
+        var r = riquadroMercatore();
+        for (var y = 0; y < h; y++) {
+          var my = r.nord - (y + 0.5) / h * (r.nord - r.sud);
+          var lat = (2 * Math.atan(Math.exp(my / RAGGIO_TERRA)) - Math.PI / 2) * 180 / Math.PI;
+          var fi = (lat - tile.sud) / passoLat;
+          if (fi < 0 || fi > ny - 1) continue;
+          var i0 = limita(Math.floor(fi), 0, ny - 2), ti = limita(fi - i0, 0, 1);
+          for (var x = 0; x < w; x++) {
+            var lon = DOMINIO.ovest + (x + 0.5) / w * (DOMINIO.est - DOMINIO.ovest);
+            var fj = (lon - tile.ovest) / passoLon;
+            if (fj < 0 || fj > nx - 1) continue;
+            var j0 = limita(Math.floor(fj), 0, nx - 2), tj = limita(fj - j0, 0, 1);
+            for (var e = 0; e < nomi.length; e++) {
+              var arr = tile.campi[nomi[e]];
+              var a = arr[i0 * nx + j0], b = arr[i0 * nx + j0 + 1];
+              var c = arr[(i0 + 1) * nx + j0], d = arr[(i0 + 1) * nx + j0 + 1];
+              var v = (a * (1 - tj) + b * tj) * (1 - ti) + (c * (1 - tj) + d * tj) * ti;
+              if (!Number.isFinite(v)) {
+                var vicini = [a, b, c, d].filter(Number.isFinite);
+                v = vicini.length ? vicini[0] : NaN;
+              }
+              fuori[nomi[e]][y * w + x] = v;
+            }
+          }
+        }
+        return fuori;
+      }
+
       function ambienteSulCampo(amb, w, h) {
+        var nomiEU = LIVELLI_ICON_EU.map(function (l) { return "c" + l[0]; });
+        if (amb.soloEU) {
+          // Solo ICON-EU: nessun ambiente termodinamico, il satellite fa da
+          // solo come prima; gli strati per quota ci sono.
+          var n0 = w * h, solo = {
+            lcl: new Float32Array(n0).fill(BASE_CUMULO_KM), t2m: new Float32Array(n0).fill(NaN),
+            gradiente: new Float32Array(n0).fill(6.5), suolo: new Float32Array(n0),
+            convezione: new Float32Array(n0), disponibile: new Float32Array(n0),
+            extra: campiSulCampo(amb.eu, nomiEU, w, h)
+          };
+          solo.modo = amb.modo; solo.run = amb.run; solo.distanza = amb.distanza;
+          return solo;
+        }
+        var conEU = ambienteSulCampoIcon2I(amb, w, h);
+        if (amb.eu) {
+          var livelliEU = campiSulCampo(amb.eu, nomiEU, w, h);
+          Object.keys(livelliEU).forEach(function (nome) { conEU.extra[nome] = livelliEU[nome]; });
+        }
+        return conEU;
+      }
+
+      function ambienteSulCampoIcon2I(amb, w, h) {
         var nx = amb.nx, ny = amb.ny, n = w * h;
         var passoLat = (amb.nord - amb.sud) / Math.max(1, ny - 1);
         var passoLon = (amb.est - amb.ovest) / Math.max(1, nx - 1);
@@ -9916,6 +9991,7 @@
           incudineVicina: sfoca(massimoScorrevole(incudine, w2, h2, Math.max(1, Math.round(40 / kmpx))),
             w2, h2, Math.max(1, Math.round(6 / kmpx))),
           convezione: amb ? giu(amb.convezione) : null, lcl: amb ? giu(amb.lcl) : null,
+          disponibile: amb ? giu(amb.disponibile) : null,
           suolo: amb ? giu(amb.suolo) : null, hzero: hzero
         };
         ["cin", "rh850", "rh700", "rh500", "rgsp", "rcon", "u250", "v250", "u500", "v500", "shu", "shv",
@@ -12827,7 +12903,7 @@
           + (stato.secondo[k] ? " (alternativa: " + secondo.nome + ")" : ""));
         righe.push("Cima " + numero(stato.cima[k], 1) + " km (osservata: CTH/IR)"
           + " · base " + numero(stato.base[k], 1) + " km ("
-          + (Number.isFinite(val("lcl")) ? "inferita da LCL ICON-2I" : "inferita, senza modello") + ")"
+          + (val("disponibile") > 0.5 ? "inferita da LCL ICON-2I" : "inferita per tipo, fuori da ICON-2I") + ")"
           + " · spessore " + numero(stato.cima[k] - stato.base[k], 1) + " km");
         var bt = val("btC");
         if (Number.isFinite(bt)) righe.push("Temperatura della sommita' " + Math.round(bt) + " °C (IR, osservata)");
@@ -12865,7 +12941,11 @@
         if (Number.isFinite(val("rgsp")) || Number.isFinite(val("rcon"))) {
           amb.push("pioggia di scala " + numero(val("rgsp") || 0, 1) + " / convettiva " + numero(val("rcon") || 0, 1) + " mm/h");
         }
-        if (amb.length) righe.push("ICON-2I (modello): " + amb.join(" · "));
+        if (val("disponibile") > 0.5) {
+          if (amb.length) righe.push("ICON-2I (modello): " + amb.join(" · "));
+        } else {
+          righe.push("Fuori dal dominio ICON-2I: forma dal satellite e dal tipo, strati da ICON-EU");
+        }
         var oss = [];
         if (Number.isFinite(val("dbz")) && val("dbz") >= 15) oss.push("radar " + Math.round(val("dbz")) + " dBZ");
         if (Number.isFinite(val("lampi")) && val("lampi") > 0.05) oss.push("fulmini rilevati");

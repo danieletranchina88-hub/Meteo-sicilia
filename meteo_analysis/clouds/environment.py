@@ -306,7 +306,7 @@ class Tile:
     fields: dict
 
     def to_bytes(self) -> bytes:
-        ny, nx = self.fields["lcl"].shape
+        ny, nx = next(iter(self.fields.values())).shape
         body = b""
         present = [spec for spec in FIELDS if spec[0] in self.fields]
         head = MAGIC + struct.pack("<BBHH", VERSION, len(present), nx, ny)

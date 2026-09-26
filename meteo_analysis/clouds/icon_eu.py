@@ -34,6 +34,13 @@ LEVEL_HEIGHT_KM = {
     400: 7.185, 300: 9.164, 250: 10.363, 200: 11.784,
 }
 # Il DWD pubblica un run ogni 3 ore; si risale al massimo di 12.
+# Il dominio del volume in Europa: dove il satellite MTG vede bene e ICON-EU
+# ha dati (ICON-EU copre 23,5 W - 62,5 E, 29,5 - 70,5 N).
+EU_DOMAIN = {"south": 29.5, "north": 66.0, "west": -23.5, "east": 42.0}
+# ICON-EU e' a 0,0625 gradi: mediato 2x2 fa 0,125 gradi (circa 12 km), piu'
+# fine della struttura verticale che serve e un quarto dei byte.
+COARSEN = 2
+METHOD = "icon-eu-cloud-profile-v1"
 RUN_STEP_HOURS = 3
 MAX_RUN_LOOKBACK_HOURS = 12
 MAX_STEP_HOURS = 120
@@ -82,7 +89,8 @@ def decode_regular_grib(data: bytes):
 class IconEuCloudProfile:
     """CLC per livello e per ora di validita', ritagliata sul dominio."""
 
-    def __init__(self, lat_bounds, lon_bounds, margin_deg: float = 0.2) -> None:
+    def __init__(self, lat_bounds, lon_bounds, margin_deg: float = 0.2, factor: int = 1) -> None:
+        self.factor = max(1, int(factor))
         self.south, self.north = min(lat_bounds) - margin_deg, max(lat_bounds) + margin_deg
         self.west, self.east = min(lon_bounds) - margin_deg, max(lon_bounds) + margin_deg
         self.latitudes = None
@@ -153,9 +161,18 @@ class IconEuCloudProfile:
                 jlon = (lons >= self.west) & (lons <= self.east)
                 if not jlat.any() or not jlon.any():
                     continue
-                if self.latitudes is None:
-                    self.latitudes, self.longitudes = lats[jlat], lons[jlon]
                 crop = values[np.ix_(jlat, jlon)]
+                clat, clon = lats[jlat], lons[jlon]
+                if self.factor > 1:
+                    f = self.factor
+                    ny, nx = (crop.shape[0] // f) * f, (crop.shape[1] // f) * f
+                    blocchi = crop[:ny, :nx].reshape(ny // f, f, nx // f, f)
+                    with np.errstate(invalid="ignore"):
+                        crop = np.nanmean(np.nanmean(blocchi, axis=3), axis=1)
+                    clat = clat[:ny].reshape(-1, f).mean(axis=1)
+                    clon = clon[:nx].reshape(-1, f).mean(axis=1)
+                if self.latitudes is None:
+                    self.latitudes, self.longitudes = clat, clon
                 if crop.shape != (self.latitudes.size, self.longitudes.size):
                     continue
                 packed = np.where(np.isfinite(crop), np.clip(np.round(crop), 0, 100), 255).astype(np.uint8)
@@ -185,3 +202,33 @@ class IconEuCloudProfile:
                                              bounds_error=False, fill_value=np.nan)
             out[level] = interp(points)
         return out
+
+    # --- piastrelle per il browser ---------------------------------------------
+    def write(self, directory, target_run: datetime) -> dict:
+        """Una piastrella per ora (formato NUBA, campi c<livello> in %) e
+        ``index.json``; la stessa struttura dell'ambiente ICON-2I, cosi' il
+        browser e l'unione delle ore passate funzionano uguali."""
+        import json
+        import os
+
+        from .environment import Tile, _write_atomic, iso, tile_name
+
+        if not self.data or self.latitudes is None:
+            raise ValueError("nessuna ora ICON-EU")
+        os.makedirs(directory, exist_ok=True)
+        entries = []
+        for valid in sorted(self.data):
+            fields = {}
+            for level, packed in self.data[valid].items():
+                values = packed.astype(np.float64)
+                values[packed == 255] = np.nan
+                fields[field_name(level)] = values
+            tile = Tile(valid, self.latitudes, self.longitudes, fields)
+            name = tile_name(valid)
+            _write_atomic(os.path.join(directory, name), tile.to_bytes())
+            lead = int((valid - target_run).total_seconds() // 3600)
+            entries.append({"valid": iso(valid), "run": iso(self.run or target_run), "lead": lead, "file": name})
+        index = {"method": METHOD, "latestRun": iso(target_run), "hours": entries}
+        _write_atomic(os.path.join(directory, "index.json"),
+                      json.dumps(index, separators=(",", ":")).encode("utf-8"))
+        return index

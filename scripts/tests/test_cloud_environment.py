@@ -198,13 +198,21 @@ def test_icon_eu_levels_are_interpolated_and_written():
     assert np.allclose(levels[850][:, lon < 13.8], 100) and np.allclose(levels[850][:, lon > 14.2], 0)
     assert np.nanmax(levels[500]) == 0
     assert profile.levels_at(RUN, lat, lon) == {}
-    writer = CloudEnvironmentWriter(RUN, lat, lon, target_points=100)
-    shape = (lat.size, lon.size)
-    assert writer.add(2, np.full(shape, 20.0), np.full(shape, 12.0), np.zeros(shape),
-                      extras={"c850": levels[850], "c500": levels[500]})
-    back = Tile.from_bytes(writer.tiles[2].to_bytes(), writer.tiles[2].valid).fields
-    assert "c850" in back and "c500" in back and "c300" not in back
+    # La serie a parte per il browser: cloud_eu/, stesso formato NUBA e indice.
+    import json
+    import tempfile
+    with tempfile.TemporaryDirectory() as cartella:
+        profile.run = RUN - timedelta(hours=3)
+        index = profile.write(cartella, RUN)
+        assert index["method"] == "icon-eu-cloud-profile-v1"
+        assert index["hours"][0]["lead"] == 2 and index["hours"][0]["run"].startswith("2026")
+        with open(os.path.join(cartella, "index.json"), encoding="utf-8") as handle:
+            assert json.load(handle)["hours"][0]["file"] == index["hours"][0]["file"]
+        with open(os.path.join(cartella, index["hours"][0]["file"]), "rb") as handle:
+            back = Tile.from_bytes(handle.read(), valid).fields
+    assert set(back) == {"c850", "c500"}
     assert float(np.nanmax(back["c850"])) == 100.0 and float(np.nanmin(back["c850"])) == 0.0
+    assert np.isnan(back["c500"][0, 0]), "il valore mancante resta mancante"
 
 
 def test_browser_fixture_matches_the_writer():
