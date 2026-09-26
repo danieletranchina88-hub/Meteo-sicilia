@@ -2546,7 +2546,7 @@ assert.match(html, /function ispezionaNube\(lat, lon\)/, "manca l'ispezione mete
 assert.match(fragment, /vec3 verso = vec3\(uSole\.xy, uSole\.z\) \/ kmPerUnita;/,
   "le ombre non seguono piu' la geometria esagerata: da vicino spariscono");
 assert.match(fragment, /t = max\(tVicino, t - passoPrima\);/, "manca l'ingresso a passi corti: torna la brina");
-assert.match(html, /var ESAGERAZIONE_MINIMA = 2\.4;/, "l'esagerazione torna a spianare le nubi da vicino");
+assert.match(html, /var ESAGERAZIONE_MINIMA = 1\.5;/, "da vicino la scala deve tornare quasi vera: le nubi alte diventano guglie");
 // Prestazioni (Nubis3): il vuoto si salta con la distanza dalla nube, la
 // luce lontana legge il profilo, il rumore si legge a MIP crescente.
 assert.match(fragment, /float vuotoKm = distanzaVuoto\(uvV, p\.z \* kmPerUnita \/ uEsagerazione\);/, "manca il salto del vuoto");
@@ -2767,7 +2767,10 @@ if (process.argv.includes("--gpu")) {
   const program=path.join(dir,"render.py");fs.writeFileSync(program,GPU_QA.replaceAll("/tmp/",dir+"/"));
   const python=process.env.CLOUD_QA_PYTHON || "python3";
   for (const mode of ["render","section"]) execFileSync(python,[program,path.join(dir,"cloud_FRAMMENTO.glsl"),path.join(dir,"cloud"),mode],{stdio:"inherit",env:{...process.env,EGL_PLATFORM:"surfaceless"}});
-  execFileSync(python,[program,path.join(dir,"cloud_FRAMMENTO.glsl"),path.join(dir,"mobile"),"section"],{stdio:"inherit",env:{...process.env,EGL_PLATFORM:"surfaceless",CLOUD_QA_EXAGGERATION:"3.2",CLOUD_QA_MOBILE:"1"}});
+  execFileSync(python,[program,path.join(dir,"cloud_FRAMMENTO.glsl"),path.join(dir,"mobile"),"section"],{stdio:"inherit",env:{...process.env,EGL_PLATFORM:"surfaceless",CLOUD_QA_EXAGGERATION:"2.0",CLOUD_QA_MOBILE:"1"}});
+  // (2,0: l'esagerazione del telefono da vicino con la legge attuale -- 3,2
+  // resta solo alla vista d'insieme, dove i lobi degli altocumuli non si
+  // distinguono comunque)
   execFileSync(python,[program,path.join(dir,"cloud_FRAMMENTO.glsl"),path.join(dir,"close"),"render"],{stdio:"inherit",env:{...process.env,EGL_PLATFORM:"surfaceless",CLOUD_QA_CLOSE:"1"}});
   console.log("GPU images and density arrays:",dir);
 } else console.log("GPU render checks: run with --gpu before publishing shader changes");

@@ -7395,9 +7395,12 @@
       // quando scendeva a 1,6 le cupole e le loro ombre, che dall'alto davano
       // la forma alla nube, si appiattivano in una lastra bianca proprio
       // mentre ci si avvicinava. La nube deve restare la stessa a ogni zoom.
-      var ESAGERAZIONE_ZOOM_PIENO = 7.5;
-      var ESAGERAZIONE_CALO_PER_ZOOM = 0.3;
-      var ESAGERAZIONE_MINIMA = 2.4;
+      // Da vicino si torna verso la scala vera (1:1, come nei simulatori): con
+      // la forma fatta dal rumore 3D la nube non si spiana piu' in una lastra,
+      // e un congestus di 5 km stirato tre volte diventava una guglia.
+      var ESAGERAZIONE_ZOOM_PIENO = 6.0;
+      var ESAGERAZIONE_CALO_PER_ZOOM = 0.45;
+      var ESAGERAZIONE_MINIMA = 1.5;
 
       // Di notte il sole e' sotto l'orizzonte: il volume viene illuminato
       // dall'ambiente notturno e dai lampi, e basta. Non si accende un sole
@@ -9650,13 +9653,27 @@
         var stab = Number.isFinite(x.stab) ? x.stab : x.gradiente;
         var instabile = Number.isFinite(stab) ? lisciaFra(5.5, 8.5, stab) : 0.5;
         var secco = Number.isFinite(x.rhmid) ? limita((75 - x.rhmid) / 45, 0, 1) : 0.3;
-        out.durezza[k] = limita(0.55 * instabile + 0.25 * numeroValido(x.convezione, 0) + 0.2 * secco, 0, 1);
+        var durezzaModello = limita(0.55 * instabile + 0.25 * numeroValido(x.convezione, 0) + 0.2 * secco, 0, 1);
         if (Number.isFinite(x.depth)) {
           var km = x.depth / 1000;
           out.profondita[k] = km;
           var grado = limita((km - 1) / 8, 0, 1);
-          out.sviluppo[k] = 0.5 * out.sviluppo[k] + 0.5 * grado * out.cumulo[k];
+          // Il satellite ha l'ultima parola sulla convezione che c'e': il
+          // modello puo' correggere lo sviluppo, non cancellarlo.
+          out.sviluppo[k] = Math.max(0.6 * out.sviluppo[k], 0.5 * out.sviluppo[k] + 0.5 * grado * out.cumulo[k]);
         }
+        // La durezza unisce l'aria del modello e il carattere OSSERVATO: un
+        // congestus visto dal satellite con la cima a -10 C e' compatto anche
+        // dove ICON-2I non ha CAPE.
+        var durezzaTipo = out.cumulo[k] * (0.4 + 0.6 * out.sviluppo[k]);
+        out.durezza[k] = limita(0.5 * durezzaModello + 0.5 * durezzaTipo, 0, 1);
+        // LA PIOGGIA SOTTO LA NUBE vuole una prova: radar (dBZ), pioggia del
+        // modello (mm/h convettiva + di scala) o la diagnosi di precipitazione
+        // del satellite. Il tipo da solo dice che PUO' piovere, non che piove:
+        // senza prove, niente colonne.
+        var prove = [lisciaFra(15, 35, x.dbz), lisciaFra(0.2, 3, numeroValido(x.rcon, 0) + numeroValido(x.rgsp, 0)),
+          numeroValido(x.pioggiaDiffusa, NaN)].filter(Number.isFinite);
+        out.pioggia[k] *= prove.length ? Math.max.apply(null, prove) : 0;
         var u = x.u250, v = x.v250;
         if (!Number.isFinite(u) || !Number.isFinite(v)) { u = x.shu; v = x.shv; }
         var m = Math.hypot(u, v);
@@ -10435,10 +10452,15 @@
         "float profiloVerticale(float hf, float cumulo, float sviluppo, float fibra, float durezza) {",
         "  float lastra = smoothstep(0.0, 0.15, hf) * (1.0 - smoothstep(mix(0.78, 0.62, durezza), 1.0, hf));",
         "  float rampa = mix(0.04, 0.18, durezza);",
-        "  float chiusura = mix(2.0, 0.8, durezza) * mix(1.0, 1.4, sviluppo);",
-        "  float cumuliforme = smoothstep(0.0, rampa, hf) * pow(saturare(1.0 - pow(hf, chiusura)), 0.5 + 0.3 * durezza);",
+        "  // Il CORPO del cumulo e' a riempimento costante e intermedio: e' il",
+        "  // rumore 3D degli ammassi a scolpirne fianchi e cime in lobi tondi",
+        "  // (Horizon Zero Dawn). Un profilo che cala piano con la quota darebbe",
+        "  // coni e fiamme; uno pieno, prismi. La cima cala solo nell'ultimo tratto:",
+        "  // piu' presto nell'aria dura (cupola compatta), tardi in quella morbida.",
+        "  float corpo = mix(0.62, 0.74, durezza);",
+        "  float cumuliforme = corpo * smoothstep(0.0, rampa, hf) * (1.0 - smoothstep(mix(0.82, 0.6, durezza), 1.0, hf));",
         "  float cirro = smoothstep(0.0, 0.35, hf) * (1.0 - smoothstep(0.55, 1.0, hf));",
-        "  return mix(mix(lastra, cumuliforme, cumulo), cirro, fibra);",
+        "  return mix(mix(lastra, cumuliforme, cumulo * mix(0.75, 1.0, smoothstep(0.0, 0.5, durezza))), cirro, fibra);",
         "}",
         "",
         "// LA FRAZIONE DI NUBE DEL MODELLO alla quota data (ICON-EU, DWD): la",
@@ -10520,8 +10542,11 @@
         "    // Una mappa delle altezze a scala di cella (il 'Cloud Max Height' di",
         "    // Nubis) abbassa le altre: niente muro unico alla quota del satellite.",
         "    float variaCime = cumulo * mix(0.25, 0.85, sviluppo) * uRigonfio;",
+        "    // Con la quota esagerata le celle si allargano in proporzione: una",
+        "    // cella di 3 km alta 5, stirata tre volte, sarebbe uno spiedo.",
+        "    float cellaVistaKm = max(cellaKm * 2.2 * mix(1.0, max(1.0, 0.55 * esag), sviluppo), 1.5);",
         "    if (variaCime > 0.01) {",
-        "      float cella = textureLod(uForma, vec3(q.xy / max(cellaKm * 2.2, 1.5), 0.63) + uSemenza.yxz, max(lodRumore - log2(max(cellaKm * 2.2, 1.5) / uScalaFormaKm) + 1.5, 1.5)).r;",
+        "      float cella = textureLod(uForma, vec3(q.xy / cellaVistaKm, 0.63) + uSemenza.yxz, max(lodRumore - log2(cellaVistaKm / uScalaFormaKm) + 1.5 - log2(128.0 / uLatoForma), 1.5 - log2(128.0 / uLatoForma))).r;",
         "      // (letta sfocata: le cime salgono e scendono dolci, niente pareti)",
         "      float quota = mix(1.0, 0.2 + 0.8 * smoothstep(0.15, 0.85, cella), clamp(variaCime, 0.0, 1.0));",
         "      hRel = clamp((altKm - baseKm) / max(0.05, spessore * quota), 0.0, 1.2);",
@@ -10559,9 +10584,9 @@
         "  // La pioggia sotto la base: colonne grigie, sfrangiate, piu' dense in",
         "  // basso dove il nembostrato o il temporale scaricano.",
         "  float pioggiaD = 0.0;",
-        "  if (pioggia > 0.08 && altKm < baseKm && campo.g > 0.3 && !leggera) {",
+        "  if (pioggia > 0.15 && altKm < baseKm && campo.g > 0.3 && !leggera) {",
         "    float colonne = textureLod(uForma, vec3(q.xy / 6.0, q.z / 60.0) + uSemenza.zyx, max(lodRumore, 0.0)).a;",
-        "    pioggiaD = 0.1 * pioggia * smoothstep(0.35, 0.7, 1.0 - colonne) * (1.0 - altKm / max(baseKm, 0.1) * 0.5) * impronta;",
+        "    pioggiaD = 0.06 * pioggia * smoothstep(0.35, 0.7, 1.0 - colonne) * (1.0 - altKm / max(baseKm, 0.1) * 0.5) * impronta;",
         "  }",
         "  gTipoCampione = uDebugTipi > 0.5 ? texelFetch(uMorfo2, ivec2(uv * vec2(textureSize(uMorfo2, 0))), 0).b * 255.0 : 0.0;",
         "  if (profilo <= 0.0) return pioggiaD;",
@@ -13067,7 +13092,9 @@
         attiva: attivaNubiVolumetriche,
         disattiva: disattivaNubiVolumetriche,
         aggiorna: aggiornaNubiVolumetriche,
-        notificaScarica: notificaScarica
+        notificaScarica: notificaScarica,
+        // Per le prove e la console: cosa il motore ha inferito in un punto.
+        ispeziona: function (lat, lon) { return descriviNube(lat, lon); }
       };
     })();
 

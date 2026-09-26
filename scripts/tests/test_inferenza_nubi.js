@@ -76,6 +76,15 @@ prova("3. cumulus congestus: sviluppo verticale forte, non ghiacciato", () => {
   assert.ok(s.sviluppo[0] > 0.75);
 });
 
+prova("pioggia sotto la nube solo con una prova (radar o modello)", () => {
+  const senza = m.inferisciStati(cella(Object.assign({}, scenari.congestus, { dbz: NaN, rcon: NaN, rgsp: NaN, pioggiaDiffusa: NaN })));
+  assert.equal(senza.pioggia[0], 0, "il tipo da solo non fa piovere");
+  const radar = m.inferisciStati(cella(Object.assign({}, scenari.congestus, { dbz: 40 })));
+  assert.ok(radar.pioggia[0] > 0.1, "con 40 dBZ piove: " + radar.pioggia[0]);
+  const modello = m.inferisciStati(cella(Object.assign({}, scenari.congestus, { rcon: 4 })));
+  assert.ok(modello.pioggia[0] > 0.1, "con 4 mm/h convettivi del modello piove: " + modello.pioggia[0]);
+});
+
 prova("4. temporale isolato: cumulonembo con base all'LCL e cima osservata", () => {
   const s = m.inferisciStati(cella(scenari.temporale));
   assert.match(sigla(s), /^Cb (cal|cap)$/);
