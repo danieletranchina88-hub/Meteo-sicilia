@@ -2407,7 +2407,7 @@ console.log("nubi in volume: spessore continuo, niente grana, niente coni, nient
   assert.match(frammento, /float cimaKm = campo\.r \* uScalaKm;/, "la cima non viene piu' dal canale R");
   assert.match(frammento, /float baseKm = campo\.b \* uScalaKm;/, "la base non viene piu' dal canale B");
   assert.match(frammento, /if \(campo\.g < 0\.004 && pTorri <= 0\.0\) return 0\.0;/, "la maschera satellitare non e' piu' esatta");
-  assert.match(frammento, /profilo \*= impronta;/, "la struttura ricostruita esce dall'impronta del satellite");
+  assert.match(frammento, /profilo \*= impronta \* bordo;/, "la struttura ricostruita esce dall'impronta del satellite");
   assert.match(frammento, /conv = cumulo \* sviluppo;/, "la convezione non viene piu' dallo stato inferito");
   // Le precedenti asserzioni su collo, copQuota e deformazione delle
   // coordinate imponevano proprio le formule responsabili dei crateri.
@@ -2517,15 +2517,24 @@ assert.match(fragment, /float d = saturare\(rimappa\(base, composto, 1\.0, 0\.0,
   "manca l'erosione del profilo dimensionale (up-rez di Nubis3)");
 assert.match(fragment, /float billowy = mix\(n\.b, n\.a, 0\.25 \+ 0\.5 \* base\);/, "manca il rumore billowy di Nubis3");
 assert.match(fragment, /d = pow\(d \* ps, mix\(0\.3, 0\.6, max\(1e-3, ps\)\)\);/, "manca la nitidezza di Nubis3");
-assert.match(fragment, /float profiloVerticale\(float hf, float cumulo, float sviluppo, float fibra\)/,
-  "manca il profilo verticale per tipo");
+assert.match(fragment, /float profiloVerticale\(float hf, float cumulo, float sviluppo, float fibra, float durezza\)/,
+  "manca il profilo verticale per tipo e per durezza (ICON-2I)");
+// ICON-2I COME STRUTTURA VERTICALE: dominio del modello, spessore consentito,
+// durezza, vento in quota della cella, domain warp contro il tiling.
+assert.match(html, /var DOMINIO = \{ ovest: 3\.0, sud: 33\.7, est: 22\.0, nord: 48\.9 \};/, "il volume esce dal dominio ICON-2I");
+assert.match(fragment, /spessore = mix\(spessore, min\(spessore, max\(m3\.g \* 16\.0, 1\.0\)\), cumulo\);/, "lo spessore del modello non limita i cumuliformi");
+assert.match(fragment, /vec2 dir = dot\(locale, locale\) > 0\.25 \? normalize\(locale\) : uVentoAlto;/, "i cirri non seguono il vento della cella");
+assert.match(fragment, /deforma = \(macroV\.rg - 0\.5\) \* uScalaFormaKm \* 0\.2;/, "manca il domain warp");
+assert.match(html, /gl\.uniform1i\(u\("uMorfo3"\), 7\)/, "campionatore del profilo ICON-2I non collegato");
+assert.doesNotMatch(html, /map\.setLayoutProperty\("satellite-clouds-layer", "visibility", "none"\);\n\s*\}\n\s*map\.triggerRepaint\(\);\n\s*\}\n\n\s*function rilasciaOtticaMorfologica/,
+  "fuori dal dominio ICON-2I il satellite 2D deve restare");
 assert.match(fragment, /float profiloTorri\(vec2 punto, float z, float kmPerUnita, float esag, out float tipoDettaglio\)/,
   "mancano gli inviluppi degli oggetti convettivi (torri e incudini)");
 assert.match(fragment, /vec2 rel = dKm - B\.yz \* max\(z - base, 0\.0\);/, "le torri non si inclinano piu' con lo shear");
 assert.match(fragment, /float lungo = dot\(rel, dir\), largo = dot\(rel, vec2\(-dir\.y, dir\.x\)\);/,
   "l'incudine non segue piu' la direzione del vento in quota");
 assert.match(fragment, /float sdInc = max\(sdEllissoide\(e, raggi\), zv - tetto\);/, "l'incudine non ha piu' il tetto piatto");
-assert.match(fragment, /vec2 dir = uVentoAlto, perp = vec2\(-uVentoAlto\.y, uVentoAlto\.x\);/, "i cirri non seguono piu' il vento");
+
 assert.match(fragment, /float aperta = max\(apertura, cumulo \* \(1\.0 - smoothstep\(0\.25, 0\.95, campo\.g\)\)\);/,
   "le aperture non rispettano piu' la copertura osservata");
 assert.match(html, /var GENERA_FORMA = \[/, "manca il generatore del rumore");
@@ -2670,6 +2679,9 @@ for i,kind in enumerate(scenes):
   'As':([0,0,cel(25),0],[.03,.15,4/255,.8]),'Bank':([1,.85,cel(3.8),0],[.3,.2,11/255,.8]),
   'Ci':([0,0,cel(8),1],[.55,0,1/255,.8])}[kind]
  tex(np.array([[morfo[0]]],np.float32),4,mip=False);tex(np.array([[morfo[1]]],np.float32),5,mip=False)
+ # Il profilo ICON-2I della scena: durezza; spessore e vento sconosciuti.
+ dur={'Cb':.9,'St':.1,'Cu':.75,'Cu0':.4,'Sc':.4,'Ac':.6,'As':.15,'Bank':.7,'Ci':.2}[kind]
+ tex(np.array([[[dur,0,.5,.5]]],np.float32),8,mip=False);ui('uMorfo3',8)
  torre=np.zeros((4,24,4),np.float32)
  if kind=='Cb':
   torre[0,0]=[.5,.5,6,11.5];torre[1,0]=[1.0,.15,0,.3];torre[2,0]=[1,0,40,.8];torre[3,0]=[2,.8,3,.5]

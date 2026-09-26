@@ -85,6 +85,12 @@ FIELDS = (
     ("clch", 0.01, 0.0),
     ("rcon", 0.001, 0.0),     # pioggia convettiva, mm/h (massimo di blocco)
     ("rgsp", 0.001, 0.0),     # pioggia di scala, mm/h
+    # --- il profilo verticale (derivato dai livelli 700/500/250 hPa) ---
+    ("depth", 1.0, 0.0),      # spessore della nube dal suo LCL, m: il maggiore fra
+                              # la convezione (particella pseudoadiabatica fino al
+                              # livello di equilibrio) e lo strato umido (UR >= 75%)
+    ("rhmid", 0.01, 0.0),     # umidita' relativa media 850-700-500 hPa, %
+    ("stab", 0.001, 0.0),     # gradiente 700-500 hPa, K/km (stabilita' media)
 )
 # Come si riduce ogni campo facoltativo sulla griglia larga: il massimo per
 # cio' che e' piccolo e intenso (una cella convettiva), la media per il resto.
@@ -103,6 +109,113 @@ def relative_humidity(q_kg_kg, t_k, p_hpa: float) -> np.ndarray:
     es = 6.112 * np.exp(17.67 * tc / (tc + 243.5))
     with np.errstate(invalid="ignore", divide="ignore"):
         return np.clip(100.0 * e / es, 0.0, 110.0)
+
+
+# Quote standard (atmosfera ICAO) dei livelli isobarici del profilo, km.
+Z_STANDARD_KM = {850: 1.457, 700: 3.012, 500: 5.574, 250: 10.363}
+# Soglia dell'umidita' relativa oltre la quale un livello si considera parte
+# dello strato nuvoloso (schema di copertura di Sundqvist: RHcrit 0,75-0,8).
+RH_STRATO = 75.0
+# Un livello di equilibrio sopra 250 hPa: la cima sale fino alla tropopausa
+# media alle nostre latitudini, non oltre.
+EL_OLTRE_250_KM = 1.5
+
+_RD, _CP, _LV, _EPS = 287.04, 1004.6, 2.501e6, 0.622
+
+
+def _es_hpa(t_k):
+    tc = np.asarray(t_k, dtype=np.float64) - 273.15
+    return 6.112 * np.exp(17.67 * tc / (tc + 243.5))
+
+
+def _moist_step(t_k, p_hpa, dp_hpa):
+    """Un passo della pseudoadiabatica satura: dT/dp (formula di MetPy)."""
+    es = _es_hpa(t_k)
+    rs = _EPS * es / np.maximum(p_hpa - es, 1.0)
+    dtdp = ((_RD * t_k + _LV * rs) / (_CP + (_LV * _LV * rs * _EPS) / (_RD * t_k * t_k))) / p_hpa
+    return t_k + dtdp * dp_hpa
+
+
+def parcel_temperatures(t2m_c, td2m_c, hsurf_m, levels=(700, 500, 250), substeps=24):
+    """Temperatura (K) della particella di superficie ai livelli dati.
+
+    Secca fino all'LCL (Bolton 1980), pseudoadiabatica satura sopra; la
+    pressione al suolo dalla quota con scala di 8,4 km.  Vettoriale sulla
+    griglia intera.
+    """
+    t = np.asarray(t2m_c, dtype=np.float64) + 273.15
+    td = np.asarray(td2m_c, dtype=np.float64)
+    td = np.where(np.isfinite(td) & (td > 150.0), td, td + 273.15)
+    td = np.minimum(td, t)
+    z = 0.0 if hsurf_m is None else np.nan_to_num(np.asarray(hsurf_m, dtype=np.float64))
+    ps = 1013.25 * np.exp(-z / 8400.0)
+    with np.errstate(invalid="ignore", divide="ignore"):
+        t_lcl = 1.0 / (1.0 / (td - 56.0) + np.log(t / td) / 800.0) + 56.0
+        p_lcl = ps * (t_lcl / t) ** (1.0 / 0.2857)
+    out = {}
+    t_cur, p_cur = t_lcl.copy(), p_lcl.copy()
+    for level in levels:
+        target = float(level)
+        dry = t * (target / ps) ** 0.2857          # sotto l'LCL: adiabatica secca
+        sopra = target < p_cur
+        dp = (target - p_cur) / substeps
+        tt, pp = t_cur.copy(), p_cur.copy()
+        for _ in range(substeps):
+            tt = np.where(sopra, _moist_step(tt, pp, dp), tt)
+            pp = np.where(sopra, pp + dp, pp)
+        out[level] = np.where(target >= p_lcl, dry, tt)
+        t_cur = np.where(sopra, tt, t_cur)
+        p_cur = np.where(sopra, pp, p_cur)
+    return out, p_lcl
+
+
+def cloud_depth_km(lcl_asl_m, parcel, env, rh_levels):
+    """Spessore della nube sopra il suo LCL, km.
+
+    Il maggiore fra la profondita' convettiva (dall'LCL al livello di
+    equilibrio della particella rispetto a T ambiente a 700/500/250 hPa) e lo
+    strato umido contiguo (livelli con UR >= RH_STRATO a partire dal basso).
+    NaN dove mancano i dati per entrambe le stime.
+    """
+    lcl_km = np.asarray(lcl_asl_m, dtype=np.float64) / 1000.0
+    levels = [lv for lv in (700, 500, 250) if parcel.get(lv) is not None and env.get(lv) is not None]
+    conv = np.full(lcl_km.shape, np.nan)
+    # Almeno 700 e 500 hPa: con un livello solo il livello di equilibrio non
+    # si puo' stimare.
+    if 700 in levels and 500 in levels:
+        conv = np.zeros(lcl_km.shape)
+        attiva = np.ones(lcl_km.shape, dtype=bool)
+        prima_b, prima_z = None, None
+        for lv in levels:
+            b = np.asarray(parcel[lv], float) - np.asarray(env[lv], float)
+            z = Z_STANDARD_KM[lv]
+            if prima_b is None:
+                # Sotto il primo livello: galleggia fin li' se positivo.
+                el = np.where(b > 0, z, lcl_km)
+            else:
+                cross = prima_z + (z - prima_z) * prima_b / np.maximum(prima_b - b, 1e-6)
+                el = np.where(attiva & (prima_b > 0) & (b <= 0), cross, conv)
+                el = np.where(attiva & (prima_b > 0) & (b > 0), z, el)
+            conv = np.where(attiva, el, conv)
+            attiva = attiva & (b > 0)
+            prima_b, prima_z = b, z
+        conv = np.where(attiva, conv + EL_OLTRE_250_KM, conv)
+        conv = np.maximum(conv - lcl_km, 0.0)
+    umido = np.full(lcl_km.shape, np.nan)
+    ordinati = [(Z_STANDARD_KM[lv], rh_levels[lv]) for lv in (850, 700, 500) if rh_levels.get(lv) is not None]
+    if ordinati:
+        umido = np.zeros(lcl_km.shape)
+        continua = np.ones(lcl_km.shape, dtype=bool)
+        for z, rh in ordinati:
+            rh = np.asarray(rh, dtype=np.float64)
+            sopra_lcl = z > lcl_km
+            bagnato = np.nan_to_num(rh, nan=0.0) >= RH_STRATO
+            # Un livello sotto l'LCL non interrompe lo strato.
+            continua = continua & (bagnato | ~sopra_lcl)
+            umido = np.where(continua & sopra_lcl & bagnato, z - lcl_km + 0.5, umido)
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", category=RuntimeWarning)
+        return np.fmax(conv, umido)
 
 
 class EnvironmentUnavailable(RuntimeError):
@@ -296,6 +409,27 @@ class CloudEnvironmentWriter:
             extras["rgsp"] = extras["rain_gsp"]
         if extras.get("cin") is not None:
             extras["cin"] = np.abs(np.asarray(extras["cin"], dtype=np.float64))
+        # IL PROFILO VERTICALE: stabilita' media, umidita' media, spessore.
+        # Tutto nell'orientamento gia' raddrizzato (sud -> nord, ovest -> est).
+        derived = {}
+        t700o, t250o = self._orient(extras.get("t700")), self._orient(extras.get("t250"))
+        if t700o is not None and t500 is not None:
+            derived["stab"] = np.clip((t700o - np.asarray(t500, float))
+                                      / (Z_STANDARD_KM[500] - Z_STANDARD_KM[700]), 0.0, 12.0)
+        rh_levels = {lv: self._orient(extras.get("rh%d" % lv)) for lv in (850, 700, 500)}
+        presenti = [np.asarray(v, dtype=np.float64) for v in rh_levels.values() if v is not None]
+        if presenti:
+            with warnings.catch_warnings():
+                warnings.simplefilter("ignore", category=RuntimeWarning)
+                derived["rhmid"] = np.nanmean(np.stack(presenti), axis=0)
+        try:
+            parcel, _ = parcel_temperatures(t2m_c, td2m, hsurf)
+            env = {700: t700o, 500: t500, 250: t250o}
+            depth = cloud_depth_km(lcl_height_asl_m(t2m_c, td2m, hsurf), parcel, env, rh_levels)
+            if np.isfinite(depth).any():
+                derived["depth"] = depth * 1000.0
+        except Exception:
+            pass
         known = {spec[0] for spec in FIELDS}
         for name, values in extras.items():
             if name in known and name not in fields and values is not None:
@@ -303,6 +437,9 @@ class CloudEnvironmentWriter:
                 if arr is None or arr.shape != t2m_k.shape:
                     continue
                 fields[name] = _block(arr, f, _EXTRA_BLOCK.get(name, "mean"))
+        for name, arr in derived.items():
+            if arr is not None and np.shape(arr) == t2m_k.shape:
+                fields[name] = _block(arr, f, "mean")
         valid = self.run_time + timedelta(hours=lead_hours)
         self.tiles[lead_hours] = Tile(valid, self.latitudes, self.longitudes, fields)
         return True

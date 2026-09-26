@@ -912,6 +912,9 @@ def prepare_icon_cloud_fields(run_dt, source_inventory=None):
         # pubblica 250 hPa (non 300).
         "u250": f"{run_base}/U/{common}_isobaricInhPa-250.grib",
         "v250": f"{run_base}/V/{common}_isobaricInhPa-250.grib",
+        # La temperatura a 250 hPa chiude il profilo della particella: fin dove
+        # sale la convezione (livello di equilibrio), cioe' lo spessore.
+        "t250": f"{run_base}/T/{common}_isobaricInhPa-250.grib",
         # Il profilo di umidita': dove l'aria e' satura c'e' uno strato.
         "rh850": f"{run_base}/RELHUM/{common}_isobaricInhPa-850.grib",
         "rh500": f"{run_base}/RELHUM/{common}_isobaricInhPa-500.grib",
@@ -929,7 +932,7 @@ def prepare_icon_cloud_fields(run_dt, source_inventory=None):
         shutil.rmtree(CLOUD_TEMP_DIR)
     os.makedirs(CLOUD_TEMP_DIR)
     paths = {}
-    print("2c. Scarico i campi ICON-2I delle nubi 3D (vento 250 hPa, UR, CLCL/M/H, piogge)…",
+    print("2c. Scarico i campi ICON-2I delle nubi 3D (vento e T 250 hPa, UR, CLCL/M/H, piogge)…",
           flush=True)
     with ThreadPoolExecutor(max_workers=2) as executor:
         futures = {
@@ -2410,7 +2413,7 @@ def process_data():
                             "u500": rischio("u500"), "v500": rischio("v500"),
                             "shear_u": rischio("wshear_u"), "shear_v": rischio("wshear_v"),
                             "t700": rischio("t700"), "q700": rischio("q700"),
-                            "u250": nube("u250"), "v250": nube("v250"),
+                            "u250": nube("u250"), "v250": nube("v250"), "t250": nube("t250"),
                             "rh850": nube("rh850"), "rh500": nube("rh500"),
                             "clcl": nube("clcl"), "clcm": nube("clcm"), "clch": nube("clch"),
                             "rain_con": tasso("rain_con"), "rain_gsp": tasso("rain_gsp"),

@@ -137,6 +137,41 @@ def test_inference_fields_are_optional_and_derived():
     assert set(_writer().tiles[1].fields) == {"lcl", "t2m", "lapse", "cape", "hsurf"}
 
 
+def test_vertical_profile_depth_stability_and_moisture():
+    """Il profilo verticale dai livelli ICON-2I: una colonna instabile ha una
+    nube profonda fino al livello di equilibrio, una colonna stabile e secca
+    una nube bassa, uno strato umido stabile lo spessore dello strato."""
+    lat = np.linspace(40.0, 38.0, 3)
+    lon = np.linspace(13.0, 16.0, 3)
+    shape = (lat.size, lon.size)
+    ones = np.ones(shape)
+
+    def tile(t2m, td, t700, t500, t250, rh, q700=0.001):
+        writer = CloudEnvironmentWriter(RUN, lat, lon, target_points=100)
+        assert writer.add(3, t2m * ones, td * ones, np.zeros(shape), t500_k=t500 * ones,
+                          hsurf_m=np.zeros(shape),
+                          extras={"t700": t700 * ones, "t250": t250 * ones,
+                                  "q700": q700 * ones,
+                                  "rh850": rh * ones, "rh500": rh * ones})
+        return Tile.from_bytes(writer.tiles[3].to_bytes(), writer.tiles[3].valid).fields
+
+    # Estate, suolo 30/22 C, 700 hPa +4 C, 500 hPa -16 C, 250 hPa -48 C:
+    # CAPE abbondante, la particella galleggia oltre i 250 hPa.
+    instabile = tile(30.0, 22.0, 277.15, 257.15, 225.15, 60.0)
+    # Stessa superficie, ma aria calda in quota (inversione di subsidenza).
+    stabile = tile(30.0, 22.0, 288.15, 268.15, 235.15, 40.0)
+    # Autunno: suolo 14/13 C quasi saturo, stabile ma umido fino a 500 hPa.
+    strato = tile(14.0, 13.0, 275.15, 257.15, 222.15, 92.0, q700=0.0058)
+    d_i, d_s, d_u = (float(np.nanmean(f["depth"])) / 1000 for f in (instabile, stabile, strato))
+    assert d_i > 8.0, f"torre convettiva troppo bassa: {d_i:.1f} km"
+    assert d_s < 2.0, f"colonna stabile e secca con nube alta: {d_s:.1f} km"
+    assert 3.5 < d_u < 6.0, f"strato umido fino a 500 hPa: {d_u:.1f} km"
+    # 700-500 hPa: (4 + 16) K su 2,56 km = 7,8 K/km.
+    assert abs(float(np.nanmean(instabile["stab"])) - 20.0 / 2.562) < 0.05
+    assert float(np.nanmean(strato["rhmid"])) > 85.0, "umidita' media dello strato"
+    assert float(np.nanmean(stabile["rhmid"])) < 45.0
+
+
 def test_browser_fixture_matches_the_writer():
     """scripts/tests/fixtures_cloud_env.bin.gz e' la piastrella che legge
     test_nubi_icon.js: se il writer cambia formato, va rigenerata."""

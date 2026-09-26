@@ -7101,7 +7101,10 @@
       const NubiVolumetriche = (function () {
         "use strict";
 
-      var DOMINIO = { ovest: -14.0, sud: 29.0, est: 40.0, nord: 62.0 };
+      // IL DOMINIO E' QUELLO DI ICON-2I: il volume si costruisce solo dove il
+      // modello da' la struttura verticale (spessore, stabilita', umidita',
+      // vento in quota). Fuori resta il satellite 2D, che copre l'Europa.
+      var DOMINIO = { ovest: 3.0, sud: 33.7, est: 22.0, nord: 48.9 };
       var WMS = "https://view.eumetsat.int/geoserver/wms";
 
       // La qualita' e' fissa, non regolabile: niente sliders. Sul telefono
@@ -7834,7 +7837,8 @@
           extra: {}
         };
         var EXTRA = ["cin", "hzero", "u250", "v250", "u500", "v500", "shu", "shv",
-          "rh850", "rh700", "rh500", "clcl", "clcm", "clch", "rcon", "rgsp", "cape"];
+          "rh850", "rh700", "rh500", "clcl", "clcm", "clch", "rcon", "rgsp", "cape",
+          "depth", "rhmid", "stab"];
         EXTRA.forEach(function (nome) {
           if (amb.campi[nome]) fuori.extra[nome] = new Float32Array(n).fill(NaN);
         });
@@ -9574,12 +9578,16 @@
           base: new Float32Array(n), cima: new Float32Array(n),
           cumulo: new Float32Array(n), sviluppo: new Float32Array(n), cellaKm: new Float32Array(n),
           apertura: new Float32Array(n), fibra: new Float32Array(n), pioggia: new Float32Array(n),
-          onda: new Float32Array(n), fonti: new Uint8Array(n)
+          onda: new Float32Array(n), fonti: new Uint8Array(n),
+          // Il profilo verticale da ICON-2I (MODELLATO/DERIVATO):
+          durezza: new Float32Array(n), profondita: new Float32Array(n).fill(NaN),
+          ventoX: new Float32Array(n), ventoY: new Float32Array(n)
         };
         var x = {};
         var nomi = ["copertura", "cima", "tau", "kappa", "chi", "incudine", "fibra", "granuli", "liscio",
           "btC", "convezione", "cin", "rh850", "rh700", "rh500", "rgsp", "rcon", "pioggiaDiffusa",
-          "dbz", "lampi", "lcl", "suolo", "hzero", "nebbia", "incudineVicina"];
+          "dbz", "lampi", "lcl", "suolo", "hzero", "nebbia", "incudineVicina",
+          "depth", "rhmid", "stab", "gradiente", "u250", "v250", "shu", "shv"];
         var P = TIPI_NUBE.length;
         for (var k = 0; k < n; k++) {
           for (var a = 0; a < nomi.length; a++) {
@@ -9622,8 +9630,37 @@
           out.fibra[k] = fb / pesoTot; out.pioggia[k] = pg / pesoTot; out.onda[k] = on / pesoTot;
           out.fonti[k] = FONTE.OSSERVATO | FONTE.INFERITO
             | (Number.isFinite(x.lcl) ? FONTE.MODELLO | FONTE.DERIVATO : 0);
+          profiloDellaCella(x, out, k);
         }
         return out;
+      }
+
+      // IL PROFILO VERTICALE DELLA CELLA, da ICON-2I (non dal satellite):
+      //   durezza   -- 0 strato soffice (aria stabile e umida: la massa resta
+      //                alta, cime piatte), 1 cumulo compatto (aria instabile e
+      //                secca in quota: base stretta, massa che si chiude in
+      //                una cupola). Stabilita' 700-500 hPa, CAPE, secchezza.
+      //   profondita -- km della nube sopra la base: convezione fino al
+      //                livello di equilibrio o strato umido (DERIVATO).
+      //   sviluppo  -- il grado convettivo del tipo, corretto dallo spessore
+      //                che il modello consente.
+      //   vento     -- il verso del vento a 250 hPa nella cella (cirri,
+      //                incudini), lo shear 0-6 km dove manca.
+      function profiloDellaCella(x, out, k) {
+        var stab = Number.isFinite(x.stab) ? x.stab : x.gradiente;
+        var instabile = Number.isFinite(stab) ? lisciaFra(5.5, 8.5, stab) : 0.5;
+        var secco = Number.isFinite(x.rhmid) ? limita((75 - x.rhmid) / 45, 0, 1) : 0.3;
+        out.durezza[k] = limita(0.55 * instabile + 0.25 * numeroValido(x.convezione, 0) + 0.2 * secco, 0, 1);
+        if (Number.isFinite(x.depth)) {
+          var km = x.depth / 1000;
+          out.profondita[k] = km;
+          var grado = limita((km - 1) / 8, 0, 1);
+          out.sviluppo[k] = 0.5 * out.sviluppo[k] + 0.5 * grado * out.cumulo[k];
+        }
+        var u = x.u250, v = x.v250;
+        if (!Number.isFinite(u) || !Number.isFinite(v)) { u = x.shu; v = x.shv; }
+        var m = Math.hypot(u, v);
+        if (m > 1) { out.ventoX[k] = u / m; out.ventoY[k] = -v / m; }
       }
 
       // GLI OGGETTI CONVETTIVI. Un cumulonembo non e' una colonna per pixel:
@@ -9819,8 +9856,10 @@
           convezione: amb ? giu(amb.convezione) : null, lcl: amb ? giu(amb.lcl) : null,
           suolo: amb ? giu(amb.suolo) : null, hzero: hzero
         };
-        ["cin", "rh850", "rh700", "rh500", "rgsp", "rcon", "u250", "v250", "u500", "v500", "shu", "shv"]
+        ["cin", "rh850", "rh700", "rh500", "rgsp", "rcon", "u250", "v250", "u500", "v500", "shu", "shv",
+          "depth", "rhmid", "stab"]
           .forEach(function (nome) { if (ex[nome]) ingresso[nome] = giu(ex[nome]); });
+        if (amb && amb.gradiente) ingresso.gradiente = giu(amb.gradiente);
         if (campo.evidenzaSat && campo.evidenzaSat.basseAcqua) {
           var e = campo.evidenzaSat;
           ingresso.nebbia = ricampiona(e.basseAcqua, e.larghezza, e.altezza, w2, h2);
@@ -9850,7 +9889,7 @@
       //   2: R apertura, G pioggia, B tipo (indice), A fiducia
       function tessitureMorfologiche(stato) {
         var n = stato.larghezza * stato.altezza;
-        var a = new Uint8Array(n * 4), b = new Uint8Array(n * 4);
+        var a = new Uint8Array(n * 4), b = new Uint8Array(n * 4), c = new Uint8Array(n * 4);
         var lmin = Math.log(0.2), lmax = Math.log(50);
         for (var k = 0; k < n; k++) {
           var i = k * 4;
@@ -9862,8 +9901,15 @@
           b[i + 1] = Math.round(limita(stato.pioggia[k], 0, 1) * 255);
           b[i + 2] = stato.tipo[k];
           b[i + 3] = Math.round(limita(stato.fiducia[k], 0, 1) * 255);
+          // 3: R durezza, G spessore del modello (km/16; 0 = sconosciuto),
+          //    BA verso del vento in quota (0,5 0,5 = sconosciuto)
+          c[i] = Math.round(limita(stato.durezza[k], 0, 1) * 255);
+          var pr = stato.profondita[k];
+          c[i + 1] = Number.isFinite(pr) ? Math.max(1, Math.round(limita(pr / 16, 0, 1) * 255)) : 0;
+          c[i + 2] = Math.round((stato.ventoX[k] * 0.5 + 0.5) * 255);
+          c[i + 3] = Math.round((stato.ventoY[k] * 0.5 + 0.5) * 255);
         }
-        return { a: a, b: b };
+        return { a: a, b: b, c: c };
       }
 
       // Gli oggetti convettivi negli array di uniform dello shader, dalle
@@ -10162,6 +10208,7 @@
         "uniform vec2 uVentoAlto;      // verso del vento in quota (cirri), unitario",
         "uniform float uDebugTipi;     // 1: colora le nubi per tipo",
         "uniform vec3 uColoriTipi[16];",
+        "uniform sampler2D uMorfo3;    // profilo ICON-2I: R durezza, G spessore (km/16), BA vento in quota",
         "uniform sampler3D uVuoto;     // km minimi dalla nube piu' vicina (griglia grossa)",
         "uniform float uVuotoKm;       // fondoscala della griglia del vuoto",
         "uniform float uVuotoQuotaKm;  // quota coperta dalla griglia del vuoto",
@@ -10236,7 +10283,7 @@
         "// in cima; distanza con segno in km VISTI (quota esagerata).",
         "float sdColonna(vec2 rel, float zv, float altezza, float r, float rCupola) {",
         "  float y = zv - clamp(zv, 0.0, max(altezza - rCupola, 0.0));",
-        "  return max(length(vec2(length(rel), y * r / max(rCupola, 1e-3))) - r, -zv);",
+        "  return length(vec2(length(rel), y * r / max(rCupola, 1e-3))) - r;",
         "}",
         "float sdEllissoide(vec3 p, vec3 r) {",
         "  float k0 = length(p / r), k1 = length(p / (r * r));",
@@ -10264,7 +10311,7 @@
         "    float r = raggio * mix(1.0, 0.8, dissipa);",
         "    float zv = (z - base) * esag, H = (cima - base) * esag;",
         "    // Cupola schiacciata: sotto la tropopausa la corrente si allarga.",
-        "    float sd = sdColonna(rel, zv, H, r, min(r, 0.3 * H));",
+        "    float sd = sdColonna(rel, zv, H, r, min(r, 0.22 * H));",
         "    // Le torri secondarie (multicella): piu' basse, attorno alla principale.",
         "    for (int s = 0; s < 4; s++) {",
         "      if (float(s) >= D.z) break;",
@@ -10281,7 +10328,8 @@
         "      float ro = 0.42 * r * D.w;",
         "      sd = smin(sd, length(vec3(rel, zv - H + 0.3 * ro)) - ro, 0.3 * ro);",
         "    }",
-        "    float profiloColonna = saturare(-sd / (0.5 * r)) * mix(1.0, 0.6, dissipa);",
+        "    // La base e' netta (il livello di condensazione): piena a 300 m sopra.",
+        "    float profiloColonna = saturare(-sd / (0.5 * r)) * smoothstep(0.0, 0.3 * esag, zv) * mix(1.0, 0.6, dissipa);",
         "    float profiloIncudine = 0.0;",
         "    if (C.w > 0.03) {",
         "      vec2 dir = C.xy;",
@@ -10304,12 +10352,18 @@
         "  return migliore;",
         "}",
         "",
-        "// IL PROFILO VERTICALE per tipo (Nubis, metodo del profilo verticale):",
-        "// strati a lastra, cumuliformi con la base netta e la massa in basso che si",
-        "// assottiglia verso la cima tonda, cirri sottili.",
-        "float profiloVerticale(float hf, float cumulo, float sviluppo, float fibra) {",
-        "  float lastra = smoothstep(0.0, 0.15, hf) * (1.0 - smoothstep(0.7, 1.0, hf));",
-        "  float cumuliforme = smoothstep(0.0, 0.05, hf) * pow(saturare(1.0 - hf), mix(0.9, 0.45, sviluppo));",
+        "// IL PROFILO VERTICALE per tipo (Nubis, metodo del profilo verticale),",
+        "// con la forma che gli da' l'aria del modello ICON-2I (durezza):",
+        "//  - durezza bassa (aria stabile e umida): la massa resta alta fino quasi",
+        "//    alla cima, che e' piatta -- strato soffice;",
+        "//  - durezza alta (aria instabile, secca in quota): base stretta (la massa",
+        "//    cresce salendo), poi si chiude presto in una cupola -- cumulo compatto.",
+        "// Gli strati restano lastre, i cirri fasce sottili.",
+        "float profiloVerticale(float hf, float cumulo, float sviluppo, float fibra, float durezza) {",
+        "  float lastra = smoothstep(0.0, 0.15, hf) * (1.0 - smoothstep(mix(0.78, 0.62, durezza), 1.0, hf));",
+        "  float rampa = mix(0.04, 0.18, durezza);",
+        "  float chiusura = mix(2.0, 0.8, durezza) * mix(1.0, 1.4, sviluppo);",
+        "  float cumuliforme = smoothstep(0.0, rampa, hf) * pow(saturare(1.0 - pow(hf, chiusura)), 0.5 + 0.3 * durezza);",
         "  float cirro = smoothstep(0.0, 0.35, hf) * (1.0 - smoothstep(0.55, 1.0, hf));",
         "  return mix(mix(lastra, cumuliforme, cumulo), cirro, fibra);",
         "}",
@@ -10337,7 +10391,10 @@
         "  float baseKm = campo.b * uScalaKm;",
         "  vec4 m1 = textureLod(uMorfo1, uv, lodCampo);",
         "  vec4 m2 = textureLod(uMorfo2, uv, lodCampo);",
+        "  // Il profilo del modello: durezza, spessore, vento in quota della cella.",
+        "  vec4 m3 = textureLod(uMorfo3, uv, lodCampo);",
         "  float cumulo = m1.r, sviluppo = m1.g, fibra = m1.a, apertura = m2.r, pioggia = m2.g;",
+        "  float durezza = m3.r;",
         "  float cellaKm = exp(mix(log(0.2), log(50.0), m1.b));",
         "  // Fascia: la pioggia scende sotto la base fino al suolo.",
         "  float sotto = pioggia > 0.08 ? baseKm : 0.0;",
@@ -10345,6 +10402,9 @@
         "  // L'impronta osservata: dentro la maschera la struttura e' ricostruita,",
         "  // fuori non si inventano nubi.",
         "  float impronta = smoothstep(0.004, 0.2, gLiscia);",
+        "  // Al bordo del dominio ICON-2I il volume si dissolve (fuori resta il",
+        "  // satellite 2D): niente parete dove finiscono i dati.",
+        "  float bordo = smoothstep(0.0, 0.025, min(min(uv.x, 1.0 - uv.x), min(uv.y, 1.0 - uv.y)));",
         "  // (solo per le nubi cumuliformi: un velo sottile ha densita' ottica bassa,",
         "  // non copertura parziale)",
         "  float aperta = max(apertura, cumulo * (1.0 - smoothstep(0.25, 0.95, campo.g)));",
@@ -10354,13 +10414,25 @@
         "  vec2 centroDominio = (uDominio.xy + uDominio.zw) * 0.5;",
         "  vec3 q = vec3((p.xy - centroDominio) * uCircKm * cosLatDa(centroDominio.y), altKm * esag);",
         "  float profilo = 0.0, tipo = cumulo;",
+        "  vec2 deforma = vec2(0.0);",
         "  if (altKm >= baseKm && altKm <= cimaKm + 0.15 && campo.g >= 0.004) {",
         "    float spessore = max(0.05, cimaKm - baseKm);",
+        "    // LO SPESSORE DEL MODELLO: nei cumuliformi la nube non sale oltre dove",
+        "    // la porta la convezione (livello di equilibrio) o lo strato umido di",
+        "    // ICON-2I; la cima del satellite resta il tetto. Una cella senza",
+        "    // convezione nel modello e' un cumulo basso sotto l'inversione.",
+        "    if (m3.g > 0.002 && cumulo > 0.05) {",
+        "      spessore = mix(spessore, min(spessore, max(m3.g * 16.0, 1.0)), cumulo);",
+        "    }",
         "    hRel = clamp((altKm - baseKm) / spessore, 0.0, 1.0);",
         "    // LA COPERTURA (la ''weather map'' di Nubis): dove il satellite vede cielo",
         "    // a tratti le celle vuote crescono; la mappa macro raggruppa le celle",
         "    // in ammassi e varchi a scala di decine di km.",
-        "    float macro = textureLod(uForma, vec3(q.xy / uScalaMacroKm, 0.31) + uSemenza, max(lodRumore - log2(uScalaMacroKm / uScalaFormaKm), 0.0)).b;",
+        "    vec4 macroV = textureLod(uForma, vec3(q.xy / uScalaMacroKm, 0.31) + uSemenza, max(lodRumore - log2(uScalaMacroKm / uScalaFormaKm), 0.0));",
+        "    float macro = macroV.b;",
+        "    // DOMAIN WARP: le coordinate del rumore si piegano su scala macro, e il",
+        "    // cubo di rumore non si ripete piu' a griglia regolare.",
+        "    deforma = (macroV.rg - 0.5) * uScalaFormaKm * 0.2;",
         "    float copertura = saturare((1.0 - aperta * uCopertura * 1.6) + (macro - 0.5) * uForzaMacro * cumulo);",
         "    // LE CIME DELLE CELLE: in un campo convettivo ogni cella sale fin dove",
         "    // la porta la sua corrente; la cima osservata e' quella delle piu' alte.",
@@ -10374,7 +10446,7 @@
         "      hRel = clamp((altKm - baseKm) / max(0.05, spessore * quota), 0.0, 1.2);",
         "      copertura *= smoothstep(0.1, 0.45, cella + 0.5 * (1.0 - cumulo));",
         "    }",
-        "    profilo = hRel > 1.0 ? 0.0 : profiloVerticale(hRel, cumulo, sviluppo, fibra) * copertura;",
+        "    profilo = hRel > 1.0 ? 0.0 : profiloVerticale(hRel, cumulo, sviluppo, fibra, durezza) * copertura;",
         "    hRel = min(hRel, 1.0);",
         "    conv = cumulo * sviluppo;",
         "  }",
@@ -10387,7 +10459,7 @@
         "    conv = max(conv, pTorri);",
         "    fascia = vec2(0.0, max(fascia.y, altKm + 1.0));",
         "  }",
-        "  profilo *= impronta;",
+        "  profilo *= impronta * bordo;",
         "  gProfilo = profilo;",
         "  // La pioggia sotto la base: colonne grigie, sfrangiate, piu' dense in",
         "  // basso dove il nembostrato o il temporale scaricano.",
@@ -10402,11 +10474,15 @@
         "  // LA FORMA (Horizon Zero Dawn, Nubis 2022): il profilo fa da copertura",
         "  // sul rumore degli ammassi -- dove il rumore supera 1 - profilo c'e'",
         "  // nube. I cirri lo leggono stirato nel verso del vento in quota.",
-        "  vec3 qn = q;",
+        "  vec3 qn = vec3(q.xy + deforma, q.z);",
         "  if (fibra > 0.02) {",
-        "    vec2 dir = uVentoAlto, perp = vec2(-uVentoAlto.y, uVentoAlto.x);",
-        "    vec2 stirato = dir * dot(q.xy, dir) * 0.22 + perp * dot(q.xy, perp) * 1.6;",
-        "    qn.xy = mix(q.xy, stirato, fibra);",
+        "    // Il vento in quota DELLA CELLA (250 hPa, o lo shear), non uno solo per",
+        "    // tutta la scena: i cirri si stirano ognuno nel suo verso.",
+        "    vec2 locale = m3.ba * 2.0 - 1.0;",
+        "    vec2 dir = dot(locale, locale) > 0.25 ? normalize(locale) : uVentoAlto;",
+        "    vec2 perp = vec2(-dir.y, dir.x);",
+        "    vec2 stirato = dir * dot(qn.xy, dir) * 0.22 + perp * dot(qn.xy, perp) * 1.6;",
+        "    qn.xy = mix(qn.xy, stirato, fibra);",
         "  }",
         "  vec4 f = textureLod(uForma, qn / uScalaFormaKm + uSemenza, max(lodRumore + (leggera ? 1.0 : 0.0), 0.0));",
         "  // Negli strati gli ammassi sono appena accennati: ondulazioni, non cupole.",
@@ -11040,6 +11116,7 @@
         };
         this.texMorfo1 = morfo();
         this.texMorfo2 = morfo();
+        this.texMorfo3 = morfo();
         // La griglia del vuoto: finche' non c'e' un campo, una cella a zero
         // (nessun salto).
         this.texVuoto = gl.createTexture();
@@ -11097,6 +11174,9 @@
             gl.bindTexture(gl.TEXTURE_2D, this.texMorfo2);
             gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA8, stato.larghezza, stato.altezza, 0,
               gl.RGBA, gl.UNSIGNED_BYTE, tessere.b);
+            gl.bindTexture(gl.TEXTURE_2D, this.texMorfo3);
+            gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA8, stato.larghezza, stato.altezza, 0,
+              gl.RGBA, gl.UNSIGNED_BYTE, tessere.c);
             this.oggettiTorri = uniformiTorri(campo.torri, stato, this.dominioUnitario());
             this.ventoAlto = ventoInQuota(stato.ingresso);
           }
@@ -11530,6 +11610,9 @@
           gl.uniform4fv(u("uTorreA"), ot.a); gl.uniform4fv(u("uTorreB"), ot.b);
           gl.uniform4fv(u("uTorreC"), ot.c); gl.uniform4fv(u("uTorreD"), ot.d);
         }
+        gl.activeTexture(gl.TEXTURE7);
+        gl.bindTexture(gl.TEXTURE_2D, this.texMorfo3);
+        gl.uniform1i(u("uMorfo3"), 7);
         gl.activeTexture(gl.TEXTURE6);
         gl.bindTexture(gl.TEXTURE_3D, this.texVuoto);
         gl.uniform1i(u("uVuoto"), 6);
@@ -11887,9 +11970,9 @@
       function nascondiNubePianaQuandoPronto() {
         if (!attiva || !volume.pronto || !map) return;
         volume.acceso = true;
-        if (map.getLayer("satellite-clouds-layer")) {
-          map.setLayoutProperty("satellite-clouds-layer", "visibility", "none");
-        }
+        // Il satellite 2D non si spegne piu': dentro il dominio ICON-2I lo
+        // copre la superficie fotografica sotto il volume, fuori resta la
+        // sola osservazione vera che c'e'.
         map.triggerRepaint();
       }
 
@@ -12603,6 +12686,13 @@
           amb.push("CAPE ~" + Math.round(w0 * w0 / 2 / 50) * 50 + " J/kg");
         }
         if (Number.isFinite(val("cin"))) amb.push("CIN " + Math.round(val("cin")) + " J/kg");
+        if (Number.isFinite(stato.profondita[k])) {
+          amb.push("spessore consentito " + numero(stato.profondita[k], 1) + " km (EL/strato umido, derivato)");
+        }
+        if (Number.isFinite(val("stab"))) amb.push("gradiente 700-500 hPa " + numero(val("stab"), 1) + " K/km");
+        if (Number.isFinite(val("rhmid"))) amb.push("UR media 850-500 " + Math.round(val("rhmid")) + "%");
+        amb.push("durezza " + Math.round(stato.durezza[k] * 100) + "% ("
+          + (stato.durezza[k] > 0.6 ? "cumulo compatto" : stato.durezza[k] < 0.35 ? "strato soffice" : "intermedia") + ")");
         if (Number.isFinite(val("rh850"))) amb.push("UR 850 " + Math.round(val("rh850")) + "%");
         if (Number.isFinite(val("rh700"))) amb.push("UR 700 " + Math.round(val("rh700")) + "%");
         if (Number.isFinite(val("hzero"))) amb.push("zero termico " + numero(val("hzero"), 1) + " km");
