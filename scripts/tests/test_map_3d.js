@@ -2406,8 +2406,9 @@ console.log("nubi in volume: spessore continuo, niente grana, niente coni, nient
   // La texture delle nubi 3D: R cima, G densita', B base, A CAPE.
   assert.match(frammento, /float cimaKm = campo\.r \* uScalaKm;/, "la cima non viene piu' dal canale R");
   assert.match(frammento, /float baseKm = campo\.b \* uScalaKm;/, "la base non viene piu' dal canale B");
-  assert.match(frammento, /if \(campo\.g < 0\.004\) return 0\.0;/, "la maschera satellitare non e' piu' esatta");
-  assert.match(frammento, /conv = campo\.a \* smoothstep\(0\.3, 0\.8, campo\.g\);/, "il CAPE non entra piu' nello shader");
+  assert.match(frammento, /if \(campo\.g < 0\.004 && dTorri <= 0\.0\) return 0\.0;/, "la maschera satellitare non e' piu' esatta");
+  assert.match(frammento, /d \*= impronta;/, "la struttura ricostruita esce dall'impronta del satellite");
+  assert.match(frammento, /conv = cumulo \* sviluppo;/, "la convezione non viene piu' dallo stato inferito");
   // Le precedenti asserzioni su collo, copQuota e deformazione delle
   // coordinate imponevano proprio le formule responsabili dei crateri.
   // Il test del volume verifica ora limiti fisici e immagini del vero shader.
@@ -2503,16 +2504,27 @@ const fragment = shader("FRAMMENTO");
 // IL PROMPT DELLE NUBI 3D: raggio confinato fra base e cima, Perlin per i
 // vuoti, Worley sottratto con un morso che il CAPE varia, Beer-Lambert,
 // powder 1 - e^(-densita' x 2), Henyey-Greenstein.
-assert.match(fragment, /if \(altKm < baseKm \|\| altKm > cimaKm \+ sopra\) return 0\.0;/,
+// IL MOTORE D'INFERENZA: lo shader disegna lo stato inferito (tipo,
+// morfologia, oggetti convettivi), non estrude la maschera del satellite.
+assert.match(fragment, /if \(altKm >= baseKm && altKm <= cimaKm \+ 0\.15 && campo\.g >= 0\.004\)/,
   "il raggio non e' piu' confinato fra base e cima");
-// Il metodo dei giochi: forma Perlin-Worley x profilo del tipo di nube,
-// tagliata dalla copertura del satellite, erosa dal dettaglio.
-assert.match(fragment, /float forma = clamp\(rimappa\(f\.r, fbm \* uContrasto \* mix\(0\.35, 1\.0, cumuliforme\)/, "manca la forma Perlin-Worley");
-assert.match(fragment, /float profilo = mix\(strato, cumulo, cumuliforme\);/, "manca il profilo verticale del tipo di nube");
-assert.match(fragment, /float d = clamp\(rimappa\(base, 1\.0 - cop, 1\.0, 0\.0, 1\.0\), 0\.0, 1\.0\);/, "la copertura del satellite non taglia piu' la forma");
+assert.match(fragment, /float celle\(vec2 xy, float z, float base, float cima, float cellaKm, float sviluppo,/,
+  "manca l'archetipo a celle (cumuli, stratocumuli, altocumuli)");
+assert.match(fragment, /float torri\(vec2 punto, float z, float kmPerUnita, float esag, out float tipoTorre\)/,
+  "mancano gli oggetti convettivi (torri e incudini)");
+assert.match(fragment, /vec2 rel = dKm - B\.yz \* max\(z - base, 0\.0\);/, "le torri non si inclinano piu' con lo shear");
+assert.match(fragment, /float lungo = dot\(rel, dir\), largo = dot\(rel, vec2\(-dir\.y, dir\.x\)\);/,
+  "l'incudine non segue piu' la direzione del vento in quota");
+assert.match(fragment, /float d = 0\.0;/);
+assert.match(fragment, /d = max\(dStrato \* \(1\.0 - smoothstep\(0\.7, 1\.0, cumulo\)\), dCelle \* smoothstep\(0\.02, 0\.35, cumulo\)\);/, "banco e celle non si compongono piu' per carattere cumuliforme");
+assert.match(fragment, /vec2 dir = uVentoAlto, perp = vec2\(-uVentoAlto\.y, uVentoAlto\.x\);/, "i cirri non seguono piu' il vento");
+assert.match(fragment, /float aperta = max\(apertura, cumulo \* \(1\.0 - smoothstep\(0\.25, 0\.95, campo\.g\)\)\);/,
+  "le aperture non rispettano piu' la copertura osservata");
 assert.match(html, /var GENERA_FORMA = \[/, "manca il generatore della forma");
 assert.match(html, /function creaPannelloRegolazione\(\)/, "manca il pannello ?regola=1");
 assert.match(html, /if \(!REGOLA_ATTIVA\) return r;/, "i valori salvati devono valere solo con ?regola=1");
+assert.match(html, /function inferisciStati\(ingresso\)/, "manca il motore d'inferenza");
+assert.match(html, /function ispezionaNube\(lat, lon\)/, "manca l'ispezione meteorologica");
 assert.match(fragment, /vec3 qd = q \/ uDettaglioKm \+ \(f\.gba - 0\.5\) \* 6\.0;/, "il dettaglio torna a ripetersi a trama regolare");
 assert.doesNotMatch(fragment, /textureLod\(uWorley, q \/ uWorleyKm/, "l'erosione torna sul cubo 32^3 che mette le bolle in fila");
 assert.match(fragment, /vec3 verso = vec3\(uSole\.xy, uSole\.z\) \/ kmPerUnita;/,
@@ -2522,13 +2534,13 @@ assert.match(html, /var ESAGERAZIONE_MINIMA = 2\.4;/, "l'esagerazione torna a sp
 // Realismo: diffusione multipla a ottave, incudine dei cumulonembi, cavita'
 // fra i lobi, accumulo dei fotogrammi a mappa ferma solo sul PC.
 assert.match(fragment, /multipla \+= 0\.12 \* exp\(-tauSole \* 0\.12\) \* fase2;/, "manca la seconda ottava di diffusione multipla");
-assert.match(fragment, /float incudine = smoothstep\(uIncudineKm, uIncudineKm \+ 2\.5, cimaKm\)/, "manca l'incudine dei cumulonembi");
+assert.match(fragment, /float e = \(lungo - 0\.42 \* L\)/, "manca l'incudine dei cumulonembi");
 assert.match(fragment, /fract\(sin\(dot\(gl_FragCoord\.xy \+ vec2\(17\.31, 41\.73\) \* uFotogramma/,
   "lo scarto del raggio non cambia piu' da un fotogramma all'altro: l'accumulo non converge");
 assert.match(html, /rumore: 48, passiLuce: 5, passi: 176, qualita: 0, accumula: 0, latoForma: 64 \}/, "il telefono deve restare leggero");
 assert.match(html, /qualita: 1, accumula: 12, latoForma: 128 \}/, "sul PC manca l'accumulo dei fotogrammi");
 assert.match(html, /var lampiAccesi = /, "l'accumulo spalmerebbe i lampi");
-assert.match(fragment, /float morso = uErosione \* mix\(0\.5, 1\.2, convettiva\) \* \(1\.0 - smoothstep\(1\.0, 2\.5, lodDet\)\)/, "il CAPE non varia piu' il morso del Worley");
+assert.match(fragment, /float morso = uErosione \* mix\(0\.2, 1\.0, cumuliforme\)/, "il dettaglio non dipende piu' dal carattere cumuliforme");
 // Da vicino: il passo segue la fascia della colonna (niente trama a puntini
 // sui veli), il cielo e' schermato dalla nube sopra, le ombre dei primi
 // passi verso il sole vedono i lobi, e le lamine non fanno curve di livello.
@@ -2559,7 +2571,7 @@ CreateShader=gl('CreateShader',[U],U);ShaderSource=gl('ShaderSource',[U,I,P,P]);
 def shader(src,typ):
  s=CreateShader(typ);buf=c.c_char_p(src.encode());ShaderSource(s,1,c.byref(buf),None);CompileShader(s);ok=I();GetShaderiv(s,0x8B81,c.byref(ok));log=c.create_string_buffer(16000);GetShaderInfoLog(s,len(log),None,log);assert ok.value,log.value.decode();return s
 CreateProgram=gl('CreateProgram',[],U);AttachShader=gl('AttachShader',[U,U]);LinkProgram=gl('LinkProgram',[U]);UseProgram=gl('UseProgram',[U]);GetProgramiv=gl('GetProgramiv',[U,U,P]);GetProgramInfoLog=gl('GetProgramInfoLog',[U,I,P,P]);BindAttribLocation=gl('BindAttribLocation',[U,U,c.c_char_p])
-GetUniformLocation=gl('GetUniformLocation',[U,c.c_char_p],I);Uniform1f=gl('Uniform1f',[I,F]);Uniform1i=gl('Uniform1i',[I,I]);Uniform2f=gl('Uniform2f',[I,F,F]);Uniform3f=gl('Uniform3f',[I,F,F,F]);Uniform4f=gl('Uniform4f',[I,F,F,F,F]);UniformMatrix4fv=gl('UniformMatrix4fv',[I,I,c.c_ubyte,P])
+GetUniformLocation=gl('GetUniformLocation',[U,c.c_char_p],I);Uniform4fv=gl('Uniform4fv',[I,I,P]);Uniform2f2=gl('Uniform2f',[I,F,F]);Uniform1f=gl('Uniform1f',[I,F]);Uniform1i=gl('Uniform1i',[I,I]);Uniform2f=gl('Uniform2f',[I,F,F]);Uniform3f=gl('Uniform3f',[I,F,F,F]);Uniform4f=gl('Uniform4f',[I,F,F,F,F]);UniformMatrix4fv=gl('UniformMatrix4fv',[I,I,c.c_ubyte,P])
 GenTextures=gl('GenTextures',[I,P]);BindTexture=gl('BindTexture',[U,U]);ActiveTexture=gl('ActiveTexture',[U]);TexParameteri=gl('TexParameteri',[U,U,I]);TexImage2D=gl('TexImage2D',[U,I,I,I,I,I,U,U,P]);TexImage3D=gl('TexImage3D',[U,I,I,I,I,I,I,U,U,P]);GenerateMipmap=gl('GenerateMipmap',[U])
 GenFramebuffers=gl('GenFramebuffers',[I,P]);BindFramebuffer=gl('BindFramebuffer',[U,U]);FramebufferTexture2D=gl('FramebufferTexture2D',[U,U,U,U,I]);CheckFramebufferStatus=gl('CheckFramebufferStatus',[U],U)
 GenVertexArrays=gl('GenVertexArrays',[I,P]);BindVertexArray=gl('BindVertexArray',[U]);GenBuffers=gl('GenBuffers',[I,P]);BindBuffer=gl('BindBuffer',[U,U]);BufferData=gl('BufferData',[U,c.c_ssize_t,P,U]);VertexAttribPointer=gl('VertexAttribPointer',[U,I,U,c.c_ubyte,I,P]);EnableVertexAttribArray=gl('EnableVertexAttribArray',[U]);Viewport=gl('Viewport',[I,I,I,I]);DrawArrays=gl('DrawArrays',[U,I,I]);ReadPixels=gl('ReadPixels',[I,I,I,I,U,U,P]);GetError=gl('GetError',[],U)
@@ -2597,7 +2609,8 @@ program=CreateProgram();AttachShader(program,shader(open('/tmp/cloud_VERTICE.gls
 def uf(n,*v):
  loc=GetUniformLocation(program,n.encode());[None,Uniform1f,Uniform2f,Uniform3f,Uniform4f][len(v)](loc,*v)
 def ui(n,v):Uniform1i(GetUniformLocation(program,n.encode()),v)
-for n,v in [('uCampo',0),('uPerlin',1),('uWorley',2),('uForma',3),('uPassiLuce',4),('uPassi',200),('uQuantiLampi',0)]:ui(n,v)
+for n,v in [('uCampo',0),('uPerlin',1),('uWorley',2),('uForma',3),('uMorfo1',4),('uMorfo2',5),('uPassiLuce',4),('uPassi',200),('uQuantiLampi',0)]:ui(n,v)
+uf('uVentoAlto',1.0,0.0);uf('uDebugTipi',0.0)
 for n,v in dict(uLatoForma=LF,uScalaFormaKm=12,uScalaMacroKm=96,uCopertura=.5,uContrasto=1.2,uDettaglioKm=1.2,uStiraBolle=1,uForzaMacro=.4,uBaseDura=.75,uNucleo=.65,uPolvere=1.3,uMultipla=1,uFoschiaKm=420,uSoleForza=1,uIncudineKm=7.5,uCavita=.7,uErosione=.9,uRigonfio=1.15,uCavolfiore=.8,uOmbra=1.5,uAmbiente=.75,uEsposizione=.55,uQualita=1).items():uf(n,v)
 unit=1/40075;esag=float(os.environ.get('CLOUD_QA_EXAGGERATION','1.6'))
 for n,v in dict(uScalaKm=16,uCircKm=40075,uEsagerazione=esag,uSigma=3.6,uFaseG=.6,uForzaSole=1,uZMax=14*esag*unit,uPassoKm=.3,uPixelAngolo=.00005,uTexelCampo=40*unit/128,uPerlinKm=48,uWorleyKm=6,uLatoPerlin=64,uLatoWorley=32).items():uf(n,v)
@@ -2619,6 +2632,19 @@ for i,kind in enumerate(scenes):
  elif kind=='Ci':top=10;base=8.7;dens=.25*cover;conv=0.
  field[:,:,0]=top/16;field[:,:,1]=dens;field[:,:,2]=base/16;field[:,:,3]=conv
  tex(field,0)
+ # Lo stato inferito del tipo di questa scena (come lo produce il motore JS):
+ # [cumulo, sviluppo, scala celle log, fibra], [apertura, pioggia, tipo, fiducia].
+ import math as _m
+ cel=lambda km:(_m.log(km)-_m.log(.2))/(_m.log(50)-_m.log(.2))
+ morfo={'Cb':([1,1,cel(7),.1],[.1,.8,13/255,.9]),'St':([0,0,cel(20),0],[.02,.05,6/255,.9]),
+  'Cu':([1,.55,cel(2.2),0],[.45,0,10/255,.8]),'Cu0':([.55,.2,cel(3.2),0],[.22,.05,7/255,.8]),
+  'Ci':([0,0,cel(8),1],[.55,0,1/255,.8])}[kind]
+ tex(np.array([[morfo[0]]],np.float32),4,mip=False);tex(np.array([[morfo[1]]],np.float32),5,mip=False)
+ torre=np.zeros((4,24,4),np.float32)
+ if kind=='Cb':
+  torre[0,0]=[.5,.5,6,11.5];torre[1,0]=[1.0,.15,0,.3];torre[2,0]=[1,0,40,.8];torre[3,0]=[2,.8,3,.5]
+ ui('uQuanteTorri',1 if kind=='Cb' else 0)
+ for nome,arr in zip(['uTorreA','uTorreB','uTorreC','uTorreD'],torre):Uniform4fv(GetUniformLocation(program,nome.encode()),24,np.ascontiguousarray(arr).ctypes.data)
  theta=math.radians(20 if kind=='Cb' else 55);right=np.array([1,0,0]);up=np.array([0,-math.sin(theta),math.cos(theta)]);forward=np.array([0,-math.cos(theta),-math.sin(theta)]);mat=np.eye(4,dtype=np.float32);mat[:3,0]=right*24*unit;mat[:3,1]=up*18*unit;mat[:3,2]=forward*70*unit;mat[:3,3]=[.5,.5,(6 if kind=='Cb' else 3)*esag*unit];UniformMatrix4fv(GetUniformLocation(program,b'uInversa'),1,0,np.ascontiguousarray(mat.T).ctypes.data)
  Viewport(0,0,W,H);DrawArrays(4,0,3);pixels=np.zeros((H,W,4),np.float32);ReadPixels(0,0,W,H,0x1908,0x1406,pixels.ctypes.data);assert GetError()==0
  pixels=pixels[::-1];np.save(f'{prefix}_{kind}_{mode}.npy',pixels)
@@ -2639,11 +2665,12 @@ if mode=='section':
  assert np.all(cb[:,abs(xx)>19.5]<.001), 'Cloud outside the observed coverage'
  st=np.load(f'{prefix}_St_section.npy')[:,:,0]
  assert np.all(st[z>1.95]<.001) and np.all(st[z<.45]<.001), 'Stratus leaves its base-top band (cupole comprese)'
- # Il CAPE scolpisce: lo stesso cumulo in aria instabile e' eroso a cavolfiore
- # ma resta una nube.
+ # Archetipi diversi: i cumuli sono elementi SEPARATI (celle aperte), lo
+ # stratocumulo un banco di celle quasi chiuso su base comune.
  cu=np.load(f'{prefix}_Cu_section.npy')[:,:,0];cu0=np.load(f'{prefix}_Cu0_section.npy')[:,:,0]
- assert (cu>.05).sum()>(cu0>.05).sum()*0.3, 'CAPE erodes the cumulus away'
- assert np.abs(cu-cu0).sum()>0.02*(cu0>.05).sum(), 'CAPE has no effect on cumulus sculpture'
+ assert (cu>.05).sum()>0 and (cu0>.05).sum()>0, 'cumulus or stratocumulus vanished'
+ assert (cu>.05).any(0).sum()<(cu0>.05).any(0).sum(), 'cumulus cells are not more open than the stratocumulus deck'
+ assert np.abs(cu-cu0).sum()>0.02*(cu0>.05).sum(), 'cumulus and stratocumulus have the same morphology'
  print(f'GPU physical checks OK: Cb core {core.mean():.3f}; Cb cap {roof[abs(xx)<2].max():.2f} km',flush=True)
 
 `;

@@ -171,3 +171,78 @@ copertura osservata.
   o di campo e non si accumula durante un lampo.
 - **Qualita'**: PC 4,5 Mpx, 384 passi, 8 verso il sole; telefono 720 kpx,
   176 passi, 5 verso il sole, niente accumulo.
+
+## Il motore d'inferenza delle nubi
+
+Il satellite vede la sommità e la proiezione della copertura: è un
+**vincolo**, non la geometria 3D. Fra i dati e il renderer c'è un motore
+meteorologico (`InferenzaNubi` in `index.html`, testato da
+`scripts/tests/test_inferenza_nubi.js`):
+
+```
+satellite (CLM, CTH, IR, VIS, Cloud Type/Phase/Fog, RDT) + radar + fulmini
++ ICON-2I (CAPE, CIN, LCL, zero termico, UR 850/700/500, vento 250/500,
+  shear 0-6 km, coperture CLCL/CLCM/CLCH, pioggia convettiva e di scala)
+  -> classificazione esistente (tessitura, nucleo, incudine, pioggia)
+  -> punteggiNube: compatibilità fisica con 15 tipi (regole leggibili)
+  -> inferisciStati: tipo, fiducia, alternativa, base, cima, morfologia
+  -> trovaTorri: oggetti convettivi (massimi locali), tracciati nel tempo
+  -> texture di stato + uniform delle torri
+  -> shader: geometria per archetipo, illuminazione
+```
+
+**Tipi**: Cirro, Cirrostrato, Cirrocumulo, Altostrato, Altocumulo, Strato,
+Stratocumulo, Nembostrato, Cumulo humilis/mediocris/congestus, Cumulonembo
+calvus/capillatus/incus, Incudine.
+
+**Esempi di coerenza fisica**: nembostrato = sommità liscia e spessa +
+precipitazione estesa (radar o pioggia di scala ICON-2I) + aria satura, poca
+convezione; cumulonembo = nucleo convettivo osservato (rilievo IR, RDT,
+radar forte + fulmini) in alta troposfera, capillatus se la cima è glaciata
+(IR < -38 °C), incus se c'è il manto freddo attorno; stratocumulo = banco
+esteso a celle in aria poco convettiva (CIN), cumuli = celle separate con
+CAPE. Il CAPE sostiene, non crea: senza nucleo osservato non nasce un Cb.
+
+**Struttura verticale**: la cima è osservata (CTH, IR sul profilo ICON-2I);
+la base è inferita per tipo: LCL per cumuli e cumulonembi, strato basso
+dall'LCL limitato, altostrato sopra lo zero termico, cirri sopra 5,5 km,
+incudine 2,6 km sotto la cima. Il tipo dominante pesa sulla base con la
+quarta potenza dei punteggi, la morfologia con il quadrato: dove la fiducia
+è bassa gli archetipi compatibili si mescolano, senza salti di forma.
+
+**Morfologia per tipo** (parametri nella texture di stato): cumuliforme,
+sviluppo verticale, scala delle celle, aperture, fibre, pioggia, onda.
+
+- Celle (Cu, Sc, Ac, Cc): una cella per nodo di una griglia sfalsata con
+  seme proprio; ogni elemento è una **pila di bolle** tonde in km visti, base
+  piatta al livello di condensazione, altezza non oltre qualche volta la
+  larghezza; celle vuote per le aperture (più numerose dove la copertura
+  osservata è parziale).
+- Strati (St, As, Ns, Cs): volumi con cima e base ondulate dolcemente.
+- Cirri: fibre stirate nel verso del vento a 250 hPa.
+- Oggetti convettivi: torre principale inclinata dallo shear 0-6 km, 1-4 torri
+  secondarie (multicella), overshooting top se la cima supera 11,5 km,
+  incudine sottovento (direzione osservata del manto freddo, altrimenti vento
+  a 250 hPa) spessa sopra la torre e sottile ai bordi; nelle torri in
+  dissipazione il corpo si assottiglia.
+- Pioggia sotto la base per Ns e Cb.
+- Il rumore arricchisce la superficie (microscala), non crea la forma.
+
+**Coerenza temporale**: ogni torre ha id e seme (stessa forma procedurale);
+ricalcolando lo stesso istante (arrivo di radar, fulmini, RGB) li conserva;
+fra istanti vicini (≤ 45 min) la stessa torre è riconosciuta e lo stadio
+(in formazione, in crescita, matura, in dissipazione) viene dall'andamento
+di cima e fulmini.
+
+**Debug meteorologico**: `?debug=nubi` (o il cursore nel pannello
+`?regola=1`) colora le nubi per tipo. Toccando una nube si apre una scheda
+con tipo, fiducia, alternativa, base/cima/spessore con la fonte,
+temperatura della sommità, ambiente ICON-2I, radar e fulmini, la torre più
+vicina (stadio, secondarie, overshooting, direzione e fonte dell'incudine,
+shear), le ragioni della classificazione e i parametri morfologici.
+
+**Dati ICON-2I nuovi** (backend, `prepare_icon_cloud_fields`, tutti
+facoltativi, scaricati a parte dalla diagnostica temporali): vento a 250 hPa,
+UR 850 e 500 hPa, CLCL/CLCM/CLCH, RAIN_CON e RAIN_GSP (intensità orarie);
+nella piastrella anche CIN, zero termico, vento a 500 hPa, shear 0-6 km e UR
+700 hPa derivata da T e QV.

@@ -7131,7 +7131,7 @@
         cavolfiore: 0.8, ombra: 1.5, ambiente: 0.75, esposizione: 0.55, esagerazione: 0, contrasto: 1.2,
         dettaglioKm: 1.2, stiraBolle: 1.0, forzaMacro: 0.4, baseDura: 0.75, nucleo: 0.65,
         densita: 3.6, faseG: 0.6, polvere: 1.3, multipla: 1.0, foschiaKm: 420, sole: 1.0,
-        cavita: 0.7, incudineKm: 7.5, passi: 0, passiLuce: 0, accumula: 0
+        cavita: 0.7, incudineKm: 7.5, passi: 0, passiLuce: 0, accumula: 0, debugTipi: 0
       };
 
       var REGOLA_ATTIVA = typeof location !== "undefined" && /[?&]regola=1\b/.test(location.search || "");
@@ -7828,8 +7828,17 @@
         var r = riquadroMercatore();
         var fuori = {
           lcl: new Float32Array(n), t2m: new Float32Array(n), gradiente: new Float32Array(n),
-          suolo: new Float32Array(n), convezione: new Float32Array(n), disponibile: new Float32Array(n)
+          suolo: new Float32Array(n), convezione: new Float32Array(n), disponibile: new Float32Array(n),
+          // I campi del motore d'inferenza, quando la piastrella li ha (NaN
+          // dove mancano): nomi come nella piastrella.
+          extra: {}
         };
+        var EXTRA = ["cin", "hzero", "u250", "v250", "u500", "v500", "shu", "shv",
+          "rh850", "rh700", "rh500", "clcl", "clcm", "clch", "rcon", "rgsp", "cape"];
+        EXTRA.forEach(function (nome) {
+          if (amb.campi[nome]) fuori.extra[nome] = new Float32Array(n).fill(NaN);
+        });
+        var nomiExtra = Object.keys(fuori.extra);
         var campione = function (arr, i0, j0, ti, tj, ripiego) {
           var a = arr[i0 * nx + j0], b = arr[i0 * nx + j0 + 1];
           var c = arr[(i0 + 1) * nx + j0], d = arr[(i0 + 1) * nx + j0 + 1];
@@ -7862,6 +7871,9 @@
             fuori.t2m[q] = campione(amb.campi.t2m, i0, j0, ti, tj, NaN);
             fuori.gradiente[q] = campione(amb.campi.lapse, i0, j0, ti, tj, 6.5);
             fuori.convezione[q] = campione(corrente, i0, j0, ti, tj, 0);
+            for (var e = 0; e < nomiExtra.length; e++) {
+              fuori.extra[nomiExtra[e]][q] = campione(amb.campi[nomiExtra[e]], i0, j0, ti, tj, NaN);
+            }
             if (!Number.isFinite(fuori.t2m[q])) fuori.disponibile[q] = 0;
           }
         }
@@ -8086,6 +8098,7 @@
           dentro[k] = densita[k] > 1 / 255 ? 1 : 0;
         }
         campo.fusione = {
+          bt: bt,
           cima: estendiFuori(cima, dentro, w, h),
           base: estendiFuori(base, dentro, w, h),
           convezione: estendiFuori(convezione, dentro, w, h),
@@ -9387,6 +9400,514 @@
         return dati;
       }
 
+      // =====================================================================
+      // IL MOTORE D'INFERENZA DELLE NUBI
+      //
+      // Fra i dati e la geometria. Il satellite vede la SOMMITA' e la
+      // proiezione della copertura: e' un vincolo, non la forma 3D. Qui si
+      // ricostruisce, cella per cella, lo STATO della nube -- quale nube e',
+      // con che fiducia, dove sta la base, fin dove sale, che morfologia ha,
+      // su quali fonti poggia -- e gli OGGETTI convettivi (torri, incudini)
+      // con un'identita' nel tempo. Lo shader poi disegna soltanto: riceve
+      // parametri morfologici, non ragiona di meteorologia.
+      //
+      //   osservazioni (satellite, radar, fulmini)
+      //   + modello (ICON-2I: profilo, CAPE/CIN, vento, piogge, coperture)
+      //   -> punteggi di compatibilita' fisica per 15 tipi di nube
+      //   -> stato (tipo, fiducia, base, cima, parametri morfologici, fonti)
+      //   -> oggetti convettivi tracciati (torri, incudini, ciclo di vita)
+      //
+      // Ogni grandezza dichiara la sua origine: OSSERVATO (satellite, radar,
+      // fulmini), MODELLO (ICON-2I), DERIVATO (calcolato da questi, es. LCL),
+      // INFERITO (ricostruito per coerenza fisica, es. la base di un Cb).
+      // =====================================================================
+      var FONTE = { OSSERVATO: 1, MODELLO: 2, DERIVATO: 4, INFERITO: 8 };
+
+      // Gli archetipi. Ogni tipo porta i PARAMETRI MORFOLOGICI con cui lo
+      // shader costruisce la geometria:
+      //   cumulo    0 strato continuo ... 1 elementi convettivi a cupola
+      //   sviluppo  0 elementi tutti alla stessa quota ... 1 torri di altezze
+      //             diverse fino alla cima
+      //   cellaKm   scala orizzontale degli elementi (celle, lobi, onde)
+      //   apertura  frazione di celle vuote: da strato chiuso a celle aperte
+      //   fibra     struttura fibrosa di ghiaccio stirata dal vento
+      //   pioggia   base sfrangiata e precipitazione sotto la base
+      //   onda      ampiezza relativa delle ondulazioni di cima e base
+      // Il colore serve solo alla vista di debug.
+      var TIPI_NUBE = [
+        { sigla: "", nome: "sereno" },
+        { sigla: "Ci", nome: "Cirro", piano: "alto", cumulo: 0, sviluppo: 0, cellaKm: 8, apertura: 0.55, fibra: 1, pioggia: 0, onda: 0.3, colore: [0.75, 0.85, 1.0] },
+        { sigla: "Cs", nome: "Cirrostrato", piano: "alto", cumulo: 0, sviluppo: 0, cellaKm: 30, apertura: 0.04, fibra: 0.55, pioggia: 0, onda: 0.2, colore: [0.55, 0.7, 1.0] },
+        { sigla: "Cc", nome: "Cirrocumulo", piano: "alto", cumulo: 0.65, sviluppo: 0.1, cellaKm: 0.6, apertura: 0.45, fibra: 0.15, pioggia: 0, onda: 0.2, colore: [0.8, 0.7, 1.0] },
+        { sigla: "As", nome: "Altostrato", piano: "medio", cumulo: 0, sviluppo: 0, cellaKm: 25, apertura: 0.03, fibra: 0, pioggia: 0.15, onda: 0.18, colore: [0.6, 0.6, 0.85] },
+        { sigla: "Ac", nome: "Altocumulo", piano: "medio", cumulo: 0.6, sviluppo: 0.15, cellaKm: 1.3, apertura: 0.35, fibra: 0, pioggia: 0, onda: 0.2, colore: [0.85, 0.6, 0.95] },
+        { sigla: "St", nome: "Strato", piano: "basso", cumulo: 0, sviluppo: 0, cellaKm: 20, apertura: 0.02, fibra: 0, pioggia: 0.05, onda: 0.12, colore: [0.6, 0.6, 0.6] },
+        { sigla: "Sc", nome: "Stratocumulo", piano: "basso", cumulo: 0.55, sviluppo: 0.2, cellaKm: 3.2, apertura: 0.22, fibra: 0, pioggia: 0.05, onda: 0.25, colore: [0.75, 0.75, 0.5] },
+        { sigla: "Ns", nome: "Nembostrato", piano: "medio", cumulo: 0.08, sviluppo: 0, cellaKm: 40, apertura: 0, fibra: 0, pioggia: 1, onda: 0.12, colore: [0.35, 0.45, 0.6] },
+        { sigla: "Cu hum", nome: "Cumulo humilis", piano: "basso", cumulo: 1, sviluppo: 0.3, cellaKm: 1.2, apertura: 0.6, fibra: 0, pioggia: 0, onda: 0.2, colore: [0.6, 1.0, 0.6] },
+        { sigla: "Cu med", nome: "Cumulo mediocris", piano: "basso", cumulo: 1, sviluppo: 0.55, cellaKm: 2.2, apertura: 0.45, fibra: 0, pioggia: 0, onda: 0.2, colore: [0.4, 0.9, 0.4] },
+        { sigla: "Cu con", nome: "Cumulo congestus", piano: "verticale", cumulo: 1, sviluppo: 0.85, cellaKm: 3.8, apertura: 0.3, fibra: 0, pioggia: 0.2, onda: 0.2, colore: [0.2, 0.75, 0.3] },
+        { sigla: "Cb cal", nome: "Cumulonembo calvus", piano: "verticale", cumulo: 1, sviluppo: 1, cellaKm: 7, apertura: 0.12, fibra: 0.1, pioggia: 0.8, onda: 0.2, colore: [1.0, 0.75, 0.3] },
+        { sigla: "Cb cap", nome: "Cumulonembo capillatus", piano: "verticale", cumulo: 1, sviluppo: 1, cellaKm: 9, apertura: 0.1, fibra: 0.35, pioggia: 0.9, onda: 0.2, colore: [1.0, 0.55, 0.2] },
+        { sigla: "Cb inc", nome: "Cumulonembo incus", piano: "verticale", cumulo: 0.9, sviluppo: 1, cellaKm: 10, apertura: 0.06, fibra: 0.4, pioggia: 1, onda: 0.2, colore: [1.0, 0.3, 0.2] },
+        { sigla: "Inc", nome: "Incudine (cumulonembo)", piano: "alto", cumulo: 0.12, sviluppo: 0, cellaKm: 20, apertura: 0.05, fibra: 0.5, pioggia: 0, onda: 0.15, colore: [1.0, 0.5, 0.6] }
+      ];
+      var TIPO = {};
+      TIPI_NUBE.forEach(function (t, i) { if (t.sigla) TIPO[t.sigla] = i; });
+      var FASI_CICLO = ["in formazione", "in crescita", "matura", "in dissipazione"];
+      var TORRI_MAX = 24;
+
+      function numeroValido(v, ripiego) { return Number.isFinite(v) ? v : ripiego; }
+
+      // I PUNTEGGI DI COMPATIBILITA'. Non probabilita' calibrate: quanto ogni
+      // tipo e' coerente con cio' che si osserva e con l'atmosfera del
+      // modello. Ogni regola e' leggibile e dichiarata qui; niente scatola nera
+      // (un modello appreso potra' sostituire questa funzione con la stessa
+      // interfaccia). Ingresso: le grandezze di una cella; uscita: un vettore
+      // lungo come TIPI_NUBE e le ragioni principali.
+      function punteggiNube(x) {
+        var ls = lisciaFra;
+        var p = new Float32Array(TIPI_NUBE.length);
+        var ragioni = [];
+        if (!(x.copertura >= 0.12) || !(x.cima > 0.15)) return { p: p, ragioni: ["maschera: sereno"] };
+        var top = x.cima, tau = x.tau, kap = x.kappa;
+        var basso = 1 - ls(2.7, 3.7, top), alto = ls(5.8, 7.0, top);
+        var medio = Math.max(0, 1 - basso - alto);
+        var sottile = 1 - ls(0.3, 0.62, tau), spesso = ls(0.6, 0.88, tau);
+        // Il ghiaccio in cima: temperatura di brillanza sotto -20/-38 C.
+        var ghiaccio = Number.isFinite(x.btC) ? 1 - ls(-38, -20, x.btC) : alto;
+        var conv = x.convezione;                       // MODELLO (CAPE)
+        var inib = ls(40, 180, numeroValido(x.cin, 0)); // MODELLO (CIN)
+        var umidoBasso = ls(85, 97, numeroValido(x.rh850, 90));
+        var umidoMedio = ls(75, 95, numeroValido(x.rh700, 80));
+        // Precipitazione: di scala (nembostrato) o convettiva (rovesci).
+        var rgsp = numeroValido(x.rgsp, 0), rcon = numeroValido(x.rcon, 0);
+        var pioggiaScalaMod = ls(0.2, 1.2, rgsp) * (1 - ls(0.5, 3, rcon) * 0.6);
+        var pioggiaConvMod = ls(0.5, 4, rcon);
+        var radarDiffuso = numeroValido(x.pioggiaDiffusa, 0);   // OSSERVATO
+        var radarForte = ls(33, 45, numeroValido(x.dbz, 0));    // OSSERVATO
+        var lampi = ls(0.05, 0.5, numeroValido(x.lampi, 0));    // OSSERVATO
+        var stratiforme = Math.max(radarDiffuso * (1 - radarForte), 0.7 * pioggiaScalaMod);
+        var estensione = top - numeroValido(x.lcl, 1.0);        // cima - LCL
+        var nucleo = x.chi, incudine = x.incudine;
+        var tempesta = Math.max(nucleo, 0.8 * lampi * radarForte * ls(5.5, 8, top));
+
+        p[TIPO.Ci] = alto * sottile * (0.35 + x.fibra) * (1 - tempesta) * (1 - incudine);
+        p[TIPO.Cs] = alto * ls(0.3, 0.6, tau) * (1 - ls(0.78, 0.95, tau)) * (0.5 + x.liscio)
+          * (1 - 0.6 * kap) * (1 - tempesta) * (1 - incudine);
+        p[TIPO.Cc] = alto * kap * x.granuli * sottile * (1 - tempesta) * 1.2;
+        p[TIPO.As] = (medio + 0.5 * alto * spesso) * ls(0.35, 0.7, tau) * (1 - 0.75 * kap)
+          * (1 - 0.7 * stratiforme) * (1 - tempesta) * (0.6 + 0.4 * umidoMedio) * (1 - 0.6 * conv * kap);
+        p[TIPO.Ns] = ls(3.2, 4.8, top) * ls(0.55, 0.85, tau) * (1 - 0.8 * kap) * (1 - tempesta)
+          * (0.1 + 2.2 * stratiforme) * (0.6 + 0.4 * umidoBasso);
+        // L'altocumulo e' uno strato medio a celle, non una torre che passa
+        // di li': in aria molto convettiva con base bassa e' un congesto.
+        p[TIPO.Ac] = medio * kap * (0.5 + x.granuli) * (1 - ls(0.75, 0.92, tau)) * (1 - tempesta)
+          * (1 - 0.75 * conv * ls(2.5, 4, estensione));
+        p[TIPO.St] = basso * (1 - kap) * (1 - ls(1.0, 2.0, top - numeroValido(x.suolo, 0)))
+          * (0.4 + 0.6 * umidoBasso) * (1 - 0.7 * conv) * (0.6 + 1.6 * numeroValido(x.nebbia, 0));
+        // Lo stratocumulo e' un BANCO (copertura estesa) in aria poco
+        // convettiva; celle sparse in aria instabile sono cumuli.
+        p[TIPO.Sc] = basso * (0.35 + 0.8 * x.granuli + 0.4 * kap * (1 - conv)) * (1 - tempesta)
+          * (0.6 + 0.4 * Math.max(inib, 1 - conv)) * (0.25 + 0.75 * ls(0.55, 0.9, x.copertura))
+          * (1 - 0.6 * conv * (1 - inib));
+        var cumulo = kap * (0.25 + 0.75 * Math.max(conv, kap)) * (1 - incudine) * (1 - 0.7 * tempesta)
+          * (1 - ls(7, 8.5, top)) * (1 - 0.5 * inib);
+        // Celle separate (copertura parziale) sono il segno dei cumuli.
+        cumulo *= 1 + 0.6 * (1 - ls(0.6, 0.95, x.copertura));
+        p[TIPO["Cu hum"]] = cumulo * (1 - ls(1.0, 1.8, estensione));
+        p[TIPO["Cu med"]] = cumulo * ls(1.0, 1.8, estensione) * (1 - ls(2.8, 4.2, estensione));
+        p[TIPO["Cu con"]] = cumulo * ls(2.8, 4.2, estensione) * (1 - 0.7 * ghiaccio) * (1 + pioggiaConvMod);
+        // Il cumulonembo: nucleo convettivo osservato (rilievo IR, RDT,
+        // radar + fulmini) che arriva in alta troposfera. Il CAPE lo sostiene,
+        // non lo crea mai da solo.
+        var cb = tempesta * ls(5.5, 8.5, top) * (1.2 + lampi + radarForte + 0.5 * conv);
+        var anvilVicino = ls(0.12, 0.45, numeroValido(x.incudineVicina, 0));
+        p[TIPO["Cb cal"]] = cb * (1 - 0.8 * ghiaccio) * (1 - anvilVicino);
+        p[TIPO["Cb cap"]] = cb * ghiaccio * (1 - anvilVicino);
+        p[TIPO["Cb inc"]] = cb * anvilVicino * 1.3;
+        p[TIPO.Inc] = alto * incudine * (1 - nucleo) * 3.2;
+
+        if (tempesta > 0.3) ragioni.push("nucleo convettivo (IR/RDT/radar+fulmini)");
+        if (lampi > 0.3) ragioni.push("fulmini");
+        if (radarForte > 0.3) ragioni.push("eco radar forte");
+        if (stratiforme > 0.3) ragioni.push("precipitazione estesa (radar/ICON)");
+        if (conv > 0.4) ragioni.push("CAPE elevato (ICON-2I)");
+        if (inib > 0.5) ragioni.push("CIN elevato: aria inibita");
+        if (ghiaccio > 0.6 && alto > 0.5) ragioni.push("sommita' glaciata (IR)");
+        if (kap > 0.5) ragioni.push("sommita' tessuta a celle (IR/VIS)");
+        if (kap < 0.2 && tau > 0.5) ragioni.push("sommita' liscia e uniforme");
+        if (incudine > 0.3) ragioni.push("manto freddo attorno a un nucleo: incudine");
+        return { p: p, ragioni: ragioni };
+      }
+
+      // La STRUTTURA VERTICALE di ogni tipo: base e cima. La cima viene dal
+      // satellite (osservata); la base, invisibile dall'alto, dall'atmosfera
+      // del modello secondo come quel tipo si forma.
+      function verticaleDelTipo(i, x) {
+        var top = x.cima, suolo = Math.max(0, numeroValido(x.suolo, 0));
+        var lcl = limita(numeroValido(x.lcl, BASE_CUMULO_KM), suolo + 0.15, suolo + 4);
+        var zero = numeroValido(x.hzero, 3.0);
+        var t = TIPI_NUBE[i].sigla;
+        var base;
+        if (t === "Ci") base = Math.max(Math.max(5.5, zero + 1.5), top - 1.1);
+        else if (t === "Cs") base = Math.max(Math.max(5.2, zero + 1), top - 1.9);
+        else if (t === "Cc") base = Math.max(5.5, top - 0.5);
+        else if (t === "Inc") base = Math.max(5, top - 2.6);
+        else if (t === "As") base = Math.max(Math.max(2.0, zero - 0.5), top - (1.2 + 2.2 * x.tau));
+        else if (t === "Ac") base = Math.max(2.0, top - 0.7);
+        else if (t === "Ns") base = Math.max(suolo + 0.3, Math.min(lcl, suolo + 1.5));
+        else if (t === "St") base = Math.max(suolo + 0.08, Math.min(lcl, suolo + 0.6));
+        else if (t === "Sc") base = Math.max(suolo + 0.3, Math.min(lcl, top - 0.35));
+        else base = lcl; // Cu e Cb: la condensazione della particella che sale
+        return { base: limita(Math.min(base, top - 0.15), 0.05, top), cima: top };
+      }
+
+      // Lo STATO di ogni cella, su una griglia ridotta (le grandezze del
+      // satellite hanno qui gia' la loro scala). Restituisce array tipizzati:
+      // tipo, fiducia, base, cima, parametri morfologici e fonti.
+      function inferisciStati(ingresso) {
+        var w = ingresso.larghezza, h = ingresso.altezza, n = w * h;
+        var out = {
+          larghezza: w, altezza: h,
+          tipo: new Uint8Array(n), secondo: new Uint8Array(n), fiducia: new Float32Array(n),
+          base: new Float32Array(n), cima: new Float32Array(n),
+          cumulo: new Float32Array(n), sviluppo: new Float32Array(n), cellaKm: new Float32Array(n),
+          apertura: new Float32Array(n), fibra: new Float32Array(n), pioggia: new Float32Array(n),
+          onda: new Float32Array(n), fonti: new Uint8Array(n)
+        };
+        var x = {};
+        var nomi = ["copertura", "cima", "tau", "kappa", "chi", "incudine", "fibra", "granuli", "liscio",
+          "btC", "convezione", "cin", "rh850", "rh700", "rh500", "rgsp", "rcon", "pioggiaDiffusa",
+          "dbz", "lampi", "lcl", "suolo", "hzero", "nebbia", "incudineVicina"];
+        var P = TIPI_NUBE.length;
+        for (var k = 0; k < n; k++) {
+          for (var a = 0; a < nomi.length; a++) {
+            var arr = ingresso[nomi[a]];
+            x[nomi[a]] = arr ? arr[k] : NaN;
+          }
+          x.copertura = numeroValido(x.copertura, 0); x.tau = numeroValido(x.tau, 0.5);
+          x.kappa = numeroValido(x.kappa, 0); x.chi = numeroValido(x.chi, 0);
+          x.incudine = numeroValido(x.incudine, 0); x.fibra = numeroValido(x.fibra, 0);
+          x.granuli = numeroValido(x.granuli, 0); x.liscio = numeroValido(x.liscio, 0);
+          x.convezione = numeroValido(x.convezione, 0);
+          var r = punteggiNube(x), p = r.p;
+          var somma = 0, s2 = 0, migliore = 0, seconda = 0, im = 0, is = 0;
+          for (var j = 1; j < P; j++) {
+            somma += p[j];
+            if (p[j] > migliore) { seconda = migliore; is = im; migliore = p[j]; im = j; }
+            else if (p[j] > seconda) { seconda = p[j]; is = j; }
+          }
+          out.cima[k] = numeroValido(x.cima, 0);
+          if (!(somma > 1e-4)) { out.tipo[k] = 0; continue; }
+          out.tipo[k] = im; out.secondo[k] = is;
+          out.fiducia[k] = migliore / somma;
+          // Parametri e quote pesati sul QUADRATO dei punteggi: prevale il
+          // tipo dominante, ma dove la fiducia e' bassa gli archetipi
+          // compatibili si mescolano e non ci sono salti di forma.
+          // La struttura verticale segue ancora piu' da vicino il tipo
+          // dominante (quarta potenza): una base mescolata fra un cumulo e
+          // un altocumulo non appartiene a nessuna nube.
+          var pesoTot = 0, pesoBase = 0, base = 0, cu = 0, sv = 0, lc = 0, ap = 0, fb = 0, pg = 0, on = 0;
+          for (j = 1; j < P; j++) {
+            var q = p[j] * p[j];
+            if (q < 1e-6 * migliore * migliore) continue;
+            var t = TIPI_NUBE[j], v = verticaleDelTipo(j, x);
+            pesoTot += q; pesoBase += q * q; base += q * q * v.base; cu += q * t.cumulo; sv += q * t.sviluppo;
+            lc += q * Math.log(t.cellaKm); ap += q * t.apertura; fb += q * t.fibra;
+            pg += q * t.pioggia; on += q * t.onda;
+          }
+          out.base[k] = base / pesoBase; out.cumulo[k] = cu / pesoTot; out.sviluppo[k] = sv / pesoTot;
+          out.cellaKm[k] = Math.exp(lc / pesoTot); out.apertura[k] = ap / pesoTot;
+          out.fibra[k] = fb / pesoTot; out.pioggia[k] = pg / pesoTot; out.onda[k] = on / pesoTot;
+          out.fonti[k] = FONTE.OSSERVATO | FONTE.INFERITO
+            | (Number.isFinite(x.lcl) ? FONTE.MODELLO | FONTE.DERIVATO : 0);
+        }
+        return out;
+      }
+
+      // GLI OGGETTI CONVETTIVI. Un cumulonembo non e' una colonna per pixel:
+      // e' un sistema -- una torre principale, torri secondarie, un'incudine
+      // spinta dal vento in quota. Qui si trovano i nuclei (regioni connesse
+      // di nucleo convettivo), e per ognuno si ricostruisce la struttura con
+      // i dati: base all'LCL (derivato), cima dal satellite (osservata),
+      // inclinazione dallo shear 0-6 km (modello), incudine nella direzione
+      // osservata del manto freddo o, in mancanza, del vento a 250 hPa.
+      function trovaTorri(ingresso, stato, precedenti, dtMinuti, stessoIstante) {
+        var w = ingresso.larghezza, h = ingresso.altezza, n = w * h;
+        var kmpx = ingresso.kmPerPixel;
+        var nucleo = ingresso.chi, torri = [];
+        // I NUCLEI SONO MASSIMI LOCALI, non regioni intere: un'area
+        // convettiva estesa e' un sistema multicella, con una torre per ogni
+        // corrente ascendente. Il punteggio unisce il nucleo osservato, la
+        // cima alta e i fulmini.
+        var punteggio = new Float32Array(n);
+        for (var s = 0; s < n; s++) {
+          var cop = ingresso.copertura[s];
+          if (!(nucleo[s] > 0.3) || !(cop > 0.3)) continue;
+          punteggio[s] = nucleo[s] * (0.6 + 0.4 * lisciaFra(8, 12, ingresso.cima[s]))
+            + 0.25 * lisciaFra(0.05, 1, numeroValido(ingresso.lampi && ingresso.lampi[s], 0));
+        }
+        var raggioMax = Math.max(1, Math.round(14 / kmpx));
+        var massimi = massimoScorrevole(punteggio, w, h, raggioMax);
+        var candidati = [];
+        for (s = 0; s < n; s++) {
+          if (punteggio[s] > 0.35 && punteggio[s] >= massimi[s] - 1e-6) candidati.push(s);
+        }
+        candidati.sort(function (a, b) { return punteggio[b] - punteggio[a]; });
+        var presi = [];
+        candidati.forEach(function (s) {
+          var x0 = s % w, y0 = (s - x0) / w;
+          for (var p = 0; p < presi.length; p++) {
+            if (Math.hypot(presi[p][0] - x0, presi[p][1] - y0) < raggioMax) return;
+          }
+          if (presi.length < TORRI_MAX) presi.push([x0, y0]);
+        });
+        presi.forEach(function (c) {
+          var cx = c[0], cy = c[1], kc = cy * w + cx;
+          // Estensione della corrente ascendente: i pixel attorno ancora
+          // nucleo per almeno meta' del valore centrale, entro 20 km.
+          var r20 = Math.round(20 / kmpx), area = 0, cimaMax = 0, lampi = 0, dbz = 0;
+          for (var yy = Math.max(0, cy - r20); yy <= Math.min(h - 1, cy + r20); yy++) {
+            for (var xx = Math.max(0, cx - r20); xx <= Math.min(w - 1, cx + r20); xx++) {
+              if (Math.hypot(xx - cx, yy - cy) > r20) continue;
+              var q = yy * w + xx;
+              if (nucleo[q] >= 0.5 * nucleo[kc]) area++;
+              cimaMax = Math.max(cimaMax, ingresso.cima[q] * (nucleo[q] > 0.3 ? 1 : 0));
+              lampi += numeroValido(ingresso.lampi && ingresso.lampi[q], 0);
+              dbz = Math.max(dbz, numeroValido(ingresso.dbz && ingresso.dbz[q], 0));
+            }
+          }
+          var areaKm2 = area * kmpx * kmpx;
+          if (areaKm2 < 12) return;
+          var val = function (nome, ripiego) {
+            var arr = ingresso[nome];
+            return arr ? numeroValido(arr[kc], ripiego) : ripiego;
+          };
+          var lcl = limita(val("lcl", BASE_CUMULO_KM), 0.3, 4);
+          // Lo shear inclina la torre: spostamento orizzontale della cima,
+          // in km per km di salita (limitato: la torre non si sdraia).
+          var shu = val("shu", 0), shv = val("shv", 0);
+          var shear = Math.hypot(shu, shv);
+          var incl = limita(shear / 45, 0, 0.55);
+          // L'incudine: prima la direzione OSSERVATA del manto freddo attorno
+          // al nucleo, poi quella del vento a 250 hPa (modello).
+          var u = val("u250", NaN), vv = val("v250", NaN);
+          if (!Number.isFinite(u)) { u = val("u500", 10); vv = val("v500", 0); }
+          var ax = 0, ay = 0, ap = 0, sommaD = 0;
+          var raggioCerca = Math.round(120 / kmpx);
+          var passo = Math.max(1, Math.round(raggioCerca / 30));
+          for (var yy = Math.max(0, Math.round(cy) - raggioCerca); yy <= Math.min(h - 1, Math.round(cy) + raggioCerca); yy += passo) {
+            for (var xx = Math.max(0, Math.round(cx) - raggioCerca); xx <= Math.min(w - 1, Math.round(cx) + raggioCerca); xx += passo) {
+              var q = yy * w + xx, inc = ingresso.incudine ? ingresso.incudine[q] : 0;
+              if (!(inc > 0.3)) continue;
+              var dx = (xx - cx) * kmpx, dy = (yy - cy) * kmpx, d = Math.hypot(dx, dy);
+              // Il manto vicino pesa di piu': in una banda frontale fredda il
+              // manto e' ovunque, e non tutto appartiene a questa incudine.
+              var pd = inc / (1 + d / 40);
+              ax += dx * pd; ay += dy * pd; ap += pd; sommaD += d * pd;
+            }
+          }
+          var dirX, dirY, lungKm, fonteIncudine;
+          var velocita = Math.hypot(u, vv);
+          if (ap > 4 && Math.hypot(ax, ay) / ap > 5) {
+            var norma = Math.hypot(ax, ay);
+            dirX = ax / norma; dirY = ay / norma; lungKm = limita(2 * sommaD / ap, 15, 150);
+            fonteIncudine = "osservata (manto freddo)";
+          } else {
+            // Griglia con y verso sud: il vento verso nord e' -y.
+            dirX = velocita > 0.5 ? u / velocita : 1; dirY = velocita > 0.5 ? -vv / velocita : 0;
+            lungKm = limita(velocita * 1.2, 15, 120);
+            fonteIncudine = "vento 250 hPa (ICON-2I)";
+          }
+          var forza = limita(0.35 + 0.25 * ls01(lampi, 0.5, 5) + 0.25 * ls01(dbz, 35, 50)
+            + 0.15 * ls01(cimaMax, 9, 12), 0, 1);
+          torri.push({
+            x: cx, y: cy, raggioKm: limita(Math.sqrt(areaKm2 / Math.PI) * 0.6, 2.5, 9),
+            areaKm2: areaKm2, cimaKm: cimaMax, baseKm: lcl,
+            inclX: shear > 0.5 ? incl * shu / shear : 0, inclY: shear > 0.5 ? -incl * shv / shear : 0,
+            shearMs: shear, dirIncX: dirX, dirIncY: dirY, incudineKm: lungKm,
+            incudine: limita(ap / 12, 0, 1), fonteIncudine: fonteIncudine,
+            lampi: lampi, dbz: dbz, forza: forza,
+            secondarie: Math.round(1 + 3 * forza),
+            sfondamento: limita((cimaMax - 11.5) / 1.5, 0, 1),
+            ciclo: 2, id: 0, seme: 0
+          });
+        });
+        torri.sort(function (a, b) { return b.forza * b.areaKm2 - a.forza * a.areaKm2; });
+        torri = torri.slice(0, TORRI_MAX);
+        tracciaTorri(torri, precedenti, dtMinuti, kmpx, stessoIstante);
+        return torri;
+      }
+      function ls01(v, a, b) { return lisciaFra(a, b, v); }
+
+      // IL TRACCIAMENTO. Fra due istanti vicini la stessa torre conserva id
+      // e seme (quindi la stessa forma procedurale: niente nubi che cambiano
+      // a caso), e il confronto dice lo stadio: la cima che sale e i fulmini
+      // che aumentano = in crescita; la cima che scende e i fulmini che
+      // calano = in dissipazione.
+      var prossimoIdTorre = 1;
+      function tracciaTorri(torri, precedenti, dtMinuti, kmpx, stessoIstante) {
+        var usati = {}, giaFatti = {};
+        var vicini = precedenti && Math.abs(dtMinuti) <= 45 ? precedenti : [];
+        // Lo stesso istante ricalcolato (arrivano radar, fulmini, RGB): la
+        // torre resta la stessa, con id, seme e stadio gia' stabiliti.
+        (stessoIstante || []).length && torri.forEach(function (t) {
+          var migliore = null, dMin = 12 / kmpx;
+          stessoIstante.forEach(function (p) {
+            if (giaFatti[p.id]) return;
+            var d = Math.hypot(p.x - t.x, p.y - t.y);
+            if (d < dMin) { dMin = d; migliore = p; }
+          });
+          if (migliore) {
+            giaFatti[migliore.id] = true;
+            t.id = migliore.id; t.seme = migliore.seme; t.ciclo = migliore.ciclo; t.fonteCiclo = migliore.fonteCiclo;
+          }
+        });
+        torri.forEach(function (t) {
+          if (t.id) return;
+          var migliore = null, dMin = 30 / kmpx;
+          vicini.forEach(function (p) {
+            if (usati[p.id]) return;
+            var d = Math.hypot(p.x - t.x, p.y - t.y);
+            if (d < dMin) { dMin = d; migliore = p; }
+          });
+          if (migliore) {
+            usati[migliore.id] = true;
+            t.id = migliore.id; t.seme = migliore.seme;
+            var avanti = dtMinuti >= 0 ? 1 : -1;
+            var dCima = (t.cimaKm - migliore.cimaKm) * avanti;
+            var dLampi = (t.lampi - migliore.lampi) * avanti;
+            if (dCima > 0.3 || dLampi > Math.max(1, 0.3 * migliore.lampi)) t.ciclo = 1;
+            else if (dCima < -0.4 || (dLampi < -0.5 * migliore.lampi && t.dbz < migliore.dbz)) t.ciclo = 3;
+            else t.ciclo = 2;
+            t.fonteCiclo = "tracciamento (" + Math.round(Math.abs(dtMinuti)) + " min)";
+          } else {
+            t.id = prossimoIdTorre++;
+            t.seme = ((t.id * 0.61803398875) % 1);
+            t.ciclo = t.cimaKm < 8.5 ? 1 : 2;
+            t.fonteCiclo = "stima dalla sola cima";
+          }
+        });
+      }
+
+      // Dal campo del satellite (e dell'ambiente) all'ingresso del motore,
+      // sulla griglia della classificazione; poi stato, torri e la base
+      // inferita riportata sulla griglia del volume.
+      function costruisciStato(campo, precedenti) {
+        var m = campo.classeMisura;
+        if (!m || !campo.chi) return null;
+        var w = campo.larghezza, h = campo.altezza, w2 = m.larghezza, h2 = m.altezza;
+        var giu = function (v) { return v ? ricampiona(v, w, h, w2, h2) : null; };
+        var f = campo.fusione, amb = campo.ambiente, ex = amb && amb.extra ? amb.extra : {};
+        var bt = f && f.bt ? giu(f.bt) : null;
+        if (bt) for (var k = 0; k < bt.length; k++) bt[k] = bt[k] - 273.15;
+        var hzero = ex.hzero ? giu(ex.hzero) : null;
+        if (hzero) for (k = 0; k < hzero.length; k++) hzero[k] = hzero[k] / 1000;
+        var kmpx = kmPerPixelDi({ larghezza: w2 });
+        var incudine = giu(campo.incudine);
+        var ingresso = {
+          larghezza: w2, altezza: h2, kmPerPixel: kmpx,
+          copertura: giu(campo.cancello || campo.copertura),
+          cima: giu(f ? f.cima : campo.quota), tau: giu(campo.tau), kappa: giu(campo.kappa),
+          chi: giu(campo.chi), incudine: incudine, fibra: giu(campo.fibra),
+          granuli: giu(campo.granuli), liscio: giu(campo.veloLiscio), btC: bt,
+          pioggiaDiffusa: giu(campo.pioggiaNube), dbz: campo.radarNube || null,
+          lampi: campo.scaricheNube || null,
+          incudineVicina: sfoca(massimoScorrevole(incudine, w2, h2, Math.max(1, Math.round(40 / kmpx))),
+            w2, h2, Math.max(1, Math.round(6 / kmpx))),
+          convezione: amb ? giu(amb.convezione) : null, lcl: amb ? giu(amb.lcl) : null,
+          suolo: amb ? giu(amb.suolo) : null, hzero: hzero
+        };
+        ["cin", "rh850", "rh700", "rh500", "rgsp", "rcon", "u250", "v250", "u500", "v500", "shu", "shv"]
+          .forEach(function (nome) { if (ex[nome]) ingresso[nome] = giu(ex[nome]); });
+        if (campo.evidenzaSat && campo.evidenzaSat.basseAcqua) {
+          var e = campo.evidenzaSat;
+          ingresso.nebbia = ricampiona(e.basseAcqua, e.larghezza, e.altezza, w2, h2);
+        }
+        var stato = inferisciStati(ingresso);
+        var torri = trovaTorri(ingresso, stato, precedenti ? precedenti.torri : null,
+          precedenti ? (campo.epoca - precedenti.epoca) / 60000 : 999, campo.torri || null);
+        stato.ingresso = ingresso;
+        campo.stato = stato;
+        campo.torri = torri;
+        // La base inferita (per tipo) sostituisce quella della sola fusione;
+        // fuori dalla nube si estende come le altre quote.
+        if (f) {
+          var basePiena = ricampiona(stato.base, w2, h2, w, h);
+          var dentro = new Uint8Array(w * h);
+          for (k = 0; k < w * h; k++) {
+            dentro[k] = f.densita[k] > 1 / 255 ? 1 : 0;
+            basePiena[k] = Math.min(basePiena[k], f.cima[k] - 0.15);
+          }
+          f.base = estendiFuori(basePiena, dentro, w, h);
+        }
+        return stato;
+      }
+
+      // Le due texture della morfologia, sulla griglia dello stato:
+      //   1: R cumulo, G sviluppo, B scala delle celle (log, 0,2-50 km), A fibra
+      //   2: R apertura, G pioggia, B tipo (indice), A fiducia
+      function tessitureMorfologiche(stato) {
+        var n = stato.larghezza * stato.altezza;
+        var a = new Uint8Array(n * 4), b = new Uint8Array(n * 4);
+        var lmin = Math.log(0.2), lmax = Math.log(50);
+        for (var k = 0; k < n; k++) {
+          var i = k * 4;
+          a[i] = Math.round(limita(stato.cumulo[k], 0, 1) * 255);
+          a[i + 1] = Math.round(limita(stato.sviluppo[k], 0, 1) * 255);
+          a[i + 2] = Math.round(limita((Math.log(Math.max(0.2, stato.cellaKm[k] || 1)) - lmin) / (lmax - lmin), 0, 1) * 255);
+          a[i + 3] = Math.round(limita(stato.fibra[k], 0, 1) * 255);
+          b[i] = Math.round(limita(stato.apertura[k], 0, 1) * 255);
+          b[i + 1] = Math.round(limita(stato.pioggia[k], 0, 1) * 255);
+          b[i + 2] = stato.tipo[k];
+          b[i + 3] = Math.round(limita(stato.fiducia[k], 0, 1) * 255);
+        }
+        return { a: a, b: b };
+      }
+
+      // Gli oggetti convettivi negli array di uniform dello shader, dalle
+      // coordinate della griglia dello stato al Mercatore unitario.
+      function uniformiTorri(torri, stato, dom) {
+        var n = Math.min(torri ? torri.length : 0, TORRI_MAX);
+        var a = new Float32Array(TORRI_MAX * 4), b = new Float32Array(TORRI_MAX * 4);
+        var c = new Float32Array(TORRI_MAX * 4), d = new Float32Array(TORRI_MAX * 4);
+        for (var i = 0; i < n; i++) {
+          var t = torri[i], j = i * 4;
+          a[j] = dom.x0 + (t.x + 0.5) / stato.larghezza * (dom.x1 - dom.x0);
+          a[j + 1] = dom.yNord + (t.y + 0.5) / stato.altezza * (dom.ySud - dom.yNord);
+          a[j + 2] = t.raggioKm; a[j + 3] = t.cimaKm;
+          b[j] = t.baseKm; b[j + 1] = t.inclX; b[j + 2] = t.inclY; b[j + 3] = t.seme;
+          c[j] = t.dirIncX; c[j + 1] = t.dirIncY; c[j + 2] = t.incudineKm;
+          c[j + 3] = limita(0.25 + 0.75 * t.incudine, 0, 1) * (t.ciclo === 0 ? 0.3 : 1);
+          d[j] = t.ciclo; d[j + 1] = t.forza; d[j + 2] = t.secondarie; d[j + 3] = t.sfondamento;
+        }
+        return { quante: n, a: a, b: b, c: c, d: d };
+      }
+
+      // Il verso del vento in quota per le fibre dei cirri: la media del
+      // vento a 250 hPa sulla scena (500 hPa in ripiego), y verso sud.
+      function ventoInQuota(ingresso) {
+        var u = ingresso && (ingresso.u250 || ingresso.u500), v = ingresso && (ingresso.v250 || ingresso.v500);
+        if (!u || !v) return [1, 0];
+        var su = 0, sv = 0;
+        for (var k = 0; k < u.length; k += 7) {
+          if (Number.isFinite(u[k]) && Number.isFinite(v[k])) { su += u[k]; sv += v[k]; }
+        }
+        var m = Math.hypot(su, sv);
+        return m > 1e-6 ? [su / m, -sv / m] : [1, 0];
+      }
+
+      var COLORI_TIPI = (function () {
+        var arr = new Float32Array(16 * 3);
+        TIPI_NUBE.forEach(function (t, i) {
+          var c = t.colore || [0, 0, 0];
+          arr[i * 3] = c[0]; arr[i * 3 + 1] = c[1]; arr[i * 3 + 2] = c[2];
+        });
+        return arr;
+      })();
+      var DEBUG_NUBI = typeof location !== "undefined" && /[?&]debug=nubi\b/.test(location.search || "");
+
       // --- il volume, attraversato dai raggi ---------------------------------
       // Uno strato personalizzato di MapLibre: prende il contesto WebGL e la
       // matrice della vista, ricostruisce il raggio che passa per ogni pixel e
@@ -9446,6 +9967,17 @@
         "uniform float uSoleForza;",
         "uniform float uIncudineKm;    // quota oltre la quale compare l'incudine",
         "uniform float uCavita;        // scurimento delle cavita' fra le bolle",
+        "uniform sampler2D uMorfo1;    // stato inferito: R cumulo, G sviluppo, B scala celle (log), A fibra",
+        "uniform sampler2D uMorfo2;    // R apertura, G pioggia, B tipo (indice), A fiducia",
+        "uniform int uQuanteTorri;",
+        "uniform vec4 uTorreA[24];     // x, y (Mercatore unitario), raggio km, cima km",
+        "uniform vec4 uTorreB[24];     // base km, inclinazione x, y (km/km), seme",
+        "uniform vec4 uTorreC[24];     // direzione incudine x, y, lunghezza km, forza",
+        "uniform vec4 uTorreD[24];     // ciclo 0-3, forza, torri secondarie, sfondamento",
+        "uniform vec2 uVentoAlto;      // verso del vento in quota (cirri), unitario",
+        "uniform float uDebugTipi;     // 1: colora le nubi per tipo",
+        "uniform vec3 uColoriTipi[16];",
+        "float gTipoCampione = 0.0;",
         "uniform float uFotogramma;    // indice del fotogramma accumulato a mappa ferma",
         "uniform float uSigma;",
         "uniform float uFaseG;",
@@ -9496,128 +10028,241 @@
         "// il campione del raggio, la legge la luce del cielo.",
         "float gCavita = 0.0;",
         "",
-        "// La colonna letta dalla texture: la nube esiste solo fra base e cima.",
-        "// Ritorna la densita' 0-1; in uscita l'altezza relativa e la convezione.",
-        "//",
-        "// IL METODO DEI GIOCHI (Nubis, Horizon Zero Dawn; Flight Simulator):",
-        "// densita' = forma 3D x profilo verticale del tipo di nube, tagliata dalla",
-        "// copertura osservata, poi erosa ai bordi dal dettaglio. Il satellite dice",
-        "// DOVE (maschera, copertura G), A CHE QUOTA (cima R, base B) e QUANTO E'",
-        "// CONVETTIVA (A, CAPE); la forma Perlin-Worley da' i cavolfiori a tutte le",
-        "// scale, con bolle tonde e sovrapposte invece di colonne o creste.",
+        "// LA GEOMETRIA DELLE NUBI, costruita dallo STATO inferito (motore",
+        "// d'inferenza, in JavaScript): lo shader non decide che nube e', la",
+        "// disegna. Tre scale:",
+        "//   macro  -- dove (maschera del satellite), quota della cima (osservata),",
+        "//             base (inferita per tipo), oggetti convettivi (torri, incudini)",
+        "//   meso   -- l'archetipo del tipo: celle a cupola su base comune",
+        "//             (Cu/Sc/Ac/Cc), volumi stratiformi ondulati (St/As/Ns/Cs),",
+        "//             fibre di ghiaccio nel vento (Ci), torri e incudini (Cb)",
+        "//   micro  -- il rumore, che sfrangia i bordi e non crea la forma.",
+        "float hash21(vec2 c) {",
+        "  c = mod(c, 4096.0);",
+        "  return fract(sin(dot(c, vec2(127.1, 311.7))) * 43758.5453);",
+        "}",
+        "vec2 hash22(vec2 c) {",
+        "  c = mod(c, 4096.0);",
+        "  return fract(sin(vec2(dot(c, vec2(127.1, 311.7)), dot(c, vec2(269.5, 183.3)))) * 43758.5453);",
+        "}",
+        "",
+        "// UN ELEMENTO CONVETTIVO E' UNA PILA DI BOLLE, non una colonna: la",
+        "// corrente ascendente sale a bolle termiche che si impilano, si sfalsano e",
+        "// si stringono salendo; ognuna e' una sfera in km VISTI (verticale",
+        "// esagerata), cosi' resta tonda sullo schermo. La base e' piatta: il livello",
+        "// di condensazione taglia le bolle.",
+        "float elemento(vec2 rel, float z, float base, float cima, float raggio, float esag, float seme) {",
+        "  if (z < base || z > cima) return 0.0;",
+        "  float zv = (z - base) * esag, altezza = (cima - base) * esag;",
+        "  float r0 = min(raggio, 0.5 * altezza + 0.3 * raggio);",
+        "  float quante = clamp(floor(altezza / (0.8 * r0)) + 1.0, 1.0, uQualita > 0.5 ? 7.0 : 3.0);",
+        "  float migliore = 0.0;",
+        "  for (int b = 0; b < 7; b++) {",
+        "    float fb = float(b);",
+        "    if (fb >= quante) break;",
+        "    float f = quante > 1.0 ? fb / (quante - 1.0) : 1.0;",
+        "    float rb = r0 * mix(1.0, 0.78, f) * mix(0.8, 1.12, fract(seme * 17.3 + fb * 0.41));",
+        "    float zc = mix(0.55 * rb, altezza - rb, f);",
+        "    vec2 scarto = (vec2(fract(seme * 7.7 + fb * 0.61), fract(seme * 3.1 + fb * 0.83)) - 0.5) * 0.7 * rb * (0.3 + f);",
+        "    float dist = length(vec3(rel - scarto, zv - zc));",
+        "    // Fusione morbida delle bolle vicine: niente solchi netti fra l'una e",
+        "    // l'altra (il pupazzo di neve), ma lobi che si confondono.",
+        "    migliore = 1.0 - (1.0 - migliore) * smoothstep(0.7 * rb, 1.05 * rb, dist);",
+        "  }",
+        "  // Il corpo sotto la prima bolla: base piatta, larga quanto lei.",
+        "  float corpo = zv < 0.55 * r0 ? 1.0 - smoothstep(0.8 * r0, r0, length(rel)) : 0.0;",
+        "  return max(migliore, corpo);",
+        "}",
+        "",
+        "// CELLE: un campo di elementi, uno per cella di una griglia sfalsata",
+        "// (niente file e niente ripetizioni: ogni cella ha il suo seme). Le celle",
+        "// vuote fanno le aperture; lo sviluppo decide quanto le altezze variano.",
+        "float celle(vec2 xy, float z, float base, float cima, float cellaKm, float sviluppo,",
+        "            float apertura, float esag) {",
+        "  vec2 g = xy / cellaKm;",
+        "  vec2 i0 = floor(g);",
+        "  float migliore = 0.0;",
+        "  for (int j = -1; j <= 1; j++) {",
+        "    for (int i = -1; i <= 1; i++) {",
+        "      vec2 c = i0 + vec2(float(i), float(j));",
+        "      if (hash21(c + 17.3) < apertura) continue;",
+        "      vec2 centro = (c + 0.15 + 0.7 * hash22(c)) * cellaKm;",
+        "      float r1 = hash21(c + 5.1), r2 = hash21(c + 9.7);",
+        "      float quota = mix(1.0, mix(0.28, 1.0, r1 * r1), sviluppo);",
+        "      float raggio = 0.5 * cellaKm * mix(0.75, 1.25, r2);",
+        "      // Una bolla termica non e' piu' alta di qualche volta la sua",
+        "      // larghezza: oltre, la cima osservata appartiene a una torre (oggetto).",
+        "      float alta = min((cima - base) * quota, mix(0.5, 2.2, sviluppo) * 2.0 * raggio);",
+        "      migliore = max(migliore, elemento(xy - centro, z, base, base + alta, raggio, esag, r1 + r2));",
+        "    }",
+        "  }",
+        "  return migliore;",
+        "}",
+        "",
+        "// OGGETTI CONVETTIVI: torre principale inclinata dallo shear, torri",
+        "// secondarie (multicella), sfondamento sopra la cima, incudine spinta",
+        "// sottovento e assottigliata verso il bordo.",
+        "float torri(vec2 punto, float z, float kmPerUnita, float esag, out float tipoTorre) {",
+        "  float migliore = 0.0;",
+        "  tipoTorre = 0.0;",
+        "  for (int i = 0; i < 24; i++) {",
+        "    if (i >= uQuanteTorri) break;",
+        "    vec4 A = uTorreA[i], B = uTorreB[i], C = uTorreC[i], D = uTorreD[i];",
+        "    vec2 dKm = (punto - A.xy) * kmPerUnita;",
+        "    float raggio = A.z, cima = A.w, base = B.x;",
+        "    float portata = C.z + 3.0 * raggio;",
+        "    if (dot(dKm, dKm) > portata * portata) continue;",
+        "    if (z < base - 0.1 || z > cima + 1.2) continue;",
+        "    vec2 rel = dKm - B.yz * max(z - base, 0.0);",
+        "    float dissipa = D.x > 2.5 ? 1.0 : 0.0;",
+        "    float corpo = elemento(rel, z, base, cima, raggio * mix(1.0, 0.8, dissipa), esag, B.w);",
+        "    for (int s = 0; s < 4; s++) {",
+        "      if (float(s) >= D.z) break;",
+        "      float fs = float(s);",
+        "      float angolo = B.w * 6.2832 + fs * 2.39996;",
+        "      float distanza = raggio * mix(0.85, 1.45, fract(B.w * 7.13 + fs * 0.37));",
+        "      vec2 centro = vec2(cos(angolo), sin(angolo)) * distanza;",
+        "      float rs = raggio * mix(0.42, 0.7, fract(B.w * 13.7 + fs * 0.71));",
+        "      float cs = base + (cima - base) * mix(0.45, 0.85, fract(B.w * 3.7 + fs * 0.53));",
+        "      corpo = max(corpo, elemento(rel - centro, z, base, cs, rs, esag, fract(B.w * 5.3 + fs * 0.29)));",
+        "    }",
+        "    if (D.w > 0.0) {",
+        "      corpo = max(corpo, elemento(rel, z, cima - 0.4, cima + 0.9 * D.w, raggio * 0.45, esag, fract(B.w * 2.9)));",
+        "    }",
+        "    float incudine = 0.0;",
+        "    if (C.w > 0.03) {",
+        "      vec2 dir = C.xy;",
+        "      float lungo = dot(rel, dir), largo = dot(rel, vec2(-dir.y, dir.x));",
+        "      float L = max(C.z, 1.0);",
+        "      float avanti = clamp((lungo + raggio) / (L + raggio), 0.0, 1.0);",
+        "      float a = 0.55 * L + raggio, b = raggio * 1.2 + 0.28 * L * mix(0.5, 1.0, avanti);",
+        "      float e = (lungo - 0.42 * L) * (lungo - 0.42 * L) / (a * a) + largo * largo / (b * b);",
+        "      // Spessa sopra la torre, sottile sottovento e verso i bordi: il",
+        "      // fondo sale, il tetto scende appena. Niente pareti verticali.",
+        "      float bordo = sqrt(max(0.0, 1.0 - e));",
+        "      float spessore = mix(2.6, 0.9, avanti) * bordo;",
+        "      float tetto = cima - 0.15 - 0.35 * (1.0 - bordo), fondo = tetto - spessore;",
+        "      if (e < 1.0 && z > fondo && z < tetto) {",
+        "        incudine = smoothstep(0.0, 0.35, bordo) * smoothstep(fondo, fondo + 0.4 * spessore + 0.05, z)",
+        "          * (1.0 - smoothstep(tetto - 0.3, tetto, z)) * C.w;",
+        "      }",
+        "    }",
+        "    float qui = max(corpo, 0.85 * incudine);",
+        "    if (qui > migliore) { migliore = qui; tipoTorre = 1.0 + float(i); }",
+        "  }",
+        "  return migliore;",
+        "}",
+        "",
+        "// La colonna: lo stato inferito della cella (texture) e gli oggetti.",
         "float densita(vec3 p, float lodCampo, float lodRumore, bool leggera,",
         "              out float hRel, out float conv, out vec2 fascia) {",
-        "  hRel = 0.0; conv = 0.0; fascia = vec2(-1.0);",
+        "  hRel = 0.0; conv = 0.0; fascia = vec2(-1.0); gCavita = 0.0;",
         "  vec2 uv = vec2((p.x - uDominio.x) / (uDominio.z - uDominio.x),",
         "                 (p.y - uDominio.y) / (uDominio.w - uDominio.y));",
         "  if (uv.x < 0.0 || uv.y < 0.0 || uv.x > 1.0 || uv.y > 1.0) return 0.0;",
-        "  vec4 campo = textureLod(uCampo, uv, lodCampo);",
-        "  // LA MASCHERA E' DEL SATELLITE: senza densita' osservata non c'e' nube.",
-        "  if (campo.g < 0.004) return 0.0;",
         "  float kmPerUnita = uCircKm * cosLatDa(p.y);",
+        "  float esag = max(uEsagerazione, 1.0);",
         "  float altKm = p.z * kmPerUnita / uEsagerazione;",
-        "  // Le quote a scala un poco piu' grossa della sagoma: le colonne di un",
-        "  // pixel non diventano aghi; R e B sono estesi fuori dalla maschera.",
+        "  // Gli oggetti convettivi prima: stanno dentro la maschera del satellite,",
+        "  // ma la loro geometria non e' quella di un pixel.",
+        "  float tipoTorre;",
+        "  float dTorri = uQuanteTorri > 0 ? torri(p.xy, altKm, kmPerUnita, esag, tipoTorre) : 0.0;",
+        "  vec4 campo = textureLod(uCampo, uv, lodCampo);",
+        "  float gLiscia = textureLod(uCampo, uv, lodCampo + 2.0).g;",
+        "  if (campo.g < 0.004 && dTorri <= 0.0) return 0.0;",
         "  vec4 liscio = textureLod(uCampo, uv, lodCampo + 1.5);",
         "  campo.rba = mix(liscio.rba, campo.rba, 0.3);",
         "  float cimaKm = campo.r * uScalaKm;",
         "  float baseKm = campo.b * uScalaKm;",
-        "  float spessore = max(0.05, cimaKm - baseKm);",
-        "  // Il CAPE conta solo dove il satellite vede una nube spessa.",
-        "  conv = campo.a * smoothstep(0.3, 0.8, campo.g);",
-        "  float convettiva = smoothstep(0.05, 0.65, conv);",
-        "  // Le bolle possono sporgere oltre la cima misurata fino a uRigonfio.",
-        "  float sopra = (uRigonfio - 1.0) * spessore + 0.15;",
-        "  fascia = vec2(baseKm, cimaKm + sopra);",
-        "  // BOUNDING VOLUME: fuori dalla fascia base-cima il raggio non trova nulla.",
-        "  if (altKm < baseKm || altKm > cimaKm + sopra) return 0.0;",
-        "  float h = (altKm - baseKm) / spessore;",
-        "  hRel = clamp(h, 0.0, 1.0);",
-        "  vec2 qc = p.xy * kmPerUnita / uWorleyKm;",
-        "  // L'INCUDINE: con convezione profonda e cima sopra i 7,5 km, fuori dalle",
-        "  // torri la nube e' una lastra di 2-3 km sulla tropopausa. Le torri",
-        "  // stanno dove il satellite vede la cima sporgere (overshooting top) e in",
-        "  // qualche cella di ~15 km.",
-        "  float incudine = smoothstep(uIncudineKm, uIncudineKm + 2.5, cimaKm) * smoothstep(0.25, 0.6, convettiva);",
-        "  float torre = 1.0;",
-        "  if (incudine > 0.0) {",
-        "    float intorno = textureLod(uCampo, uv, lodCampo + 5.0).r * uScalaKm;",
-        "    float sporge = smoothstep(0.05, 0.5, cimaKm - intorno);",
-        "    float cella = smoothstep(0.62, 0.9, textureLod(uWorley, vec3(qc * 0.075 + uSemenza.yx, 0.83),",
-        "      lodRumore - 3.7).r);",
-        "    torre = max(sporge, cella);",
+        "  vec4 m1 = textureLod(uMorfo1, uv, lodCampo);",
+        "  vec4 m2 = textureLod(uMorfo2, uv, lodCampo);",
+        "  float cumulo = m1.r, sviluppo = m1.g, fibra = m1.a, apertura = m2.r, pioggia = m2.g;",
+        "  float cellaKm = exp(mix(log(0.2), log(50.0), m1.b));",
+        "  // Fascia: la pioggia scende sotto la base fino al suolo.",
+        "  float sotto = pioggia > 0.08 ? baseKm : 0.0;",
+        "  fascia = vec2(baseKm - sotto, cimaKm + 0.15);",
+        "  // L'impronta osservata: dentro la maschera la struttura e' ricostruita,",
+        "  // fuori non si inventano nubi. Dove la copertura e' parziale aumentano le",
+        "  // celle vuote: la frazione coperta resta quella del satellite.",
+        "  float impronta = smoothstep(0.004, 0.2, gLiscia);",
+        "  // (solo per le nubi cumuliformi: un velo sottile ha densita' ottica bassa,",
+        "  // non copertura parziale)",
+        "  float aperta = max(apertura, cumulo * (1.0 - smoothstep(0.25, 0.95, campo.g)));",
+        "  vec3 q = vec3(p.xy * kmPerUnita, altKm * esag);",
+        "  float d = 0.0;",
+        "  if (altKm >= baseKm && altKm <= cimaKm + 0.15 && campo.g >= 0.004) {",
+        "    float spessore = max(0.05, cimaKm - baseKm);",
+        "    hRel = clamp((altKm - baseKm) / spessore, 0.0, 1.0);",
+        "    float lodForma = lodRumore + log2((uWorleyKm / uLatoWorley) / (uScalaFormaKm / uLatoForma));",
+        "    // Strato: volume con cima e base ondulate su scala della cella.",
+        "    float dStrato = 0.0;",
+        "    if (cumulo < 0.98) {",
+        "      // Ondulazioni dolci e larghe (il Worley fBm, liscio, non le bolle",
+        "      // del Perlin-Worley che scavavano buche): un mare di nubi, non crateri.",
+        "      float scalaOnda = max(cellaKm, 6.0);",
+        "      vec4 w1 = textureLod(uForma, vec3(q.xy / (scalaOnda * 6.0), 0.37) + uSemenza, max(lodForma - 2.5, 0.0));",
+        "      vec4 w2 = textureLod(uForma, vec3(q.xy / (scalaOnda * 4.3) + 0.5, 0.71) + uSemenza, max(lodForma - 2.5, 0.0));",
+        "      float o1 = w1.g * 0.7 + w1.b * 0.3, o2 = w2.g;",
+        "      float onda = min(mix(0.08, 0.2, fibra) * spessore, 0.6);",
+        "      // Nelle nubi a celle lo strato e' solo il fondo comune del banco: le",
+        "      // celle bombate stanno sopra.",
+        "      float tettoU = cimaKm - onda * (1.0 - o1) - spessore * 0.55 * cumulo;",
+        "      float fondoU = baseKm + onda * o2 * 0.7;",
+        "      float t = (altKm - fondoU) / max(tettoU - fondoU, 0.02);",
+        "      dStrato = smoothstep(0.0, 0.12, t) * (1.0 - smoothstep(0.82, 1.0, t));",
+        "      // Varchi nello strato dove il satellite ne vede solo una parte.",
+        "      if (aperta > 0.05) dStrato *= smoothstep(aperta - 0.12, aperta + 0.12, o2);",
+        "    }",
+        "    // Nei passi lontani verso il sole (leggera) le celle valgono la loro",
+        "    // media: le ombre fra bolla e bolla le fanno i primi passi, esatti.",
+        "    float dCelle = cumulo <= 0.02 ? 0.0 : (leggera",
+        "      ? (1.0 - aperta) * 0.45 * smoothstep(0.0, 0.1, hRel) * (1.0 - smoothstep(mix(0.5, 0.95, 1.0 - sviluppo), 1.0, hRel))",
+        "      : celle(q.xy, altKm, baseKm, cimaKm, cellaKm, sviluppo, aperta, esag));",
+        "    // Il banco e le celle si sommano (massimo), non si mediano: la media",
+        "    // scavava crateri tondi fra una cupola e l'altra.",
+        "    d = max(dStrato * (1.0 - smoothstep(0.7, 1.0, cumulo)), dCelle * smoothstep(0.02, 0.35, cumulo));",
+        "    gCavita = cumulo * (1.0 - smoothstep(0.3, 0.9, dCelle));",
+        "    // Fibre di ghiaccio: stirate nel verso del vento in quota.",
+        "    if (fibra > 0.02) {",
+        "      vec2 dir = uVentoAlto, perp = vec2(-uVentoAlto.y, uVentoAlto.x);",
+        "      float lungo = dot(q.xy, dir), largo = dot(q.xy, perp);",
+        "      vec4 fb = textureLod(uForma, vec3(lungo / (cellaKm * 5.0), largo / (cellaKm * 0.45),",
+        "        q.z / (cellaKm * 0.8)) + uSemenza.yzx, max(lodForma - 1.0, 0.0));",
+        "      float fili = smoothstep(0.5, 0.78, fb.r * 0.7 + fb.g * 0.3);",
+        "      d = mix(d, dStrato * fili, fibra);",
+        "    }",
+        "    conv = cumulo * sviluppo;",
         "  }",
-        "  // IL PROFILO VERTICALE del tipo di nube. Lo strato e' una lastra con base",
-        "  // e cima morbide; il cumulo ha la base piatta e si arrotonda salendo, e",
-        "  // solo le bolle piu' forti arrivano in cima: e' questo che fa il",
-        "  // cavolfiore. Le nubi convettive sono cumuli; anche le nubi spesse e dense",
-        "  // in aria stabile lo diventano in parte (uCavolfiore).",
-        "  float cumuliforme = max(convettiva,",
-        "    smoothstep(1.2, 4.0, spessore) * smoothstep(0.4, 0.8, campo.g) * uCavolfiore);",
-        "  float strato = smoothstep(0.0, 0.1, h) * (1.0 - smoothstep(0.7, uRigonfio, h));",
-        "  float cumulo = smoothstep(0.0, 0.2 * (1.0 - uBaseDura) + 0.01, h) * (1.0 - smoothstep(0.6, uRigonfio, h));",
-        "  float profilo = mix(strato, cumulo, cumuliforme);",
-        "  if (incudine > 0.0) {",
-        "    float lastra = clamp(2.4 / spessore, 0.12, 0.6);",
-        "    float piatta = smoothstep(1.0 - lastra - 0.08, 1.0 - lastra, h) * (1.0 - smoothstep(0.96, 1.06, h));",
-        "    // Le torri salgono piene fino alla cima e un poco oltre (overshooting top).",
-        "    float piena = smoothstep(0.0, 0.05, h) * (1.0 - smoothstep(0.88, uRigonfio, h));",
-        "    profilo = mix(profilo, mix(piatta, piena, torre), incudine);",
+        "  // La pioggia sotto la base: colonne grigie, sfrangiate, piu' dense in",
+        "  // basso dove il nembostrato o il temporale scaricano.",
+        "  if (pioggia > 0.08 && altKm < baseKm && campo.g > 0.3) {",
+        "    float colonne = textureLod(uForma, vec3(q.xy / 6.0, q.z / 60.0) + uSemenza.zyx, lodRumore).g;",
+        "    d = max(d, 0.1 * pioggia * smoothstep(0.35, 0.7, colonne) * (1.0 - altKm / max(baseKm, 0.1) * 0.5));",
         "  }",
-        "  if (profilo <= 0.0) return 0.0;",
-        "  // LA FORMA: Perlin-Worley in km VISTI (la verticale esagerata), cosi' le",
-        "  // bolle restano tonde sullo schermo a ogni esagerazione.",
-        "  vec3 q = vec3(p.xy * kmPerUnita, altKm * max(uEsagerazione, 1.0) / max(uStiraBolle, 0.1));",
-        "  float lodForma = lodRumore + log2((uWorleyKm / uLatoWorley) / (uScalaFormaKm / uLatoForma));",
-        "  vec4 f = textureLod(uForma, q / uScalaFormaKm + uSemenza, lodForma);",
-        "  float fbm = f.g * 0.8 + f.b * 0.2;",
-        "  // Gli strati sono poco scavati: contrasto basso e riempimento alto, e non",
-        "  // si bucano nella griglia della texture.",
-        "  float forma = clamp(rimappa(f.r, fbm * uContrasto * mix(0.35, 1.0, cumuliforme), 1.0, 0.0, 1.0), 0.0, 1.0);",
-        "  // Gli ammassi: la stessa forma quattro volte piu' grande modula la",
-        "  // copertura, e i cumuli si raccolgono in grandi cavolfiori.",
-        "  float macro = textureLod(uForma, q / uScalaMacroKm + uSemenza.zxy,",
-        "    lodForma - log2(uScalaMacroKm / uScalaFormaKm)).r;",
-        "  // La COPERTURA viene dalla maschera del satellite, sfumata su qualche",
-        "  // pixel: al bordo della nube la copertura cala e restano solo le bolle",
-        "  // piu' forti a meta' altezza, cosi' i fianchi si arrotondano invece di",
-        "  // essere pareti. Una nube sottile e' coperta quanto una spessa: sara'",
-        "  // solo piu' trasparente (densita' ottica).",
-        "  float gLiscia = textureLod(uCampo, uv, lodCampo + 2.0).g;",
-        "  float bordo = smoothstep(0.0, 0.35, gLiscia);",
-        "  float cop = clamp(mix(0.85, uCopertura, cumuliforme) * mix(0.75, 1.0, sqrt(campo.g)) * (1.0 + uForzaMacro * (macro - 0.5)) * bordo, 0.0, 1.0);",
-        "  // Il cavolfiore sta sulla superficie: dentro la nube, dove profilo e",
-        "  // copertura sono pieni, la forma conta meno e il nucleo resta denso.",
-        "  // Le torri convettive profonde e dense sono opache: piu' riempimento.",
-        "  cop = clamp(cop + 0.35 * convettiva * smoothstep(0.6, 0.9, campo.g) * (1.0 - smoothstep(0.45, 0.75, h)), 0.0, 1.0);",
-        "  float base = profilo * mix(forma, 1.0, uNucleo * profilo * profilo);",
-        "  gCavita = 1.0 - smoothstep(0.15, 0.6, base);",
-        "  float d = clamp(rimappa(base, 1.0 - cop, 1.0, 0.0, 1.0), 0.0, 1.0);",
-        "  float ottica = mix(0.25, 1.0, campo.g);",
-        "  if (d <= 0.0 || leggera) return d * ottica;",
-        "  // L'EROSIONE: il Worley di dettaglio (1,5 km - 375 m) scava i bordi. In",
-        "  // basso ciuffi, in alto bolle (Worley rovesciato). Si spegne quando il",
-        "  // dettaglio e' sotto il pixel.",
-        "  // Due letture della texture di forma (128^3, non il cubo di 32^3 che si",
-        "  // ripeteva ogni 6 km), ruotate su tre assi e a scale non multiple: le",
-        "  // bolle del dettaglio non si mettono piu' in fila.",
+        "  if (dTorri > 0.0) {",
+        "    d = max(d, dTorri);",
+        "    conv = max(conv, dTorri);",
+        "    if (altKm > baseKm || tipoTorre > 0.0) hRel = max(hRel, clamp(altKm / max(cimaKm, 1.0), 0.0, 1.0));",
+        "    fascia = vec2(0.0, max(fascia.y, altKm + 1.0));",
+        "  }",
+        "  d *= impronta;",
+        "  gTipoCampione = uDebugTipi > 0.5 ? texelFetch(uMorfo2, ivec2(uv * vec2(textureSize(uMorfo2, 0))), 0).b * 255.0 : 0.0;",
+        "  if (d <= 0.0 || leggera) return d * mix(0.35, 1.0, campo.g);",
+        "  // MICRO: il dettaglio sfrangia la superficie (le bolle sulle bolle dei",
+        "  // cumuli, il bordo sfilacciato degli strati), non crea la forma.",
+        "  vec4 f = textureLod(uForma, q / uScalaFormaKm + uSemenza, 0.0);",
         "  float lodDet = lodRumore + log2(uWorleyKm / uDettaglioKm);",
-        "  // DOMAIN WARPING: le coordinate del dettaglio sono spostate dalla forma",
-        "  // grande (che cambia su 12 km). Senza, la texture che si ripete ogni",
-        "  // pochi km disegnava una trama regolare, come un tessuto a righe.",
         "  vec3 qd = q / uDettaglioKm + (f.gba - 0.5) * 6.0;",
         "  vec4 d1 = textureLod(uForma, vec3(0.8 * qd.x - 0.6 * qd.y, 0.6 * qd.x + 0.8 * qd.y, qd.z) * 0.25 + uSemenza.zxy, lodDet);",
         "  vec4 d2 = textureLod(uForma, vec3(qd.z * 0.37 + qd.x * 0.93, qd.y, qd.x * 0.37 - qd.z * 0.93) * 0.61 + 0.37, lodDet + 1.3);",
         "  float det = mix(d1.g * 0.7 + d1.b * 0.3, d2.b * 0.6 + d2.a * 0.4, 0.4);",
-        "  det = mix(det, 1.0 - det, smoothstep(0.1, 0.5, h));",
-        "  float morso = uErosione * mix(0.5, 1.2, convettiva) * (1.0 - smoothstep(1.0, 2.5, lodDet));",
-        "  // Solo la superficie si scava: dentro la nube (d alto) l'erosione si",
-        "  // spegne e il nucleo resta denso.",
+        "  det = mix(det, 1.0 - det, smoothstep(0.1, 0.5, hRel));",
+        "  float cumuliforme = max(cumulo * cumulo, step(0.001, dTorri));",
+        "  float morso = uErosione * mix(0.2, 1.0, cumuliforme) * (1.0 - smoothstep(1.0, 2.5, lodDet));",
         "  morso *= 1.0 - smoothstep(0.75, 1.0, d);",
         "  d = clamp(rimappa(d, det * morso, 1.0, 0.0, 1.0), 0.0, 1.0);",
-        "  return d * ottica;",
+        "  return d * mix(0.35, 1.0, campo.g);",
         "}",
-        "",
         "// BEER-LAMBERT verso il sole: da ogni campione si cammina verso il sole a",
         "// passi che raddoppiano e si somma lo spessore ottico attraversato.",
         "float spessoreVersoSole(vec3 p, float lodCampo, float lodRumore) {",
@@ -9703,6 +10348,7 @@
         "  vec3 luce = vec3(0.0);",
         "  float trasmissione = 1.0;",
         "  float tPrimo = -1.0;",
+        "  float tipoPrimo = 0.0;",
         "  // L'INGRESSO NELLA NUBE: quando il raggio passa dal vuoto alla nube torna",
         "  // indietro di un passo e riparte con passi quattro volte piu' corti. Con",
         "  // la cima netta, lo scarto casuale del primo passo decideva pixel per",
@@ -9746,7 +10392,7 @@
         "    if (affina > 0) { passo *= 0.25; affina--; }",
         "    vuotoPrima = d <= 0.001;",
         "    if (d > 0.001) {",
-        "      if (tPrimo < 0.0) tPrimo = t;",
+        "      if (tPrimo < 0.0) { tPrimo = t; tipoPrimo = gTipoCampione; }",
         "      float passoKm = length(vec3(direzione.xy, direzione.z / uEsagerazione)) * passo * kmPerUnita;",
         "      float estinzione = uSigma * d;                     // per km",
         "      float trasmPasso = exp(-estinzione * passoKm);     // Beer-Lambert sul raggio di vista",
@@ -9841,6 +10487,8 @@
         "    // restano morbide e colorate.",
         "    vec3 x = colore / max(alfa, 1e-3) * uEsposizione;",
         "    colore = alfa * clamp((x * (2.51 * x + 0.03)) / (x * (2.43 * x + 0.59) + 0.14), 0.0, 1.0);",
+        "    // DEBUG METEOROLOGICO: la nube colorata per tipo inferito.",
+        "    if (uDebugTipi > 0.5) colore = mix(colore, uColoriTipi[int(clamp(tipoPrimo + 0.5, 0.0, 15.0))] * alfa, 0.6);",
         "  }",
         "  // IL CANALE SOTTO LA NUBE: dalla base al suolo, dove Blitzortung ha",
         "  // misurato la scarica, il canale e' fuori dalla nube e si vede.",
@@ -10123,6 +10771,18 @@
         this.texPerlin = carica3D(PERLIN_LATO, texturePerlin(PERLIN_LATO), true);
         this.texWorley = carica3D(WORLEY_LATO, textureWorley(WORLEY_LATO));
         this.texForma = generaForma(gl, QUALITA_VOLUME.latoForma, this.vao);
+        var morfo = function () {
+          var tex = gl.createTexture();
+          gl.bindTexture(gl.TEXTURE_2D, tex);
+          gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA8, 1, 1, 0, gl.RGBA, gl.UNSIGNED_BYTE, new Uint8Array(4));
+          gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
+          gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
+          gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+          gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+          return tex;
+        };
+        this.texMorfo1 = morfo();
+        this.texMorfo2 = morfo();
 
         this.texCampo = gl.createTexture();
         this.texGeneri = gl.createTexture();
@@ -10140,6 +10800,38 @@
       StratoVolume.prototype.pubblicaCampo = function (campo) {
         var gl = this.gl;
         if (!gl) return;
+        // IL MOTORE D'INFERENZA: stato di ogni cella e oggetti convettivi,
+        // con la storia recente per il tracciamento. Un errore qui lascia il
+        // volume con la sola fusione, mai senza nubi.
+        try {
+          this.storiaTorri = this.storiaTorri || [];
+          var epocaQui = campo.epoca;
+          var precedente = null;
+          this.storiaTorri.forEach(function (voce) {
+            if (voce.epoca !== epocaQui && Math.abs(voce.epoca - epocaQui) <= 45 * 60000
+                && (!precedente || Math.abs(voce.epoca - epocaQui) < Math.abs(precedente.epoca - epocaQui))) {
+              precedente = voce;
+            }
+          });
+          var stato = costruisciStato(campo, precedente);
+          if (stato) {
+            this.storiaTorri = this.storiaTorri.filter(function (v) { return v.epoca !== epocaQui; });
+            this.storiaTorri.push({ epoca: epocaQui, torri: campo.torri });
+            if (this.storiaTorri.length > 8) this.storiaTorri.shift();
+            var tessere = tessitureMorfologiche(stato);
+            gl.bindTexture(gl.TEXTURE_2D, this.texMorfo1);
+            gl.pixelStorei(gl.UNPACK_ALIGNMENT, 1);
+            gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA8, stato.larghezza, stato.altezza, 0,
+              gl.RGBA, gl.UNSIGNED_BYTE, tessere.a);
+            gl.bindTexture(gl.TEXTURE_2D, this.texMorfo2);
+            gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA8, stato.larghezza, stato.altezza, 0,
+              gl.RGBA, gl.UNSIGNED_BYTE, tessere.b);
+            this.oggettiTorri = uniformiTorri(campo.torri, stato, this.dominioUnitario());
+            this.ventoAlto = ventoInQuota(stato.ingresso);
+          }
+        } catch (errore) {
+          this.oggettiTorri = null;
+        }
         gl.bindTexture(gl.TEXTURE_2D, this.texCampo);
         gl.pixelStorei(gl.UNPACK_ALIGNMENT, 1);
         // La piramide serve per l'ingrossamento orizzontale: senza, non c'e'
@@ -10519,6 +11211,23 @@
         gl.activeTexture(gl.TEXTURE2);
         gl.bindTexture(gl.TEXTURE_3D, this.texWorley);
         gl.uniform1i(u("uWorley"), 2);
+        // Lo stato inferito e gli oggetti convettivi.
+        gl.activeTexture(gl.TEXTURE4);
+        gl.bindTexture(gl.TEXTURE_2D, this.texMorfo1);
+        gl.uniform1i(u("uMorfo1"), 4);
+        gl.activeTexture(gl.TEXTURE5);
+        gl.bindTexture(gl.TEXTURE_2D, this.texMorfo2);
+        gl.uniform1i(u("uMorfo2"), 5);
+        var ot = this.oggettiTorri || { quante: 0 };
+        gl.uniform1i(u("uQuanteTorri"), ot.quante);
+        if (ot.quante) {
+          gl.uniform4fv(u("uTorreA"), ot.a); gl.uniform4fv(u("uTorreB"), ot.b);
+          gl.uniform4fv(u("uTorreC"), ot.c); gl.uniform4fv(u("uTorreD"), ot.d);
+        }
+        var vento = this.ventoAlto || [1, 0];
+        gl.uniform2f(u("uVentoAlto"), vento[0], vento[1]);
+        gl.uniform1f(u("uDebugTipi"), REGOLA.debugTipi > 0.5 || DEBUG_NUBI ? 1 : 0);
+        gl.uniform3fv(u("uColoriTipi"), COLORI_TIPI);
 
         gl.disable(gl.DEPTH_TEST);
         gl.disable(gl.CULL_FACE);
@@ -11417,6 +12126,7 @@
         ["esposizione", "Esposizione", 0.1, 2, 0.01, "Luce"],
         ["foschiaKm", "Distanza della foschia (km)", 50, 3000, 10, "Luce"],
         ["esagerazione", "Esagerazione (0 = auto)", 0, 8, 0.1, "Vista"],
+        ["debugTipi", "Debug meteo: colora per tipo (0/1)", 0, 1, 1, "Vista"],
         ["passi", "Passi del raggio (0 = auto)", 0, 512, 8, "Qualita'"],
         ["passiLuce", "Passi verso il sole (0 = auto)", 0, 8, 1, "Qualita'"],
         ["accumula", "Fotogrammi accumulati (0 = auto)", 0, 64, 1, "Qualita'"]
@@ -11555,7 +12265,85 @@
 
       // Toccando una nube si legge il suo genere, con quello che e' misurato
       // e quello che e' stimato detto per nome.
+      // L'ISPEZIONE METEOROLOGICA: al tocco, lo stato che il motore ha
+      // inferito in quel punto e PERCHE'. Ogni valore dichiara la sua fonte.
+      function ispezionaNube(lat, lon) {
+        var campo = volume.campo, stato = campo && campo.stato;
+        if (!stato) return null;
+        var r = riquadroMercatore();
+        var fx = (mercX(lon) - r.ovest) / (r.est - r.ovest), fy = (r.nord - mercY(lat)) / (r.nord - r.sud);
+        if (fx < 0 || fx > 1 || fy < 0 || fy > 1) return null;
+        var w = stato.larghezza, h = stato.altezza;
+        var x = limita(Math.floor(fx * w), 0, w - 1), y = limita(Math.floor(fy * h), 0, h - 1);
+        var k = y * w + x, ing = stato.ingresso;
+        if (!stato.tipo[k]) return "Sereno qui (maschera nubi EUMETSAT: osservato)";
+        var numero = function (v, cifre) { return v.toFixed(cifre).replace(".", ","); };
+        var val = function (nome) { return ing[nome] ? ing[nome][k] : NaN; };
+        var tipo = TIPI_NUBE[stato.tipo[k]], secondo = TIPI_NUBE[stato.secondo[k]];
+        var righe = [];
+        righe.push(tipo.nome + " · fiducia " + Math.round(stato.fiducia[k] * 100) + "%"
+          + (stato.secondo[k] ? " (alternativa: " + secondo.nome + ")" : ""));
+        righe.push("Cima " + numero(stato.cima[k], 1) + " km (osservata: CTH/IR)"
+          + " · base " + numero(stato.base[k], 1) + " km ("
+          + (Number.isFinite(val("lcl")) ? "inferita da LCL ICON-2I" : "inferita, senza modello") + ")"
+          + " · spessore " + numero(stato.cima[k] - stato.base[k], 1) + " km");
+        var bt = val("btC");
+        if (Number.isFinite(bt)) righe.push("Temperatura della sommita' " + Math.round(bt) + " °C (IR, osservata)");
+        var amb = [];
+        if (Number.isFinite(val("convezione"))) {
+          var w0 = val("convezione") * CORRENTE_RIFERIMENTO_MS / EFFICIENZA_PARTICELLA;
+          amb.push("CAPE ~" + Math.round(w0 * w0 / 2 / 50) * 50 + " J/kg");
+        }
+        if (Number.isFinite(val("cin"))) amb.push("CIN " + Math.round(val("cin")) + " J/kg");
+        if (Number.isFinite(val("rh850"))) amb.push("UR 850 " + Math.round(val("rh850")) + "%");
+        if (Number.isFinite(val("rh700"))) amb.push("UR 700 " + Math.round(val("rh700")) + "%");
+        if (Number.isFinite(val("hzero"))) amb.push("zero termico " + numero(val("hzero"), 1) + " km");
+        if (Number.isFinite(val("shu"))) amb.push("shear 0-6 km " + Math.round(Math.hypot(val("shu"), val("shv"))) + " m/s");
+        if (Number.isFinite(val("rgsp")) || Number.isFinite(val("rcon"))) {
+          amb.push("pioggia di scala " + numero(val("rgsp") || 0, 1) + " / convettiva " + numero(val("rcon") || 0, 1) + " mm/h");
+        }
+        if (amb.length) righe.push("ICON-2I (modello): " + amb.join(" · "));
+        var oss = [];
+        if (Number.isFinite(val("dbz")) && val("dbz") >= 15) oss.push("radar " + Math.round(val("dbz")) + " dBZ");
+        if (Number.isFinite(val("lampi")) && val("lampi") > 0.05) oss.push("fulmini rilevati");
+        if (oss.length) righe.push("Osservato: " + oss.join(" · "));
+        // L'oggetto convettivo piu' vicino.
+        var torre = null, dMin = Infinity;
+        (campo.torri || []).forEach(function (t) {
+          var d = Math.hypot(t.x - x, t.y - y);
+          if (d < dMin) { dMin = d; torre = t; }
+        });
+        var kmpx = ing.kmPerPixel;
+        if (torre && dMin * kmpx < torre.raggioKm + torre.incudineKm) {
+          var punti = ["E", "NE", "N", "NO", "O", "SO", "S", "SE"];
+          var angolo = Math.atan2(-torre.dirIncY, torre.dirIncX);
+          var verso = punti[((Math.round(angolo / (Math.PI / 4)) % 8) + 8) % 8];
+          righe.push("Torre convettiva #" + torre.id + ": " + FASI_CICLO[torre.ciclo]
+            + " (" + torre.fonteCiclo + ") · base " + numero(torre.baseKm, 1) + " km · cima "
+            + numero(torre.cimaKm, 1) + " km · raggio " + Math.round(torre.raggioKm) + " km"
+            + " · torri secondarie " + torre.secondarie
+            + (torre.sfondamento > 0.1 ? " · overshooting top" : "")
+            + " · incudine verso " + verso + " ~" + Math.round(torre.incudineKm) + " km (" + torre.fonteIncudine + ")"
+            + " · inclinata dallo shear " + Math.round(torre.shearMs) + " m/s");
+        }
+        var x0 = {};
+        Object.keys(ing).forEach(function (nome) {
+          if (ing[nome] && ing[nome].length === w * h) x0[nome] = ing[nome][k];
+        });
+        ["copertura", "tau", "kappa", "chi", "incudine", "fibra", "granuli", "liscio", "convezione"]
+          .forEach(function (nome) { if (!Number.isFinite(x0[nome])) x0[nome] = 0; });
+        var ragioni = punteggiNube(x0).ragioni;
+        if (ragioni.length) righe.push("Perche': " + ragioni.join("; "));
+        righe.push("Morfologia: cumuliforme " + Math.round(stato.cumulo[k] * 100) + "% · sviluppo "
+          + Math.round(stato.sviluppo[k] * 100) + "% · celle ~" + numero(stato.cellaKm[k], 1) + " km · aperture "
+          + Math.round(stato.apertura[k] * 100) + "% · fibre " + Math.round(stato.fibra[k] * 100) + "%");
+        return righe.join("\n");
+      }
+
       function descriviNube(lat, lon) {
+        var ispezione = null;
+        try { ispezione = ispezionaNube(lat, lon); } catch (errore) { ispezione = null; }
+        if (ispezione) return ispezione;
         var campo = volume.campo;
         if (!campo || !campo.classe) return null;
         var r = riquadroMercatore();
@@ -11598,6 +12386,28 @@
           + ambienteQui + ecoQui + lampiQui;
       }
 
+      // La scheda dell'ispezione: resta aperta finche' non la si chiude.
+      var schedaIspezione = null;
+      function mostraIspezione(testo) {
+        if (typeof document === "undefined") return;
+        if (!schedaIspezione) {
+          schedaIspezione = document.createElement("div");
+          schedaIspezione.style.cssText = "position:fixed;right:12px;bottom:110px;z-index:9999;max-width:min(420px,calc(100vw - 24px));"
+            + "padding:10px 12px 10px 12px;background:rgba(15,20,30,.92);color:#e8eef6;font:12px/1.45 system-ui,sans-serif;"
+            + "border-radius:10px;box-shadow:0 4px 18px rgba(0,0,0,.4);white-space:pre-line;max-height:60vh;overflow:auto";
+          var chiudi = document.createElement("button");
+          chiudi.textContent = "\u00d7";
+          chiudi.setAttribute("aria-label", "Chiudi");
+          chiudi.style.cssText = "float:right;margin-left:8px";
+          chiudi.addEventListener("click", function () { schedaIspezione.style.display = "none"; });
+          schedaIspezione.appendChild(chiudi);
+          schedaIspezione.appendChild(document.createElement("div"));
+          document.body.appendChild(schedaIspezione);
+        }
+        schedaIspezione.lastChild.textContent = testo;
+        schedaIspezione.style.display = "";
+      }
+
       var toccoRegistrato = false;
       function registraTocco() {
         if (toccoRegistrato || !map) return;
@@ -11605,7 +12415,8 @@
         map.on("click", function (e) {
           if (!attiva || !volume.pronto) return;
           var testo = descriviNube(e.lngLat.lat, e.lngLat.lng);
-          if (testo) toast(testo);
+          if (testo && testo.indexOf("\n") >= 0) mostraIspezione(testo);
+          else if (testo) toast(testo);
         });
       }
 

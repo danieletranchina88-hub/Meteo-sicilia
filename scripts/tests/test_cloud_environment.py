@@ -113,6 +113,30 @@ def test_merge_forgets_hours_older_than_the_window():
         assert [e["valid"] for e in index["hours"]] == ["2026-09-27T00:00:00Z"]
 
 
+def test_inference_fields_are_optional_and_derived():
+    lat = np.linspace(48.9, 33.7, 60)
+    lon = np.linspace(3.0, 22.0, 80)
+    shape = (lat.size, lon.size)
+    writer = CloudEnvironmentWriter(RUN, lat, lon, target_points=1000)
+    extras = {
+        "u250": np.full(shape, 30.0), "v250": np.full(shape, -10.0),
+        "rh850": np.full(shape, 95.0), "clcl": np.full(shape, 80.0),
+        "t700": np.full(shape, 273.15), "q700": np.full(shape, 0.0035),
+        "rain_con": np.zeros(shape), "cin": np.full(shape, -40.0),
+        "rh500": None,
+    }
+    assert writer.add(1, np.full(shape, 20.0), np.full(shape, 12.0), np.zeros(shape),
+                      extras=extras)
+    back = Tile.from_bytes(writer.tiles[1].to_bytes(), writer.tiles[1].valid)
+    assert np.allclose(back.fields["u250"], 30.0) and np.allclose(back.fields["v250"], -10.0)
+    assert np.allclose(back.fields["cin"], 40.0), "CIN in modulo"
+    # QV 3,5 g/kg a 700 hPa e 0 C: circa 60% di umidita' relativa.
+    assert 55 < float(np.nanmean(back.fields["rh700"])) < 65
+    assert "rh500" not in back.fields and "clch" not in back.fields
+    # Senza campi facoltativi la piastrella resta quella di prima.
+    assert set(_writer().tiles[1].fields) == {"lcl", "t2m", "lapse", "cape", "hsurf"}
+
+
 def test_browser_fixture_matches_the_writer():
     """scripts/tests/fixtures_cloud_env.bin.gz e' la piastrella che legge
     test_nubi_icon.js: se il writer cambia formato, va rigenerata."""

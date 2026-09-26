@@ -68,7 +68,41 @@ FIELDS = (
     ("lapse", 0.001, 0.0),    # gradiente medio suolo-500 hPa, K/km
     ("cape", 0.5, 0.0),       # CAPE (massimo di blocco), J/kg
     ("hsurf", 1.0, 0.0),      # orografia, m
+    # --- per il motore d'inferenza delle nubi (tutti facoltativi) ---
+    ("cin", 0.5, 0.0),        # |CIN| ML, J/kg
+    ("hzero", 1.0, 0.0),      # quota dello zero termico, m
+    ("u250", 0.01, 0.0),      # vento a 250 hPa (incudini, cirri), m/s
+    ("v250", 0.01, 0.0),
+    ("u500", 0.01, 0.0),      # vento a 500 hPa (moto dei sistemi), m/s
+    ("v500", 0.01, 0.0),
+    ("shu", 0.01, 0.0),       # shear 0-6 km, m/s (inclinazione delle torri)
+    ("shv", 0.01, 0.0),
+    ("rh850", 0.01, 0.0),     # umidita' relativa, %
+    ("rh700", 0.01, 0.0),     # (da T e QV a 700 hPa)
+    ("rh500", 0.01, 0.0),
+    ("clcl", 0.01, 0.0),      # copertura del modello per piani, %
+    ("clcm", 0.01, 0.0),
+    ("clch", 0.01, 0.0),
+    ("rcon", 0.001, 0.0),     # pioggia convettiva, mm/h (massimo di blocco)
+    ("rgsp", 0.001, 0.0),     # pioggia di scala, mm/h
 )
+# Come si riduce ogni campo facoltativo sulla griglia larga: il massimo per
+# cio' che e' piccolo e intenso (una cella convettiva), la media per il resto.
+_EXTRA_BLOCK = {"rcon": "max", "cin": "mean"}
+
+
+def relative_humidity(q_kg_kg, t_k, p_hpa: float) -> np.ndarray:
+    """Umidita' relativa (%) da umidita' specifica e temperatura (Bolton)."""
+    q = np.asarray(q_kg_kg, dtype=np.float64)
+    # Alcuni GRIB pubblicano QV in g/kg: nessuna umidita' specifica reale
+    # supera 0,05 kg/kg.
+    if np.nanmax(q) > 0.1:
+        q = q / 1000.0
+    tc = np.asarray(t_k, dtype=np.float64) - 273.15
+    e = q * p_hpa / (0.622 + 0.378 * q)
+    es = 6.112 * np.exp(17.67 * tc / (tc + 243.5))
+    with np.errstate(invalid="ignore", divide="ignore"):
+        return np.clip(100.0 * e / es, 0.0, 110.0)
 
 
 class EnvironmentUnavailable(RuntimeError):
@@ -154,11 +188,12 @@ class Tile:
 
     def to_bytes(self) -> bytes:
         ny, nx = self.fields["lcl"].shape
-        head = MAGIC + struct.pack("<BBHH", VERSION, len(FIELDS), nx, ny)
+        body = b""
+        present = [spec for spec in FIELDS if spec[0] in self.fields]
+        head = MAGIC + struct.pack("<BBHH", VERSION, len(present), nx, ny)
         head += struct.pack("<ffff", float(self.latitudes[0]), float(self.latitudes[-1]),
                             float(self.longitudes[0]), float(self.longitudes[-1]))
-        body = b""
-        for name, scale, offset in FIELDS:
+        for name, scale, offset in present:
             head += name.encode("ascii").ljust(8, b"\0") + struct.pack("<ff", scale, offset)
             values = np.asarray(self.fields[name], dtype=np.float64)
             codes = np.full(values.shape, _NODATA, dtype="<i2")
@@ -228,7 +263,8 @@ class CloudEnvironmentWriter:
     def hours(self) -> list[int]:
         return sorted(self.tiles)
 
-    def add(self, lead_hours: int, t2m_c, td2m, cape, t500_k=None, hsurf_m=None) -> bool:
+    def add(self, lead_hours: int, t2m_c, td2m, cape, t500_k=None, hsurf_m=None,
+            extras=None) -> bool:
         """Aggiunge una scadenza; False se fuori orizzonte o incompleta."""
         lead_hours = int(lead_hours)
         if lead_hours < 0 or lead_hours > self.max_lead_hours or lead_hours in self.tiles:
@@ -249,6 +285,24 @@ class CloudEnvironmentWriter:
             "hsurf": (_block(hsurf, f, "mean") if hsurf is not None
                       else np.zeros((self.latitudes.size, self.longitudes.size))),
         }
+        extras = dict(extras or {})
+        if extras.get("q700") is not None and extras.get("t700") is not None:
+            extras["rh700"] = relative_humidity(extras["q700"], extras["t700"], 700.0)
+        if extras.get("shear_u") is not None:
+            extras["shu"], extras["shv"] = extras.get("shear_u"), extras.get("shear_v")
+        if extras.get("rain_con") is not None:
+            extras["rcon"] = extras["rain_con"]
+        if extras.get("rain_gsp") is not None:
+            extras["rgsp"] = extras["rain_gsp"]
+        if extras.get("cin") is not None:
+            extras["cin"] = np.abs(np.asarray(extras["cin"], dtype=np.float64))
+        known = {spec[0] for spec in FIELDS}
+        for name, values in extras.items():
+            if name in known and name not in fields and values is not None:
+                arr = self._orient(values)
+                if arr is None or arr.shape != t2m_k.shape:
+                    continue
+                fields[name] = _block(arr, f, _EXTRA_BLOCK.get(name, "mean"))
         valid = self.run_time + timedelta(hours=lead_hours)
         self.tiles[lead_hours] = Tile(valid, self.latitudes, self.longitudes, fields)
         return True
