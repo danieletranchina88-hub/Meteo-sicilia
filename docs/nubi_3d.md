@@ -246,3 +246,52 @@ facoltativi, scaricati a parte dalla diagnostica temporali): vento a 250 hPa,
 UR 850 e 500 hPa, CLCL/CLCM/CLCH, RAIN_CON e RAIN_GSP (intensità orarie);
 nella piastrella anche CIN, zero termico, vento a 500 hPa, shear 0-6 km e UR
 700 hPa derivata da T e QV.
+
+## La geometria e le prestazioni secondo Nubis³ (Guerrilla, SIGGRAPH 2023)
+
+Le forme non sono più disegnate a mano (pile di bolle, celle a griglia): il
+renderer segue il metodo pubblicato da Guerrilla per Horizon Zero Dawn e
+Horizon Forbidden West, lo stesso filone da cui vengono le nubi dei
+simulatori moderni. Asobo non ha pubblicato i dettagli del motore nuvole di
+Microsoft Flight Simulator; i riferimenti tecnici pubblici completi sono:
+
+- A. Schneider, "Nubis, Cubed: Methods (and madness) to model and render
+  immersive real-time voxel-based clouds", Advances in Real-Time Rendering,
+  SIGGRAPH 2023 (https://www.guerrilla-games.com/read/nubis-cubed).
+- A. Schneider, "Nubis, Evolved", SIGGRAPH 2022; "The Real-Time Volumetric
+  Cloudscapes of Horizon Zero Dawn", SIGGRAPH 2015.
+- SideFX, rumore Alligator (HDK, alligator.C).
+
+Come si traduce qui:
+
+1. **Profilo dimensionale** (0 fuori, 1 nel nucleo), costruito dallo stato
+   inferito: profilo verticale per tipo (lastra per gli strati, base netta e
+   cima che si assottiglia per i cumuliformi, fascia sottile per i cirri) per
+   la copertura osservata; gli oggetti convettivi sono inviluppi a distanza
+   con segno (colonna inclinata con cupola schiacciata, torri secondarie
+   fuse, cupola che sfonda, incudine a tetto piatto sottovento).
+2. **Forma**: il profilo fa da copertura sul rumore Perlin-Worley degli
+   ammassi (`remap(grumi, 1 - profilo, 1, 0, 1)`), come in Horizon Zero
+   Dawn; nel nucleo la nube resta piena.
+3. **Dettaglio** (up-rez di Nubis³): un solo campione del rumore Alligator
+   a scala più piccola, *billowy* per i cumuliformi e *wispy* riccioluto per
+   veli e cirri, che erode il bordo tenue (`remap(forma, dettaglio, 1, 0,
+   1)`), più il rumore "piegato due volte" da vicino e la nitidezza
+   `pow(d, 0.3..0.6)`.
+4. **Luce**: i primi due passi verso il sole vedono il dettaglio, gli altri
+   solo la forma grande; bagliore interno dal profilo (campo di probabilità
+   di diffusione, meno attenuato verso il sole); luce del cielo
+   `sqrt(1 - profilo)`.
+5. **Vuoto saltato** (sphere tracing): una griglia 3D grossa (384×355×24 sul
+   PC, 192×178×24 sul telefono) con i km minimi dalla nube più vicina,
+   calcolata in un Web Worker a ogni campo (trasformata di distanza euclidea
+   esatta, sempre per difetto: la prova `vuoto: distanza sempre per difetto`
+   lo verifica a forza bruta). Il raggio attraversa il cielo sereno in pochi
+   passi.
+6. **Risoluzione**: il volume si disegna in al massimo 2,1 Mpx sul PC (0,52
+   sul telefono) e si accumula a mappa ferma; 256 passi massimi (128 sul
+   telefono).
+
+Sul banco GPU software (llvmpipe) la stessa scena costa: cumulonembo 3,9 →
+0,5 s, stratocumulo 0,9 → 0,3 s, strato 0,45 → 0,23 s; sul sito si aggiungono
+i salti del vuoto e i pixel dimezzati.

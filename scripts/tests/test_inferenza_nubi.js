@@ -18,7 +18,8 @@ const contesto = { Math, Float32Array, Float64Array, Uint32Array, Uint8Array, In
   Number, isMobile: () => false, costruisciMascheraNube: () => null, CLOUD_PRODUCTS: {} };
 vm.createContext(contesto);
 vm.runInContext("this.m = (function () {" + corpo + ";return { inferisciStati, trovaTorri, TIPI_NUBE,"
-  + " punteggiNube, verticaleDelTipo };})();", contesto);
+  + " punteggiNube, verticaleDelTipo, costruisciVuoto, unitaX, unitaY, CIRCONFERENZA,"
+  + " QUOTA_SCALA_KM, VUOTO_KM_PER_GRADINO, VUOTO_QUOTA_KM };})();", contesto);
 const m = contesto.m;
 
 let ok = true;
@@ -208,6 +209,64 @@ prova("fiducia bassa: archetipi compatibili mescolati, niente salti", () => {
   const s = m.inferisciStati(cella({ copertura: 1, cima: 1.2, tau: 0.6, kappa: 0.25, granuli: 0.3, rh850: 95, lcl: 0.5 }));
   assert.ok(s.fiducia[0] < 0.7, "fiducia " + s.fiducia[0]);
   assert.ok(s.cumulo[0] > 0.05 && s.cumulo[0] < 0.5, "morfologia intermedia " + s.cumulo[0]);
+});
+
+// IL VUOTO (Nubis3, sphere tracing): la griglia della distanza non deve MAI
+// promettere piu' km vuoti di quanti ce ne siano davvero, altrimenti il
+// raggio salterebbe dentro una nube. Confronto a forza bruta con le nubi
+// del campo (colonne fra base e cima) e con una torre.
+prova("vuoto: distanza sempre per difetto", () => {
+  const dom = { x0: m.unitaX(8), x1: m.unitaX(22), yNord: m.unitaY(47), ySud: m.unitaY(35) };
+  const w = 140, h = 150, dati = new Float32Array(w * h * 4);
+  let seme = 7;
+  const caso = () => { seme = (seme * 16807) % 2147483647; return seme / 2147483647; };
+  const nubi = [];
+  for (let k = 0; k < 40; k++) {
+    const cx = Math.floor(caso() * w), cy = Math.floor(caso() * h), r = 1 + Math.floor(caso() * 4);
+    const base = 0.5 + caso() * 4, cima = base + 0.3 + caso() * 7;
+    for (let y = Math.max(0, cy - r); y < Math.min(h, cy + r); y++) {
+      for (let x = Math.max(0, cx - r); x < Math.min(w, cx + r); x++) {
+        const i = (y * w + x) * 4;
+        dati[i] = cima / m.QUOTA_SCALA_KM; dati[i + 1] = 0.6; dati[i + 2] = base / m.QUOTA_SCALA_KM;
+        nubi.push([(x + 0.5) / w, (y + 0.5) / h, base, cima]);
+      }
+    }
+  }
+  const torri = { quante: 1, a: new Float32Array(96), b: new Float32Array(96), c: new Float32Array(96), d: new Float32Array(96) };
+  torri.a.set([dom.x0 + 0.3 * (dom.x1 - dom.x0), dom.yNord + 0.6 * (dom.ySud - dom.yNord), 6, 12]);
+  torri.b.set([1, 0.1, 0, 0.5]); torri.c.set([1, 0, 40, 0.8]);
+  const v = m.costruisciVuoto(dati, w, h, null, 0, 0, torri, dom, 384);
+  const circ = m.CIRCONFERENZA / 1000;
+  const coseno = (yu) => 1 / Math.cosh(Math.PI * (1 - 2 * yu));
+  const kmTra = (u1, v1, u2, v2) => {
+    const yu = dom.yNord + (0.5 * (v1 + v2)) * (dom.ySud - dom.yNord);
+    const s = circ * coseno(yu);
+    return Math.hypot((u1 - u2) * (dom.x1 - dom.x0) * s, (v1 - v2) * (dom.ySud - dom.yNord) * s);
+  };
+  const tu = 0.3, tv = 0.6;
+  let prove = 0, salti = 0;
+  for (let n = 0; n < 3000; n++) {
+    const u = caso(), vv = caso(), alt = caso() * 18;
+    const ix = Math.min(v.nx - 1, Math.floor(u * v.nx)), iy = Math.min(v.ny - 1, Math.floor(vv * v.ny));
+    const iz = Math.min(v.nz - 1, Math.floor(alt / m.VUOTO_QUOTA_KM * v.nz));
+    const promessi = v.dati[(iz * v.ny + iy) * v.nx + ix] * m.VUOTO_KM_PER_GRADINO;
+    if (promessi <= 0) continue;
+    prove++;
+    // La nube piu' vicina: colonne del campo (mezzo texel di tolleranza) e
+    // il cilindro della torre (raggio 6 km, da 1 a 12 km).
+    const mezzoTexel = kmTra(0, 0, 1 / w, 1 / h) / 2;
+    let minimo = Infinity;
+    for (const [cu, cv, base, cima] of nubi) {
+      const dz = alt < base ? base - alt : alt > cima ? alt - cima : 0;
+      const dh = Math.max(0, kmTra(u, vv, cu, cv) - mezzoTexel);
+      minimo = Math.min(minimo, Math.hypot(dh, dz));
+    }
+    const dzT = alt < 1 ? 1 - alt : alt > 12 ? alt - 12 : 0;
+    minimo = Math.min(minimo, Math.hypot(Math.max(0, kmTra(u, vv, tu, tv) - 6), dzT));
+    assert.ok(promessi <= minimo + 1e-6, "il vuoto promette " + promessi + " km ma la nube e' a " + minimo.toFixed(2) + " " + JSON.stringify([u, vv, alt, ix, iy, iz]));
+    if (promessi > 20) salti++;
+  }
+  assert.ok(prove > 500 && salti > 100, "il vuoto non fa risparmiare niente: " + prove + " " + salti);
 });
 
 if (!ok) process.exit(1);

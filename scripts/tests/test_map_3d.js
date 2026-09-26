@@ -2406,8 +2406,8 @@ console.log("nubi in volume: spessore continuo, niente grana, niente coni, nient
   // La texture delle nubi 3D: R cima, G densita', B base, A CAPE.
   assert.match(frammento, /float cimaKm = campo\.r \* uScalaKm;/, "la cima non viene piu' dal canale R");
   assert.match(frammento, /float baseKm = campo\.b \* uScalaKm;/, "la base non viene piu' dal canale B");
-  assert.match(frammento, /if \(campo\.g < 0\.004 && dTorri <= 0\.0\) return 0\.0;/, "la maschera satellitare non e' piu' esatta");
-  assert.match(frammento, /d \*= impronta;/, "la struttura ricostruita esce dall'impronta del satellite");
+  assert.match(frammento, /if \(campo\.g < 0\.004 && pTorri <= 0\.0\) return 0\.0;/, "la maschera satellitare non e' piu' esatta");
+  assert.match(frammento, /profilo \*= impronta;/, "la struttura ricostruita esce dall'impronta del satellite");
   assert.match(frammento, /conv = cumulo \* sviluppo;/, "la convezione non viene piu' dallo stato inferito");
   // Le precedenti asserzioni su collo, copQuota e deformazione delle
   // coordinate imponevano proprio le formule responsabili dei crateri.
@@ -2508,46 +2508,55 @@ const fragment = shader("FRAMMENTO");
 // morfologia, oggetti convettivi), non estrude la maschera del satellite.
 assert.match(fragment, /if \(altKm >= baseKm && altKm <= cimaKm \+ 0\.15 && campo\.g >= 0\.004\)/,
   "il raggio non e' piu' confinato fra base e cima");
-assert.match(fragment, /float celle\(vec2 xy, float z, float base, float cima, float cellaKm, float sviluppo,/,
-  "manca l'archetipo a celle (cumuli, stratocumuli, altocumuli)");
-assert.match(fragment, /float torri\(vec2 punto, float z, float kmPerUnita, float esag, out float tipoTorre\)/,
-  "mancano gli oggetti convettivi (torri e incudini)");
+// NUBIS3 (Guerrilla, SIGGRAPH 2023): la forma e' un profilo dimensionale
+// eroso dal rumore, non bolle o celle disegnate a mano.
+assert.doesNotMatch(fragment, /float elemento\(|float celle\(/, "tornano le forme disegnate a mano (pile di bolle, celle)");
+assert.match(fragment, /float base = saturare\(rimappa\(grumi, 1\.0 - profilo, 1\.0, 0\.0, 1\.0\)/,
+  "manca la forma: il profilo come copertura sul rumore degli ammassi");
+assert.match(fragment, /float d = saturare\(rimappa\(base, composto, 1\.0, 0\.0, 1\.0\)\);/,
+  "manca l'erosione del profilo dimensionale (up-rez di Nubis3)");
+assert.match(fragment, /float billowy = mix\(n\.b, n\.a, 0\.25 \+ 0\.5 \* base\);/, "manca il rumore billowy di Nubis3");
+assert.match(fragment, /d = pow\(d \* ps, mix\(0\.3, 0\.6, max\(1e-3, ps\)\)\);/, "manca la nitidezza di Nubis3");
+assert.match(fragment, /float profiloVerticale\(float hf, float cumulo, float sviluppo, float fibra\)/,
+  "manca il profilo verticale per tipo");
+assert.match(fragment, /float profiloTorri\(vec2 punto, float z, float kmPerUnita, float esag, out float tipoDettaglio\)/,
+  "mancano gli inviluppi degli oggetti convettivi (torri e incudini)");
 assert.match(fragment, /vec2 rel = dKm - B\.yz \* max\(z - base, 0\.0\);/, "le torri non si inclinano piu' con lo shear");
 assert.match(fragment, /float lungo = dot\(rel, dir\), largo = dot\(rel, vec2\(-dir\.y, dir\.x\)\);/,
   "l'incudine non segue piu' la direzione del vento in quota");
-assert.match(fragment, /float d = 0\.0;/);
-assert.match(fragment, /d = max\(dStrato \* \(1\.0 - smoothstep\(0\.7, 1\.0, cumulo\)\), dCelle \* smoothstep\(0\.02, 0\.35, cumulo\)\);/, "banco e celle non si compongono piu' per carattere cumuliforme");
+assert.match(fragment, /float sdInc = max\(sdEllissoide\(e, raggi\), zv - tetto\);/, "l'incudine non ha piu' il tetto piatto");
 assert.match(fragment, /vec2 dir = uVentoAlto, perp = vec2\(-uVentoAlto\.y, uVentoAlto\.x\);/, "i cirri non seguono piu' il vento");
 assert.match(fragment, /float aperta = max\(apertura, cumulo \* \(1\.0 - smoothstep\(0\.25, 0\.95, campo\.g\)\)\);/,
   "le aperture non rispettano piu' la copertura osservata");
-assert.match(html, /var GENERA_FORMA = \[/, "manca il generatore della forma");
+assert.match(html, /var GENERA_FORMA = \[/, "manca il generatore del rumore");
+assert.match(html, /"float alligator\(vec3 p, float celle\) \{",/, "manca il rumore Alligator");
 assert.match(html, /function creaPannelloRegolazione\(\)/, "manca il pannello ?regola=1");
 assert.match(html, /if \(!REGOLA_ATTIVA\) return r;/, "i valori salvati devono valere solo con ?regola=1");
 assert.match(html, /function inferisciStati\(ingresso\)/, "manca il motore d'inferenza");
 assert.match(html, /function ispezionaNube\(lat, lon\)/, "manca l'ispezione meteorologica");
-assert.match(fragment, /vec3 qd = q \/ uDettaglioKm \+ \(f\.gba - 0\.5\) \* 6\.0;/, "il dettaglio torna a ripetersi a trama regolare");
-assert.doesNotMatch(fragment, /textureLod\(uWorley, q \/ uWorleyKm/, "l'erosione torna sul cubo 32^3 che mette le bolle in fila");
 assert.match(fragment, /vec3 verso = vec3\(uSole\.xy, uSole\.z\) \/ kmPerUnita;/,
   "le ombre non seguono piu' la geometria esagerata: da vicino spariscono");
 assert.match(fragment, /t = max\(tVicino, t - passoPrima\);/, "manca l'ingresso a passi corti: torna la brina");
 assert.match(html, /var ESAGERAZIONE_MINIMA = 2\.4;/, "l'esagerazione torna a spianare le nubi da vicino");
-// Realismo: diffusione multipla a ottave, incudine dei cumulonembi, cavita'
-// fra i lobi, accumulo dei fotogrammi a mappa ferma solo sul PC.
+// Prestazioni (Nubis3): il vuoto si salta con la distanza dalla nube, la
+// luce lontana legge il profilo, il rumore si legge a MIP crescente.
+assert.match(fragment, /float vuotoKm = distanzaVuoto\(uvV, p\.z \* kmPerUnita \/ uEsagerazione\);/, "manca il salto del vuoto");
+assert.match(fragment, /t \+= max\(vuotoKm \/ kmPerTMax, passoMin\);/, "il salto del vuoto non e' per difetto");
+assert.match(html, /function costruisciVuoto\(dati, w, h, morfo2, sw, sh, torri, dom, lato\)/, "manca la griglia del vuoto");
+assert.match(html, /lavoratore\.postMessage\(richiesta, \[datiCampo\.buffer\]\);/, "la griglia del vuoto deve calcolarsi nel worker");
+assert.match(fragment, /i >= \(uQualita > 0\.5 \? 2 : 1\), h, c, f\)/, "la luce lontana non legge piu' il profilo medio");
+assert.match(fragment, /multipla \+= 0\.35 \* profiloQui \* exp\(-tauSole \* mix\(0\.25, 0\.05, smoothstep\(0\.0, 0\.9, coseno\)\)\) \* fase1;/,
+  "manca il bagliore interno di Nubis3");
+assert.match(fragment, /\* mix\(1\.0, sqrt\(cavita\), uCavita\);/, "manca la luce del cielo dal profilo (Nubis)");
 assert.match(fragment, /multipla \+= 0\.12 \* exp\(-tauSole \* 0\.12\) \* fase2;/, "manca la seconda ottava di diffusione multipla");
-assert.match(fragment, /float e = \(lungo - 0\.42 \* L\)/, "manca l'incudine dei cumulonembi");
 assert.match(fragment, /fract\(sin\(dot\(gl_FragCoord\.xy \+ vec2\(17\.31, 41\.73\) \* uFotogramma/,
   "lo scarto del raggio non cambia piu' da un fotogramma all'altro: l'accumulo non converge");
-assert.match(html, /rumore: 48, passiLuce: 5, passi: 176, qualita: 0, accumula: 0, latoForma: 64 \}/, "il telefono deve restare leggero");
-assert.match(html, /qualita: 1, accumula: 12, latoForma: 128 \}/, "sul PC manca l'accumulo dei fotogrammi");
+assert.match(html, /passiLuce: 4, passi: 128, qualita: 0, accumula: 0, latoForma: 64, vuoto: 192 \}/, "il telefono deve restare leggero");
+assert.match(html, /qualita: 1, accumula: 8, latoForma: 128, vuoto: 384 \}/, "sul PC manca l'accumulo dei fotogrammi");
 assert.match(html, /var lampiAccesi = /, "l'accumulo spalmerebbe i lampi");
-assert.match(fragment, /float morso = uErosione \* mix\(0\.2, 1\.0, cumuliforme\)/, "il dettaglio non dipende piu' dal carattere cumuliforme");
-// Da vicino: il passo segue la fascia della colonna (niente trama a puntini
-// sui veli), il cielo e' schermato dalla nube sopra, le ombre dei primi
-// passi verso il sole vedono i lobi, e le lamine non fanno curve di livello.
 assert.match(fragment, /passo = min\(passo, max\(fine, \(fascia\.y - fascia\.x\) \/ salita \* 0\.25\)\);/,
   "il passo non segue piu' lo spessore della colonna");
 assert.match(fragment, /float occlusione = exp\(-sopra \* uSigma \* 0\.5\);/, "manca l'occlusione del cielo");
-assert.match(fragment, /i > \(uQualita > 0\.5 \? 3 : 1\), h, c, f\)/, "le ombre non vedono piu' il dettaglio dei lobi");
 assert.match(fragment, /float powder = 1\.0 - exp\(-estinzione \* 2\.0\);/, "manca il powder");
 assert.match(fragment, /float beer = exp\(-tauSole\);/, "manca Beer-Lambert verso il sole");
 assert.match(fragment, /float henyeyGreenstein\(float coseno, float g\)/, "manca Henyey-Greenstein");
@@ -2555,6 +2564,7 @@ assert.match(fragment, /vec4 m1 = textureLod\(uMorfo1, uv, lodCampo\);/, "lo sta
 assert.match(fragment, /vec4 m2 = textureLod\(uMorfo2, uv, lodCampo\);/, "la morfologia inferita non raggiunge il renderer");
 assert.match(html, /gl\.uniform1i\(u\("uMorfo1"\), 4\)/, "campionatore dello stato non collegato");
 assert.match(html, /gl\.uniform1i\(u\("uMorfo2"\), 5\)/, "campionatore della morfologia non collegato");
+assert.match(html, /gl\.uniform1i\(u\("uVuoto"\), 6\)/, "campionatore del vuoto non collegato");
 assert.doesNotMatch(fragment, /vec3 q = vec3\(p\.xy \* kmPerUnita/, "latitude changes stretch world noise");
 console.log("Cloud morphology and renderer wiring checks: OK");
 const GPU_QA = String.raw`import ctypes as c, math, sys, time, os
@@ -2616,11 +2626,12 @@ program=CreateProgram();AttachShader(program,shader(open('/tmp/cloud_VERTICE.gls
 def uf(n,*v):
  loc=GetUniformLocation(program,n.encode());[None,Uniform1f,Uniform2f,Uniform3f,Uniform4f][len(v)](loc,*v)
 def ui(n,v):Uniform1i(GetUniformLocation(program,n.encode()),v)
-for n,v in [('uCampo',0),('uPerlin',1),('uWorley',2),('uForma',3),('uMorfo1',4),('uMorfo2',5),('uPassiLuce',5 if mobile else 8),('uPassi',176 if mobile else 384),('uQuantiLampi',0)]:ui(n,v)
+tex(np.zeros((1,1,1,4),np.uint8),6,3,mip=False)
+for n,v in [('uCampo',0),('uPerlin',1),('uWorley',2),('uForma',3),('uMorfo1',4),('uMorfo2',5),('uVuoto',6),('uPassiLuce',4 if mobile else 6),('uPassi',128 if mobile else 256),('uQuantiLampi',0)]:ui(n,v)
 uf('uVentoAlto',1.0,0.0);uf('uDebugTipi',0.0)
 for n,v in dict(uLatoForma=LF,uScalaFormaKm=12,uScalaMacroKm=96,uCopertura=.5,uContrasto=1.2,uDettaglioKm=1.2,uStiraBolle=1,uForzaMacro=.4,uBaseDura=.75,uNucleo=.65,uPolvere=1.3,uMultipla=1,uFoschiaKm=420,uSoleForza=1,uIncudineKm=7.5,uCavita=.7,uErosione=.9,uRigonfio=1.15,uCavolfiore=.8,uOmbra=1.5,uAmbiente=.75,uEsposizione=.55,uQualita=1).items():uf(n,v)
 unit=1/40075;esag=float(os.environ.get('CLOUD_QA_EXAGGERATION','1.6'))
-for n,v in dict(uScalaKm=16,uCircKm=40075,uEsagerazione=esag,uSigma=3.6,uFaseG=.6,uForzaSole=1,uZMax=14*esag*unit,uPassoKm=.3,uPixelAngolo=.00005,uTexelCampo=40*unit/128,uPerlinKm=48,uWorleyKm=6,uLatoPerlin=64,uLatoWorley=32).items():uf(n,v)
+for n,v in dict(uScalaKm=16,uCircKm=40075,uEsagerazione=esag,uSigma=3.6,uFaseG=.6,uForzaSole=1,uZMax=14*esag*unit,uPassoKm=.3,uPixelAngolo=.0003 if close else .0021,uTexelCampo=40*unit/128,uPerlinKm=48,uWorleyKm=6,uLatoPerlin=64,uLatoWorley=32).items():uf(n,v)
 # Read actual page defaults: the fixture must not silently test obsolete tuning.
 import json
 for n,v in json.load(open('/tmp/cloud_settings.json')).items():uf(n,v)
@@ -2681,7 +2692,9 @@ if mode=='section':
  z=(1-(np.arange(H)+.5)/H)*14;xx=((np.arange(W)+.5)/W*2-1)*20
  cb=np.load(f'{prefix}_Cb_section.npy')[:,:,0]
  # La torre convettiva profonda e' una nube PIENA dalla base alla cima.
- core=cb[np.ix_((z>2)&(z<10),abs(xx)<2)]
+ # (lungo l'asse inclinato dallo shear: 0,15 km per km sopra la base)
+ zz2,xx2=np.meshgrid(z,xx,indexing='ij');asse=(zz2>2)&(zz2<10)&(abs(xx2-.15*(zz2-1.0))<2)
+ core=cb[asse]
  assert core.min()>.3, f'Cb hollow core: minimum density {core.min():.3f}'
  roof=((cb>.05)*z[:,None]).max(axis=0)
  assert roof[abs(xx)<2].max()>10.3, f'Cb top far below measured CTH: {roof[abs(xx)<2].max():.2f} km'

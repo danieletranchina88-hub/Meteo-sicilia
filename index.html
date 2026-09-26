@@ -7118,18 +7118,18 @@
       // campionamenti: e' quello che decide se uno strato sottile viene
       // attraversato o scavalcato.
       var QUALITA_VOLUME = isMobile()
-        ? { forma: 1200, pelle: 1400, misura: 800, esagerazione: 3.2, passoKm: 0.30, pixel: 720000,
-            rumore: 48, passiLuce: 5, passi: 176, qualita: 0, accumula: 0, latoForma: 64 }
-        : { forma: 2560, pelle: 3072, misura: 1100, esagerazione: 3.5, passoKm: 0.2, pixel: 4500000,
-            rumore: 64, passiLuce: 8, passi: 384, qualita: 1, accumula: 12, latoForma: 128 };
+        ? { forma: 1200, pelle: 1400, misura: 800, esagerazione: 3.2, passoKm: 0.30, pixel: 520000,
+            rumore: 48, passiLuce: 4, passi: 128, qualita: 0, accumula: 0, latoForma: 64, vuoto: 192 }
+        : { forma: 2560, pelle: 3072, misura: 1100, esagerazione: 3.5, passoKm: 0.2, pixel: 2100000,
+            rumore: 64, passiLuce: 6, passi: 256, qualita: 1, accumula: 8, latoForma: 128, vuoto: 384 };
 
       // I numeri dell'aspetto delle nubi. Sono quelli di tutti; con ?regola=1
       // nell'indirizzo compare un pannello per cambiarli dal vivo, e i valori
       // scelti restano in questo browser (solo con ?regola=1).
       var REGOLA_PREDEFINITA = {
-        scalaFormaKm: 12, scalaMacroKm: 96, copertura: 0.5, erosione: 0.9, rigonfio: 1.15,
-        cavolfiore: 0.8, ombra: 1.5, ambiente: 0.75, esposizione: 0.55, esagerazione: 0, contrasto: 1.2,
-        dettaglioKm: 1.2, stiraBolle: 1.0, forzaMacro: 0.4, baseDura: 0.75, nucleo: 0.65,
+        scalaFormaKm: 22, scalaMacroKm: 90, copertura: 0.5, erosione: 0.6, rigonfio: 1.0,
+        cavolfiore: 0.8, ombra: 1.5, ambiente: 0.75, esposizione: 0.55, esagerazione: 0, contrasto: 0.8,
+        dettaglioKm: 4.5, stiraBolle: 1.0, forzaMacro: 0.6, baseDura: 0.75, nucleo: 0.8,
         densita: 3.6, faseG: 0.6, polvere: 1.3, multipla: 1.0, foschiaKm: 420, sole: 1.0,
         cavita: 0.7, incudineKm: 7.5, passi: 0, passiLuce: 0, accumula: 0, debugTipi: 0
       };
@@ -9885,6 +9885,191 @@
         return { quante: n, a: a, b: b, c: c, d: d };
       }
 
+      // IL VUOTO: per ogni cella di una griglia grossa (dominio x quota), i km
+      // che mancano come minimo alla nube piu' vicina. E' la distanza con
+      // segno di Nubis3, calcolata qui una volta per campo: il raggio salta il
+      // cielo sereno in pochi passi invece di campionarlo a ogni passo.
+      //   - occupate: le colonne con nube (fra base e cima, con margine), le
+      //     torri con l'incudine, le colonne di pioggia fino al suolo;
+      //   - distanza euclidea esatta (Felzenszwalb) con i km della latitudine
+      //     piu' a nord (i piu' corti): sempre per difetto;
+      //   - meno la diagonale della cella piu' grande: vale per ogni punto
+      //     della cella, non solo per il centro.
+      var VUOTO_QUOTA_KM = 19;
+      var VUOTO_STRATI = 24;
+      var VUOTO_KM_PER_GRADINO = 4;
+      function trasformaDistanza1D(f, n, peso, d, v, z) {
+        var k = 0;
+        v[0] = 0; z[0] = -Infinity; z[1] = Infinity;
+        for (var q = 1; q < n; q++) {
+          var s = ((f[q] + peso * q * q) - (f[v[k]] + peso * v[k] * v[k])) / (2 * peso * (q - v[k]));
+          while (s <= z[k]) {
+            k--;
+            s = ((f[q] + peso * q * q) - (f[v[k]] + peso * v[k] * v[k])) / (2 * peso * (q - v[k]));
+          }
+          k++; v[k] = q; z[k] = s; z[k + 1] = Infinity;
+        }
+        k = 0;
+        for (q = 0; q < n; q++) {
+          while (z[k + 1] < q) k++;
+          var dq = q - v[k];
+          d[q] = peso * dq * dq + f[v[k]];
+        }
+      }
+      function costruisciVuoto(dati, w, h, morfo2, sw, sh, torri, dom, lato) {
+        var nx = lato || 256, ny = Math.max(8, Math.round(nx * h / w)), nz = VUOTO_STRATI;
+        var dz = VUOTO_QUOTA_KM / nz;
+        // Ogni colonna della griglia e' una maschera di bit: un bit per strato.
+        var maschera = new Uint32Array(nx * ny);
+        var bitFra = function (z0, z1) {
+          z0 = Math.max(0, z0); z1 = Math.min(nz - 1, z1);
+          if (z1 < z0) return 0;
+          return (z1 >= 31 ? 0xffffffff : ((1 << (z1 + 1)) >>> 0) - 1) & ~(((1 << z0) >>> 0) - 1);
+        };
+        // Ogni texel marca tutte le celle che copre (anche quando la griglia
+        // e' piu' fine del campo).
+        var fx0 = new Int32Array(w), fx1 = new Int32Array(w);
+        for (var x = 0; x < w; x++) {
+          fx0[x] = Math.floor(x * nx / w);
+          fx1[x] = Math.min(nx - 1, Math.ceil((x + 1) * nx / w) - 1);
+        }
+        for (var y = 0; y < h; y++) {
+          var vy0 = Math.floor(y * ny / h), vy1 = Math.min(ny - 1, Math.ceil((y + 1) * ny / h) - 1);
+          for (x = 0; x < w; x++) {
+            var k = (y * w + x) * 4;
+            if (!(dati[k + 1] > 0.004)) continue;
+            var cima = dati[k] * QUOTA_SCALA_KM, base = dati[k + 2] * QUOTA_SCALA_KM;
+            var bit = bitFra(Math.floor((Math.min(base, cima) - 0.5) / dz), Math.floor((cima + 0.7) / dz));
+            for (var vy = vy0; vy <= vy1; vy++) {
+              for (var vx = fx0[x]; vx <= fx1[x]; vx++) maschera[vy * nx + vx] |= bit;
+            }
+          }
+        }
+        // Le colonne di pioggia: dal suolo fino alla nube piu' bassa.
+        if (morfo2) {
+          for (y = 0; y < sh; y++) {
+            for (x = 0; x < sw; x++) {
+              if (morfo2[(y * sw + x) * 4 + 1] < 20) continue;
+              var col = Math.min(ny - 1, Math.floor((y + 0.5) * ny / sh)) * nx
+                + Math.min(nx - 1, Math.floor((x + 0.5) * nx / sw));
+              var m = maschera[col];
+              if (!m) continue;
+              var zb = 0;
+              while (!(m & (1 << zb))) zb++;
+              maschera[col] |= bitFra(0, zb);
+            }
+          }
+        }
+        // Le torri: il cilindro che contiene torre, secondarie e incudine.
+        var kmX = (dom.x1 - dom.x0) * CIRCONFERENZA / 1000 / nx;
+        var kmY = Math.abs(dom.ySud - dom.yNord) * CIRCONFERENZA / 1000 / ny;
+        var cosLatY = function (yu) { return 1 / Math.cosh(Math.PI * (1 - 2 * yu)); };
+        for (var i = 0; torri && i < torri.quante; i++) {
+          var j = i * 4;
+          var tx = (torri.a[j] - dom.x0) / (dom.x1 - dom.x0) * nx;
+          var ty = (torri.a[j + 1] - dom.yNord) / (dom.ySud - dom.yNord) * ny;
+          var coseno = cosLatY(torri.a[j + 1]);
+          var inclina = Math.hypot(torri.b[j + 1], torri.b[j + 2]) * (torri.a[j + 3] - torri.b[j]);
+          var raggioKm = Math.max(torri.c[j + 2] + 2 * torri.a[j + 2], 2.2 * torri.a[j + 2] + inclina);
+          var rx = raggioKm / (kmX * coseno) + 1, ry = raggioKm / (kmY * coseno) + 1;
+          var bitTorre = bitFra(Math.floor((torri.b[j] - 0.5) / dz), Math.ceil((torri.a[j + 3] + 1.8) / dz));
+          for (var yy = Math.max(0, Math.floor(ty - ry)); yy <= Math.min(ny - 1, Math.ceil(ty + ry)); yy++) {
+            for (var xx = Math.max(0, Math.floor(tx - rx)); xx <= Math.min(nx - 1, Math.ceil(tx + rx)); xx++) {
+              var ex = (xx + 0.5 - tx) / rx, ey = (yy + 0.5 - ty) / ry;
+              if (ex * ex + ey * ey <= 1.2) maschera[yy * nx + xx] |= bitTorre;
+            }
+          }
+        }
+        // Un anello di celle in piu' in orizzontale: lo shader legge il campo
+        // anche sfumato (i livelli piu' grossi della piramide).
+        var dil = new Uint32Array(nx * ny);
+        for (y = 0; y < ny; y++) {
+          for (x = 0; x < nx; x++) {
+            var mm = 0;
+            for (var oy = Math.max(0, y - 1); oy <= Math.min(ny - 1, y + 1); oy++) {
+              for (var ox = Math.max(0, x - 1); ox <= Math.min(nx - 1, x + 1); ox++) mm |= maschera[oy * nx + ox];
+            }
+            dil[y * nx + x] = mm;
+          }
+        }
+        // Distanza euclidea al quadrato, separabile: prima z (lungo la
+        // colonna, dai bit), poi x, poi y. I km della latitudine piu' a nord
+        // sono i piu' corti: la distanza resta per difetto.
+        var latNord = cosLatY(dom.yNord), latSud = cosLatY(dom.ySud);
+        var sx = kmX * latNord, sy = kmY * latNord;
+        var piano = nx * ny, D = new Float32Array(piano * nz), INF = 1e20;
+        var dz2 = dz * dz;
+        for (var c = 0; c < piano; c++) {
+          var bits = dil[c];
+          if (!bits) { for (var z = 0; z < nz; z++) D[z * piano + c] = INF; continue; }
+          // Lo strato occupato piu' vicino, in due passate lungo la colonna.
+          var ultimo = -1000;
+          for (z = 0; z < nz; z++) {
+            if (bits & (1 << z)) ultimo = z;
+            D[z * piano + c] = ultimo < -100 ? INF : (z - ultimo) * (z - ultimo) * dz2;
+          }
+          ultimo = 1000;
+          for (z = nz - 1; z >= 0; z--) {
+            if (bits & (1 << z)) ultimo = z;
+            if (ultimo < 500) {
+              var q = (ultimo - z) * (ultimo - z) * dz2;
+              if (q < D[z * piano + c]) D[z * piano + c] = q;
+            }
+          }
+        }
+        var n = Math.max(nx, ny);
+        var f = new Float64Array(n), d = new Float64Array(n), v = new Int32Array(n), zc = new Float64Array(n + 1);
+        for (z = 0; z < nz; z++) {
+          for (y = 0; y < ny; y++) {
+            var riga = z * piano + y * nx;
+            var vuota = true;
+            for (x = 0; x < nx; x++) { f[x] = D[riga + x]; if (f[x] < INF) vuota = false; }
+            if (vuota) continue;
+            trasformaDistanza1D(f, nx, sx * sx, d, v, zc);
+            for (x = 0; x < nx; x++) D[riga + x] = d[x];
+          }
+          for (x = 0; x < nx; x++) {
+            var inizio = z * piano + x;
+            vuota = true;
+            for (y = 0; y < ny; y++) { f[y] = D[inizio + y * nx]; if (f[y] < INF) vuota = false; }
+            if (vuota) continue;
+            trasformaDistanza1D(f, ny, sy * sy, d, v, zc);
+            for (y = 0; y < ny; y++) D[inizio + y * nx] = d[y];
+          }
+        }
+        // (una diagonale intera: il punto e la nube stanno ovunque nelle
+        // loro celle)
+        var margine = Math.sqrt(Math.pow(kmX * latSud, 2) + Math.pow(kmY * latSud, 2) + dz2);
+        var fuori = new Uint8Array(D.length);
+        for (k = 0; k < D.length; k++) {
+          var km = D[k] >= INF * 0.5 ? 1e4 : Math.sqrt(D[k]) - margine;
+          fuori[k] = km <= 0 ? 0 : Math.min(255, Math.floor(km / VUOTO_KM_PER_GRADINO));
+        }
+        return { dati: fuori, nx: nx, ny: ny, nz: nz };
+      }
+
+      // La griglia del vuoto si calcola in un worker: qualche centinaio di
+      // millisecondi che non devono bloccare la mappa quando si cambia ora.
+      // Senza worker (o in errore) si calcola qui, com'era.
+      var lavoratoreVuoto = null;
+      function lavoratoreDelVuoto() {
+        if (lavoratoreVuoto !== null) return lavoratoreVuoto;
+        lavoratoreVuoto = false;
+        try {
+          var sorgente = "var VUOTO_QUOTA_KM = " + VUOTO_QUOTA_KM + ", VUOTO_STRATI = " + VUOTO_STRATI
+            + ", VUOTO_KM_PER_GRADINO = " + VUOTO_KM_PER_GRADINO + ", QUOTA_SCALA_KM = " + QUOTA_SCALA_KM
+            + ", CIRCONFERENZA = " + CIRCONFERENZA + ";\n"
+            + trasformaDistanza1D.toString() + "\n" + costruisciVuoto.toString() + "\n"
+            + "onmessage = function (e) { var a = e.data;"
+            + " var r = costruisciVuoto(a.dati, a.w, a.h, a.morfo2, a.sw, a.sh, a.torri, a.dom, a.lato);"
+            + " postMessage({ serie: a.serie, dati: r.dati, nx: r.nx, ny: r.ny, nz: r.nz }, [r.dati.buffer]); };";
+          lavoratoreVuoto = new Worker(URL.createObjectURL(new Blob([sorgente], { type: "application/javascript" })));
+        } catch (errore) {
+          lavoratoreVuoto = false;
+        }
+        return lavoratoreVuoto;
+      }
+
       // Il verso del vento in quota per le fibre dei cirri: la media del
       // vento a 250 hPa sulla scena (500 hPa in ripiego), y verso sud.
       function ventoInQuota(ingresso) {
@@ -9977,6 +10162,10 @@
         "uniform vec2 uVentoAlto;      // verso del vento in quota (cirri), unitario",
         "uniform float uDebugTipi;     // 1: colora le nubi per tipo",
         "uniform vec3 uColoriTipi[16];",
+        "uniform sampler3D uVuoto;     // km minimi dalla nube piu' vicina (griglia grossa)",
+        "uniform float uVuotoKm;       // fondoscala della griglia del vuoto",
+        "uniform float uVuotoQuotaKm;  // quota coperta dalla griglia del vuoto",
+        "uniform float uUsaVuoto;      // 1: salta il vuoto (sphere tracing)",
         "float gTipoCampione = 0.0;",
         "uniform float uFotogramma;    // indice del fotogramma accumulato a mappa ferma",
         "uniform float uSigma;",
@@ -10024,90 +10213,44 @@
         "  return mix(henyeyGreenstein(coseno, uFaseG), henyeyGreenstein(coseno, -0.25), 0.22) * 4.0 * PI;",
         "}",
         "",
-        "// Quanto il punto sta in una cavita' fra i lobi: la scrive densita' per",
-        "// il campione del raggio, la legge la luce del cielo.",
+        "// LA GEOMETRIA, come Nubis3 (Guerrilla, ''Nubis, Cubed'', SIGGRAPH 2023):",
+        "// niente forme disegnate a mano (bolle, pile, celle). La nube e' un PROFILO",
+        "// DIMENSIONALE morbido -- 0 fuori, 1 nel nucleo -- costruito dai dati (dove",
+        "// la vede il satellite, a che quota, di che tipo la dice il motore",
+        "// d'inferenza), e il rumore lo ERODE: cloud_density = remap(profilo, rumore,",
+        "// 1, 0, 1). Il rumore e' Alligator (Houdini/SideFX): ''billowy'' per i",
+        "// cumuliformi, ''wispy'' riccioluto per veli e cirri; da bassa ad alta frequenza",
+        "// man mano che il profilo cresce verso il nucleo.",
         "float gCavita = 0.0;",
-        "",
-        "// LA GEOMETRIA DELLE NUBI, costruita dallo STATO inferito (motore",
-        "// d'inferenza, in JavaScript): lo shader non decide che nube e', la",
-        "// disegna. Tre scale:",
-        "//   macro  -- dove (maschera del satellite), quota della cima (osservata),",
-        "//             base (inferita per tipo), oggetti convettivi (torri, incudini)",
-        "//   meso   -- l'archetipo del tipo: celle a cupola su base comune",
-        "//             (Cu/Sc/Ac/Cc), volumi stratiformi ondulati (St/As/Ns/Cs),",
-        "//             fibre di ghiaccio nel vento (Ci), torri e incudini (Cb)",
-        "//   micro  -- il rumore, che sfrangia i bordi e non crea la forma.",
+        "float gProfilo = 0.0;",
         "float hash21(vec2 c) {",
         "  c = mod(c, 4096.0);",
         "  return fract(sin(dot(c, vec2(127.1, 311.7))) * 43758.5453);",
         "}",
-        "vec2 hash22(vec2 c) {",
-        "  c = mod(c, 4096.0);",
-        "  return fract(sin(vec2(dot(c, vec2(127.1, 311.7)), dot(c, vec2(269.5, 183.3)))) * 43758.5453);",
+        "float saturare(float v) { return clamp(v, 0.0, 1.0); }",
+        "float smin(float a, float b, float k) {",
+        "  float h = clamp(0.5 + 0.5 * (b - a) / k, 0.0, 1.0);",
+        "  return mix(b, a, h) - k * h * (1.0 - h);",
+        "}",
+        "// Capsula verticale a base piatta (il livello di condensazione) e cupola",
+        "// in cima; distanza con segno in km VISTI (quota esagerata).",
+        "float sdColonna(vec2 rel, float zv, float altezza, float r, float rCupola) {",
+        "  float y = zv - clamp(zv, 0.0, max(altezza - rCupola, 0.0));",
+        "  return max(length(vec2(length(rel), y * r / max(rCupola, 1e-3))) - r, -zv);",
+        "}",
+        "float sdEllissoide(vec3 p, vec3 r) {",
+        "  float k0 = length(p / r), k1 = length(p / (r * r));",
+        "  return k0 * (k0 - 1.0) / max(k1, 1e-6);",
         "}",
         "",
-        "// UN ELEMENTO CONVETTIVO E' UNA PILA DI BOLLE, non una colonna: la",
-        "// corrente ascendente sale a bolle termiche che si impilano, si sfalsano e",
-        "// si stringono salendo; ognuna e' una sfera in km VISTI (verticale",
-        "// esagerata), cosi' resta tonda sullo schermo. La base e' piatta: il livello",
-        "// di condensazione taglia le bolle.",
-        "float elemento(vec2 rel, float z, float base, float cima, float raggio, float esag, float seme) {",
-        "  if (z < base || z > cima) return 0.0;",
-        "  float zv = (z - base) * esag, altezza = (cima - base) * esag;",
-        "  float r0 = min(raggio, 0.5 * altezza + 0.3 * raggio);",
-        "  float quante = clamp(floor(altezza / (0.8 * r0)) + 1.0, 1.0, uQualita > 0.5 ? 7.0 : 3.0);",
+        "// GLI OGGETTI CONVETTIVI come inviluppi (Nubis, metodo dell'inviluppo): la",
+        "// torre principale inclinata dallo shear, le torri secondarie fuse in modo",
+        "// morbido, la cupola che sfonda e l'incudine piatta in cima, spinta dal vento",
+        "// in quota. Restituisce il profilo (0 al bordo, 1 nel nucleo) e il tipo di",
+        "// dettaglio (1 a cavolfiore, basso per l'incudine liscia e fibrosa).",
+        "float profiloTorri(vec2 punto, float z, float kmPerUnita, float esag, out float tipoDettaglio) {",
         "  float migliore = 0.0;",
-        "  for (int b = 0; b < 7; b++) {",
-        "    float fb = float(b);",
-        "    if (fb >= quante) break;",
-        "    float f = quante > 1.0 ? fb / (quante - 1.0) : 1.0;",
-        "    float rb = r0 * mix(1.0, 0.78, f) * mix(0.8, 1.12, fract(seme * 17.3 + fb * 0.41));",
-        "    float zc = mix(0.55 * rb, altezza - rb, f);",
-        "    vec2 scarto = (vec2(fract(seme * 7.7 + fb * 0.61), fract(seme * 3.1 + fb * 0.83)) - 0.5) * 0.7 * rb * (0.3 + f);",
-        "    // Con poche bolle (telefono) si allungano in verticale fino a coprire la",
-        "    // colonna: niente vuoti fra l'una e l'altra.",
-        "    float rz = max(rb, 0.75 * altezza / max(quante - 1.0, 1.0));",
-        "    float dist = length(vec3(rel - scarto, (zv - zc) * rb / rz));",
-        "    // Fusione morbida delle bolle vicine: niente solchi netti fra l'una e",
-        "    // l'altra (il pupazzo di neve), ma lobi che si confondono.",
-        "    migliore = 1.0 - (1.0 - migliore) * smoothstep(0.7 * rb, 1.05 * rb, dist);",
-        "  }",
-        "  // Il corpo sotto la prima bolla: base piatta, larga quanto lei.",
-        "  float corpo = zv < 0.55 * r0 ? 1.0 - smoothstep(0.8 * r0, r0, length(rel)) : 0.0;",
-        "  return max(migliore, corpo);",
-        "}",
-        "",
-        "// CELLE: un campo di elementi, uno per cella di una griglia sfalsata",
-        "// (niente file e niente ripetizioni: ogni cella ha il suo seme). Le celle",
-        "// vuote fanno le aperture; lo sviluppo decide quanto le altezze variano.",
-        "float celle(vec2 xy, float z, float base, float cima, float cellaKm, float sviluppo,",
-        "            float apertura, float esag) {",
-        "  vec2 g = xy / cellaKm;",
-        "  vec2 i0 = floor(g);",
-        "  float migliore = 0.0;",
-        "  for (int j = -1; j <= 1; j++) {",
-        "    for (int i = -1; i <= 1; i++) {",
-        "      vec2 c = i0 + vec2(float(i), float(j));",
-        "      if (hash21(c + 17.3) < apertura) continue;",
-        "      vec2 centro = (c + 0.15 + 0.7 * hash22(c)) * cellaKm;",
-        "      float r1 = hash21(c + 5.1), r2 = hash21(c + 9.7);",
-        "      float quota = mix(1.0, mix(0.28, 1.0, r1 * r1), sviluppo);",
-        "      float raggio = 0.5 * cellaKm * mix(0.75, 1.25, r2);",
-        "      // Una bolla termica non e' piu' alta di qualche volta la sua",
-        "      // larghezza: oltre, la cima osservata appartiene a una torre (oggetto).",
-        "      float alta = min((cima - base) * quota, mix(0.5, 2.2, sviluppo) * 2.0 * raggio);",
-        "      migliore = max(migliore, elemento(xy - centro, z, base, base + alta, raggio, esag, r1 + r2));",
-        "    }",
-        "  }",
-        "  return migliore;",
-        "}",
-        "",
-        "// OGGETTI CONVETTIVI: torre principale inclinata dallo shear, torri",
-        "// secondarie (multicella), sfondamento sopra la cima, incudine spinta",
-        "// sottovento e assottigliata verso il bordo.",
-        "float torri(vec2 punto, float z, float kmPerUnita, float esag, out float tipoTorre) {",
-        "  float migliore = 0.0;",
-        "  tipoTorre = 0.0;",
+        "  tipoDettaglio = 1.0;",
         "  for (int i = 0; i < 24; i++) {",
         "    if (i >= uQuanteTorri) break;",
         "    vec4 A = uTorreA[i], B = uTorreB[i], C = uTorreC[i], D = uTorreD[i];",
@@ -10115,69 +10258,79 @@
         "    float raggio = A.z, cima = A.w, base = B.x;",
         "    float portata = C.z + 3.0 * raggio;",
         "    if (dot(dKm, dKm) > portata * portata) continue;",
-        "    if (z < base - 0.1 || z > cima + 1.2) continue;",
+        "    if (z < base - 0.1 || z > cima + 1.5) continue;",
         "    vec2 rel = dKm - B.yz * max(z - base, 0.0);",
         "    float dissipa = D.x > 2.5 ? 1.0 : 0.0;",
-        "    float corpo = elemento(rel, z, base, cima, raggio * mix(1.0, 0.8, dissipa), esag, B.w);",
-        "    // La corrente ascendente: un nucleo opaco continuo dalla base fin sotto",
-        "    // la cupola; le bolle gli stanno attorno. In dissipazione si assottiglia.",
-        "    if (z > base && z < cima - 0.4 * raggio / esag) {",
-        "      corpo = max(corpo, (1.0 - smoothstep(0.5 * raggio, 0.72 * raggio, length(rel))) * mix(1.0, 0.55, dissipa));",
-        "    }",
+        "    float r = raggio * mix(1.0, 0.8, dissipa);",
+        "    float zv = (z - base) * esag, H = (cima - base) * esag;",
+        "    // Cupola schiacciata: sotto la tropopausa la corrente si allarga.",
+        "    float sd = sdColonna(rel, zv, H, r, min(r, 0.3 * H));",
+        "    // Le torri secondarie (multicella): piu' basse, attorno alla principale.",
         "    for (int s = 0; s < 4; s++) {",
         "      if (float(s) >= D.z) break;",
         "      float fs = float(s);",
         "      float angolo = B.w * 6.2832 + fs * 2.39996;",
-        "      float distanza = raggio * mix(0.85, 1.45, fract(B.w * 7.13 + fs * 0.37));",
-        "      vec2 centro = vec2(cos(angolo), sin(angolo)) * distanza;",
+        "      float distanza = raggio * mix(0.9, 1.5, fract(B.w * 7.13 + fs * 0.37));",
         "      float rs = raggio * mix(0.42, 0.7, fract(B.w * 13.7 + fs * 0.71));",
-        "      float cs = base + (cima - base) * mix(0.45, 0.85, fract(B.w * 3.7 + fs * 0.53));",
-        "      corpo = max(corpo, elemento(rel - centro, z, base, cs, rs, esag, fract(B.w * 5.3 + fs * 0.29)));",
+        "      float hs = H * mix(0.4, 0.8, fract(B.w * 3.7 + fs * 0.53));",
+        "      vec2 centro = vec2(cos(angolo), sin(angolo)) * distanza;",
+        "      sd = smin(sd, sdColonna(rel - centro, zv, hs, rs, min(rs, 0.5 * hs)), 0.35 * rs);",
         "    }",
+        "    // La cupola che sfonda la tropopausa.",
         "    if (D.w > 0.0) {",
-        "      corpo = max(corpo, elemento(rel, z, cima - 0.4, cima + 0.9 * D.w, raggio * 0.45, esag, fract(B.w * 2.9)));",
+        "      float ro = 0.42 * r * D.w;",
+        "      sd = smin(sd, length(vec3(rel, zv - H + 0.3 * ro)) - ro, 0.3 * ro);",
         "    }",
-        "    float incudine = 0.0;",
+        "    float profiloColonna = saturare(-sd / (0.5 * r)) * mix(1.0, 0.6, dissipa);",
+        "    float profiloIncudine = 0.0;",
         "    if (C.w > 0.03) {",
         "      vec2 dir = C.xy;",
         "      float lungo = dot(rel, dir), largo = dot(rel, vec2(-dir.y, dir.x));",
         "      float L = max(C.z, 1.0);",
-        "      float avanti = clamp((lungo + raggio) / (L + raggio), 0.0, 1.0);",
-        "      float a = 0.55 * L + raggio, b = raggio * 1.2 + 0.28 * L * mix(0.5, 1.0, avanti);",
-        "      float e = (lungo - 0.42 * L) * (lungo - 0.42 * L) / (a * a) + largo * largo / (b * b);",
-        "      // Spessa sopra la torre, sottile sottovento e verso i bordi: il",
-        "      // fondo sale, il tetto scende appena. Niente pareti verticali.",
-        "      float bordo = sqrt(max(0.0, 1.0 - e));",
-        "      float spessore = mix(2.6, 0.9, avanti) * bordo;",
-        "      float tetto = cima - 0.15 - 0.35 * (1.0 - bordo), fondo = tetto - spessore;",
-        "      if (e < 1.0 && z > fondo && z < tetto) {",
-        "        incudine = smoothstep(0.0, 0.35, bordo) * smoothstep(fondo, fondo + 0.4 * spessore + 0.05, z)",
-        "          * (1.0 - smoothstep(tetto - 0.3, tetto, z)) * C.w;",
-        "      }",
+        "      float spessore = 2.2 * esag;",
+        "      float tetto = H - 0.1 * esag;",
+        "      vec3 e = vec3(lungo - 0.42 * L, largo, zv - (tetto - 0.35 * spessore));",
+        "      vec3 raggi = vec3(0.55 * L + r, 1.2 * r + 0.28 * L, 0.5 * spessore);",
+        "      // Tetto piatto (la tropopausa), fondo che si assottiglia sottovento.",
+        "      float sdInc = max(sdEllissoide(e, raggi), zv - tetto);",
+        "      profiloIncudine = saturare(-sdInc / (0.3 * spessore)) * C.w;",
         "    }",
-        "    float qui = max(corpo, 0.85 * incudine);",
-        "    if (qui > migliore) { migliore = qui; tipoTorre = 1.0 + float(i); }",
+        "    float qui = max(profiloColonna, profiloIncudine);",
+        "    if (qui > migliore) {",
+        "      migliore = qui;",
+        "      tipoDettaglio = profiloColonna >= profiloIncudine ? 1.0 : 0.25;",
+        "    }",
         "  }",
         "  return migliore;",
         "}",
         "",
+        "// IL PROFILO VERTICALE per tipo (Nubis, metodo del profilo verticale):",
+        "// strati a lastra, cumuliformi con la base netta e la massa in basso che si",
+        "// assottiglia verso la cima tonda, cirri sottili.",
+        "float profiloVerticale(float hf, float cumulo, float sviluppo, float fibra) {",
+        "  float lastra = smoothstep(0.0, 0.15, hf) * (1.0 - smoothstep(0.7, 1.0, hf));",
+        "  float cumuliforme = smoothstep(0.0, 0.05, hf) * pow(saturare(1.0 - hf), mix(0.9, 0.45, sviluppo));",
+        "  float cirro = smoothstep(0.0, 0.35, hf) * (1.0 - smoothstep(0.55, 1.0, hf));",
+        "  return mix(mix(lastra, cumuliforme, cumulo), cirro, fibra);",
+        "}",
+        "",
         "// La colonna: lo stato inferito della cella (texture) e gli oggetti.",
+        "// ''leggera'' restituisce solo la forma grande, senza il dettaglio:",
+        "// e' quella che servono la luce lontana e il cielo (Nubis3).",
         "float densita(vec3 p, float lodCampo, float lodRumore, bool leggera,",
         "              out float hRel, out float conv, out vec2 fascia) {",
-        "  hRel = 0.0; conv = 0.0; fascia = vec2(-1.0); gCavita = 0.0;",
+        "  hRel = 0.0; conv = 0.0; fascia = vec2(-1.0); gCavita = 0.0; gProfilo = 0.0;",
         "  vec2 uv = vec2((p.x - uDominio.x) / (uDominio.z - uDominio.x),",
         "                 (p.y - uDominio.y) / (uDominio.w - uDominio.y));",
         "  if (uv.x < 0.0 || uv.y < 0.0 || uv.x > 1.0 || uv.y > 1.0) return 0.0;",
         "  float kmPerUnita = uCircKm * cosLatDa(p.y);",
         "  float esag = max(uEsagerazione, 1.0);",
         "  float altKm = p.z * kmPerUnita / uEsagerazione;",
-        "  // Gli oggetti convettivi prima: stanno dentro la maschera del satellite,",
-        "  // ma la loro geometria non e' quella di un pixel.",
-        "  float tipoTorre;",
-        "  float dTorri = uQuanteTorri > 0 ? torri(p.xy, altKm, kmPerUnita, esag, tipoTorre) : 0.0;",
+        "  float tipoTorre = 1.0;",
+        "  float pTorri = uQuanteTorri > 0 ? profiloTorri(p.xy, altKm, kmPerUnita, esag, tipoTorre) : 0.0;",
         "  vec4 campo = textureLod(uCampo, uv, lodCampo);",
         "  float gLiscia = textureLod(uCampo, uv, lodCampo + 2.0).g;",
-        "  if (campo.g < 0.004 && dTorri <= 0.0) return 0.0;",
+        "  if (campo.g < 0.004 && pTorri <= 0.0) return 0.0;",
         "  vec4 liscio = textureLod(uCampo, uv, lodCampo + 1.5);",
         "  campo.rba = mix(liscio.rba, campo.rba, 0.3);",
         "  float cimaKm = campo.r * uScalaKm;",
@@ -10190,8 +10343,7 @@
         "  float sotto = pioggia > 0.08 ? baseKm : 0.0;",
         "  fascia = vec2(baseKm - sotto, cimaKm + 0.15);",
         "  // L'impronta osservata: dentro la maschera la struttura e' ricostruita,",
-        "  // fuori non si inventano nubi. Dove la copertura e' parziale aumentano le",
-        "  // celle vuote: la frazione coperta resta quella del satellite.",
+        "  // fuori non si inventano nubi.",
         "  float impronta = smoothstep(0.004, 0.2, gLiscia);",
         "  // (solo per le nubi cumuliformi: un velo sottile ha densita' ottica bassa,",
         "  // non copertura parziale)",
@@ -10201,100 +10353,113 @@
         "  // nord a sud (lontano dall'origine la derivata e' enorme).",
         "  vec2 centroDominio = (uDominio.xy + uDominio.zw) * 0.5;",
         "  vec3 q = vec3((p.xy - centroDominio) * uCircKm * cosLatDa(centroDominio.y), altKm * esag);",
-        "  float d = 0.0;",
+        "  float profilo = 0.0, tipo = cumulo;",
         "  if (altKm >= baseKm && altKm <= cimaKm + 0.15 && campo.g >= 0.004) {",
         "    float spessore = max(0.05, cimaKm - baseKm);",
         "    hRel = clamp((altKm - baseKm) / spessore, 0.0, 1.0);",
-        "    float lodForma = lodRumore + log2((uWorleyKm / uLatoWorley) / (uScalaFormaKm / uLatoForma));",
-        "    // Strato: volume con cima e base ondulate su scala della cella.",
-        "    float dStrato = 0.0;",
-        "    if (cumulo < 0.98) {",
-        "      // Ondulazioni dolci e larghe (il Worley fBm, liscio, non le bolle",
-        "      // del Perlin-Worley che scavavano buche): un mare di nubi, non crateri.",
-        "      float scalaOnda = max(cellaKm, 6.0);",
-        "      vec4 w1 = textureLod(uForma, vec3(q.xy / (scalaOnda * 6.0), 0.37) + uSemenza, max(lodForma - 2.5, 0.0));",
-        "      vec4 w2 = textureLod(uForma, vec3(q.xy / (scalaOnda * 4.3) + 0.5, 0.71) + uSemenza, max(lodForma - 2.5, 0.0));",
-        "      float o1 = w1.g * 0.7 + w1.b * 0.3, o2 = w2.g;",
-        "      float onda = min(mix(0.08, 0.2, fibra) * spessore, 0.6);",
-        "      // Nelle nubi a celle lo strato e' solo il fondo comune del banco: le",
-        "      // celle bombate stanno sopra.",
-        "      float tettoU = cimaKm - onda * (1.0 - o1) - spessore * 0.55 * cumulo;",
-        "      float fondoU = baseKm + onda * o2 * 0.7;",
-        "      float t = (altKm - fondoU) / max(tettoU - fondoU, 0.02);",
-        "      dStrato = smoothstep(0.0, 0.12, t) * (1.0 - smoothstep(0.82, 1.0, t));",
-        "      // Varchi nello strato dove il satellite ne vede solo una parte.",
-        "      if (aperta > 0.05) dStrato *= smoothstep(aperta - 0.12, aperta + 0.12, o2);",
+        "    // LA COPERTURA (la ''weather map'' di Nubis): dove il satellite vede cielo",
+        "    // a tratti le celle vuote crescono; la mappa macro raggruppa le celle",
+        "    // in ammassi e varchi a scala di decine di km.",
+        "    float macro = textureLod(uForma, vec3(q.xy / uScalaMacroKm, 0.31) + uSemenza, max(lodRumore - log2(uScalaMacroKm / uScalaFormaKm), 0.0)).b;",
+        "    float copertura = saturare((1.0 - aperta * uCopertura * 1.6) + (macro - 0.5) * uForzaMacro * cumulo);",
+        "    // LE CIME DELLE CELLE: in un campo convettivo ogni cella sale fin dove",
+        "    // la porta la sua corrente; la cima osservata e' quella delle piu' alte.",
+        "    // Una mappa delle altezze a scala di cella (il 'Cloud Max Height' di",
+        "    // Nubis) abbassa le altre: niente muro unico alla quota del satellite.",
+        "    float variaCime = cumulo * mix(0.25, 0.85, sviluppo) * uRigonfio;",
+        "    if (variaCime > 0.01) {",
+        "      float cella = textureLod(uForma, vec3(q.xy / max(cellaKm * 2.2, 1.5), 0.63) + uSemenza.yxz, max(lodRumore - log2(max(cellaKm * 2.2, 1.5) / uScalaFormaKm) + 1.5, 1.5)).r;",
+        "      // (letta sfocata: le cime salgono e scendono dolci, niente pareti)",
+        "      float quota = mix(1.0, 0.2 + 0.8 * smoothstep(0.15, 0.85, cella), clamp(variaCime, 0.0, 1.0));",
+        "      hRel = clamp((altKm - baseKm) / max(0.05, spessore * quota), 0.0, 1.2);",
+        "      copertura *= smoothstep(0.1, 0.45, cella + 0.5 * (1.0 - cumulo));",
         "    }",
-        "    // Nei passi lontani verso il sole (leggera) le celle valgono la loro",
-        "    // media: le ombre fra bolla e bolla le fanno i primi passi, esatti.",
-        "    float dCelle = cumulo <= 0.02 ? 0.0 : (leggera",
-        "      ? (1.0 - aperta) * 0.45 * smoothstep(0.0, 0.1, hRel) * (1.0 - smoothstep(mix(0.5, 0.95, 1.0 - sviluppo), 1.0, hRel))",
-        "      : celle(q.xy, altKm, baseKm, cimaKm, cellaKm, sviluppo, aperta, esag));",
-        "    // Il banco e le celle si sommano (massimo), non si mediano: la media",
-        "    // scavava crateri tondi fra una cupola e l'altra.",
-        "    d = max(dStrato * (1.0 - smoothstep(0.7, 1.0, cumulo)), dCelle * smoothstep(0.02, 0.35, cumulo));",
-        "    gCavita = cumulo * (1.0 - smoothstep(0.3, 0.9, dCelle));",
-        "    // Fibre di ghiaccio: stirate nel verso del vento in quota.",
-        "    if (fibra > 0.02) {",
-        "      vec2 dir = uVentoAlto, perp = vec2(-uVentoAlto.y, uVentoAlto.x);",
-        "      float lungo = dot(q.xy, dir), largo = dot(q.xy, perp);",
-        "      vec4 fb = textureLod(uForma, vec3(lungo / (cellaKm * 5.0), largo / (cellaKm * 0.45),",
-        "        q.z / (cellaKm * 0.8)) + uSemenza.yzx, max(lodForma - 1.0, 0.0));",
-        "      float fili = smoothstep(0.5, 0.78, fb.r * 0.7 + fb.g * 0.3);",
-        "      d = mix(d, dStrato * fili, fibra);",
-        "    }",
+        "    profilo = hRel > 1.0 ? 0.0 : profiloVerticale(hRel, cumulo, sviluppo, fibra) * copertura;",
+        "    hRel = min(hRel, 1.0);",
         "    conv = cumulo * sviluppo;",
         "  }",
-        "  // La pioggia sotto la base: colonne grigie, sfrangiate, piu' dense in",
-        "  // basso dove il nembostrato o il temporale scaricano.",
-        "  if (pioggia > 0.08 && altKm < baseKm && campo.g > 0.3) {",
-        "    float colonne = textureLod(uForma, vec3(q.xy / 6.0, q.z / 60.0) + uSemenza.zyx, lodRumore).g;",
-        "    d = max(d, 0.1 * pioggia * smoothstep(0.35, 0.7, colonne) * (1.0 - altKm / max(baseKm, 0.1) * 0.5));",
+        "  if (pTorri > profilo) {",
+        "    profilo = pTorri;",
+        "    tipo = tipoTorre;",
+        "    hRel = max(hRel, clamp(altKm / max(cimaKm, 1.0), 0.0, 1.0));",
         "  }",
-        "  if (dTorri > 0.0) {",
-        "    d = max(d, dTorri);",
-        "    conv = max(conv, dTorri);",
-        "    if (altKm > baseKm || tipoTorre > 0.0) hRel = max(hRel, clamp(altKm / max(cimaKm, 1.0), 0.0, 1.0));",
+        "  if (pTorri > 0.0) {",
+        "    conv = max(conv, pTorri);",
         "    fascia = vec2(0.0, max(fascia.y, altKm + 1.0));",
         "  }",
-        "  d *= impronta;",
+        "  profilo *= impronta;",
+        "  gProfilo = profilo;",
+        "  // La pioggia sotto la base: colonne grigie, sfrangiate, piu' dense in",
+        "  // basso dove il nembostrato o il temporale scaricano.",
+        "  float pioggiaD = 0.0;",
+        "  if (pioggia > 0.08 && altKm < baseKm && campo.g > 0.3 && !leggera) {",
+        "    float colonne = textureLod(uForma, vec3(q.xy / 6.0, q.z / 60.0) + uSemenza.zyx, max(lodRumore, 0.0)).a;",
+        "    pioggiaD = 0.1 * pioggia * smoothstep(0.35, 0.7, 1.0 - colonne) * (1.0 - altKm / max(baseKm, 0.1) * 0.5) * impronta;",
+        "  }",
         "  gTipoCampione = uDebugTipi > 0.5 ? texelFetch(uMorfo2, ivec2(uv * vec2(textureSize(uMorfo2, 0))), 0).b * 255.0 : 0.0;",
-        "  if (d <= 0.0 || leggera) return d * mix(0.35, 1.0, campo.g);",
-        "  // MICRO: il dettaglio sfrangia la superficie (le bolle sulle bolle dei",
-        "  // cumuli, il bordo sfilacciato degli strati), non crea la forma.",
-        "  vec4 f = textureLod(uForma, q / uScalaFormaKm + uSemenza, 0.0);",
-        "  float lodDet = lodRumore + log2(uWorleyKm / uDettaglioKm);",
-        "  vec3 qd = q / uDettaglioKm + (f.gba - 0.5) * 6.0;",
-        "  vec4 d1 = textureLod(uForma, vec3(0.8 * qd.x - 0.6 * qd.y, 0.6 * qd.x + 0.8 * qd.y, qd.z) * 0.25 + uSemenza.zxy, lodDet);",
-        "  vec4 d2 = textureLod(uForma, vec3(qd.z * 0.37 + qd.x * 0.93, qd.y, qd.x * 0.37 - qd.z * 0.93) * 0.61 + 0.37, lodDet + 1.3);",
-        "  float det = mix(d1.g * 0.7 + d1.b * 0.3, d2.b * 0.6 + d2.a * 0.4, 0.4);",
-        "  det = mix(det, 1.0 - det, smoothstep(0.1, 0.5, hRel));",
-        "  float cumuliforme = max(cumulo * cumulo, step(0.001, dTorri));",
-        "  float morso = uErosione * mix(0.2, 1.0, cumuliforme) * (1.0 - smoothstep(1.0, 2.5, lodDet));",
-        "  morso *= 1.0 - smoothstep(0.75, 1.0, d);",
-        "  d = clamp(rimappa(d, det * morso, 1.0, 0.0, 1.0), 0.0, 1.0);",
-        "  return d * mix(0.35, 1.0, campo.g);",
+        "  if (profilo <= 0.0) return pioggiaD;",
+        "  float scalaDensita = mix(0.35, 1.0, campo.g);",
+        "  // LA FORMA (Horizon Zero Dawn, Nubis 2022): il profilo fa da copertura",
+        "  // sul rumore degli ammassi -- dove il rumore supera 1 - profilo c'e'",
+        "  // nube. I cirri lo leggono stirato nel verso del vento in quota.",
+        "  vec3 qn = q;",
+        "  if (fibra > 0.02) {",
+        "    vec2 dir = uVentoAlto, perp = vec2(-uVentoAlto.y, uVentoAlto.x);",
+        "    vec2 stirato = dir * dot(q.xy, dir) * 0.22 + perp * dot(q.xy, perp) * 1.6;",
+        "    qn.xy = mix(q.xy, stirato, fibra);",
+        "  }",
+        "  vec4 f = textureLod(uForma, qn / uScalaFormaKm + uSemenza, max(lodRumore + (leggera ? 1.0 : 0.0), 0.0));",
+        "  // Negli strati gli ammassi sono appena accennati: ondulazioni, non cupole.",
+        "  float grumi = mix(0.62 + 0.38 * f.r, f.r, mix(0.3, 1.0, tipo));",
+        "  // Nel nucleo (profilo pieno) la nube e' piena: gli ammassi scolpiscono",
+        "  // la superficie, non bucano l'interno.",
+        "  float base = saturare(rimappa(grumi, 1.0 - profilo, 1.0, 0.0, 1.0) + smoothstep(0.75, 1.0, profilo) * 0.6);",
+        "  // La luce lontana e il cielo leggono solo la forma grande (Horizon Zero",
+        "  // Dawn: i campioni economici): un campione, niente dettaglio.",
+        "  if (leggera) return base * uNucleo * scalaDensita;",
+        "  // IL DETTAGLIO (Nubis3): Alligator a scala piu' piccola, ruotato per non",
+        "  // allinearsi alla forma. Wispy per veli e cirri, billowy a cavolfiore",
+        "  // per i cumuliformi, dai lobi grandi del bordo a quelli piccoli dentro.",
+        "  float lodDet = lodRumore + log2(uScalaFormaKm / uDettaglioKm);",
+        "  vec3 qd = vec3(0.8 * qn.x - 0.6 * qn.y, 0.6 * qn.x + 0.8 * qn.y, qn.z) / uDettaglioKm + uSemenza.zxy;",
+        "  vec4 n = textureLod(uForma, qd, max(lodDet, 0.0));",
+        "  float wispy = n.g;",
+        "  float billowy = mix(n.b, n.a, 0.25 + 0.5 * base);",
+        "  float composto = mix(wispy, billowy, tipo);",
+        "  // Da vicino il rumore piegato due volte (hhf di Nubis3): dettaglio fine",
+        "  // senza un altro campione 3D.",
+        "  float vicino = saturare(-lodDet * 0.5);",
+        "  if (vicino > 0.0) {",
+        "    float hhf = mix(1.0 - pow(abs(abs(n.g * 2.0 - 1.0) * 2.0 - 1.0), 4.0),",
+        "                    pow(abs(abs(n.a * 2.0 - 1.0) * 2.0 - 1.0), 2.0), tipo);",
+        "    composto = mix(composto, hhf, 0.15 * vicino);",
+        "  }",
+        "  // L'erosione morde il bordo tenue, non il nucleo; da lontano, sotto il",
+        "  // pixel, si spegne e resta la forma.",
+        "  composto *= mix(uContrasto, uErosione, tipo) * (1.0 - smoothstep(1.0, 3.5, lodDet));",
+        "  float d = saturare(rimappa(base, composto, 1.0, 0.0, 1.0));",
+        "  // Nitidezza di Nubis3: piu' marcata dove la nube e' tenue.",
+        "  float ps = pow(scalaDensita, 4.0);",
+        "  d = pow(d * ps, mix(0.3, 0.6, max(1e-3, ps)));",
+        "  gCavita = saturare(1.0 - profilo);",
+        "  return d + pioggiaD;",
         "}",
         "// BEER-LAMBERT verso il sole: da ogni campione si cammina verso il sole a",
-        "// passi che raddoppiano e si somma lo spessore ottico attraversato.",
+        "// passi che raddoppiano e si somma lo spessore ottico attraversato. I primi",
+        "// due passi vedono il dettaglio (le ombre dei lobi sui lobi); gli altri il",
+        "// profilo medio, come la griglia di luce di Nubis3.",
         "float spessoreVersoSole(vec3 p, float lodCampo, float lodRumore) {",
         "  float kmPerUnita = uCircKm * cosLatDa(p.y);",
         "  // Il raggio verso il sole vive nella stessa geometria esagerata che si",
         "  // vede: le ombre cadono dalle cupole cosi' come appaiono sullo schermo.",
-        "  // Con il sole della geometria vera un rilievo stirato riceveva luce",
-        "  // piatta, e avvicinandosi le ombre sparivano.",
         "  vec3 verso = vec3(uSole.xy, uSole.z) / kmPerUnita;",
-        "  float tau = 0.0, fatto = 0.0, lung = 0.06;",
+        "  float tau = 0.0, fatto = 0.0, lung = 0.08;",
         "  for (int i = 0; i < 8; i++) {",
         "    if (i >= uPassiLuce) break;",
         "    vec3 q = p + verso * (fatto + 0.5 * lung);",
         "    float h, c; vec2 f;",
-        "    // I primi due passi con il dettaglio: sono le ombre dei lobi sui",
-        "    // lobi vicini, quelle che disegnano la forma da vicino.",
-        "    // (solo da vicino: da lontano quel dettaglio e' sotto il pixel e la sua",
-        "    // ombra diventa grana)",
         "    tau += densita(q, lodCampo + 0.5 * float(i), lodRumore + 0.5 * float(i),",
-        "      i > (uQualita > 0.5 ? 3 : 1), h, c, f)",
+        "      i >= (uQualita > 0.5 ? 2 : 1), h, c, f)",
         "      * uSigma * uOmbra * lung;",
         "    fatto += lung;",
         "    lung *= 2.0;",
@@ -10302,6 +10467,15 @@
         "  return tau;",
         "}",
         "",
+        "// IL VUOTO (Nubis3: sphere tracing sulla distanza con segno). Una griglia",
+        "// grossa, calcolata in JavaScript dal campo, dice quanti km mancano come",
+        "// minimo alla nube piu' vicina: il raggio li salta in un passo solo.",
+        "float distanzaVuoto(vec2 uv, float altKm) {",
+        "  ivec3 s = textureSize(uVuoto, 0);",
+        "  vec3 c = vec3(uv, altKm / uVuotoQuotaKm) * vec3(s);",
+        "  ivec3 i = ivec3(clamp(c, vec3(0.0), vec3(s) - 1.0));",
+        "  return texelFetch(uVuoto, i, 0).r * uVuotoKm + max(0.0, altKm - uVuotoQuotaKm);",
+        "}",
         "float intreccio(vec2 f) {",
         "  return fract(52.9829189 * fract(dot(f, vec2(0.06711056, 0.00583715))));",
         "}",
@@ -10366,6 +10540,9 @@
         "  // la cima netta, lo scarto casuale del primo passo decideva pixel per",
         "  // pixel dove il raggio incontrava la superficie: una grana di brina.",
         "  bool vuotoPrima = true;",
+        "  // I km veri percorsi per unita' di t, al piu': la latitudine piu' a sud",
+        "  // del dominio (i salti nel vuoto restano sempre per difetto).",
+        "  float kmPerTMax = length(vec3(direzione.xy, direzione.z / uEsagerazione)) * uCircKm * cosLatDa(uDominio.w);",
         "  int affina = 0;",
         "  float passoPrima = 0.0;",
         "  for (int i = 0; i < 512; i++) {",
@@ -10375,11 +10552,26 @@
         "    vec3 p = origine + direzione * t;",
         "    float lodCampo = max(0.0, log2(max(1e-12, t * uPixelAngolo) / uTexelCampo));",
         "    float kmPerUnita = uCircKm * cosLatDa(p.y);",
+        "    // Il livello del rumore: quanti texel del cubo di forma cadono in un",
+        "    // pixel (Nubis3: la MIP cresce con la distanza, -15% di costo).",
         "    float lodRumore = max(-6.0, log2(max(1e-12, t * uPixelAngolo) * kmPerUnita",
-        "      * uLatoWorley / uWorleyKm));",
+        "      * uLatoForma / uScalaFormaKm));",
+        "    // IL VUOTO SI SALTA (Nubis3): lontano dalle nubi il raggio avanza di",
+        "    // quanto dice la griglia della distanza, senza campionare niente.",
+        "    if (uUsaVuoto > 0.5) {",
+        "      vec2 uvV = vec2((p.x - uDominio.x) / (uDominio.z - uDominio.x), (p.y - uDominio.y) / (uDominio.w - uDominio.y));",
+        "      float vuotoKm = distanzaVuoto(uvV, p.z * kmPerUnita / uEsagerazione);",
+        "      if (vuotoKm > 0.0) {",
+        "        t += max(vuotoKm / kmPerTMax, passoMin);",
+        "        vuotoPrima = true;",
+        "        passoPrima = 0.0;",
+        "        continue;",
+        "      }",
+        "    }",
         "    float h, conv; vec2 fascia;",
         "    float d = densita(p, lodCampo, lodRumore, false, h, conv, fascia);",
         "    float cavita = gCavita;",
+        "    float profiloQui = gProfilo;",
         "    // IL PASSO SEGUE LA COLONNA: dentro la fascia base-cima almeno quattro",
         "    // campioni nello spessore, sopra la fascia mai un salto che la",
         "    // scavalchi. Un velo sottile attraversato da un solo passo diventava",
@@ -10423,6 +10615,10 @@
         "      // bagliore morbido dentro i cumuli e il grigio-azzurro, non nero,",
         "      // delle facce in ombra. Sul telefono una sola ottava.",
         "      float multipla = 0.3 * exp(-tauSole * 0.35) * fase1 * (0.5 + 0.5 * powder);",
+        "      // Il BAGLIORE INTERNO di Nubis3: il profilo come campo di probabilita'",
+        "      // di diffusione, attenuato da Beer-Lambert ma meno verso il sole. Il",
+        "      // nucleo si accende, i bordi sottili restano scuri.",
+        "      multipla += 0.35 * profiloQui * exp(-tauSole * mix(0.25, 0.05, smoothstep(0.0, 0.9, coseno))) * fase1;",
         "      if (uQualita > 0.5) multipla += 0.12 * exp(-tauSole * 0.12) * fase2;",
         "      multipla *= uMultipla;",
         "      vec3 sole = uColoreSole * uForzaSole * uSoleForza * (direttaSole * fasePasso + multipla);",
@@ -10437,7 +10633,7 @@
         "      // ombre. Il suolo rimanda poca luce calda dal basso.",
         "      vec3 ambiente = (uCielo * (0.35 + 0.65 * occlusione) * (0.35 + 0.65 * h)",
         "        + uSuolo * 0.35 * (1.0 - h)) * (0.55 + 0.45 * powder) * uAmbiente",
-        "        * (1.0 - uCavita * cavita);",
+        "        * mix(1.0, sqrt(cavita), uCavita);",
         "      // I LAMPI: una scarica Blitzortung accende la nube dall'interno. La",
         "      // sorgente e' il canale -- tronco verticale fino alla regione di",
         "      // carica e rami a ragno -- e la luce arriva attenuata dalla nube che",
@@ -10564,11 +10760,16 @@
         "}"
       ].join("\n");
 
-      // LA FORMA DELLE NUBI, generata una volta sulla GPU: un cubo di rumore
-      // ripetibile, disegnato strato per strato in una texture 3D. R e' il
-      // Perlin-Worley (Perlin fBm "gonfiato" da un Worley fBm: bolle tonde e
-      // sovrapposte), G, B e A tre Worley fBm sempre piu' fini. E' la texture
-      // di forma di Nubis (Horizon Zero Dawn).
+      // IL RUMORE DELLE NUBI, generato una volta sulla GPU, come quello di
+      // Nubis3 (Guerrilla, SIGGRAPH 2023): quattro canali di rumore Alligator
+      // (Houdini/SideFX: il massimo meno il secondo massimo di lobi a
+      // decadimento radiale, con valore casuale per lobo -- somiglia al Worley
+      // sovrapposto ma ha la lacunarita' dei cavolfiori veri).
+      //   R, G: "wispy" a bassa e alta frequenza, Alligator deformato da un
+      //         campo riccioluto: dove vale poco sopravvivono ragnatele e veli.
+      //   B, A: "billowy" a bassa e alta frequenza, Alligator rovesciato: vale
+      //         poco al centro dei lobi, che sopravvivono come cupole.
+      // Nello shader il canale e' la SOGLIA dell'erosione del profilo.
       var GENERA_FORMA = [
         "#version 300 es",
         "precision highp float;",
@@ -10593,6 +10794,28 @@
         "  float x1 = mix(mix(n[4], n[5], u.x), mix(n[6], n[7], u.x), u.y);",
         "  return mix(x0, x1, u.z);",
         "}",
+        "// Alligator periodico sul cubo: 27 celle vicine, un lobo per cella con",
+        "// valore casuale e decadimento radiale; il massimo meno il secondo.",
+        "float alligator(vec3 p, float celle) {",
+        "  p *= celle;",
+        "  vec3 i = floor(p), f = fract(p);",
+        "  float m1 = 0.0, m2 = 0.0;",
+        "  for (int z = -1; z <= 1; z++) for (int y = -1; y <= 1; y++) for (int x = -1; x <= 1; x++) {",
+        "    vec3 o = vec3(float(x), float(y), float(z));",
+        "    vec3 c = mod(i + o, celle);",
+        "    float d = length(o + caso3(c + 17.0) - f);",
+        "    if (d < 1.0) {",
+        "      float v = caso3(c + 91.0).x * (1.0 - smoothstep(0.0, 1.0, d));",
+        "      if (v > m1) { m2 = m1; m1 = v; } else if (v > m2) { m2 = v; }",
+        "    }",
+        "  }",
+        "  return m1 - m2;",
+        "}",
+        "// Tre ottave, poi normalizzato sulla distribuzione misurata (1-99%).",
+        "float alligatorFbm(vec3 p, float celle) {",
+        "  float a = alligator(p, celle) * 0.57 + alligator(p, celle * 2.0) * 0.29 + alligator(p, celle * 4.0) * 0.14;",
+        "  return clamp((a - 0.02) / 0.43, 0.0, 1.0);",
+        "}",
         "float worley(vec3 p, float celle) {",
         "  p *= celle;",
         "  vec3 i = floor(p), f = fract(p);",
@@ -10603,16 +10826,27 @@
         "  }",
         "  return 1.0 - clamp(d, 0.0, 1.0);",
         "}",
-        "float worleyFbm(vec3 p, float celle) {",
-        "  return worley(p, celle) * 0.625 + worley(p, celle * 2.0) * 0.25 + worley(p, celle * 4.0) * 0.125;",
+        "// Lo spostamento riccioluto: tre Perlin periodici indipendenti.",
+        "vec3 ricciolo(vec3 p, float per) {",
+        "  return vec3(perlin(p * per, per), perlin(p * per + vec3(0.0, 0.0, 5.0), per),",
+        "    perlin(p * per + vec3(0.0, 7.0, 0.0), per));",
         "}",
         "void main() {",
         "  vec3 p = vec3(vNdc * 0.5 + 0.5, uStrato);",
+        "  vec3 curl = ricciolo(p, 4.0) * 0.09 + ricciolo(p, 8.0) * 0.035;",
+        "  // R: la FORMA grande, Perlin-Worley (Horizon Zero Dawn): un fBm di",
+        "  // Perlin gonfiato da un fBm di Worley -- ammassi tondi che si fondono.",
         "  float pf = perlin(p * 4.0, 4.0) + perlin(p * 8.0, 8.0) * 0.5 + perlin(p * 16.0, 16.0) * 0.25;",
         "  pf = clamp(pf * 0.6 + 0.5, 0.0, 1.0);",
-        "  float wf = worleyFbm(p, 4.0);",
-        "  float pw = clamp(wf + pf * (1.0 - wf) - 0.3, 0.0, 1.0) / 0.7;",
-        "  colorePixel = vec4(pw, worley(p, 4.0), worley(p, 8.0), worley(p, 16.0));",
+        "  float wf = worley(p, 4.0) * 0.625 + worley(p, 8.0) * 0.25 + worley(p, 16.0) * 0.125;",
+        "  float grumi = clamp((pf - (wf - 1.0)) / (2.0 - wf), 0.0, 1.0);",
+        "  // Meta' Worley: lobi tondi di cumulo, non pieghe di carta.",
+        "  grumi = mix(grumi, wf, 0.5);",
+        "  grumi = clamp((grumi - 0.3) / 0.55, 0.0, 1.0);",
+        "  float wispy = alligatorFbm(fract(p + curl), 4.0);",
+        "  float billowyBasso = 1.0 - alligatorFbm(p, 4.0);",
+        "  float billowyAlto = 1.0 - alligatorFbm(p, 8.0);",
+        "  colorePixel = vec4(grumi, wispy, billowyBasso, billowyAlto);",
         "}"
       ].join("\n");
 
@@ -10806,6 +11040,18 @@
         };
         this.texMorfo1 = morfo();
         this.texMorfo2 = morfo();
+        // La griglia del vuoto: finche' non c'e' un campo, una cella a zero
+        // (nessun salto).
+        this.texVuoto = gl.createTexture();
+        gl.bindTexture(gl.TEXTURE_3D, this.texVuoto);
+        gl.texImage3D(gl.TEXTURE_3D, 0, gl.R8, 1, 1, 1, 0, gl.RED, gl.UNSIGNED_BYTE, new Uint8Array(1));
+        [gl.TEXTURE_MIN_FILTER, gl.TEXTURE_MAG_FILTER].forEach(function (k) {
+          gl.texParameteri(gl.TEXTURE_3D, k, gl.NEAREST);
+        });
+        [gl.TEXTURE_WRAP_S, gl.TEXTURE_WRAP_T, gl.TEXTURE_WRAP_R].forEach(function (k) {
+          gl.texParameteri(gl.TEXTURE_3D, k, gl.CLAMP_TO_EDGE);
+        });
+        this.vuotoPronto = false;
 
         this.texCampo = gl.createTexture();
         this.texGeneri = gl.createTexture();
@@ -10836,12 +11082,14 @@
               precedente = voce;
             }
           });
+          this.morfoPerVuoto = null;
           var stato = costruisciStato(campo, precedente);
           if (stato) {
             this.storiaTorri = this.storiaTorri.filter(function (v) { return v.epoca !== epocaQui; });
             this.storiaTorri.push({ epoca: epocaQui, torri: campo.torri });
             if (this.storiaTorri.length > 8) this.storiaTorri.shift();
             var tessere = tessitureMorfologiche(stato);
+            this.morfoPerVuoto = { dati: tessere.b, larghezza: stato.larghezza, altezza: stato.altezza };
             gl.bindTexture(gl.TEXTURE_2D, this.texMorfo1);
             gl.pixelStorei(gl.UNPACK_ALIGNMENT, 1);
             gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA8, stato.larghezza, stato.altezza, 0,
@@ -10859,7 +11107,8 @@
         gl.pixelStorei(gl.UNPACK_ALIGNMENT, 1);
         // La piramide serve per l'ingrossamento orizzontale: senza, non c'e'
         // niente di piu' grosso da prendere.
-        var livelli = piramideDelCampo(tessituraDelCampo(campo), campo.larghezza, campo.altezza);
+        var datiCampo = tessituraDelCampo(campo);
+        var livelli = piramideDelCampo(datiCampo, campo.larghezza, campo.altezza);
         while (gl.getError() !== gl.NO_ERROR) { /* errori altrui, non nostri */ }
         livelli.forEach(function (l, i) {
           gl.texImage2D(gl.TEXTURE_2D, i, gl.RGBA16F, l.larghezza, l.altezza, 0,
@@ -10887,6 +11136,40 @@
         gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA8, campo.larghezza, campo.altezza, 0,
           gl.RGBA, gl.UNSIGNED_BYTE, tessituraBaseTorre(campo));
         gl.generateMipmap(gl.TEXTURE_2D);
+        // Il vuoto da saltare, dal campo appena pubblicato. Finche' non e'
+        // pronto il raggio non salta niente: la griglia vecchia non vale per
+        // le nubi nuove.
+        this.vuotoPronto = false;
+        var strato = this, serie = (this.serieCampo || 0) + 1;
+        var mv = this.morfoPerVuoto;
+        var richiesta = {
+          serie: serie, dati: datiCampo, w: campo.larghezza, h: campo.altezza,
+          morfo2: mv ? mv.dati.slice() : null, sw: mv ? mv.larghezza : 0, sh: mv ? mv.altezza : 0,
+          torri: this.oggettiTorri || null, dom: this.dominioUnitario(), lato: QUALITA_VOLUME.vuoto
+        };
+        var caricaVuoto = function (r) {
+          if (r.serie !== strato.serieCampo || !strato.gl) return;
+          var g = strato.gl;
+          g.bindTexture(g.TEXTURE_3D, strato.texVuoto);
+          g.pixelStorei(g.UNPACK_ALIGNMENT, 1);
+          g.texImage3D(g.TEXTURE_3D, 0, g.R8, r.nx, r.ny, r.nz, 0, g.RED, g.UNSIGNED_BYTE, r.dati);
+          strato.vuotoPronto = true;
+          if (strato.mappa) strato.mappa.triggerRepaint();
+        };
+        var lavoratore = lavoratoreDelVuoto();
+        if (lavoratore) {
+          lavoratore.onmessage = function (e) { caricaVuoto(e.data); };
+          lavoratore.postMessage(richiesta, [datiCampo.buffer]);
+        } else {
+          try {
+            var r = costruisciVuoto(richiesta.dati, richiesta.w, richiesta.h, richiesta.morfo2,
+              richiesta.sw, richiesta.sh, richiesta.torri, richiesta.dom, richiesta.lato);
+            r.serie = serie;
+            setTimeout(function () { caricaVuoto(r); }, 0);
+          } catch (errore) {
+            this.vuotoPronto = false;
+          }
+        }
         // Il tetto del volume e' la cima piu' alta della scena, non il
         // fondoscala: sopra non c'e' niente da attraversare, e ogni
         // chilometro in meno sono campioni risparmiati su ogni pixel.
@@ -11247,6 +11530,12 @@
           gl.uniform4fv(u("uTorreA"), ot.a); gl.uniform4fv(u("uTorreB"), ot.b);
           gl.uniform4fv(u("uTorreC"), ot.c); gl.uniform4fv(u("uTorreD"), ot.d);
         }
+        gl.activeTexture(gl.TEXTURE6);
+        gl.bindTexture(gl.TEXTURE_3D, this.texVuoto);
+        gl.uniform1i(u("uVuoto"), 6);
+        gl.uniform1f(u("uVuotoKm"), 255 * VUOTO_KM_PER_GRADINO);
+        gl.uniform1f(u("uVuotoQuotaKm"), VUOTO_QUOTA_KM);
+        gl.uniform1f(u("uUsaVuoto"), this.vuotoPronto ? 1 : 0);
         var vento = this.ventoAlto || [1, 0];
         gl.uniform2f(u("uVentoAlto"), vento[0], vento[1]);
         gl.uniform1f(u("uDebugTipi"), REGOLA.debugTipi > 0.5 || DEBUG_NUBI ? 1 : 0);
@@ -12125,24 +12414,20 @@
       // appunti per fissarli come predefiniti.
       // [chiave, etichetta, minimo, massimo, passo, gruppo]
       var CURSORI = [
-        ["scalaFormaKm", "Dimensione bolle (km)", 4, 80, 0.5, "Forma"],
-        ["stiraBolle", "Bolle alte (>1) o schiacciate (<1)", 0.3, 3, 0.01, "Forma"],
-        ["contrasto", "Contrasto delle bolle", 0, 1.5, 0.01, "Forma"],
-        ["copertura", "Riempimento", 0.2, 1.3, 0.01, "Forma"],
-        ["nucleo", "Interno pieno", 0, 1, 0.01, "Forma"],
-        ["rigonfio", "Bolle oltre la cima", 1.0, 1.8, 0.01, "Forma"],
-        ["baseDura", "Base piatta e netta", 0, 1, 0.01, "Forma"],
-        ["cavolfiore", "Cavolfiore anche in aria stabile", 0, 1, 0.01, "Forma"],
-        ["scalaMacroKm", "Dimensione ammassi (km)", 20, 400, 5, "Ammassi"],
-        ["forzaMacro", "Forza degli ammassi", 0, 1.5, 0.01, "Ammassi"],
-        ["dettaglioKm", "Scala del dettaglio dei bordi (km)", 0.5, 20, 0.1, "Bordi"],
-        ["erosione", "Erosione bordi", 0, 1, 0.01, "Bordi"],
-        ["incudineKm", "Quota minima dell'incudine (km)", 5, 14, 0.1, "Cumulonembi"],
+        ["scalaFormaKm", "Dimensione degli ammassi (km, rumore Perlin-Worley)", 5, 80, 0.5, "Forma"],
+        ["copertura", "Varchi nei campi di cumuli", 0, 1.3, 0.01, "Forma"],
+        ["rigonfio", "Varieta' delle cime delle celle", 0, 1.5, 0.01, "Forma"],
+        ["nucleo", "Densita' della forma per luce e cielo", 0.2, 1.5, 0.01, "Forma"],
+        ["scalaMacroKm", "Scala dei grappoli di celle (km)", 20, 400, 5, "Grappoli"],
+        ["forzaMacro", "Forza dei grappoli", 0, 1.5, 0.01, "Grappoli"],
+        ["dettaglioKm", "Scala del dettaglio (km, rumore Alligator)", 0.5, 20, 0.1, "Dettaglio"],
+        ["erosione", "Erosione a cavolfiore (cumuliformi)", 0, 1.2, 0.01, "Dettaglio"],
+        ["contrasto", "Erosione a veli (strati, cirri)", 0, 1.2, 0.01, "Dettaglio"],
         ["densita", "Densita' ottica", 0.5, 12, 0.1, "Luce"],
         ["ombra", "Forza delle ombre", 0.1, 4, 0.05, "Luce"],
         ["sole", "Forza del sole", 0.2, 3, 0.05, "Luce"],
         ["ambiente", "Luce del cielo", 0, 2.5, 0.05, "Luce"],
-        ["cavita", "Scurimento delle cavita'", 0, 1, 0.01, "Luce"],
+        ["cavita", "Luce del cielo solo sul bordo (Nubis)", 0, 1, 0.01, "Luce"],
         ["polvere", "Effetto polvere (bordi scuri)", 0, 2, 0.01, "Luce"],
         ["multipla", "Bagliore interno (diffusione multipla)", 0, 3, 0.05, "Luce"],
         ["faseG", "Bordo d'argento controsole", 0, 0.95, 0.01, "Luce"],
