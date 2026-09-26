@@ -2485,7 +2485,7 @@ console.log("nubi in volume: maschera CLM, quota CTH, opacita', generi, sabbia, 
 
 // Physical cloud-volume regression and optional software-GPU visual checks.
 {
-// Default: numeric tests of the scalar GLSL surface function, no dependencies.
+// Default: renderer wiring and source guards, no WebGL dependencies.
 // node scripts/tests/test_map_3d.js --gpu [--shader /path/to/before.glsl]
 // Additional real shader renders and density sections via EGL/Mesa, NumPy, PIL.
 // --gpu is mandatory during cloud shader reviews; images go to a temp folder.
@@ -2547,11 +2547,16 @@ assert.match(fragment, /float morso = uErosione \* mix\(0\.2, 1\.0, cumuliforme\
 assert.match(fragment, /passo = min\(passo, max\(fine, \(fascia\.y - fascia\.x\) \/ salita \* 0\.25\)\);/,
   "il passo non segue piu' lo spessore della colonna");
 assert.match(fragment, /float occlusione = exp\(-sopra \* uSigma \* 0\.5\);/, "manca l'occlusione del cielo");
-assert.match(fragment, /i > 1 \|\| lodRumore > 1\.5, h, c, f\)/, "le ombre non vedono piu' il dettaglio dei lobi");
+assert.match(fragment, /i > \(uQualita > 0\.5 \? 3 : 1\), h, c, f\)/, "le ombre non vedono piu' il dettaglio dei lobi");
 assert.match(fragment, /float powder = 1\.0 - exp\(-estinzione \* 2\.0\);/, "manca il powder");
 assert.match(fragment, /float beer = exp\(-tauSole\);/, "manca Beer-Lambert verso il sole");
 assert.match(fragment, /float henyeyGreenstein\(float coseno, float g\)/, "manca Henyey-Greenstein");
-console.log("Cloud surface numeric checks: OK");
+assert.match(fragment, /vec4 m1 = textureLod\(uMorfo1, uv, lodCampo\);/, "lo stato inferito non raggiunge il renderer");
+assert.match(fragment, /vec4 m2 = textureLod\(uMorfo2, uv, lodCampo\);/, "la morfologia inferita non raggiunge il renderer");
+assert.match(html, /gl\.uniform1i\(u\("uMorfo1"\), 4\)/, "campionatore dello stato non collegato");
+assert.match(html, /gl\.uniform1i\(u\("uMorfo2"\), 5\)/, "campionatore della morfologia non collegato");
+assert.doesNotMatch(fragment, /vec3 q = vec3\(p\.xy \* kmPerUnita/, "latitude changes stretch world noise");
+console.log("Cloud morphology and renderer wiring checks: OK");
 const GPU_QA = String.raw`import ctypes as c, math, sys, time, os
 from ctypes.util import find_library
 import numpy as np
@@ -2584,16 +2589,18 @@ def tex(arr,unit,dim=2,mip=True):
  else:TexImage2D(target,0,internal,a.shape[1],a.shape[0],0,0x1908,typ,a.ctypes.data)
  if mip:GenerateMipmap(target)
  return t
-W,H=320,240
+close=os.environ.get('CLOUD_QA_CLOSE')=='1'
+mobile=os.environ.get('CLOUD_QA_MOBILE')=='1'
+W,H=(640,480) if close else (320,240)
 out=tex(np.zeros((H,W,4),np.float32),7,mip=False);fbo=U();GenFramebuffers(1,c.byref(fbo));BindFramebuffer(0x8D40,fbo.value);FramebufferTexture2D(0x8D40,0x8CE0,0x0DE1,out.value,0);assert CheckFramebufferStatus(0x8D40)==0x8CD5
 vao=U();GenVertexArrays(1,c.byref(vao));BindVertexArray(vao.value);vbo=U();GenBuffers(1,c.byref(vbo));BindBuffer(0x8892,vbo.value);vertices=np.array([-1,-1,3,-1,-1,3],np.float32);BufferData(0x8892,vertices.nbytes,vertices.ctypes.data,0x88E4);VertexAttribPointer(0,2,0x1406,0,0,None);EnableVertexAttribArray(0)
 tex(np.fromfile('/tmp/cloud_perlin.raw',np.uint8).reshape(64,64,64,4),1,3);tex(np.fromfile('/tmp/cloud_worley.raw',np.uint8).reshape(32,32,32,4),2,3)
 # La forma Perlin-Worley si genera sulla GPU con lo stesso shader della pagina.
 FramebufferTextureLayer=gl('FramebufferTextureLayer',[U,U,U,I,I])
 gprog=CreateProgram();AttachShader(gprog,shader(open('/tmp/cloud_VERTICE.glsl').read(),0x8B31));AttachShader(gprog,shader(open('/tmp/cloud_GENERA.glsl').read(),0x8B30));BindAttribLocation(gprog,0,b'aPos');LinkProgram(gprog);UseProgram(gprog)
-LF=64;tforma=U();GenTextures(1,c.byref(tforma));ActiveTexture(0x84C0+3);BindTexture(0x806F,tforma.value)
+LF=64 if mobile else 128;tforma=U();GenTextures(1,c.byref(tforma));ActiveTexture(0x84C0+3);BindTexture(0x806F,tforma.value)
 for k,v in [(0x2801,0x2703),(0x2800,0x2601),(0x2802,0x2901),(0x2803,0x2901),(0x8072,0x2901)]:TexParameteri(0x806F,k,v)
-TexImage3D(0x806F,0,0x8058,LF,LF,LF,0,0x1908,0x1401,None)
+TexImage3D(0x806F,0,0x8058 if mobile else 0x881A,LF,LF,LF,0,0x1908,0x1406,None)
 gfbo=U();GenFramebuffers(1,c.byref(gfbo));BindFramebuffer(0x8D40,gfbo.value)
 for zz in range(LF):
  FramebufferTextureLayer(0x8D40,0x8CE0,tforma.value,0,zz);Viewport(0,0,LF,LF);Uniform1f(GetUniformLocation(gprog,b'uStrato'),(zz+.5)/LF);DrawArrays(4,0,3)
@@ -2609,22 +2616,32 @@ program=CreateProgram();AttachShader(program,shader(open('/tmp/cloud_VERTICE.gls
 def uf(n,*v):
  loc=GetUniformLocation(program,n.encode());[None,Uniform1f,Uniform2f,Uniform3f,Uniform4f][len(v)](loc,*v)
 def ui(n,v):Uniform1i(GetUniformLocation(program,n.encode()),v)
-for n,v in [('uCampo',0),('uPerlin',1),('uWorley',2),('uForma',3),('uMorfo1',4),('uMorfo2',5),('uPassiLuce',4),('uPassi',200),('uQuantiLampi',0)]:ui(n,v)
+for n,v in [('uCampo',0),('uPerlin',1),('uWorley',2),('uForma',3),('uMorfo1',4),('uMorfo2',5),('uPassiLuce',5 if mobile else 8),('uPassi',176 if mobile else 384),('uQuantiLampi',0)]:ui(n,v)
 uf('uVentoAlto',1.0,0.0);uf('uDebugTipi',0.0)
 for n,v in dict(uLatoForma=LF,uScalaFormaKm=12,uScalaMacroKm=96,uCopertura=.5,uContrasto=1.2,uDettaglioKm=1.2,uStiraBolle=1,uForzaMacro=.4,uBaseDura=.75,uNucleo=.65,uPolvere=1.3,uMultipla=1,uFoschiaKm=420,uSoleForza=1,uIncudineKm=7.5,uCavita=.7,uErosione=.9,uRigonfio=1.15,uCavolfiore=.8,uOmbra=1.5,uAmbiente=.75,uEsposizione=.55,uQualita=1).items():uf(n,v)
 unit=1/40075;esag=float(os.environ.get('CLOUD_QA_EXAGGERATION','1.6'))
 for n,v in dict(uScalaKm=16,uCircKm=40075,uEsagerazione=esag,uSigma=3.6,uFaseG=.6,uForzaSole=1,uZMax=14*esag*unit,uPassoKm=.3,uPixelAngolo=.00005,uTexelCampo=40*unit/128,uPerlinKm=48,uWorleyKm=6,uLatoPerlin=64,uLatoWorley=32).items():uf(n,v)
+# Read actual page defaults: the fixture must not silently test obsolete tuning.
+import json
+for n,v in json.load(open('/tmp/cloud_settings.json')).items():uf(n,v)
+uf('uQualita',0 if mobile else 1)
 uf('uSemenza',.3,.6,.1);uf('uDominio',.5-20*unit,.5-20*unit,.5+20*unit,.5+20*unit);uf('uSole',.5,-.4,.768);uf('uCielo',.46,.58,.78);uf('uSuolo',.26,.25,.23);uf('uColoreSole',2.6,2.5,2.34);uf('uFoschia',.72,.81,.92)
 x,y=np.meshgrid(np.linspace(-20,20,128),np.linspace(-20,20,128));r=np.hypot(x,y)
 def smooth(a,b,v):
  z=np.clip((v-a)/(b-a),0,1);return z*z*(3-2*z)
 # La texture delle nubi 3D: R cima, G densita', B base, A convezione (CAPE).
-scenes=['Cb','St','Cu','Ci','Cu0'] if mode=='render' else ['Cb','St','Cu','Cu0']
+scenes=['Cu'] if close else (['Cb','St','Cu','Sc','Ac','As','Ci','Cu0','Bank'] if mode=='render' else ['Cb','St','Cu','Cu0','Sc','Ac','As','Ci'])
 canvas=Image.new('RGB',(W*3,(H+25)*((len(scenes)+2)//3)),(18,30,44));draw=ImageDraw.Draw(canvas)
 for i,kind in enumerate(scenes):
  start=time.time();field=np.zeros((128,128,4),np.float32);cover=1-smooth(16,19,r)
  if kind=='Cb':top=11.5+.8*np.exp(-(r/5)**2);base=1.0;dens=.9*cover;conv=.8
  elif kind=='St':top=1.6;base=.5;dens=.55*cover;conv=0.
+ elif kind=='Sc':top=2.5+.6*smooth(-15,15,x);base=1;dens=.8*cover;conv=.02
+ elif kind=='Ac':top=4.7;base=3.5;dens=.8*cover;conv=.02
+ elif kind=='As':top=5.5;base=3.5;dens=.85*cover;conv=0.
+ elif kind=='Bank':
+  top=5+.9*np.sin(x*.23)*np.cos(y*.19)+1.7*np.exp(-((x-5)**2+(y+4)**2)/45)
+  base=1.1;dens=.85*cover*(.86+.14*np.sin(x*.16+y*.3));conv=.45
  elif kind in ('Cu','Cu0'):
   dens=np.zeros_like(r)
   for cx,cy,rad in [(-8,-3,4),(2,2,5),(11,-5,3),(-3,-11,3)]:dens=np.maximum(dens,.8*(1-smooth(rad*.35,rad,np.hypot(x-cx,y-cy))))
@@ -2638,6 +2655,8 @@ for i,kind in enumerate(scenes):
  cel=lambda km:(_m.log(km)-_m.log(.2))/(_m.log(50)-_m.log(.2))
  morfo={'Cb':([1,1,cel(7),.1],[.1,.8,13/255,.9]),'St':([0,0,cel(20),0],[.02,.05,6/255,.9]),
   'Cu':([1,.55,cel(2.2),0],[.45,0,10/255,.8]),'Cu0':([.55,.2,cel(3.2),0],[.22,.05,7/255,.8]),
+  'Sc':([.55,.2,cel(3.2),0],[.22,.05,7/255,.8]),'Ac':([.6,.15,cel(1.3),0],[.35,0,5/255,.8]),
+  'As':([0,0,cel(25),0],[.03,.15,4/255,.8]),'Bank':([1,.85,cel(3.8),0],[.3,.2,11/255,.8]),
   'Ci':([0,0,cel(8),1],[.55,0,1/255,.8])}[kind]
  tex(np.array([[morfo[0]]],np.float32),4,mip=False);tex(np.array([[morfo[1]]],np.float32),5,mip=False)
  torre=np.zeros((4,24,4),np.float32)
@@ -2645,8 +2664,14 @@ for i,kind in enumerate(scenes):
   torre[0,0]=[.5,.5,6,11.5];torre[1,0]=[1.0,.15,0,.3];torre[2,0]=[1,0,40,.8];torre[3,0]=[2,.8,3,.5]
  ui('uQuanteTorri',1 if kind=='Cb' else 0)
  for nome,arr in zip(['uTorreA','uTorreB','uTorreC','uTorreD'],torre):Uniform4fv(GetUniformLocation(program,nome.encode()),24,np.ascontiguousarray(arr).ctypes.data)
- theta=math.radians(20 if kind=='Cb' else 55);right=np.array([1,0,0]);up=np.array([0,-math.sin(theta),math.cos(theta)]);forward=np.array([0,-math.cos(theta),-math.sin(theta)]);mat=np.eye(4,dtype=np.float32);mat[:3,0]=right*24*unit;mat[:3,1]=up*18*unit;mat[:3,2]=forward*70*unit;mat[:3,3]=[.5,.5,(6 if kind=='Cb' else 3)*esag*unit];UniformMatrix4fv(GetUniformLocation(program,b'uInversa'),1,0,np.ascontiguousarray(mat.T).ctypes.data)
- Viewport(0,0,W,H);DrawArrays(4,0,3);pixels=np.zeros((H,W,4),np.float32);ReadPixels(0,0,W,H,0x1908,0x1406,pixels.ctypes.data);assert GetError()==0
+ theta=math.radians(20 if kind=='Cb' else 55);right=np.array([1,0,0]);up=np.array([0,-math.sin(theta),math.cos(theta)]);forward=np.array([0,-math.cos(theta),-math.sin(theta)]);mat=np.eye(4,dtype=np.float32);mat[:3,0]=right*(7 if close else 24)*unit;mat[:3,1]=up*(5.25 if close else 18)*unit;mat[:3,2]=forward*70*unit;mat[:3,3]=[.5,.5,(6 if kind=='Cb' else 3)*esag*unit];UniformMatrix4fv(GetUniformLocation(program,b'uInversa'),1,0,np.ascontiguousarray(mat.T).ctypes.data)
+ if close:
+  mat[:3,3]=[.5+2*unit,.5+2*unit,2.5*esag*unit];UniformMatrix4fv(GetUniformLocation(program,b'uInversa'),1,0,np.ascontiguousarray(mat.T).ctypes.data);uf('uSole',-.6,.45,.6614)
+ Viewport(0,0,W,H);pixels=np.zeros((H,W,4),np.float32)
+ frames=12 if close and not mobile else 1
+ for frame in range(frames):
+  uf('uFotogramma',frame);DrawArrays(4,0,3);one=np.zeros_like(pixels);ReadPixels(0,0,W,H,0x1908,0x1406,one.ctypes.data);pixels+=one/frames
+ assert GetError()==0
  pixels=pixels[::-1];np.save(f'{prefix}_{kind}_{mode}.npy',pixels)
  if mode=='render':rgb=pixels[:,:,:3]+(1-pixels[:,:,3:4])*np.array([.11,.24,.36])
  else:rgb=np.repeat(pixels[:,:,:1],3,axis=2)
@@ -2657,7 +2682,7 @@ if mode=='section':
  cb=np.load(f'{prefix}_Cb_section.npy')[:,:,0]
  # La torre convettiva profonda e' una nube PIENA dalla base alla cima.
  core=cb[np.ix_((z>2)&(z<10),abs(xx)<2)]
- assert core.mean()>.3, f'Cb core too thin: mean density {core.mean():.3f}'
+ assert core.min()>.3, f'Cb hollow core: minimum density {core.min():.3f}'
  roof=((cb>.05)*z[:,None]).max(axis=0)
  assert roof[abs(xx)<2].max()>10.3, f'Cb top far below measured CTH: {roof[abs(xx)<2].max():.2f} km'
  floor=((cb>.05)*z[:,None]+(cb<=.05)*99).min(axis=0)
@@ -2671,11 +2696,24 @@ if mode=='section':
  assert (cu>.05).sum()>0 and (cu0>.05).sum()>0, 'cumulus or stratocumulus vanished'
  assert (cu>.05).any(0).sum()<(cu0>.05).any(0).sum(), 'cumulus cells are not more open than the stratocumulus deck'
  assert np.abs(cu-cu0).sum()>0.02*(cu0>.05).sum(), 'cumulus and stratocumulus have the same morphology'
+ # Same heights but distinct forms; no phantom material outside CLM.
+ sc=np.load(f'{prefix}_Sc_section.npy')[:,:,0];ac=np.load(f'{prefix}_Ac_section.npy')[:,:,0];astr=np.load(f'{prefix}_As_section.npy')[:,:,0]
+ for name,arr in [('Sc',sc),('Ac',ac),('As',astr)]:
+  assert np.all(arr[:,abs(xx)>19.5]<.001),f'{name} escapes coverage'
+ tops=[((arr>.05)*z[:,None]).max(axis=0)[abs(xx)<10] for arr in [ac,astr]]
+ assert tops[0].std()>tops[1].std()*2, 'Ac lost its small lobes compared with the As sheet'
+ assert np.isfinite(cb).all() and cb.min()>=0 and cb.max()<=1.01,'invalid density'
+ ci=np.load(f'{prefix}_Ci_section.npy')[:,:,0]
+ assert (ci>.005).sum()>100,'thin cirrus erased by opaque-cloud coverage threshold'
  print(f'GPU physical checks OK: Cb core {core.mean():.3f}; Cb cap {roof[abs(xx)<2].max():.2f} km',flush=True)
 
 `;
 if (process.argv.includes("--gpu")) {
   const dir=fs.mkdtempSync(path.join(os.tmpdir(),"meteo-cloud-gpu-"));
+  const defaults=vm.runInNewContext("("+html.match(/var REGOLA_PREDEFINITA = (\{[\s\S]*?\});/)[1]+")");
+  const uniforms={};
+  for(const m of html.matchAll(/gl\.uniform1f\(u\("([^"]+)"\), REGOLA\.(\w+)\);/g)) uniforms[m[1]]=defaults[m[2]];
+  fs.writeFileSync(path.join(dir,"cloud_settings.json"),JSON.stringify(uniforms));
   fs.writeFileSync(path.join(dir,"cloud_VERTICE.glsl"),shader("VERTICE"));
   fs.writeFileSync(path.join(dir,"cloud_GENERA.glsl"),shader("GENERA_FORMA"));
   const override=process.argv.indexOf("--shader");
@@ -2690,7 +2728,8 @@ if (process.argv.includes("--gpu")) {
   const program=path.join(dir,"render.py");fs.writeFileSync(program,GPU_QA.replaceAll("/tmp/",dir+"/"));
   const python=process.env.CLOUD_QA_PYTHON || "python3";
   for (const mode of ["render","section"]) execFileSync(python,[program,path.join(dir,"cloud_FRAMMENTO.glsl"),path.join(dir,"cloud"),mode],{stdio:"inherit",env:{...process.env,EGL_PLATFORM:"surfaceless"}});
-  execFileSync(python,[program,path.join(dir,"cloud_FRAMMENTO.glsl"),path.join(dir,"mobile"),"section"],{stdio:"inherit",env:{...process.env,EGL_PLATFORM:"surfaceless",CLOUD_QA_EXAGGERATION:"3.2"}});
+  execFileSync(python,[program,path.join(dir,"cloud_FRAMMENTO.glsl"),path.join(dir,"mobile"),"section"],{stdio:"inherit",env:{...process.env,EGL_PLATFORM:"surfaceless",CLOUD_QA_EXAGGERATION:"3.2",CLOUD_QA_MOBILE:"1"}});
+  execFileSync(python,[program,path.join(dir,"cloud_FRAMMENTO.glsl"),path.join(dir,"close"),"render"],{stdio:"inherit",env:{...process.env,EGL_PLATFORM:"surfaceless",CLOUD_QA_CLOSE:"1"}});
   console.log("GPU images and density arrays:",dir);
 } else console.log("GPU render checks: run with --gpu before publishing shader changes");
 

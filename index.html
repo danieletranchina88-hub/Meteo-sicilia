@@ -9944,7 +9944,7 @@
         "uniform int uPassi;",
         "uniform int uPassiLuce;",
         "uniform float uQualita;       // 1 sul PC (tutto), 0 sul telefono (versione leggera)",
-        "uniform sampler3D uForma;     // Perlin-Worley a nube: R forma, GBA Worley fBm a 3 scale",
+        "uniform sampler3D uForma;     // Perlin-Worley a nube: R forma, GBA distanze Worley a 3 scale",
         "uniform float uLatoForma;",
         "uniform float uScalaFormaKm;  // km visti coperti da una ripetizione della forma",
         "uniform float uScalaMacroKm;  // gli ammassi: la stessa forma molto piu' grande",
@@ -10064,7 +10064,10 @@
         "    float rb = r0 * mix(1.0, 0.78, f) * mix(0.8, 1.12, fract(seme * 17.3 + fb * 0.41));",
         "    float zc = mix(0.55 * rb, altezza - rb, f);",
         "    vec2 scarto = (vec2(fract(seme * 7.7 + fb * 0.61), fract(seme * 3.1 + fb * 0.83)) - 0.5) * 0.7 * rb * (0.3 + f);",
-        "    float dist = length(vec3(rel - scarto, zv - zc));",
+        "    // Con poche bolle (telefono) si allungano in verticale fino a coprire la",
+        "    // colonna: niente vuoti fra l'una e l'altra.",
+        "    float rz = max(rb, 0.75 * altezza / max(quante - 1.0, 1.0));",
+        "    float dist = length(vec3(rel - scarto, (zv - zc) * rb / rz));",
         "    // Fusione morbida delle bolle vicine: niente solchi netti fra l'una e",
         "    // l'altra (il pupazzo di neve), ma lobi che si confondono.",
         "    migliore = 1.0 - (1.0 - migliore) * smoothstep(0.7 * rb, 1.05 * rb, dist);",
@@ -10116,6 +10119,11 @@
         "    vec2 rel = dKm - B.yz * max(z - base, 0.0);",
         "    float dissipa = D.x > 2.5 ? 1.0 : 0.0;",
         "    float corpo = elemento(rel, z, base, cima, raggio * mix(1.0, 0.8, dissipa), esag, B.w);",
+        "    // La corrente ascendente: un nucleo opaco continuo dalla base fin sotto",
+        "    // la cupola; le bolle gli stanno attorno. In dissipazione si assottiglia.",
+        "    if (z > base && z < cima - 0.4 * raggio / esag) {",
+        "      corpo = max(corpo, (1.0 - smoothstep(0.5 * raggio, 0.72 * raggio, length(rel))) * mix(1.0, 0.55, dissipa));",
+        "    }",
         "    for (int s = 0; s < 4; s++) {",
         "      if (float(s) >= D.z) break;",
         "      float fs = float(s);",
@@ -10188,7 +10196,11 @@
         "  // (solo per le nubi cumuliformi: un velo sottile ha densita' ottica bassa,",
         "  // non copertura parziale)",
         "  float aperta = max(apertura, cumulo * (1.0 - smoothstep(0.25, 0.95, campo.g)));",
-        "  vec3 q = vec3(p.xy * kmPerUnita, altKm * esag);",
+        "  // Coordinate ancorate al centro del dominio: moltiplicare il Mercatore",
+        "  // assoluto per il fattore della latitudine locale stirava il rumore da",
+        "  // nord a sud (lontano dall'origine la derivata e' enorme).",
+        "  vec2 centroDominio = (uDominio.xy + uDominio.zw) * 0.5;",
+        "  vec3 q = vec3((p.xy - centroDominio) * uCircKm * cosLatDa(centroDominio.y), altKm * esag);",
         "  float d = 0.0;",
         "  if (altKm >= baseKm && altKm <= cimaKm + 0.15 && campo.g >= 0.004) {",
         "    float spessore = max(0.05, cimaKm - baseKm);",
@@ -10272,7 +10284,7 @@
         "  // Con il sole della geometria vera un rilievo stirato riceveva luce",
         "  // piatta, e avvicinandosi le ombre sparivano.",
         "  vec3 verso = vec3(uSole.xy, uSole.z) / kmPerUnita;",
-        "  float tau = 0.0, fatto = 0.0, lung = 0.1;",
+        "  float tau = 0.0, fatto = 0.0, lung = 0.06;",
         "  for (int i = 0; i < 8; i++) {",
         "    if (i >= uPassiLuce) break;",
         "    vec3 q = p + verso * (fatto + 0.5 * lung);",
@@ -10282,7 +10294,7 @@
         "    // (solo da vicino: da lontano quel dettaglio e' sotto il pixel e la sua",
         "    // ombra diventa grana)",
         "    tau += densita(q, lodCampo + 0.5 * float(i), lodRumore + 0.5 * float(i),",
-        "      i > 1 || lodRumore > 1.5, h, c, f)",
+        "      i > (uQualita > 0.5 ? 3 : 1), h, c, f)",
         "      * uSigma * uOmbra * lung;",
         "    fatto += lung;",
         "    lung *= 2.0;",
@@ -10393,6 +10405,8 @@
         "    vuotoPrima = d <= 0.001;",
         "    if (d > 0.001) {",
         "      if (tPrimo < 0.0) { tPrimo = t; tipoPrimo = gTipoCampione; }",
+        "      // Resolve the optical surface before integrating a long opaque step.",
+        "      passo = min(passo, max(t * uPixelAngolo * 0.65, mix(0.13, 0.07, uQualita) / kmPerUnita));",
         "      float passoKm = length(vec3(direzione.xy, direzione.z / uEsagerazione)) * passo * kmPerUnita;",
         "      float estinzione = uSigma * d;                     // per km",
         "      float trasmPasso = exp(-estinzione * passoKm);     // Beer-Lambert sul raggio di vista",
@@ -10403,7 +10417,7 @@
         "      // gia' incontrato abbastanza goccioline da essere rimbalzata verso di",
         "      // noi: bassa sul velo esterno, piena nelle pieghe dentro la nube.",
         "      float powder = 1.0 - exp(-estinzione * 2.0);",
-        "      float direttaSole = beer * mix(1.0, 2.0 * powder, pesoPolvere * uPolvere);",
+        "      float direttaSole = beer * mix(1.0, 2.0 * powder, clamp(pesoPolvere * uPolvere, 0.0, 1.0));",
         "      // DIFFUSIONE MULTIPLA A OTTAVE (Wrenninge): la luce rimbalzata molte",
         "      // volte attenua meno, diffonde meno in avanti e pesa meno. E' il",
         "      // bagliore morbido dentro i cumuli e il grigio-azzurro, non nero,",
@@ -10598,7 +10612,7 @@
         "  pf = clamp(pf * 0.6 + 0.5, 0.0, 1.0);",
         "  float wf = worleyFbm(p, 4.0);",
         "  float pw = clamp(wf + pf * (1.0 - wf) - 0.3, 0.0, 1.0) / 0.7;",
-        "  colorePixel = vec4(pw, worleyFbm(p, 8.0), worleyFbm(p, 16.0), worleyFbm(p, 32.0));",
+        "  colorePixel = vec4(pw, worley(p, 4.0), worley(p, 8.0), worley(p, 16.0));",
         "}"
       ].join("\n");
 
@@ -10691,7 +10705,11 @@
         var programma = collega(gl, GENERA_FORMA);
         var tex = gl.createTexture();
         gl.bindTexture(gl.TEXTURE_3D, tex);
-        gl.texImage3D(gl.TEXTURE_3D, 0, gl.RGBA8, lato, lato, lato, 0, gl.RGBA, gl.UNSIGNED_BYTE, null);
+        // Le distanze dei lobi richiedono precisione: 8 bit imprimono gradini
+        // nella luce radente. Ripiego esplicito per GPU prive di render float.
+        var mezza = !!gl.getExtension("EXT_color_buffer_float");
+        gl.texImage3D(gl.TEXTURE_3D, 0, mezza ? gl.RGBA16F : gl.RGBA8,
+          lato, lato, lato, 0, gl.RGBA, mezza ? gl.HALF_FLOAT : gl.UNSIGNED_BYTE, null);
         gl.texParameteri(gl.TEXTURE_3D, gl.TEXTURE_MIN_FILTER, gl.LINEAR_MIPMAP_LINEAR);
         gl.texParameteri(gl.TEXTURE_3D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
         gl.texParameteri(gl.TEXTURE_3D, gl.TEXTURE_WRAP_S, gl.REPEAT);
@@ -10711,6 +10729,11 @@
         gl.useProgram(programma);
         gl.bindVertexArray(vao);
         var strato = gl.getUniformLocation(programma, "uStrato");
+        gl.framebufferTextureLayer(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, tex, 0, 0);
+        if (mezza && gl.checkFramebufferStatus(gl.FRAMEBUFFER) !== gl.FRAMEBUFFER_COMPLETE) {
+          gl.bindTexture(gl.TEXTURE_3D, tex);
+          gl.texImage3D(gl.TEXTURE_3D, 0, gl.RGBA8, lato, lato, lato, 0, gl.RGBA, gl.UNSIGNED_BYTE, null);
+        }
         for (var z = 0; z < lato; z++) {
           gl.framebufferTextureLayer(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, tex, 0, z);
           gl.viewport(0, 0, lato, lato);
