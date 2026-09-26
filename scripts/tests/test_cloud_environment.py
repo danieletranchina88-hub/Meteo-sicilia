@@ -172,6 +172,41 @@ def test_vertical_profile_depth_stability_and_moisture():
     assert float(np.nanmean(stabile["rhmid"])) < 45.0
 
 
+def test_icon_eu_levels_are_interpolated_and_written():
+    """La copertura per livello di ICON-EU (DWD) passa dalla sua griglia a
+    quella di ICON-2I e finisce nella piastrella come c<livello> (%)."""
+    from datetime import timedelta
+    from meteo_analysis.clouds.icon_eu import IconEuCloudProfile, clc_url, field_name
+
+    assert field_name(850) == "c850"
+    url = clc_url(datetime(2026, 9, 26, 12, tzinfo=timezone.utc), 7, 850)
+    assert url.endswith("/12/clc/icon-eu_europe_regular-lat-lon_pressure-level_2026092612_007_850_CLC.grib2.bz2")
+    profile = IconEuCloudProfile((36.0, 40.0), (12.0, 16.0))
+    profile.latitudes = np.arange(35.8, 40.3, 0.0625)
+    profile.longitudes = np.arange(11.8, 16.3, 0.0625)
+    la, lo = np.meshgrid(profile.latitudes, profile.longitudes, indexing="ij")
+    valid = RUN + timedelta(hours=2)
+    # 850 hPa: coltre piena a ovest di 14 E; 500 hPa: sereno; un buco mancante.
+    c850 = np.where(lo < 14.0, 100, 0).astype(np.uint8)
+    c500 = np.zeros_like(c850)
+    c500[0, 0] = 255
+    profile.data[valid] = {850: c850, 500: c500}
+    lat = np.linspace(39.5, 36.5, 12)
+    lon = np.linspace(12.5, 15.5, 16)
+    levels = profile.levels_at(valid, lat, lon)
+    assert set(levels) == {850, 500}
+    assert np.allclose(levels[850][:, lon < 13.8], 100) and np.allclose(levels[850][:, lon > 14.2], 0)
+    assert np.nanmax(levels[500]) == 0
+    assert profile.levels_at(RUN, lat, lon) == {}
+    writer = CloudEnvironmentWriter(RUN, lat, lon, target_points=100)
+    shape = (lat.size, lon.size)
+    assert writer.add(2, np.full(shape, 20.0), np.full(shape, 12.0), np.zeros(shape),
+                      extras={"c850": levels[850], "c500": levels[500]})
+    back = Tile.from_bytes(writer.tiles[2].to_bytes(), writer.tiles[2].valid).fields
+    assert "c850" in back and "c500" in back and "c300" not in back
+    assert float(np.nanmax(back["c850"])) == 100.0 and float(np.nanmin(back["c850"])) == 0.0
+
+
 def test_browser_fixture_matches_the_writer():
     """scripts/tests/fixtures_cloud_env.bin.gz e' la piastrella che legge
     test_nubi_icon.js: se il writer cambia formato, va rigenerata."""

@@ -91,6 +91,12 @@ FIELDS = (
                               # livello di equilibrio) e lo strato umido (UR >= 75%)
     ("rhmid", 0.01, 0.0),     # umidita' relativa media 850-700-500 hPa, %
     ("stab", 0.001, 0.0),     # gradiente 700-500 hPa, K/km (stabilita' media)
+) + tuple(
+    # --- la copertura nuvolosa per livello di ICON-EU (DWD), % ---------------
+    # "c850" e' la frazione di nube a 850 hPa: il profilo verticale delle nubi
+    # del modello, strato per strato, anche sotto una coltre alta.
+    (f"c{level}", 1.0, 0.0) for level in (1000, 950, 925, 900, 875, 850, 825, 800, 775,
+                                          700, 600, 500, 400, 300, 250, 200)
 )
 # Come si riduce ogni campo facoltativo sulla griglia larga: il massimo per
 # cio' che e' piccolo e intenso (una cella convettiva), la media per il resto.

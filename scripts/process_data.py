@@ -20,6 +20,8 @@ from front_analysis_v12 import FrontalAnalysisV12
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 from meteo_analysis.core.icon_fields import IconRunFields
 from meteo_analysis.clouds.environment import CloudEnvironmentWriter
+from meteo_analysis.clouds.environment import MAX_LEAD_HOURS as CLOUD_ENV_MAX_LEAD
+from meteo_analysis.clouds.icon_eu import IconEuCloudProfile
 from meteo_analysis.hazards.storms import (
     bowen_ratio,
     coarsen,
@@ -1785,6 +1787,19 @@ def process_data():
     # L'ambiente ICON-2I delle nubi 3D (base, gradiente, CAPE, orografia):
     # una piastrella per ora, interpolata dal browser all'istante satellitare.
     cloud_environment = None
+    # La struttura verticale delle nubi: copertura per livello di ICON-EU (DWD).
+    # Facoltativa: senza, il volume resta quello del solo ICON-2I.
+    icon_eu_clouds = None
+    try:
+        icon_eu_clouds = IconEuCloudProfile((33.7, 48.9), (3.0, 22.0))
+        letti = icon_eu_clouds.download(run_dt, range(0, CLOUD_ENV_MAX_LEAD + 1))
+        print(f"2d. ICON-EU (DWD): {letti} campi di copertura per livello"
+              f" dal run {icon_eu_clouds.run}", flush=True)
+        if not letti:
+            icon_eu_clouds = None
+    except Exception as icon_eu_error:
+        print(f"2d. ICON-EU non disponibile: {icon_eu_error}", flush=True)
+        icon_eu_clouds = None
     icon_front_analyzer = prepare_icon_front_analyzer(
         run_dt, source_inventory=source_inventory, raw_archive=raw_archive
     )
@@ -2418,6 +2433,13 @@ def process_data():
                             "clcl": nube("clcl"), "clcm": nube("clcm"), "clch": nube("clch"),
                             "rain_con": tasso("rain_con"), "rain_gsp": tasso("rain_gsp"),
                         }
+                        if icon_eu_clouds is not None:
+                            try:
+                                valido = run_dt + timedelta(hours=step_hours)
+                                for livello, valori in icon_eu_clouds.levels_at(valido, lat, lon).items():
+                                    extras[f"c{livello}"] = valori
+                            except Exception as icon_eu_error:
+                                print(f" iconeu-{step_hours}h:{icon_eu_error}", end="", flush=True)
                         cloud_environment.add(
                             step_hours,
                             temp_c,

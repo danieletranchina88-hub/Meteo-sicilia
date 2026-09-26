@@ -2551,7 +2551,7 @@ assert.match(html, /var ESAGERAZIONE_MINIMA = 2\.4;/, "l'esagerazione torna a sp
 // luce lontana legge il profilo, il rumore si legge a MIP crescente.
 assert.match(fragment, /float vuotoKm = distanzaVuoto\(uvV, p\.z \* kmPerUnita \/ uEsagerazione\);/, "manca il salto del vuoto");
 assert.match(fragment, /t \+= max\(vuotoKm \/ kmPerTMax, passoMin\);/, "il salto del vuoto non e' per difetto");
-assert.match(html, /function costruisciVuoto\(dati, w, h, morfo2, sw, sh, torri, dom, lato\)/, "manca la griglia del vuoto");
+assert.match(html, /function costruisciVuoto\(dati, w, h, morfo2, sw, sh, torri, dom, lato, modello\)/, "manca la griglia del vuoto");
 assert.match(html, /lavoratore\.postMessage\(richiesta, \[datiCampo\.buffer\]\);/, "la griglia del vuoto deve calcolarsi nel worker");
 assert.match(fragment, /i >= \(uQualita > 0\.5 \? 2 : 1\), h, c, f\)/, "la luce lontana non legge piu' il profilo medio");
 assert.match(fragment, /multipla \+= 0\.35 \* profiloQui \* exp\(-tauSole \* mix\(0\.25, 0\.05, smoothstep\(0\.0, 0\.9, coseno\)\)\) \* fase1;/,
@@ -2636,7 +2636,8 @@ def uf(n,*v):
  loc=GetUniformLocation(program,n.encode());[None,Uniform1f,Uniform2f,Uniform3f,Uniform4f][len(v)](loc,*v)
 def ui(n,v):Uniform1i(GetUniformLocation(program,n.encode()),v)
 tex(np.zeros((1,1,1,4),np.uint8),6,3,mip=False)
-for n,v in [('uCampo',0),('uPerlin',1),('uWorley',2),('uForma',3),('uMorfo1',4),('uMorfo2',5),('uVuoto',6),('uPassiLuce',4 if mobile else 6),('uPassi',128 if mobile else 256),('uQuantiLampi',0)]:ui(n,v)
+tex(np.zeros((1,1,1,4),np.uint8),9,3,mip=False)
+for n,v in [('uCampo',0),('uPerlin',1),('uWorley',2),('uForma',3),('uMorfo1',4),('uMorfo2',5),('uVuoto',6),('uNubiModello',9),('uPassiLuce',4 if mobile else 6),('uPassi',128 if mobile else 256),('uQuantiLampi',0)]:ui(n,v)
 uf('uVentoAlto',1.0,0.0);uf('uDebugTipi',0.0)
 for n,v in dict(uLatoForma=LF,uScalaFormaKm=12,uScalaMacroKm=96,uCopertura=.5,uContrasto=1.2,uDettaglioKm=1.2,uStiraBolle=1,uForzaMacro=.4,uBaseDura=.75,uNucleo=.65,uPolvere=1.3,uMultipla=1,uFoschiaKm=420,uSoleForza=1,uIncudineKm=7.5,uCavita=.7,uErosione=.9,uRigonfio=1.15,uCavolfiore=.8,uOmbra=1.5,uAmbiente=.75,uEsposizione=.55,uQualita=1).items():uf(n,v)
 unit=1/40075;esag=float(os.environ.get('CLOUD_QA_EXAGGERATION','1.6'))
@@ -2650,7 +2651,7 @@ x,y=np.meshgrid(np.linspace(-20,20,128),np.linspace(-20,20,128));r=np.hypot(x,y)
 def smooth(a,b,v):
  z=np.clip((v-a)/(b-a),0,1);return z*z*(3-2*z)
 # La texture delle nubi 3D: R cima, G densita', B base, A convezione (CAPE).
-scenes=['Cu'] if close else (['Cb','St','Cu','Sc','Ac','As','Ci','Cu0','Bank'] if mode=='render' else ['Cb','St','Cu','Cu0','Sc','Ac','As','Ci'])
+scenes=['Cu'] if close else (['Cb','St','Cu','Sc','Ac','As','Ci','Cu0','Bank','Strati'] if mode=='render' else ['Cb','St','Cu','Cu0','Sc','Ac','As','Ci','Strati'])
 canvas=Image.new('RGB',(W*3,(H+25)*((len(scenes)+2)//3)),(18,30,44));draw=ImageDraw.Draw(canvas)
 for i,kind in enumerate(scenes):
  start=time.time();field=np.zeros((128,128,4),np.float32);cover=1-smooth(16,19,r)
@@ -2659,6 +2660,7 @@ for i,kind in enumerate(scenes):
  elif kind=='Sc':top=2.5+.6*smooth(-15,15,x);base=1;dens=.8*cover;conv=.02
  elif kind=='Ac':top=4.7;base=3.5;dens=.8*cover;conv=.02
  elif kind=='As':top=5.5;base=3.5;dens=.85*cover;conv=0.
+ elif kind=='Strati':top=6.0;base=4.2;dens=.85*cover;conv=0.
  elif kind=='Bank':
   top=5+.9*np.sin(x*.23)*np.cos(y*.19)+1.7*np.exp(-((x-5)**2+(y+4)**2)/45)
   base=1.1;dens=.85*cover*(.86+.14*np.sin(x*.16+y*.3));conv=.45
@@ -2677,11 +2679,18 @@ for i,kind in enumerate(scenes):
   'Cu':([1,.55,cel(2.2),0],[.45,0,10/255,.8]),'Cu0':([.55,.2,cel(3.2),0],[.22,.05,7/255,.8]),
   'Sc':([.55,.2,cel(3.2),0],[.22,.05,7/255,.8]),'Ac':([.6,.15,cel(1.3),0],[.35,0,5/255,.8]),
   'As':([0,0,cel(25),0],[.03,.15,4/255,.8]),'Bank':([1,.85,cel(3.8),0],[.3,.2,11/255,.8]),
-  'Ci':([0,0,cel(8),1],[.55,0,1/255,.8])}[kind]
+  'Ci':([0,0,cel(8),1],[.55,0,1/255,.8]),'Strati':([0,0,cel(25),0],[.03,.05,4/255,.8])}[kind]
  tex(np.array([[morfo[0]]],np.float32),4,mip=False);tex(np.array([[morfo[1]]],np.float32),5,mip=False)
  # Il profilo ICON-2I della scena: durezza; spessore e vento sconosciuti.
- dur={'Cb':.9,'St':.1,'Cu':.75,'Cu0':.4,'Sc':.4,'Ac':.6,'As':.15,'Bank':.7,'Ci':.2}[kind]
+ dur={'Strati':.2,'Cb':.9,'St':.1,'Cu':.75,'Cu0':.4,'Sc':.4,'Ac':.6,'As':.15,'Bank':.7,'Ci':.2}[kind]
  tex(np.array([[[dur,0,.5,.5]]],np.float32),8,mip=False);ui('uMorfo3',8)
+ # ICON-EU per quota: nella scena a strati una coltre bassa (1-2 km) che il
+ # satellite non vede sotto l'altostrato; altrove nessun modello.
+ if kind=='Strati':
+  zq=np.arange(33)*.5;col=np.where((zq>=1)&(zq<=2),.8,0)+np.where((zq>=4.2)&(zq<=6),.9,0)
+  tex(np.ascontiguousarray(np.broadcast_to(col[:,None,None,None],(33,4,4,4))*np.array([1,0,0,0])).astype(np.float32),9,3,mip=False)
+  uf('uModelloNubi',1.0);uf('uModelloPassoKm',.5)
+ else:uf('uModelloNubi',0.0)
  torre=np.zeros((4,24,4),np.float32)
  if kind=='Cb':
   torre[0,0]=[.5,.5,6,11.5];torre[1,0]=[1.0,.15,0,.3];torre[2,0]=[1,0,40,.8];torre[3,0]=[2,.8,3,.5]
@@ -2728,6 +2737,11 @@ if mode=='section':
  tops=[((arr>.05)*z[:,None]).max(axis=0)[abs(xx)<10] for arr in [ac,astr]]
  assert tops[0].std()>tops[1].std()*2, 'Ac lost its small lobes compared with the As sheet'
  assert np.isfinite(cb).all() and cb.min()>=0 and cb.max()<=1.01,'invalid density'
+ # Due strati: l'altostrato osservato e, sotto, la coltre del modello.
+ sm=np.load(f'{prefix}_Strati_section.npy')[:,:,0];centro=abs(xx)<10
+ basso=sm[np.ix_((z>1.1)&(z<1.9),centro)];vuoto=sm[np.ix_((z>2.6)&(z<3.6),centro)]
+ assert (basso>.05).mean()>.5, f'lo strato basso del modello manca sotto la coltre: {(basso>.05).mean():.2f}'
+ assert (vuoto>.05).mean()<.05, 'fra i due strati il modello non ha nube: deve restare vuoto'
  ci=np.load(f'{prefix}_Ci_section.npy')[:,:,0]
  assert (ci>.005).sum()>100,'thin cirrus erased by opaque-cloud coverage threshold'
  print(f'GPU physical checks OK: Cb core {core.mean():.3f}; Cb cap {roof[abs(xx)<2].max():.2f} km',flush=True)

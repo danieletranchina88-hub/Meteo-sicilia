@@ -295,3 +295,41 @@ Come si traduce qui:
 Sul banco GPU software (llvmpipe) la stessa scena costa: cumulonembo 3,9 →
 0,5 s, stratocumulo 0,9 → 0,3 s, strato 0,45 → 0,23 s; sul sito si aggiungono
 i salti del vuoto e i pixel dimezzati.
+
+## La struttura verticale dal modello (ICON-2I + ICON-EU)
+
+Il satellite vede la cima e la posizione, non la struttura verticale, e non
+vede sotto una coltre. Il volume ora si costruisce solo sul dominio di
+ICON-2I (3-22 E, 33,7-48,9 N): fuori resta il satellite 2D.
+
+Fonti verticali disponibili (verificate il 26/09/2026):
+
+| Fonte | Livelli | Nubi per livello | Accesso |
+|---|---|---|---|
+| ICON-2I, MeteoHub (in uso) | 1000/925/850/700/500/250 hPa | no (CLCL/M/H) | aperto |
+| ICON-2I model levels, MeteoHub | ~65 livelli nativi | da verificare | account + API `/api/data` (10 richieste/ora, 1 GB) |
+| MOLOCH, MeteoHub | 9 (1000-300 hPa) | no | aperto |
+| WRF, MeteoHub | 12 (1000-200 hPa) | no | aperto |
+| **ICON-EU, DWD (in uso)** | 20 isobarici + 74 del modello | **CLC, QC, QI** | aperto, opendata.dwd.de |
+| ICON-D2, DWD | 65, 2,2 km | sì | aperto, ma solo fino a ~43 N |
+
+Cosa entra nella piastrella ambiente per ogni ora:
+
+- da ICON-2I: spessore della nube (particella pseudoadiabatica fino al
+  livello di equilibrio con T a 700/500/250 hPa, o strato umido UR >= 75%),
+  gradiente 700-500 hPa, UR media 850-500;
+- da ICON-EU: la frazione di nube CLC su 16 livelli (1000-200 hPa),
+  `c1000` ... `c200`, interpolata sulla griglia ICON-2I (circa 110 kB in più
+  per ora). Se il run DWD con la stessa ora non e' ancora uscito si usa il
+  precedente (ogni 3 ore).
+
+Nel browser:
+
+- durezza (stabilita' 700-500, CAPE, secchezza): profilo verticale da strato
+  soffice a cumulo compatto a base stretta; spessore del modello come limite
+  dei cumuliformi; vento a 250 hPa della cella per i cirri;
+- CLC per quota in una texture 3D (0-16 km, 500 m): dentro la fascia
+  osservata sposta la massa dove il modello ha nube; SOTTO la fascia, dove il
+  satellite non vede, disegna gli strati del modello (prova GPU "Strati");
+- la griglia del vuoto include gli strati del modello;
+- l'ispezione al tocco elenca gli strati ICON-EU della colonna.
